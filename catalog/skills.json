@@ -2,13 +2,52 @@
   "schema_version": "1.0",
   "skills": [
     {
+      "name": "repo-apply-fix",
+      "title": "Scoped Correction",
+      "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
+      "path": "skills/repo-apply-fix/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 3,
+      "phase_title": "Scoped Correction",
+      "maturity": "experimental",
+      "symptoms": [
+        "apply",
+        "fix"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed apply fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "repo-audit-accessibility-state",
       "title": "Accessibility State Consistency",
       "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
       "path": "skills/repo-audit-accessibility-state/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "accessibility",
+        "state"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit accessibility state handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-api-consistency",
@@ -17,7 +56,22 @@
       "path": "skills/repo-audit-api-consistency/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "api",
+        "consistency"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit api consistency handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-architecture",
@@ -26,7 +80,21 @@
       "path": "skills/repo-audit-architecture/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "architecture"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit architecture handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-behavioral-contracts",
@@ -35,7 +103,22 @@
       "path": "skills/repo-audit-behavioral-contracts/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "behavioral",
+        "contracts"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit behavioral contracts handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-boundary-conditions",
@@ -44,7 +127,22 @@
       "path": "skills/repo-audit-boundary-conditions/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "boundary",
+        "conditions"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit boundary conditions handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-cache-coherence",
@@ -53,7 +151,22 @@
       "path": "skills/repo-audit-cache-coherence/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "cache",
+        "coherence"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit cache coherence handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-cancellation",
@@ -62,7 +175,21 @@
       "path": "skills/repo-audit-cancellation/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "cancellation"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit cancellation handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-canonicalization",
@@ -71,7 +198,21 @@
       "path": "skills/repo-audit-canonicalization/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "canonicalization"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit canonicalization handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-capacity",
@@ -80,7 +221,21 @@
       "path": "skills/repo-audit-capacity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "capacity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit capacity handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-cohesion",
@@ -89,7 +244,21 @@
       "path": "skills/repo-audit-cohesion/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "cohesion"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit cohesion handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-compatibility",
@@ -98,7 +267,21 @@
       "path": "skills/repo-audit-compatibility/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "compatibility"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit compatibility handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-complexity",
@@ -107,7 +290,21 @@
       "path": "skills/repo-audit-complexity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "complexity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit complexity handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-concurrency",
@@ -116,7 +313,25 @@
       "path": "skills/repo-audit-concurrency/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "concurrency",
+        "stale response",
+        "race",
+        "reentrancy",
+        "lost update"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit concurrency handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-configuration",
@@ -125,7 +340,21 @@
       "path": "skills/repo-audit-configuration/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "configuration"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit configuration handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-data-integrity",
@@ -134,7 +363,22 @@
       "path": "skills/repo-audit-data-integrity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "data",
+        "integrity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit data integrity handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-dead-code",
@@ -143,7 +387,22 @@
       "path": "skills/repo-audit-dead-code/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "dead",
+        "code"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit dead code handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-domain-models",
@@ -152,7 +411,22 @@
       "path": "skills/repo-audit-domain-models/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "domain",
+        "models"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit domain models handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-error-semantics",
@@ -161,7 +435,22 @@
       "path": "skills/repo-audit-error-semantics/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "error",
+        "semantics"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit error semantics handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-failure-modes",
@@ -170,7 +459,22 @@
       "path": "skills/repo-audit-failure-modes/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "failure",
+        "modes"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit failure modes handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-idempotency",
@@ -179,7 +483,21 @@
       "path": "skills/repo-audit-idempotency/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "idempotency"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit idempotency handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-invariants",
@@ -188,7 +506,21 @@
       "path": "skills/repo-audit-invariants/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "invariants"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit invariants handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-lifecycle",
@@ -197,7 +529,26 @@
       "path": "skills/repo-audit-lifecycle/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "lifecycle",
+        "leak",
+        "listener",
+        "camera",
+        "worker",
+        "cleanup"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit lifecycle handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-nondeterminism",
@@ -206,7 +557,21 @@
       "path": "skills/repo-audit-nondeterminism/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "nondeterminism"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit nondeterminism handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-observability",
@@ -215,7 +580,21 @@
       "path": "skills/repo-audit-observability/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "observability"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit observability handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-program",
@@ -224,7 +603,21 @@
       "path": "skills/repo-audit-program/SKILL.md",
       "suite": "repository-audits",
       "phase": 0,
-      "phase_title": "Coordinator"
+      "phase_title": "Coordinator",
+      "maturity": "experimental",
+      "symptoms": [
+        "program"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit program handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-protocol-drift",
@@ -233,7 +626,22 @@
       "path": "skills/repo-audit-protocol-drift/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "protocol",
+        "drift"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit protocol drift handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-side-effects",
@@ -242,7 +650,22 @@
       "path": "skills/repo-audit-side-effects/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "side",
+        "effects"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit side effects handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-sources-of-truth",
@@ -251,7 +674,23 @@
       "path": "skills/repo-audit-sources-of-truth/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "sources",
+        "of",
+        "truth"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit sources of truth handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-state-machines",
@@ -260,7 +699,22 @@
       "path": "skills/repo-audit-state-machines/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "state",
+        "machines"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit state machines handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-synthesis",
@@ -269,7 +723,21 @@
       "path": "skills/repo-audit-synthesis/SKILL.md",
       "suite": "repository-audits",
       "phase": 4,
-      "phase_title": "Findings and issue planning"
+      "phase_title": "Findings and issue planning",
+      "maturity": "experimental",
+      "symptoms": [
+        "synthesis"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit synthesis handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-temporal-coupling",
@@ -278,7 +746,22 @@
       "path": "skills/repo-audit-temporal-coupling/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
-      "phase_title": "Behavioral discovery"
+      "phase_title": "Behavioral discovery",
+      "maturity": "experimental",
+      "symptoms": [
+        "temporal",
+        "coupling"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit temporal coupling handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-test-contracts",
@@ -287,7 +770,22 @@
       "path": "skills/repo-audit-test-contracts/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "test",
+        "contracts"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit test contracts handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-test-oracles",
@@ -296,7 +794,26 @@
       "path": "skills/repo-audit-test-oracles/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
-      "phase_title": "Architecture and maintainability"
+      "phase_title": "Architecture and maintainability",
+      "maturity": "experimental",
+      "symptoms": [
+        "test",
+        "oracles",
+        "circular test",
+        "mock",
+        "mutation",
+        "false assurance"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit test oracles handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-transactions",
@@ -305,7 +822,21 @@
       "path": "skills/repo-audit-transactions/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "transactions"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit transactions handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
       "name": "repo-audit-trust-boundaries",
@@ -314,7 +845,146 @@
       "path": "skills/repo-audit-trust-boundaries/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
-      "phase_title": "Correctness and resilience"
+      "phase_title": "Correctness and resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "trust",
+        "boundaries",
+        "permission",
+        "tenant",
+        "authorization",
+        "untrusted"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit trust boundaries handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "repo-plan-fix",
+      "title": "Scoped Implementation Planning",
+      "description": "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff.",
+      "path": "skills/repo-plan-fix/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 2,
+      "phase_title": "Scoped Implementation Planning",
+      "maturity": "experimental",
+      "symptoms": [
+        "plan",
+        "fix"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed plan fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "repo-reconcile-findings",
+      "title": "Remediation Reconciliation",
+      "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
+      "path": "skills/repo-reconcile-findings/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 5,
+      "phase_title": "Remediation Reconciliation",
+      "maturity": "experimental",
+      "symptoms": [
+        "reconcile",
+        "findings"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed reconcile findings handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "repo-specify-regression",
+      "title": "Regression Specification",
+      "description": "Use when defining an independent regression test for a supported behavioral defect.",
+      "path": "skills/repo-specify-regression/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 1,
+      "phase_title": "Regression Specification",
+      "maturity": "experimental",
+      "symptoms": [
+        "specify",
+        "regression"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed specify regression handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "repo-verify-finding",
+      "title": "Finding Verification",
+      "description": "Use when verifying, reproducing, refuting, or narrowing an existing repository finding.",
+      "path": "skills/repo-verify-finding/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 0,
+      "phase_title": "Finding Verification",
+      "maturity": "experimental",
+      "symptoms": [
+        "verify",
+        "finding"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed verify finding handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "repo-verify-fix",
+      "title": "Fix Verification",
+      "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+      "path": "skills/repo-verify-fix/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 4,
+      "phase_title": "Fix Verification",
+      "maturity": "experimental",
+      "symptoms": [
+        "verify",
+        "fix"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed verify fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     }
   ]
 }

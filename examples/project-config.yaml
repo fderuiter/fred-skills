@@ -1,0 +1,8 @@
+# Explicitly opt in with --config; these are planning hints, never execution authority.
+profile: web-app
+exclude:
+  - generated/**
+  - fixtures/vendor/**
+critical_workflows:
+  - Authenticated request through validation, persistence, and response
+  - Cancellation, retries, and stale result publication
