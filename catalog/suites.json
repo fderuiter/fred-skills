@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "suites": [
+    {
+      "name": "repository-audits",
+      "protocol_version": "1.0",
+      "phases": [
+        {
+          "id": 0,
+          "title": "Coordinator",
+          "skills": [
+            "repo-audit-program"
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Behavioral discovery",
+          "skills": [
+            "repo-audit-behavioral-contracts",
+            "repo-audit-invariants",
+            "repo-audit-state-machines",
+            "repo-audit-concurrency",
+            "repo-audit-lifecycle",
+            "repo-audit-temporal-coupling",
+            "repo-audit-domain-models"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Correctness and resilience",
+          "skills": [
+            "repo-audit-failure-modes",
+            "repo-audit-trust-boundaries",
+            "repo-audit-transactions",
+            "repo-audit-idempotency",
+            "repo-audit-error-semantics",
+            "repo-audit-capacity",
+            "repo-audit-cancellation",
+            "repo-audit-cache-coherence",
+            "repo-audit-data-integrity",
+            "repo-audit-boundary-conditions",
+            "repo-audit-protocol-drift",
+            "repo-audit-configuration",
+            "repo-audit-compatibility",
+            "repo-audit-complexity",
+            "repo-audit-canonicalization"
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Architecture and maintainability",
+          "skills": [
+            "repo-audit-side-effects",
+            "repo-audit-sources-of-truth",
+            "repo-audit-architecture",
+            "repo-audit-test-contracts",
+            "repo-audit-cohesion",
+            "repo-audit-observability",
+            "repo-audit-nondeterminism",
+            "repo-audit-test-oracles",
+            "repo-audit-api-consistency",
+            "repo-audit-accessibility-state",
+            "repo-audit-dead-code"
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Findings and issue planning",
+          "skills": [
+            "repo-audit-synthesis"
+          ]
+        }
+      ]
+    }
+  ]
+}

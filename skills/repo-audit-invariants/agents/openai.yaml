@@ -1,0 +1,14 @@
+interface:
+  display_name: Implicit Invariants
+  short_description: Investigate implicit invariants contracts
+  default_prompt: Use $repo-audit-invariants to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

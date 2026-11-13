@@ -1,0 +1,35 @@
+{
+  "topic": "state-machines",
+  "scenarios": [
+    {
+      "id": "state-machines-failure",
+      "prompt": "Audit this supplied repository for implicit state machines.",
+      "fixture_shape": "A retry changes an error flag but leaves a completion flag set, making the UI claim both success and pending.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "state-machines-safe",
+      "prompt": "Audit this supplied repository for implicit state machines.",
+      "fixture_shape": "Several booleans may represent truly independent dimensions; their mere existence does not prove an invalid state machine.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "state-machines-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

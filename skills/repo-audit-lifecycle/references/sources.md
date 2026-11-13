@@ -1,0 +1,9 @@
+# Research references
+
+Reviewed 2026-11-13. Use these as methods, not evidence about an unaudited repository.
+Check the actual installed language, engine, library version, and license before reuse.
+These files contain original instructions; third-party implementations are not bundled.
+
+- [React useEffect](https://react.dev/reference/react/useEffect): Setup/cleanup, dependencies, replay, and stale asynchronous work.
+- [.NET cooperative cancellation](https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads): Cancellation roots, propagation, and cooperative observation.
+- [Infer RacerD](https://fbinfer.com/docs/checker-racerd/): Thread-safety analysis with explicit language and modeling limitations.

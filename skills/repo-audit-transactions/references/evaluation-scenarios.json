@@ -1,0 +1,35 @@
+{
+  "topic": "transactions",
+  "scenarios": [
+    {
+      "id": "transactions-failure",
+      "prompt": "Audit this supplied repository for implicit transaction boundaries.",
+      "fixture_shape": "A record commits, event publication fails, and subscribers never learn the change because neither an outbox nor repair path exists.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "transactions-safe",
+      "prompt": "Audit this supplied repository for implicit transaction boundaries.",
+      "fixture_shape": "A workflow can intentionally expose a pending state if the contract defines it and recovery is durable.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "transactions-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

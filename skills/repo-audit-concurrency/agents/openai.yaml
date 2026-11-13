@@ -1,0 +1,14 @@
+interface:
+  display_name: Concurrency and Race Conditions
+  short_description: Investigate concurrency and race conditions contracts
+  default_prompt: Use $repo-audit-concurrency to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

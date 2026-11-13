@@ -1,0 +1,14 @@
+interface:
+  display_name: Trust and Authorization Boundaries
+  short_description: Investigate trust and authorization boundaries contracts
+  default_prompt: Use $repo-audit-trust-boundaries to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

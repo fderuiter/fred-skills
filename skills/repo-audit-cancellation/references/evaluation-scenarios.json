@@ -1,0 +1,35 @@
+{
+  "topic": "cancellation",
+  "scenarios": [
+    {
+      "id": "cancellation-failure",
+      "prompt": "Audit this supplied repository for cancellation propagation.",
+      "fixture_shape": "Promise.race returns on abort but the losing request later writes shared state and emits completion.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "cancellation-safe",
+      "prompt": "Audit this supplied repository for cancellation propagation.",
+      "fixture_shape": "A documented noncancelable commit region can be correct if its outcome is reconciled and cancellation semantics are explicit.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "cancellation-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

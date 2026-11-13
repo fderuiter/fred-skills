@@ -1,0 +1,35 @@
+{
+  "topic": "complexity",
+  "scenarios": [
+    {
+      "id": "complexity-failure",
+      "prompt": "Audit this supplied repository for algorithmic complexity.",
+      "fixture_shape": "Every received chunk rescans and recopies all previous chunks, making transfer completion quadratic in total chunks.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "complexity-safe",
+      "prompt": "Audit this supplied repository for algorithmic complexity.",
+      "fixture_shape": "A nested loop over a constant four protocol lanes is constant-factor work, not quadratic in file size.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "complexity-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

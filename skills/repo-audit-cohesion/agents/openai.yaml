@@ -1,0 +1,14 @@
+interface:
+  display_name: Cohesion and Responsibility
+  short_description: Investigate cohesion and responsibility contracts
+  default_prompt: Use $repo-audit-cohesion to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

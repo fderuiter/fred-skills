@@ -1,0 +1,14 @@
+interface:
+  display_name: Implicit State Machines
+  short_description: Investigate implicit state machines contracts
+  default_prompt: Use $repo-audit-state-machines to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

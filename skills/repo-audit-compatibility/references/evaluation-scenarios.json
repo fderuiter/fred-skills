@@ -1,0 +1,35 @@
+{
+  "topic": "compatibility",
+  "scenarios": [
+    {
+      "id": "compatibility-failure",
+      "prompt": "Audit this supplied repository for compatibility and migration contracts.",
+      "fixture_shape": "A new version rewrites stored records; an older offline client resumes and overwrites them using the obsolete schema.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "compatibility-safe",
+      "prompt": "Audit this supplied repository for compatibility and migration contracts.",
+      "fixture_shape": "A private unreleased format can change incompatibly if there are no supported persisted consumers; establish that context.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "compatibility-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "files": [
+    "references/protocol.md",
+    "assets/audit.schema.json",
+    "assets/report-template.md",
+    "assets/handoff-template.md"
+  ]
+}

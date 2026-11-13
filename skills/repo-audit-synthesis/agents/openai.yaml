@@ -1,0 +1,14 @@
+interface:
+  display_name: Audit Findings and Issue Planning
+  short_description: Investigate audit findings and issue planning contracts
+  default_prompt: Use $repo-audit-synthesis to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

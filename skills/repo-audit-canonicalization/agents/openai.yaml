@@ -1,0 +1,14 @@
+interface:
+  display_name: Security-Sensitive Canonicalization
+  short_description: Investigate security-sensitive canonicalization contracts
+  default_prompt: Use $repo-audit-canonicalization to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

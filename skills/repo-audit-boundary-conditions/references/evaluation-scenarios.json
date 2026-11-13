@@ -1,0 +1,35 @@
+{
+  "topic": "boundary-conditions",
+  "scenarios": [
+    {
+      "id": "boundary-conditions-failure",
+      "prompt": "Audit this supplied repository for boundary-condition correctness.",
+      "fixture_shape": "A buffer is allocated for N bytes but a loop writes indices zero through N inclusive.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "boundary-conditions-safe",
+      "prompt": "Audit this supplied repository for boundary-condition correctness.",
+      "fixture_shape": "An exclusive end offset equal to collection length is valid when the slice API defines it that way.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "boundary-conditions-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}
