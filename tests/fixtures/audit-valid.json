@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "run_id": "synthetic-validation",
+  "repository": {
+    "identity": "synthetic",
+    "revision": "fixture",
+    "dirty": false,
+    "snapshot": "fixture-1"
+  },
+  "scope": [
+    "synthetic"
+  ],
+  "coverage": [],
+  "contracts": [
+    {
+      "id": "C-1",
+      "dimension": "state",
+      "scope": "fixture",
+      "intended": "Latest start wins",
+      "observed": "Unconditional result write",
+      "enforcement": "none",
+      "evidence_ids": [
+        "E-1"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-1",
+      "path": "session.mjs",
+      "line_start": 4,
+      "line_end": 8,
+      "symbol": "Session.start",
+      "context": "Synthetic fixture"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-1",
+      "topic": "concurrency",
+      "tags": [
+        "cancellation"
+      ],
+      "title": "Old result publishes",
+      "status": "supported",
+      "severity": "medium",
+      "confidence": "high",
+      "contract_ids": [
+        "C-1"
+      ],
+      "evidence_ids": [
+        "E-1"
+      ],
+      "preconditions": "Overlapping starts",
+      "sequence": [
+        "Start A",
+        "Start B",
+        "Resolve B",
+        "Resolve A"
+      ],
+      "expected": "B remains",
+      "actual": "A overwrites B",
+      "impact": "Stale result",
+      "root_cause": "No publication fence",
+      "counterevidence": "Abort signal alone does not invalidate result",
+      "remedy": "Fence publication",
+      "acceptance": [
+        "Latest result remains"
+      ],
+      "validation": {
+        "state": "not-run",
+        "commands": [],
+        "result": "Static fixture only"
+      },
+      "related_findings": []
+    }
+  ],
+  "issues": [],
+  "limitations": [
+    "Synthetic data only"
+  ],
+  "checks": []
+}

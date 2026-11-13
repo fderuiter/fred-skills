@@ -1,0 +1,14 @@
+interface:
+  display_name: Test Oracle Quality
+  short_description: Investigate test oracle quality contracts
+  default_prompt: Use $repo-audit-test-oracles to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

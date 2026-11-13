@@ -1,0 +1,14 @@
+interface:
+  display_name: Dead Code and Obsolete Compatibility Paths
+  short_description: Audit Dead Code and Obsolete Compatibility Paths
+  default_prompt: Use $repo-audit-dead-code to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

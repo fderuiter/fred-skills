@@ -1,0 +1,14 @@
+interface:
+  display_name: API Design Consistency
+  short_description: Investigate api design consistency contracts
+  default_prompt: Use $repo-audit-api-consistency to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -1,0 +1,35 @@
+{
+  "topic": "test-contracts",
+  "scenarios": [
+    {
+      "id": "test-contracts-failure",
+      "prompt": "Audit this supplied repository for untested behavioral contracts.",
+      "fixture_shape": "Unit tests verify encoding and decoding separately but never verify that transferred bytes equal the original after interruption and resume.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "test-contracts-safe",
+      "prompt": "Audit this supplied repository for untested behavioral contracts.",
+      "fixture_shape": "No unit test for a wrapper is not a finding when an appropriate integration test already verifies its contract.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "test-contracts-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

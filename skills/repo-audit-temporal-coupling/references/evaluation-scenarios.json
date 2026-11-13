@@ -1,0 +1,35 @@
+{
+  "topic": "temporal-coupling",
+  "scenarios": [
+    {
+      "id": "temporal-coupling-failure",
+      "prompt": "Audit this supplied repository for temporal coupling.",
+      "fixture_shape": "Initialize sets ready before awaited setup ends; start observes ready and uses an unset dependency.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "temporal-coupling-safe",
+      "prompt": "Audit this supplied repository for temporal coupling.",
+      "fixture_shape": "An API whose constructor establishes readiness has no hidden initialization-order defect merely because lifecycle methods exist.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "temporal-coupling-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

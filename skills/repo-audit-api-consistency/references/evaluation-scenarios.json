@@ -1,0 +1,35 @@
+{
+  "topic": "api-consistency",
+  "scenarios": [
+    {
+      "id": "api-consistency-failure",
+      "prompt": "Audit this supplied repository for api design consistency.",
+      "fixture_shape": "Two delete APIs return before different completion points, but a shared caller assumes both mean the resource is durably gone.",
+      "expected_behavior": [
+        "Inspect actual reachable code and safeguards.",
+        "Tie the intended guarantee to independent evidence.",
+        "Give a concrete trace, actual validation state, and coverage limitations."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "api-consistency-safe",
+      "prompt": "Audit this supplied repository for api design consistency.",
+      "fixture_shape": "A streaming API and a batch API may intentionally expose different cancellation and partial-result semantics.",
+      "expected_behavior": [
+        "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
+        "Record a healthy pattern or refuted candidate."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "api-consistency-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

@@ -1,0 +1,14 @@
+interface:
+  display_name: Protocol Contract Drift
+  short_description: Investigate protocol contract drift contracts
+  default_prompt: Use $repo-audit-protocol-drift to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

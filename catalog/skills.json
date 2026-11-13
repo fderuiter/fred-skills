@@ -1,0 +1,320 @@
+{
+  "schema_version": "1.0",
+  "skills": [
+    {
+      "name": "repo-audit-accessibility-state",
+      "title": "Accessibility State Consistency",
+      "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
+      "path": "skills/repo-audit-accessibility-state/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-api-consistency",
+      "title": "API Design Consistency",
+      "description": "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+      "path": "skills/repo-audit-api-consistency/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-architecture",
+      "title": "Architectural Boundaries and Dependency Direction",
+      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+      "path": "skills/repo-audit-architecture/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-behavioral-contracts",
+      "title": "Behavioral Contract Reconstruction",
+      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
+      "path": "skills/repo-audit-behavioral-contracts/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-boundary-conditions",
+      "title": "Boundary-Condition Correctness",
+      "description": "Audit boundary-condition correctness with code evidence and counterexamples. Use when auditing empty inputs, limits, off-by-one errors, numeric overflow, Unicode, or malformed boundary values.",
+      "path": "skills/repo-audit-boundary-conditions/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-cache-coherence",
+      "title": "Cache Coherence",
+      "description": "Audit cache coherence with code evidence and counterexamples. Use when auditing stale caches, invalidation races, cache keys, tenant leakage through caches, or competing cache layers.",
+      "path": "skills/repo-audit-cache-coherence/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-cancellation",
+      "title": "Cancellation Propagation",
+      "description": "Audit cancellation propagation with code evidence and counterexamples. Use when auditing abort propagation, cancelled tasks that keep running, stale publication after cancellation, or shutdown draining.",
+      "path": "skills/repo-audit-cancellation/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-canonicalization",
+      "title": "Security-Sensitive Canonicalization",
+      "description": "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement.",
+      "path": "skills/repo-audit-canonicalization/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-capacity",
+      "title": "Resource Bounds and Backpressure",
+      "description": "Audit resource bounds and backpressure with code evidence and counterexamples. Use when auditing unbounded memory, queues, retries, fan-out, polling, backpressure, or resource exhaustion.",
+      "path": "skills/repo-audit-capacity/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-cohesion",
+      "title": "Cohesion and Responsibility",
+      "description": "Audit cohesion and responsibility with code evidence and counterexamples. Use when auditing mixed module responsibilities, unrelated reasons to change, god objects, or weak cohesion.",
+      "path": "skills/repo-audit-cohesion/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-compatibility",
+      "title": "Compatibility and Migration Contracts",
+      "description": "Audit compatibility and migration contracts with code evidence and counterexamples. Use when auditing breaking persisted-state changes, migrations, older-client compatibility, or rolling deployment contracts.",
+      "path": "skills/repo-audit-compatibility/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-complexity",
+      "title": "Algorithmic Complexity",
+      "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
+      "path": "skills/repo-audit-complexity/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-concurrency",
+      "title": "Concurrency and Race Conditions",
+      "description": "Audit concurrency and race conditions with code evidence and counterexamples. Use when auditing races, stale asynchronous results, reentrancy, lost updates, or unsafe overlapping operations.",
+      "path": "skills/repo-audit-concurrency/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-configuration",
+      "title": "Configuration Combinatorics",
+      "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
+      "path": "skills/repo-audit-configuration/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-data-integrity",
+      "title": "Data Transformation Integrity",
+      "description": "Audit data transformation integrity with code evidence and counterexamples. Use when auditing lossy mappings, serialization errors, precision loss, provenance gaps, or parser-to-model data corruption.",
+      "path": "skills/repo-audit-data-integrity/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-dead-code",
+      "title": "Dead Code and Obsolete Compatibility Paths",
+      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths.",
+      "path": "skills/repo-audit-dead-code/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-domain-models",
+      "title": "Implicit Domain Models",
+      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+      "path": "skills/repo-audit-domain-models/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-error-semantics",
+      "title": "Error Semantics and Taxonomy",
+      "description": "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation.",
+      "path": "skills/repo-audit-error-semantics/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-failure-modes",
+      "title": "Failure-Mode Completeness",
+      "description": "Audit failure-mode completeness with code evidence and counterexamples. Use when auditing partial failures, timeouts, recovery gaps, interrupted workflows, or failure transition completeness.",
+      "path": "skills/repo-audit-failure-modes/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-idempotency",
+      "title": "Idempotency and Replay Safety",
+      "description": "Audit idempotency and replay safety with code evidence and counterexamples. Use when auditing duplicate deliveries, unsafe retries, repeated initialization, replay handling, or idempotency keys.",
+      "path": "skills/repo-audit-idempotency/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-invariants",
+      "title": "Implicit Invariants",
+      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values.",
+      "path": "skills/repo-audit-invariants/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-lifecycle",
+      "title": "Ownership and Lifecycle Boundaries",
+      "description": "Audit ownership and lifecycle boundaries with code evidence and counterexamples. Use when auditing resource ownership, missing cleanup, use after disposal, leaked listeners, streams, timers, or tasks.",
+      "path": "skills/repo-audit-lifecycle/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-nondeterminism",
+      "title": "Nondeterministic Behavior",
+      "description": "Audit nondeterministic behavior with code evidence and counterexamples. Use when auditing flaky tests, clock/randomness dependence, global state leakage, or order-sensitive workflows.",
+      "path": "skills/repo-audit-nondeterminism/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-observability",
+      "title": "Observability Gaps",
+      "description": "Audit observability gaps with code evidence and counterexamples. Use when auditing undiagnosable failures, missing correlation, misleading telemetry, or insufficient recovery visibility.",
+      "path": "skills/repo-audit-observability/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-program",
+      "title": "Repository Audit Program",
+      "description": "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program.",
+      "path": "skills/repo-audit-program/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 0,
+      "phase_title": "Coordinator"
+    },
+    {
+      "name": "repo-audit-protocol-drift",
+      "title": "Protocol Contract Drift",
+      "description": "Audit protocol contract drift with code evidence and counterexamples. Use when auditing producer-consumer disagreement, wire format drift, message versioning, or incompatible protocol assumptions.",
+      "path": "skills/repo-audit-protocol-drift/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-side-effects",
+      "title": "Hidden Side Effects",
+      "description": "Audit hidden side effects with code evidence and counterexamples. Use when investigating unexpected mutations, hidden I/O, effectful getters, render effects, or misleading function contracts.",
+      "path": "skills/repo-audit-side-effects/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-sources-of-truth",
+      "title": "Duplicated Sources of Truth",
+      "description": "Audit duplicated sources of truth with code evidence and counterexamples. Use when auditing duplicated domain state, conflicting authorities, independently maintained derived fields, or divergent projections.",
+      "path": "skills/repo-audit-sources-of-truth/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-state-machines",
+      "title": "Implicit State Machines",
+      "description": "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior.",
+      "path": "skills/repo-audit-state-machines/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-synthesis",
+      "title": "Audit Findings and Issue Planning",
+      "description": "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan.",
+      "path": "skills/repo-audit-synthesis/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 4,
+      "phase_title": "Findings and issue planning"
+    },
+    {
+      "name": "repo-audit-temporal-coupling",
+      "title": "Temporal Coupling",
+      "description": "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts.",
+      "path": "skills/repo-audit-temporal-coupling/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 1,
+      "phase_title": "Behavioral discovery"
+    },
+    {
+      "name": "repo-audit-test-contracts",
+      "title": "Untested Behavioral Contracts",
+      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
+      "path": "skills/repo-audit-test-contracts/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-test-oracles",
+      "title": "Test Oracle Quality",
+      "description": "Audit test oracle quality with code evidence and counterexamples. Use when auditing assertions that mirror implementation, ineffective mocks, weak expected results, or surviving mutations.",
+      "path": "skills/repo-audit-test-oracles/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 3,
+      "phase_title": "Architecture and maintainability"
+    },
+    {
+      "name": "repo-audit-transactions",
+      "title": "Implicit Transaction Boundaries",
+      "description": "Audit implicit transaction boundaries with code evidence and counterexamples. Use when auditing multi-step consistency, partial commits, transaction scope, dual writes, or compensation guarantees.",
+      "path": "skills/repo-audit-transactions/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    },
+    {
+      "name": "repo-audit-trust-boundaries",
+      "title": "Trust and Authorization Boundaries",
+      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
+      "path": "skills/repo-audit-trust-boundaries/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 2,
+      "phase_title": "Correctness and resilience"
+    }
+  ]
+}

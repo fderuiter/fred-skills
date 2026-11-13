@@ -1,0 +1,14 @@
+interface:
+  display_name: Compatibility and Migration Contracts
+  short_description: Investigate compatibility and migration contracts contracts
+  default_prompt: Use $repo-audit-compatibility to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

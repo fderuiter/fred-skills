@@ -1,0 +1,14 @@
+interface:
+  display_name: Behavioral Contract Reconstruction
+  short_description: Investigate behavioral contract reconstruction contracts
+  default_prompt: Use $repo-audit-behavioral-contracts to audit this repository with
+    evidence and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

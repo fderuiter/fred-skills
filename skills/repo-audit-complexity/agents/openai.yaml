@@ -1,0 +1,14 @@
+interface:
+  display_name: Algorithmic Complexity
+  short_description: Investigate algorithmic complexity contracts
+  default_prompt: Use $repo-audit-complexity to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
