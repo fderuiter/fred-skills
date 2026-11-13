@@ -8,7 +8,7 @@ it is not an audit of this repository or proof about any consuming application.
 - Keep activation descriptions precise and root instructions concise. Load references
   on demand. Put host-specific display metadata in `agents/`, not the portable body.
 - Read `CONTRIBUTING.md` before changing the packaging or shared resources.
-- Edit common audit resources in `shared/repo-audit/resources/`, then run
+- Edit common resources in `shared/<family>/resources/`, then run
   `python scripts/sync_audit_resources.py`. Do not independently edit generated copies.
 - Update `catalog/suites.json` when adding or moving a suite member. Regenerate the
   catalog with `python scripts/build_catalog.py`; do not edit generated indexes directly.
@@ -24,6 +24,7 @@ Run from the repository root before proposing a change:
 ```sh
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
+python scripts/build_experience.py --check
 python scripts/validate_skills.py
 python -m unittest discover -s tests -v
 ```
@@ -31,3 +32,8 @@ python -m unittest discover -s tests -v
 Do not add an agent runtime, mandatory analyzers, or third-party skill implementations
 without a concrete need. These checks validate packaging and selected mechanisms;
 they do not establish complete behavioral or cross-runtime correctness.
+
+Discovery inputs live in `catalog/{recipes,packs,profiles,hosts,experience}.json`. Keep
+profiles hypothetical and host behavior status honest. Preserve original audit schema 1.0;
+run, remediation, and verification records are separate contracts. Root `fredlib` is local
+tooling, not a mandatory agent runtime. Never use fixture-adapter scores as model quality.

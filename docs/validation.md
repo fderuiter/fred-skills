@@ -42,3 +42,37 @@ The sampled runs are a small workflow/evidence-discipline check, not a statistic
 benchmark or a measured improvement over the baseline. Comprehensive behavior on real
 repositories and other agent hosts remains unverified. Record future actual runs,
 misses, false positives, and environment constraints when extending the suite.
+
+## 0.2.0 usability and correction-workflow validation
+
+The expanded deterministic suite exercises 41 standalone packages, generated recipes,
+packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
+proof requirements, comparison collisions, safe SARIF imports, HTML escaping, managed
+installation lifecycle/recovery, deterministic archives/tamper detection, and evaluation
+failure/timeout/input-isolation paths. Exact test counts and CI results are recorded in
+the PR because they change during review.
+
+The runnable Node walkthrough executes the exact unsafe source and a separate corrected
+variant, controlled overlap/cancellation, and synchronous abort reentrancy. It produces a
+schema-valid audit, report, local issue draft, and separate proof/remediation record. This
+is a synthetic demonstration, not an agent audit or correction of a user's application.
+
+The reference evaluation adapter executed 15 raw cases in baseline and with-skill
+configurations (30 runs). Its deterministic key matching passed in both configurations;
+this verifies harness plumbing and is not evidence of a model-quality improvement.
+
+Two fresh-context agent tasks on 13 November 2026 used only selected skill instructions
+and one raw source fixture each, without expected keys or other cases:
+
+| Workflow | Observed result | Limit |
+| --- | --- | --- |
+| Verify finding and specify regression | Executed unchanged SQLite transfer; interruption and a real failed credit left total 115 rather than 140. Caller transaction could not undo the internal commit. Independent suite had 3 intended failures and 1 passing control. | Only the supplied SQLite mechanism was established; production caller/backend restrictions remained unknown. |
+| Full six-step correction workflow | Established latest-start/cancel publication contract, specified and reproduced 7 failing regressions while 6 controls passed, applied one generation guard, and passed the identical 13 checks afterward. Recorded before/after identity, diff, commands, and schema-valid proof. | Authorized synthetic fixture only; does not establish general fix correctness or host/model superiority. |
+
+The local optional Chromium check could not launch in the managed environment because
+Unix socket creation was denied. No browser assertions passed locally and no restriction
+was bypassed. The PR's dedicated CI job runs the actual report/explorer search, filter,
+escaping, and no-external-request assertions. CI status is separate from this local record.
+Copy-path tests cover four host layouts using temporary directories; none are host runtime
+certification. Additional host versions, real repositories, all 99 original specifications,
+and statistically meaningful model comparisons remain future evidence, not completed work.

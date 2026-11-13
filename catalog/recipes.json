@@ -1,0 +1,262 @@
+{
+  "schema_version": "1.0",
+  "recipes": {
+    "review-pr": {
+      "outcome": "Review changed behavior and affected contracts.",
+      "skills": [
+        "repo-audit-behavioral-contracts",
+        "repo-audit-concurrency",
+        "repo-audit-trust-boundaries",
+        "repo-audit-test-contracts",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": true,
+      "workflows": [
+        "Changed execution paths and their callers/consumers"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "investigate-bug": {
+      "outcome": "Reconstruct and demonstrate a concrete failure.",
+      "skills": [
+        "repo-audit-behavioral-contracts",
+        "repo-audit-state-machines",
+        "repo-audit-concurrency",
+        "repo-audit-failure-modes",
+        "repo-verify-finding"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Reported symptom, preconditions, and safe controls"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "release-ready": {
+      "outcome": "Assess supported release and recovery behavior.",
+      "skills": [
+        "repo-audit-compatibility",
+        "repo-audit-configuration",
+        "repo-audit-protocol-drift",
+        "repo-audit-failure-modes",
+        "repo-audit-test-contracts",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Migration, deployment, recovery, and compatibility"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "understand-repo": {
+      "outcome": "Map architecture, workflows, and enforcing authority.",
+      "skills": [
+        "repo-audit-behavioral-contracts",
+        "repo-audit-domain-models",
+        "repo-audit-architecture",
+        "repo-audit-lifecycle",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Critical user workflows and module ownership"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "plan-findings": {
+      "outcome": "Create independent, evidence-backed implementation workstreams.",
+      "skills": [
+        "repo-verify-finding",
+        "repo-plan-fix",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Existing findings and their corrective mechanisms"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "verify-fix": {
+      "outcome": "Verify the original failure and safe behavior on before/after source.",
+      "skills": [
+        "repo-verify-finding",
+        "repo-specify-regression",
+        "repo-verify-fix",
+        "repo-reconcile-findings"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Original reproduction, corrected behavior, and safe controls"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "review-ai-code": {
+      "outcome": "Check requirement alignment, omitted behavior, and independent tests.",
+      "skills": [
+        "repo-audit-behavioral-contracts",
+        "repo-audit-invariants",
+        "repo-audit-test-oracles",
+        "repo-audit-architecture",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Implemented requirements and missing/negative behavior"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "upgrade-dependency": {
+      "outcome": "Review changed dependency contracts and compatibility.",
+      "skills": [
+        "repo-audit-protocol-drift",
+        "repo-audit-compatibility",
+        "repo-audit-failure-modes",
+        "repo-audit-test-contracts",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Dependent callers, changed APIs, and rollback"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "database-migration": {
+      "outcome": "Review mixed-version persistence, consistency, and restart.",
+      "skills": [
+        "repo-audit-compatibility",
+        "repo-audit-transactions",
+        "repo-audit-data-integrity",
+        "repo-audit-idempotency",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Schema readers/writers and interrupted migration"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "flaky-tests": {
+      "outcome": "Find nondeterminism and weak test oracles.",
+      "skills": [
+        "repo-audit-nondeterminism",
+        "repo-audit-concurrency",
+        "repo-audit-test-oracles",
+        "repo-verify-finding"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Failing schedule, seed, environment, and independent oracle"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "api-change": {
+      "outcome": "Trace producer/consumer semantics and supported compatibility.",
+      "skills": [
+        "repo-audit-api-consistency",
+        "repo-audit-protocol-drift",
+        "repo-audit-compatibility",
+        "repo-audit-error-semantics",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Public consumers, error semantics, and rollout"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "docs-drift": {
+      "outcome": "Compare documented promises with current implementation.",
+      "skills": [
+        "repo-audit-behavioral-contracts",
+        "repo-audit-compatibility",
+        "repo-audit-test-contracts",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Documented guarantees and actual enforcement"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "apply-fix": {
+      "outcome": "Implement an authorized bounded correction with regression evidence.",
+      "skills": [
+        "repo-verify-finding",
+        "repo-specify-regression",
+        "repo-plan-fix",
+        "repo-apply-fix",
+        "repo-verify-fix",
+        "repo-reconcile-findings"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Established defect, authorized files, and compatibility controls"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    }
+  }
+}

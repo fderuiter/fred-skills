@@ -1,64 +1,80 @@
 # fred-skills
 
-Reusable Agent Skills for evidence-based repository audits. The first suite contains
-**35 skills**: 33 focused audit domains, a coordinator, and a findings-to-issues workflow.
+Portable engineering workflows for investigating repositories, planning useful fixes,
+and verifying that those fixes work. **41 standalone skills**: 33 audit domains,
+a coordinator, findings synthesis, and six workflows from finding verification to
+remediation reconciliation. All packages currently have experimental maturity.
 
-Start with [Repository Audit Program](skills/repo-audit-program/SKILL.md), select an
-individual audit from the [catalog](docs/catalog.md), or use
-[Audit Findings and Issue Planning](skills/repo-audit-synthesis/SKILL.md) on existing results.
+Start with a task in the [task guide](docs/experience.md), browse the
+[searchable offline explorer](docs/explorer.html) after downloading the repository,
+or choose a package from the [catalog](docs/catalog.md).
 
-## Use a skill
-
-Copy the selected directory from `skills/` into your agent host's documented skill
-location, retaining its name and contents. Each package includes its own references
-and templates. The portable entry point is `SKILL.md`; `agents/openai.yaml` provides
-optional OpenAI-specific display metadata. Invocation syntax and discovery locations
-depend on the host. See the [usage guide](docs/usage.md).
-
-```text
-Use repo-audit-program to audit <repository> at <revision> for hidden behavioral
-contracts. Prioritize <critical workflows>. Preserve evidence, existing safeguards,
-honest coverage, severity/confidence, and actual validation results across all three
-passes. Return coherent issue drafts and an ordered implementation handoff.
-Keep application code unchanged and leave issues as drafts for this run.
-```
-
-Skills default to audits and reviewable drafts. Publishing issues or changing the
-audited application requires an applicable user instruction. No analyzer or agent
-runtime is installed or invoked automatically by this repository.
-
-## Audit coverage
-
-| Pass | Focus |
+| I want to… | Start here |
 | --- | --- |
-| Behavioral discovery | Contracts, invariants, state machines, concurrency, ownership/lifecycle, ordering, domain models |
-| Correctness and resilience | Failure, cancellation, trust, transactions, replay, data/protocol integrity, configuration, compatibility, resource bounds |
-| Architecture and maintainability | Boundaries, side effects, data authority, tests/oracles, cohesion, observability, determinism, APIs, accessibility, obsolete paths |
+| Review a pull request | `review-pr` with an explicit base revision |
+| Investigate a bug | `investigate-bug` and a bounded critical workflow |
+| Understand hidden contracts | `understand-repo` or `repo-audit-program` |
+| Turn findings into a practical plan | `plan-findings` |
+| Correct and independently verify a defect | `apply-fix`, then `verify-fix` |
+| Prepare a release | `release-ready` |
 
-Findings distinguish reproduced defects, statically supported defects, unresolved
-risks, hardening, and refuted candidates. A shared evidence ledger lets later passes
-reuse earlier contracts and consolidate causes without filing one issue per occurrence.
+## Try the local walkthrough
 
-## Authoring and validation
-
-The repository keeps installable skills self-contained while maintaining shared
-resources from one canonical source. The [architecture](docs/architecture.md),
-[contribution guide](CONTRIBUTING.md), and [machine-readable catalog](catalog/skills.json)
-describe the layout and maintenance workflow.
+Use Python 3.12+; the synthetic walkthrough also needs Node.js 20+.
 
 ```sh
+python -m venv .venv
+# Activate: source .venv/bin/activate (macOS/Linux)
+# PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
-python scripts/sync_audit_resources.py --check
-python scripts/build_catalog.py --check
-python scripts/validate_skills.py
-python -m unittest discover -s tests -v
+python examples/walkthrough/run_demo.py --output audit-output/demo
 ```
 
-Python is needed for authoring checks and the optional audit-ledger validator, not
-instruction-only use. The [validation record](docs/validation.md) separates deterministic
-checks and sampled agent runs from the 105 specified evaluation scenarios. Full behavior
-across all specialist topics and agent hosts has not been established.
+Open `audit-output/demo/report.html`. The example executes an intentionally unsafe
+original and a separate corrected variant, then creates a report, local issue draft,
+and verification record. It makes no remote changes and invokes no AI model.
 
-See [research and existing approaches](docs/research.md) for primary-source references,
-tool boundaries, and adoption decisions. The workflows are original authored material;
-third-party skill implementations are not bundled.
+## Use it on your repository
+
+Run these commands from this toolkit's root, replacing the repository path:
+
+```sh
+python scripts/fred.py search "stale response"
+python scripts/fred.py preflight /path/to/project
+python scripts/fred.py plan /path/to/project --task review-pr --mode changes --base main
+python scripts/fred.py install --destination /path/to/project --host codex --pack starter --dry-run
+python scripts/fred.py install --destination /path/to/project --host codex --pack starter
+python scripts/fred.py init /path/to/project --task review-pr --mode changes --base main --output audit-output/review
+```
+
+Give `audit-output/review/prompt.md` to your agent. Planning selects work and records
+source identity; **it does not execute an audit**. Budgets show deferred topics rather
+than implying complete coverage. Use `--allow-fixes` only within a user-authorized
+correction task. Remote issue publication is a separate explicit choice.
+
+The managed installer supports explicit Codex, Claude Code, Antigravity, and Gemini CLI
+locations, with dry runs, local-change protection, receipts, backups, and rollback.
+Copy-path checks do not establish behavior on those hosts. Manual directory copying
+remains supported; Python is unnecessary for instruction-only use.
+
+See the [CLI guide](docs/toolkit.md) for resuming work, source freshness, reports,
+comparisons, scanner imports, project profiles, and installation recovery. See
+[usage](docs/usage.md) for portable invocation and [evaluations](evals/README.md) for
+baseline/with-skill adapters, raw fixtures, and grading limits.
+
+## Trust and validation
+
+Findings retain intended behavior, source evidence, safe controls, uncertainty, and
+actual validation. Remediation status is recorded separately from evidence certainty.
+A finding absent from a later run is not automatically fixed. Local tools have no
+telemetry or built-in network calls; your selected agent/adapter has its own behavior.
+
+The [validation record](docs/validation.md) distinguishes deterministic tests, sampled
+agent runs, and unexecuted scenario specifications. Host behavior and broad model
+quality are not certified. The [implementation status](docs/implementation-status.md)
+records delivered features and remaining validation or owner decisions.
+
+For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
+[architecture](docs/architecture.md), [security](SECURITY.md), and
+[research](docs/research.md). [Licensing](docs/licensing.md) requires an owner decision
+before public release publication; this PR does not select a license or publish a tag.

@@ -1,0 +1,123 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "id": "concurrency-a",
+      "fixture": "fixtures/concurrency/a",
+      "skill": "repo-audit-concurrency",
+      "prompt": "Audit asynchronous publication and cancellation in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "stale-publication"
+      ]
+    },
+    {
+      "id": "trust-a",
+      "fixture": "fixtures/trust/a",
+      "skill": "repo-audit-trust-boundaries",
+      "prompt": "Audit object-level authorization for the documented contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "authorization-bypass"
+      ]
+    },
+    {
+      "id": "transactions-a",
+      "fixture": "fixtures/transactions/a",
+      "skill": "repo-audit-transactions",
+      "prompt": "Audit the documented transaction boundary and failure behavior. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "partial-commit"
+      ]
+    },
+    {
+      "id": "oracles-a",
+      "fixture": "fixtures/oracles/a",
+      "skill": "repo-audit-test-oracles",
+      "prompt": "Audit whether the test independently checks its stated contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "circular-oracle"
+      ]
+    },
+    {
+      "id": "synthesis-a",
+      "fixture": "fixtures/synthesis/a",
+      "skill": "repo-audit-synthesis",
+      "prompt": "Consolidate these supplied supported findings by independent corrective mechanism. Return one grouped record per cause using root_cause as key; do not publish issues. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "publication-guard"
+      ]
+    },
+    {
+      "id": "concurrency-b",
+      "fixture": "fixtures/concurrency/b",
+      "skill": "repo-audit-concurrency",
+      "prompt": "Audit asynchronous publication and cancellation in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "trust-b",
+      "fixture": "fixtures/trust/b",
+      "skill": "repo-audit-trust-boundaries",
+      "prompt": "Audit object-level authorization for the documented contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "transactions-b",
+      "fixture": "fixtures/transactions/b",
+      "skill": "repo-audit-transactions",
+      "prompt": "Audit the documented transaction boundary and failure behavior. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "oracles-b",
+      "fixture": "fixtures/oracles/b",
+      "skill": "repo-audit-test-oracles",
+      "prompt": "Audit whether the test independently checks its stated contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "synthesis-b",
+      "fixture": "fixtures/synthesis/b",
+      "skill": "repo-audit-synthesis",
+      "prompt": "Consolidate these supplied supported findings by independent corrective mechanism. Return one grouped record per cause using root_cause as key; do not publish issues. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "publication-guard",
+        "authorization"
+      ]
+    },
+    {
+      "id": "concurrency-routing",
+      "fixture": "fixtures/concurrency/a",
+      "skill": "repo-audit-concurrency",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "expected_keys": []
+    },
+    {
+      "id": "trust-routing",
+      "fixture": "fixtures/trust/a",
+      "skill": "repo-audit-trust-boundaries",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "expected_keys": []
+    },
+    {
+      "id": "transactions-routing",
+      "fixture": "fixtures/transactions/a",
+      "skill": "repo-audit-transactions",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "expected_keys": []
+    },
+    {
+      "id": "oracles-routing",
+      "fixture": "fixtures/oracles/a",
+      "skill": "repo-audit-test-oracles",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "expected_keys": []
+    },
+    {
+      "id": "synthesis-routing",
+      "fixture": "fixtures/synthesis/a",
+      "skill": "repo-audit-synthesis",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "expected_keys": []
+    }
+  ]
+}

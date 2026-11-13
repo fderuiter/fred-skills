@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "hosts": {
+    "codex": {
+      "project_path": ".agents/skills",
+      "user_path": ".agents/skills",
+      "invocation": "$skill-name",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed-by-this-host-adapter",
+      "source": "https://developers.openai.com/codex/skills"
+    },
+    "claude-code": {
+      "project_path": ".claude/skills",
+      "user_path": ".claude/skills",
+      "invocation": "/skill-name or natural-language activation; check current host behavior",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://code.claude.com/docs/en/skills"
+    },
+    "antigravity": {
+      "project_path": ".agents/skills",
+      "user_path": ".gemini/antigravity/skills",
+      "invocation": "Use the named skill; verify current host discovery",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://github.com/vercel-labs/skills"
+    },
+    "gemini-cli": {
+      "project_path": ".gemini/skills",
+      "user_path": ".gemini/skills",
+      "invocation": "Use the named skill; verify current host discovery",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://geminicli.com/docs/cli/skills/"
+    }
+  }
+}
