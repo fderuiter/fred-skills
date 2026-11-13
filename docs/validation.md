@@ -32,9 +32,9 @@ unsafe fixture was correct. No production system or remote issue record was modi
 
 ## Specified evaluations are not executed evaluations
 
-Each of the 33 specialists includes three scenario specifications in
+Each of the 35 skills in the suite includes three scenario specifications in
 `references/evaluation-scenarios.json`: relevant failure, safe control, and unrelated
-activation request. These 99 specifications are not 99 executed evaluations. They are
+activation request. These 105 specifications are not 105 executed evaluations. They are
 authoring inputs for future raw fixtures and fresh-context agent runs; do not supply
 their expected answers to the agent performing an audit.
 

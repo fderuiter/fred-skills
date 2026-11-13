@@ -56,7 +56,7 @@ python -m unittest discover -s tests -v
 
 Python is needed for authoring checks and the optional audit-ledger validator, not
 instruction-only use. The [validation record](docs/validation.md) separates deterministic
-checks and sampled agent runs from the 99 specified evaluation scenarios. Full behavior
+checks and sampled agent runs from the 105 specified evaluation scenarios. Full behavior
 across all specialist topics and agent hosts has not been established.
 
 See [research and existing approaches](docs/research.md) for primary-source references,
