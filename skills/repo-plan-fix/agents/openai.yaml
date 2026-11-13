@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scoped Implementation Planning"
+  short_description: "Verify bounded engineering workflow outcomes"
+  default_prompt: "Use $repo-plan-fix on this source and its evidence artifacts."

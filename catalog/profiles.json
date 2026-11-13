@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "profiles": {
+    "browser-async": {
+      "description": "Hypothesis: browser resources and asynchronous operation identity are critical.",
+      "priorities": [
+        "repo-audit-concurrency",
+        "repo-audit-cancellation",
+        "repo-audit-lifecycle"
+      ]
+    },
+    "modular-backend": {
+      "description": "Hypothesis: module write authority, permissions, and consistency are critical.",
+      "priorities": [
+        "repo-audit-invariants",
+        "repo-audit-trust-boundaries",
+        "repo-audit-transactions"
+      ]
+    },
+    "web-app": {
+      "description": "Hypothesis: client/server trust, caching, and accessible interaction state matter.",
+      "priorities": [
+        "repo-audit-trust-boundaries",
+        "repo-audit-cache-coherence",
+        "repo-audit-accessibility-state"
+      ]
+    },
+    "qrcraftly": {
+      "description": "Verify current optical-transfer protocol and browser lifetimes; this is not a fresh finding.",
+      "priorities": [
+        "repo-audit-concurrency",
+        "repo-audit-cancellation",
+        "repo-audit-protocol-drift",
+        "repo-audit-capacity"
+      ]
+    },
+    "cadence-clinical": {
+      "description": "Verify current authoritative writes, permissions, evidence, and event delivery; do not infer compliance.",
+      "priorities": [
+        "repo-audit-invariants",
+        "repo-audit-trust-boundaries",
+        "repo-audit-transactions",
+        "repo-audit-idempotency"
+      ]
+    },
+    "deruiter-dev": {
+      "description": "Verify current URL trust, async UI, cache authority, and accessibility surfaces.",
+      "priorities": [
+        "repo-audit-trust-boundaries",
+        "repo-audit-canonicalization",
+        "repo-audit-cache-coherence",
+        "repo-audit-accessibility-state"
+      ]
+    }
+  }
+}

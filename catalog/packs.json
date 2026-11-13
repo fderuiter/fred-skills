@@ -1,0 +1,158 @@
+{
+  "schema_version": "1.0",
+  "packs": {
+    "starter": {
+      "description": "A small starting set for understanding and reviewing a workflow.",
+      "skills": [
+        "repo-audit-program",
+        "repo-audit-behavioral-contracts",
+        "repo-audit-concurrency",
+        "repo-audit-trust-boundaries",
+        "repo-audit-test-contracts",
+        "repo-audit-synthesis"
+      ]
+    },
+    "async-correctness": {
+      "description": "Timing, state, ownership, and cancellation.",
+      "skills": [
+        "repo-audit-behavioral-contracts",
+        "repo-audit-concurrency",
+        "repo-audit-cancellation",
+        "repo-audit-lifecycle",
+        "repo-audit-temporal-coupling",
+        "repo-audit-state-machines",
+        "repo-audit-synthesis"
+      ]
+    },
+    "backend-consistency": {
+      "description": "Authoritative writes, permissions, transactions, and replay.",
+      "skills": [
+        "repo-audit-invariants",
+        "repo-audit-transactions",
+        "repo-audit-idempotency",
+        "repo-audit-trust-boundaries",
+        "repo-audit-data-integrity",
+        "repo-audit-synthesis"
+      ]
+    },
+    "web-review": {
+      "description": "Client/server boundaries and interactive behavior.",
+      "skills": [
+        "repo-audit-trust-boundaries",
+        "repo-audit-canonicalization",
+        "repo-audit-concurrency",
+        "repo-audit-cache-coherence",
+        "repo-audit-accessibility-state",
+        "repo-audit-synthesis"
+      ]
+    },
+    "release-readiness": {
+      "description": "Compatibility, migrations, configuration, and recovery.",
+      "skills": [
+        "repo-audit-compatibility",
+        "repo-audit-configuration",
+        "repo-audit-protocol-drift",
+        "repo-audit-failure-modes",
+        "repo-audit-test-contracts",
+        "repo-audit-synthesis"
+      ]
+    },
+    "verified-fixes": {
+      "description": "From a reported finding to verified correction and reconciliation.",
+      "skills": [
+        "repo-verify-finding",
+        "repo-specify-regression",
+        "repo-plan-fix",
+        "repo-apply-fix",
+        "repo-verify-fix",
+        "repo-reconcile-findings"
+      ]
+    },
+    "full-audit": {
+      "description": "All 33 specialist audits plus coordinator and synthesis.",
+      "skills": [
+        "repo-audit-accessibility-state",
+        "repo-audit-api-consistency",
+        "repo-audit-architecture",
+        "repo-audit-behavioral-contracts",
+        "repo-audit-boundary-conditions",
+        "repo-audit-cache-coherence",
+        "repo-audit-cancellation",
+        "repo-audit-canonicalization",
+        "repo-audit-capacity",
+        "repo-audit-cohesion",
+        "repo-audit-compatibility",
+        "repo-audit-complexity",
+        "repo-audit-concurrency",
+        "repo-audit-configuration",
+        "repo-audit-data-integrity",
+        "repo-audit-dead-code",
+        "repo-audit-domain-models",
+        "repo-audit-error-semantics",
+        "repo-audit-failure-modes",
+        "repo-audit-idempotency",
+        "repo-audit-invariants",
+        "repo-audit-lifecycle",
+        "repo-audit-nondeterminism",
+        "repo-audit-observability",
+        "repo-audit-program",
+        "repo-audit-protocol-drift",
+        "repo-audit-side-effects",
+        "repo-audit-sources-of-truth",
+        "repo-audit-state-machines",
+        "repo-audit-synthesis",
+        "repo-audit-temporal-coupling",
+        "repo-audit-test-contracts",
+        "repo-audit-test-oracles",
+        "repo-audit-transactions",
+        "repo-audit-trust-boundaries"
+      ]
+    },
+    "complete": {
+      "description": "Every audit and engineering workflow.",
+      "skills": [
+        "repo-audit-accessibility-state",
+        "repo-audit-api-consistency",
+        "repo-audit-architecture",
+        "repo-audit-behavioral-contracts",
+        "repo-audit-boundary-conditions",
+        "repo-audit-cache-coherence",
+        "repo-audit-cancellation",
+        "repo-audit-canonicalization",
+        "repo-audit-capacity",
+        "repo-audit-cohesion",
+        "repo-audit-compatibility",
+        "repo-audit-complexity",
+        "repo-audit-concurrency",
+        "repo-audit-configuration",
+        "repo-audit-data-integrity",
+        "repo-audit-dead-code",
+        "repo-audit-domain-models",
+        "repo-audit-error-semantics",
+        "repo-audit-failure-modes",
+        "repo-audit-idempotency",
+        "repo-audit-invariants",
+        "repo-audit-lifecycle",
+        "repo-audit-nondeterminism",
+        "repo-audit-observability",
+        "repo-audit-program",
+        "repo-audit-protocol-drift",
+        "repo-audit-side-effects",
+        "repo-audit-sources-of-truth",
+        "repo-audit-state-machines",
+        "repo-audit-synthesis",
+        "repo-audit-temporal-coupling",
+        "repo-audit-test-contracts",
+        "repo-audit-test-oracles",
+        "repo-audit-transactions",
+        "repo-audit-trust-boundaries",
+        "repo-verify-finding",
+        "repo-specify-regression",
+        "repo-plan-fix",
+        "repo-apply-fix",
+        "repo-verify-fix",
+        "repo-reconcile-findings"
+      ]
+    }
+  }
+}

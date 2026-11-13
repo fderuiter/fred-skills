@@ -25,11 +25,12 @@ python -m venv .venv
 python -m pip install -r requirements-dev.txt
 python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
+python scripts/build_experience.py
 python scripts/validate_skills.py
 python -m unittest discover -s tests -v
 ```
 
-For CI-equivalent non-mutating checks, add `--check` to the first two scripts. All
+For CI-equivalent non-mutating checks, add `--check` to the the resource and discovery generators. All
 commands run without network access once the development dependencies are installed.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.
 
@@ -60,3 +61,26 @@ repositories or embed secrets, personal installation URLs, or transient conversa
 
 Research sources are attribution and method references, not bundled third-party code.
 Do not infer permission to copy an upstream implementation from its public availability.
+
+## Toolkit and experience changes
+
+`shared/repo-workflows/` owns common correction handoffs/protocol. Its manifest limits
+copies to the new workflow family. `catalog/{recipes,packs,profiles,hosts,experience}.json`
+are authoring inputs; the skill catalog, docs/catalog.md, docs/experience.md, and explorer
+are generated. Keep these boundaries explicit rather than adding another editable index.
+
+Root CLI tooling lives in `scripts/fredlib/`; installable skills do not import it.
+Preserve audit schema 1.0 compatibility, source identity, explicit authority, empty findings,
+local-change protection, and draft-only remote behavior. A recorded proof is not execution.
+Add meaningful regressions for changes to these contracts. Keep live adapters and model
+credentials outside ordinary CI. See evals/README.md for the adapter protocol.
+
+The Ubuntu/Windows jobs run deterministic tests, the Node walkthrough, and pack verification.
+For optional local browser checks, install requirements-browser.txt and run
+`python -m playwright install chromium`, then `python tests/browser_check.py`.
+Chromium needs ordinary process/socket support; if a managed environment prevents launch,
+record that limitation and use CI. Do not weaken the environment's restrictions.
+
+Before requesting a release, read docs/releasing.md and docs/licensing.md. No owner
+license, public release, real host certification, or quality benchmark should be inferred
+from this repository's package structure or fixture results.

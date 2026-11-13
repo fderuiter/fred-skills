@@ -1,0 +1,4 @@
+interface:
+  display_name: "Finding Verification"
+  short_description: "Verify bounded engineering workflow outcomes"
+  default_prompt: "Use $repo-verify-finding on this source and its evidence artifacts."
