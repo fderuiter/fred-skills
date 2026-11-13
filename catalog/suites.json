@@ -71,6 +71,54 @@
           ]
         }
       ]
+    },
+    {
+      "name": "repository-workflows",
+      "protocol_version": "1.0",
+      "phases": [
+        {
+          "id": 0,
+          "title": "Finding Verification",
+          "skills": [
+            "repo-verify-finding"
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Regression Specification",
+          "skills": [
+            "repo-specify-regression"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Scoped Implementation Planning",
+          "skills": [
+            "repo-plan-fix"
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Scoped Correction",
+          "skills": [
+            "repo-apply-fix"
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Fix Verification",
+          "skills": [
+            "repo-verify-fix"
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Remediation Reconciliation",
+          "skills": [
+            "repo-reconcile-findings"
+          ]
+        }
+      ]
     }
   ]
 }

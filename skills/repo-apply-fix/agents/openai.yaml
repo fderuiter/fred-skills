@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scoped Correction"
+  short_description: "Verify bounded engineering workflow outcomes"
+  default_prompt: "Use $repo-apply-fix on this source and its evidence artifacts."

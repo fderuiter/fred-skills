@@ -1,0 +1,14 @@
+[
+  {
+    "id": "F-1",
+    "root_cause": "publication-guard",
+    "trace": "start A; start B; resolve B; resolve A",
+    "evidence": "completion handler has no operation fence"
+  },
+  {
+    "id": "F-2",
+    "root_cause": "authorization",
+    "trace": "tenant A reads tenant B object",
+    "evidence": "handler never binds owner"
+  }
+]

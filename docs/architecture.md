@@ -56,3 +56,27 @@ none constitute proof that all 33 specialists detect every defect on every host.
 CI runs on ordinary pull requests and main-branch pushes with read-only repository
 permissions, pinned action revisions, and checkout credential persistence disabled.
 It validates the repository without invoking an external agent or requiring secrets.
+
+## Optional local toolkit
+
+The original 35-package audit family remains intact. A six-package workflow family
+uses `shared/repo-workflows/` for finding verification, independent regression specification,
+fix planning/application/verification, and reconciliation. The resource synchronizer reads
+family manifests; each resulting package is independently portable.
+
+Root `scripts/fred.py` provides discovery and explicitly selected local operations.
+`fredlib` separates source inventory/Git metadata, planning/run state, installation,
+rendering, evaluation, and release archives. It neither dispatches an agent nor installs
+an analyzer. Standard library code handles filesystem/subprocess work; jsonschema and
+PyYAML validate records and opt-in configuration. Playwright is optional browser QA only.
+
+Task recipes/packs/profiles/host locations are data, separate from skill instructions.
+Generated discovery combines actual package metadata with authored experience fields;
+CI rejects drift. Run manifests are additive, leaving audit schema 1.0 unchanged.
+Evidence certainty and remediation progress are separate axes. Resume preserves the old
+snapshot and requests impact review; comparisons never close missing findings.
+
+Only explicit adapters execute processes during evaluation. Raw source and optional skill
+are copied into fresh work directories; grading happens afterward, with expected keys
+outside the prompt. This is a contamination control, not a security sandbox. Reports
+escape untrusted text, include no external resources, and cannot execute issue publication.

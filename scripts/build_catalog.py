@@ -9,6 +9,8 @@ from skill_tools import ROOT, read_frontmatter, suite_members
 
 def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
     membership = suite_members(root)
+    experience_path = root / "catalog/experience.json"
+    experience = json.loads(experience_path.read_text(encoding="utf-8"))["skills"] if experience_path.exists() else {}
     entries = []
     for skill in sorted((root / "skills").glob("*/SKILL.md")):
         meta, body = read_frontmatter(skill)
@@ -17,7 +19,7 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
             raise ValueError(f"Skill name/directory mismatch: {skill}")
         title = next((line[2:].strip() for line in body.splitlines() if line.startswith("# ")), name)
         entries.append({"name": name, "title": title, "description": meta["description"],
-                        "path": skill.relative_to(root).as_posix(), **membership.get(name, {"suite": None, "phase": None, "phase_title": None})})
+                        "path": skill.relative_to(root).as_posix(), **membership.get(name, {"suite": None, "phase": None, "phase_title": None}), **experience.get(name, {})})
     missing = set(membership) - {entry["name"] for entry in entries}
     if missing:
         raise ValueError(f"Suite members missing packages: {sorted(missing)}")
@@ -39,7 +41,7 @@ def build(root: Path = ROOT, check: bool = False) -> list[str]:
                 problems.append(f"Stale generated index: {relative}")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            path.write_text(content, encoding="utf-8", newline="\n")
     return problems
 
 

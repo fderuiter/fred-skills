@@ -1,0 +1,703 @@
+{
+  "schema_version": "1.0",
+  "skills": {
+    "repo-audit-accessibility-state": {
+      "maturity": "experimental",
+      "symptoms": [
+        "accessibility",
+        "state"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit accessibility state handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-api-consistency": {
+      "maturity": "experimental",
+      "symptoms": [
+        "api",
+        "consistency"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit api consistency handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-architecture": {
+      "maturity": "experimental",
+      "symptoms": [
+        "architecture"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit architecture handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-behavioral-contracts": {
+      "maturity": "experimental",
+      "symptoms": [
+        "behavioral",
+        "contracts"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit behavioral contracts handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-boundary-conditions": {
+      "maturity": "experimental",
+      "symptoms": [
+        "boundary",
+        "conditions"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit boundary conditions handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-cache-coherence": {
+      "maturity": "experimental",
+      "symptoms": [
+        "cache",
+        "coherence"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit cache coherence handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-cancellation": {
+      "maturity": "experimental",
+      "symptoms": [
+        "cancellation"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit cancellation handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-canonicalization": {
+      "maturity": "experimental",
+      "symptoms": [
+        "canonicalization"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit canonicalization handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-capacity": {
+      "maturity": "experimental",
+      "symptoms": [
+        "capacity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit capacity handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-cohesion": {
+      "maturity": "experimental",
+      "symptoms": [
+        "cohesion"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit cohesion handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-compatibility": {
+      "maturity": "experimental",
+      "symptoms": [
+        "compatibility"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit compatibility handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-complexity": {
+      "maturity": "experimental",
+      "symptoms": [
+        "complexity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit complexity handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-concurrency": {
+      "maturity": "experimental",
+      "symptoms": [
+        "concurrency",
+        "stale response",
+        "race",
+        "reentrancy",
+        "lost update"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit concurrency handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-configuration": {
+      "maturity": "experimental",
+      "symptoms": [
+        "configuration"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit configuration handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-data-integrity": {
+      "maturity": "experimental",
+      "symptoms": [
+        "data",
+        "integrity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit data integrity handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-dead-code": {
+      "maturity": "experimental",
+      "symptoms": [
+        "dead",
+        "code"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit dead code handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-domain-models": {
+      "maturity": "experimental",
+      "symptoms": [
+        "domain",
+        "models"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit domain models handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-error-semantics": {
+      "maturity": "experimental",
+      "symptoms": [
+        "error",
+        "semantics"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit error semantics handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-failure-modes": {
+      "maturity": "experimental",
+      "symptoms": [
+        "failure",
+        "modes"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit failure modes handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-idempotency": {
+      "maturity": "experimental",
+      "symptoms": [
+        "idempotency"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit idempotency handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-invariants": {
+      "maturity": "experimental",
+      "symptoms": [
+        "invariants"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit invariants handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-lifecycle": {
+      "maturity": "experimental",
+      "symptoms": [
+        "lifecycle",
+        "leak",
+        "listener",
+        "camera",
+        "worker",
+        "cleanup"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit lifecycle handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-nondeterminism": {
+      "maturity": "experimental",
+      "symptoms": [
+        "nondeterminism"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit nondeterminism handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-observability": {
+      "maturity": "experimental",
+      "symptoms": [
+        "observability"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit observability handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-program": {
+      "maturity": "experimental",
+      "symptoms": [
+        "program"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit program handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-protocol-drift": {
+      "maturity": "experimental",
+      "symptoms": [
+        "protocol",
+        "drift"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit protocol drift handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-side-effects": {
+      "maturity": "experimental",
+      "symptoms": [
+        "side",
+        "effects"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit side effects handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-sources-of-truth": {
+      "maturity": "experimental",
+      "symptoms": [
+        "sources",
+        "of",
+        "truth"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit sources of truth handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-state-machines": {
+      "maturity": "experimental",
+      "symptoms": [
+        "state",
+        "machines"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit state machines handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-synthesis": {
+      "maturity": "experimental",
+      "symptoms": [
+        "synthesis"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit synthesis handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-temporal-coupling": {
+      "maturity": "experimental",
+      "symptoms": [
+        "temporal",
+        "coupling"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit temporal coupling handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-test-contracts": {
+      "maturity": "experimental",
+      "symptoms": [
+        "test",
+        "contracts"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit test contracts handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-test-oracles": {
+      "maturity": "experimental",
+      "symptoms": [
+        "test",
+        "oracles",
+        "circular test",
+        "mock",
+        "mutation",
+        "false assurance"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit test oracles handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-transactions": {
+      "maturity": "experimental",
+      "symptoms": [
+        "transactions"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit transactions handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-audit-trust-boundaries": {
+      "maturity": "experimental",
+      "symptoms": [
+        "trust",
+        "boundaries",
+        "permission",
+        "tenant",
+        "authorization",
+        "untrusted"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit trust boundaries handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-verify-finding": {
+      "maturity": "experimental",
+      "symptoms": [
+        "verify",
+        "finding"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed verify finding handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-specify-regression": {
+      "maturity": "experimental",
+      "symptoms": [
+        "specify",
+        "regression"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed specify regression handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-plan-fix": {
+      "maturity": "experimental",
+      "symptoms": [
+        "plan",
+        "fix"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed plan fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-apply-fix": {
+      "maturity": "experimental",
+      "symptoms": [
+        "apply",
+        "fix"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed apply fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-verify-fix": {
+      "maturity": "experimental",
+      "symptoms": [
+        "verify",
+        "fix"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed verify fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "repo-reconcile-findings": {
+      "maturity": "experimental",
+      "symptoms": [
+        "reconcile",
+        "findings"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed reconcile findings handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    }
+  }
+}
