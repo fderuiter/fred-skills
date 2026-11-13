@@ -1,3 +1,4 @@
 # Authoring and validation dependencies; the instruction-only skills do not need these.
 PyYAML==6.0.3
 jsonschema==4.26.0
+pre-commit==4.7.0

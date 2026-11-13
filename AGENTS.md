@@ -22,12 +22,21 @@ it is not an audit of this repository or proof about any consuming application.
 Run from the repository root before proposing a change:
 
 ```sh
+pre-commit install
+pre-commit run --all-files
+```
+
+Or execute verification checks directly:
+
+```sh
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check
 python scripts/validate_skills.py
 python -m unittest discover -s tests -v
 ```
+
+Once installed, hooks run automatically on `git commit`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
 
 Do not add an agent runtime, mandatory analyzers, or third-party skill implementations
 without a concrete need. These checks validate packaging and selected mechanisms;

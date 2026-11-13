@@ -23,6 +23,20 @@ Use Python 3.12 or newer in a virtual environment:
 python -m venv .venv
 # Activate .venv using your shell's activation command.
 python -m pip install -r requirements-dev.txt
+pre-commit install
+```
+
+Once installed, pre-commit hooks run automatically on every `git commit`. You can also execute all verification checks manually across the repository:
+
+```sh
+pre-commit run --all-files
+```
+
+To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
+
+To regenerate shared copies and indexes or run verification scripts directly:
+
+```sh
 python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
 python scripts/build_experience.py

@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -87,6 +88,26 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(sync(self.root, check=True))
         self.assertEqual([], sync(self.root))
         self.assertEqual(source.read_bytes(), target.read_bytes())
+
+    def test_pre_commit_configuration_and_requirements(self):
+        config_path = ROOT / ".pre-commit-config.yaml"
+        self.assertTrue(config_path.is_file())
+        with config_path.open("r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        self.assertIn("repos", config)
+        local_repos = [r for r in config["repos"] if r.get("repo") == "local"]
+        self.assertTrue(local_repos)
+        hooks = {h["id"]: h for h in local_repos[0].get("hooks", [])}
+        for hook_id in ["sync-audit-resources", "build-catalog", "validate-skills", "unit-tests"]:
+            self.assertIn(hook_id, hooks)
+            self.assertEqual(hooks[hook_id].get("language"), "system")
+            self.assertFalse(hooks[hook_id].get("pass_filenames", True))
+            self.assertTrue(hooks[hook_id].get("always_run", False))
+
+        reqs_path = ROOT / "requirements-dev.txt"
+        self.assertTrue(reqs_path.is_file())
+        reqs = reqs_path.read_text(encoding="utf-8")
+        self.assertIn("pre-commit", reqs)
 
 
 if __name__ == "__main__":
