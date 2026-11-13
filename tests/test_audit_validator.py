@@ -36,10 +36,12 @@ class AuditValidatorTests(unittest.TestCase):
 
     def test_missing_and_duplicate_evidence_are_rejected(self):
         self.audit["findings"][0]["evidence_ids"] = ["E-missing"]
-        self.assertTrue(any("Unknown evidence" in error for error in self.errors()))
+        errors = self.errors()
+        self.assertTrue(any("Unknown evidence" in error and "F-1" in error and "evidence_ids" in error and "E-missing" in error for error in errors))
         self.audit = copy.deepcopy(BASE)
         self.audit["evidence"].append(copy.deepcopy(self.audit["evidence"][0]))
-        self.assertTrue(any("Duplicate IDs" in error for error in self.errors()))
+        errors = self.errors()
+        self.assertTrue(any("Duplicate IDs in evidence: E-1" in error for error in errors))
 
     def test_invalid_source_locations_are_rejected(self):
         for path in ["/tmp/source.mjs", "../source.mjs"]:
@@ -91,6 +93,17 @@ class AuditValidatorTests(unittest.TestCase):
         self.audit = copy.deepcopy(BASE)
         self.audit["schema_version"] = "9"
         self.assertTrue(self.errors())
+        self.audit = copy.deepcopy(BASE)
+        del self.audit["schema_version"]
+        errors = self.errors()
+        self.assertTrue(any(error.startswith("root:") and "'schema_version' is a required property" in error for error in errors))
+
+    def test_empty_record_lists_are_valid(self):
+        self.audit["evidence"] = []
+        self.audit["contracts"] = []
+        self.audit["findings"] = []
+        self.audit["issues"] = []
+        self.assertEqual([], self.errors())
 
     def test_cli_accepts_valid_fixture_and_rejects_malformed_json(self):
         fixture = ROOT / "tests/fixtures/audit-valid.json"
@@ -101,6 +114,22 @@ class AuditValidatorTests(unittest.TestCase):
             bad.write_text("{")
             invalid = subprocess.run([sys.executable, str(SCRIPT), str(bad)], capture_output=True, text=True)
             self.assertEqual(2, invalid.returncode)
+        missing_dep = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys, runpy; sys.modules['jsonschema'] = None; "
+                    f"sys.argv = ['{SCRIPT}', '{fixture}']; "
+                    f"runpy.run_path('{SCRIPT}', run_name='__main__')"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(2, missing_dep.returncode)
+        self.assertIn("Dependency missing: jsonschema", missing_dep.stderr)
+        self.assertIn("pip install", missing_dep.stderr)
 
 
 if __name__ == "__main__":
