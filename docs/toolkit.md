@@ -3,7 +3,8 @@
 Run `python scripts/fred.py --help` from the toolkit root. Python 3.12+ and
 `requirements-dev.txt` are required for the CLI. JSON goes to stdout; concise errors
 go to stderr with exit 2. Paths with spaces need your shell's normal quoting. Commands
-work with `python` on Windows after activating a virtual environment.
+work with `python` on Windows after activating a virtual environment. For programmatic
+Python integration and module contracts, see the [Developer API Guide](api.md).
 
 ## Discover and plan
 

@@ -67,7 +67,8 @@ package is independently portable.
 
 Root `scripts/fred.py` provides discovery and explicitly selected local operations.
 `fredlib` separates source inventory/Git metadata, planning/run state, installation,
-rendering, evaluation, and release archives. Operational recovery workflows and troubleshooting
+rendering, evaluation, and release archives (documented authoritatively in the
+[Developer API Guide](api.md)). Operational recovery workflows and troubleshooting
 procedures for locks, receipts, and git resolution are documented in [operational runbooks](runbooks.md).
 It neither dispatches an agent nor installs
 an analyzer. Standard library code handles filesystem/subprocess work; jsonschema and
