@@ -1,7 +1,6 @@
-import json
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -11,9 +10,17 @@ from fredlib.common import read_json
 
 class ExperienceTests(unittest.TestCase):
     def test_every_pack_recipe_and_profile_resolves_real_skills(self):
-        known = {item["name"] for item in read_json(ROOT / "catalog/skills.json")["skills"]}
-        for filename, key, field in [("packs", "packs", "skills"), ("recipes", "recipes", "skills"), ("profiles", "profiles", "priorities")]:
-            for name, item in read_json(ROOT / "catalog" / (filename + ".json"))[key].items():
+        known = {
+            item["name"] for item in read_json(ROOT / "catalog/skills.json")["skills"]
+        }
+        for filename, key, field in [
+            ("packs", "packs", "skills"),
+            ("recipes", "recipes", "skills"),
+            ("profiles", "profiles", "priorities"),
+        ]:
+            for name, item in read_json(ROOT / "catalog" / (filename + ".json"))[
+                key
+            ].items():
                 with self.subTest(name=name):
                     self.assertTrue(item[field])
                     self.assertFalse(set(item[field]) - known)

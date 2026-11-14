@@ -1,11 +1,13 @@
 """Negative package fixtures and generated-artifact drift checks."""
+
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,25 +24,44 @@ class PackageTests(unittest.TestCase):
         self.skill = self.root / "skills/sample-audit"
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
-        self.entry.write_text('---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n')
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n'
+        )
 
     def tearDown(self):
         self.temp.cleanup()
 
     def manifest(self):
         (self.root / "catalog").mkdir(exist_ok=True)
-        document = {"schema_version": "1.0", "suites": [{"name": "repository-audits", "phases": [{"id": 1, "title": "Discovery", "skills": ["sample-audit"]}]}]}
+        document = {
+            "schema_version": "1.0",
+            "suites": [
+                {
+                    "name": "repository-audits",
+                    "phases": [
+                        {"id": 1, "title": "Discovery", "skills": ["sample-audit"]}
+                    ],
+                }
+            ],
+        }
         (self.root / "catalog/suites.json").write_text(json.dumps(document))
 
     def test_minimal_portable_package_is_valid(self):
         self.assertEqual([], validate_skill(self.skill))
 
     def test_name_mismatch_is_rejected(self):
-        self.entry.write_text(self.entry.read_text().replace("name: sample-audit", "name: different-name"))
-        self.assertTrue(any("mismatch" in error for error in validate_skill(self.skill)))
+        self.entry.write_text(
+            self.entry.read_text().replace("name: sample-audit", "name: different-name")
+        )
+        self.assertTrue(
+            any("mismatch" in error for error in validate_skill(self.skill))
+        )
 
     def test_missing_reference_and_package_escape_are_rejected(self):
-        self.entry.write_text(self.entry.read_text() + '\n[Missing](references/absent.md)\n[Outside](../../outside.md)\n')
+        self.entry.write_text(
+            self.entry.read_text()
+            + "\n[Missing](references/absent.md)\n[Outside](../../outside.md)\n"
+        )
         (self.root / "outside.md").write_text("Outside package")
         errors = validate_skill(self.skill)
         self.assertTrue(any("Missing relative" in error for error in errors))
@@ -55,7 +76,10 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(validate_skill(self.skill))
 
     def test_external_links_and_local_fragments_are_allowed(self):
-        self.entry.write_text(self.entry.read_text() + '\n[External](https://example.invalid/docs)\n[Local](#sample)\n')
+        self.entry.write_text(
+            self.entry.read_text()
+            + "\n[External](https://example.invalid/docs)\n[Local](#sample)\n"
+        )
         self.assertEqual([], validate_skill(self.skill))
 
     def test_symlinks_are_not_standalone_packages(self):
@@ -72,7 +96,9 @@ class PackageTests(unittest.TestCase):
         self.assertEqual([], build(self.root, check=True))
         build(self.root)
         self.assertEqual(first, (self.root / "catalog/skills.json").read_bytes())
-        self.entry.write_text(self.entry.read_text().replace("synthetic contracts", "revised contracts"))
+        self.entry.write_text(
+            self.entry.read_text().replace("synthetic contracts", "revised contracts")
+        )
         self.assertTrue(build(self.root, check=True))
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
@@ -81,7 +107,9 @@ class PackageTests(unittest.TestCase):
         source = shared / "resources/references/protocol.md"
         source.parent.mkdir(parents=True)
         source.write_text("Canonical protocol\n")
-        (shared / "manifest.json").write_text(json.dumps({"files": ["references/protocol.md"]}))
+        (shared / "manifest.json").write_text(
+            json.dumps({"files": ["references/protocol.md"]})
+        )
         self.assertTrue(sync(self.root, check=True))
         self.assertEqual([], sync(self.root))
         self.assertEqual([], sync(self.root, check=True))
@@ -100,16 +128,25 @@ class PackageTests(unittest.TestCase):
         local_repos = [r for r in config["repos"] if r.get("repo") == "local"]
         self.assertTrue(local_repos)
         hooks = {h["id"]: h for h in local_repos[0].get("hooks", [])}
-        for hook_id in ["sync-audit-resources", "build-catalog", "validate-skills", "unit-tests"]:
+        for hook_id in [
+            "sync-audit-resources",
+            "build-catalog",
+            "validate-skills",
+            "unit-tests",
+        ]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
             self.assertTrue(hooks[hook_id].get("always_run", False))
+        for hook_id in ["ruff-lint", "ruff-format"]:
+            self.assertIn(hook_id, hooks)
+            self.assertEqual(hooks[hook_id].get("language"), "system")
 
         reqs_path = ROOT / "requirements-dev.txt"
         self.assertTrue(reqs_path.is_file())
         reqs = reqs_path.read_text(encoding="utf-8")
         self.assertIn("pre-commit", reqs)
+        self.assertIn("ruff", reqs)
 
     def test_makefile_target_definitions(self):
         makefile_path = ROOT / "Makefile"
@@ -118,7 +155,10 @@ class PackageTests(unittest.TestCase):
         self.assertIn(".PHONY:", content)
         for target in ["check", "fix", "test"]:
             self.assertIn(target, content.split(".PHONY:")[1].splitlines()[0])
-            self.assertTrue(any(line.startswith(f"{target}:") for line in content.splitlines()), f"Target {target} must be defined")
+            self.assertTrue(
+                any(line.startswith(f"{target}:") for line in content.splitlines()),
+                f"Target {target} must be defined",
+            )
         self.assertIn("scripts/sync_audit_resources.py", content)
         self.assertIn("scripts/build_catalog.py", content)
         self.assertIn("scripts/validate_skills.py", content)
@@ -131,6 +171,7 @@ class PackageTests(unittest.TestCase):
             result = subprocess.run(
                 ["make", "-n", target],
                 cwd=ROOT,
+                check=False,
                 capture_output=True,
                 text=True,
             )
@@ -155,6 +196,7 @@ class PackageTests(unittest.TestCase):
         default_result = subprocess.run(
             ["make", "-n"],
             cwd=ROOT,
+            check=False,
             capture_output=True,
             text=True,
         )

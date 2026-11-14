@@ -55,6 +55,10 @@ make test
 For environments without `make`, run direct Python commands:
 
 ```sh
+# Linting and formatting checks
+ruff check .
+ruff format --check .
+
 # Verification checks (CI-equivalent non-mutating checks)
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
@@ -67,6 +71,8 @@ python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
 python scripts/build_experience.py
 ```
+
+To automatically format code or apply safe lint fixes, use `ruff format .` and `ruff check --fix .`.
 
 All commands run without network access once the development dependencies are installed.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.

@@ -1,10 +1,10 @@
 """Exercise generated local pages in a real browser, including hostile report text."""
+
 import argparse
-import copy
-from pathlib import Path
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -19,16 +19,27 @@ args = parser.parse_args()
 with tempfile.TemporaryDirectory() as temporary:
     report = Path(temporary) / "report.html"
     audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
-    audit["findings"][0]["title"] = '<img src="https://example.invalid/x" onerror="window.injected=true">'
+    audit["findings"][0]["title"] = (
+        '<img src="https://example.invalid/x" onerror="window.injected=true">'
+    )
     render(audit, report)
     with sync_playwright() as playwright:
         # An installed system Chromium is useful in managed environments without
         # Playwright downloads; ordinary CI uses its version-matched browser.
         system_browser = shutil.which("chromium") or shutil.which("chromium-browser")
-        browser = playwright.chromium.launch(headless=True, executable_path=system_browser)
+        browser = playwright.chromium.launch(
+            headless=True, executable_path=system_browser
+        )
         page = browser.new_page(viewport={"width": 1100, "height": 850})
         network = []
-        page.on("request", lambda request: network.append(request.url) if request.url.startswith(("http:", "https:")) else None)
+        page.on(
+            "request",
+            lambda request: (
+                network.append(request.url)
+                if request.url.startswith(("http:", "https:"))
+                else None
+            ),
+        )
         page.goto(report.as_uri())
         assert page.locator("article.finding").count() == 1
         assert page.locator("img").count() == 0
@@ -40,7 +51,9 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("article.finding:visible").count() == 0
         page.get_by_label("Search findings").fill("")
         assert page.locator("article.finding:visible").count() == 1
-        page.get_by_text("Developer: failure, source, and correction", exact=True).click()
+        page.get_by_text(
+            "Developer: failure, source, and correction", exact=True
+        ).click()
         assert page.get_by_text("No publication fence", exact=False).count() > 0
         assert not network
         page.goto((ROOT / "docs/explorer.html").as_uri())
@@ -56,4 +69,6 @@ with tempfile.TemporaryDirectory() as temporary:
             page.screenshot(path=str(args.screenshot))
         assert not network
         browser.close()
-print("PASS: report/explorer filtering, safe text, no external requests, and workflow discovery")
+print(
+    "PASS: report/explorer filtering, safe text, no external requests, and workflow discovery"
+)

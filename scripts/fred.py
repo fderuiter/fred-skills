@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Local discovery, installation, run management, and validation for fred-skills."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.dont_write_bytecode = True
-from fredlib.common import ROOT, atomic_json, read_json
 from fredlib import evaluations, installation, releases, reports, repository, runs
+from fredlib.common import ROOT, atomic_json, read_json
 
 
 def parser() -> argparse.ArgumentParser:
@@ -21,18 +22,34 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("query", nargs="?", default="")
     pre = commands.add_parser("preflight")
     pre.add_argument("repo", type=Path)
-    pre.add_argument("--full", action="store_true", help="Include every recorded source-file hash")
+    pre.add_argument(
+        "--full", action="store_true", help="Include every recorded source-file hash"
+    )
     for command in ["plan", "init"]:
         sub = commands.add_parser(command)
         sub.add_argument("repo", type=Path)
         sub.add_argument("--task", required=True)
-        sub.add_argument("--mode", choices=["explore", "changes", "investigate", "comprehensive"], default="investigate")
-        sub.add_argument("--budget", choices=["brief", "balanced", "deep"], default="balanced")
+        sub.add_argument(
+            "--mode",
+            choices=["explore", "changes", "investigate", "comprehensive"],
+            default="investigate",
+        )
+        sub.add_argument(
+            "--budget", choices=["brief", "balanced", "deep"], default="balanced"
+        )
         sub.add_argument("--base")
         sub.add_argument("--profile")
         sub.add_argument("--exclude", action="append", default=[])
-        sub.add_argument("--config", type=Path, help="Optional project YAML with profile, excludes, and critical workflows; never executable commands")
-        sub.add_argument("--full", action="store_true", help="Include the full source-file inventory in terminal output")
+        sub.add_argument(
+            "--config",
+            type=Path,
+            help="Optional project YAML with profile, excludes, and critical workflows; never executable commands",
+        )
+        sub.add_argument(
+            "--full",
+            action="store_true",
+            help="Include the full source-file inventory in terminal output",
+        )
         if command == "init":
             sub.add_argument("--output", type=Path, required=True)
             sub.add_argument("--allow-fixes", action="store_true")
@@ -44,7 +61,9 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--output", type=Path, required=True)
     sub = commands.add_parser("checkpoint")
     sub.add_argument("directory", type=Path)
-    sub.add_argument("--state", choices=["running", "paused", "completed"], required=True)
+    sub.add_argument(
+        "--state", choices=["running", "paused", "completed"], required=True
+    )
     sub.add_argument("--note", required=True)
     for command in ["report", "issues"]:
         sub = commands.add_parser(command)
@@ -58,7 +77,18 @@ def parser() -> argparse.ArgumentParser:
     sub = commands.add_parser("reconcile")
     sub.add_argument("directory", type=Path)
     sub.add_argument("--finding", required=True)
-    sub.add_argument("--state", required=True, choices=["open", "in-progress", "fixed-pending-verification", "verified-fixed", "regressed", "accepted-risk"])
+    sub.add_argument(
+        "--state",
+        required=True,
+        choices=[
+            "open",
+            "in-progress",
+            "fixed-pending-verification",
+            "verified-fixed",
+            "regressed",
+            "accepted-risk",
+        ],
+    )
     sub.add_argument("--note", required=True)
     sub.add_argument("--verification", type=Path)
     sub = commands.add_parser("import-sarif")
@@ -66,7 +96,12 @@ def parser() -> argparse.ArgumentParser:
     sub.add_argument("--output", type=Path, required=True)
     for command in ["install", "update", "remove", "rollback", "recover-install"]:
         sub = commands.add_parser(command)
-        sub.add_argument("--destination", type=Path, required=True, help="Explicit project root, or home directory with --scope user")
+        sub.add_argument(
+            "--destination",
+            type=Path,
+            required=True,
+            help="Explicit project root, or home directory with --scope user",
+        )
         sub.add_argument("--host", required=True)
         sub.add_argument("--scope", choices=["project", "user"], default="project")
         if command not in {"rollback", "recover-install"}:
@@ -78,7 +113,11 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--confirm-interrupted", action="store_true")
     sub = commands.add_parser("evaluate")
     sub.add_argument("--output", type=Path, required=True)
-    sub.add_argument("--adapter-argv", required=True, help="JSON array, with optional {prompt_file}, {output_file}, {case_dir} placeholders; never interpreted by a shell")
+    sub.add_argument(
+        "--adapter-argv",
+        required=True,
+        help="JSON array, with optional {prompt_file}, {output_file}, {case_dir} placeholders; never interpreted by a shell",
+    )
     sub.add_argument("--case", action="append")
     sub.add_argument("--repeats", type=int, default=1)
     sub.add_argument("--timeout", type=int, default=120)
@@ -105,17 +144,44 @@ def dispatch(a):
     if a.command == "search":
         rows = read_json(ROOT / "catalog/skills.json")["skills"]
         query = a.query.casefold()
-        return [row for row in rows if query in json.dumps(row, ensure_ascii=False).casefold()]
+        return [
+            row
+            for row in rows
+            if query in json.dumps(row, ensure_ascii=False).casefold()
+        ]
     if a.command == "preflight":
         data = repository.preflight(a.repo)
         return data if a.full else concise_environment(data)
     if a.command in {"plan", "init"}:
-        options = {key: getattr(a, key) for key in ["task", "mode", "budget", "base", "profile", "exclude", "config"]}
+        options = {
+            key: getattr(a, key)
+            for key in [
+                "task",
+                "mode",
+                "budget",
+                "base",
+                "profile",
+                "exclude",
+                "config",
+            ]
+        }
         if a.command == "plan":
             plan, preflight = runs.plan(a.repo, **options)
-            return {"plan": plan, "preflight": preflight if a.full else concise_environment(preflight)}
-        data = runs.initialize(a.repo, a.output, allow_fixes=a.allow_fixes, allow_publication=a.allow_issue_publication, **options)
-        return {"output": str(a.output), "run": data if a.full else concise_environment(data)}
+            return {
+                "plan": plan,
+                "preflight": preflight if a.full else concise_environment(preflight),
+            }
+        data = runs.initialize(
+            a.repo,
+            a.output,
+            allow_fixes=a.allow_fixes,
+            allow_publication=a.allow_issue_publication,
+            **options,
+        )
+        return {
+            "output": str(a.output),
+            "run": data if a.full else concise_environment(data),
+        }
     if a.command == "validate-run":
         errors = runs.validate_run(a.directory)
         if errors:
@@ -130,10 +196,15 @@ def dispatch(a):
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "report":
-        reports.render(read_json(a.audit), a.output, read_json(a.prior) if a.prior else None)
+        reports.render(
+            read_json(a.audit), a.output, read_json(a.prior) if a.prior else None
+        )
         return {"output": str(a.output)}
     if a.command == "issues":
-        return {"drafts": reports.issue_drafts(read_json(a.audit), a.output), "remote_writes": 0}
+        return {
+            "drafts": reports.issue_drafts(read_json(a.audit), a.output),
+            "remote_writes": 0,
+        }
     if a.command == "compare":
         return runs.compare(read_json(a.before), read_json(a.after))
     if a.command == "reconcile":
@@ -143,18 +214,34 @@ def dispatch(a):
         atomic_json(a.output, data)
         return {"observations": len(data["observations"]), "output": str(a.output)}
     if a.command in {"install", "update"}:
-        return installation.install(a.destination, a.host, a.scope, a.pack, a.skill, a.command == "update", a.dry_run)
+        return installation.install(
+            a.destination,
+            a.host,
+            a.scope,
+            a.pack,
+            a.skill,
+            a.command == "update",
+            a.dry_run,
+        )
     if a.command == "remove":
         if not a.skill:
-            raise ValueError("Remove requires at least one --skill; there is no implicit remove-all")
+            raise ValueError(
+                "Remove requires at least one --skill; there is no implicit remove-all"
+            )
         return installation.remove(a.destination, a.host, a.scope, a.skill, a.dry_run)
     if a.command == "rollback":
         return installation.rollback(a.destination, a.host, a.scope)
     if a.command == "recover-install":
-        return installation.recover(a.destination, a.host, a.scope, a.confirm_interrupted)
+        return installation.recover(
+            a.destination, a.host, a.scope, a.confirm_interrupted
+        )
     if a.command == "evaluate":
         argv = json.loads(a.adapter_argv)
-        if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv):
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(not isinstance(arg, str) for arg in argv)
+        ):
             raise ValueError("Adapter argv must be a nonempty JSON array of strings")
         return evaluations.evaluate(a.output, argv, a.case, a.repeats, a.timeout)
     if a.command == "release":
