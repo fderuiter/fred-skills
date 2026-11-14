@@ -15,6 +15,24 @@ when appropriate. Follow its current installation/discovery instructions and tes
 behavior in that environment. Recognizing SKILL.md does not prove identical runtime
 behavior, permissions, or tool availability across agents.
 
+## Installation
+
+Install all 35 audit skills directly via plugin marketplaces:
+
+### Claude Code
+
+```sh
+/plugin marketplace add fderuiter/fred-skills
+```
+
+### Codex
+
+```sh
+codex plugin marketplace add fderuiter/fred-skills
+```
+
+For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install`.
+
 ## Focused investigation
 
 ```text

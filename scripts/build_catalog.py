@@ -11,6 +11,10 @@ from skill_tools import ROOT, read_frontmatter, suite_members
 
 def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
     membership = suite_members(root)
+    for name in sorted(membership):
+        entry_point = root / "skills" / name / "SKILL.md"
+        if entry_point.is_symlink() or not entry_point.is_file():
+            raise ValueError(f"Listed skill missing entry point file: {name}")
     experience_path = root / "catalog/experience.json"
     experience = (
         json.loads(experience_path.read_text(encoding="utf-8"))["skills"]
@@ -55,12 +59,39 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         desc = entry["description"].replace("|", "\\|").replace("\n", " ")
         phase = entry["phase_title"] or "Independent"
         markdown += f"| {phase} | [{entry['name']}](../{entry['path']}) | {desc} |\n"
+    plugins = [
+        {
+            "name": entry["name"],
+            "description": entry["description"],
+            "source": f"./skills/{entry['name']}",
+        }
+        for entry in sorted(entries, key=lambda item: item["name"])
+        if entry.get("suite") == "repository-audits"
+    ]
+    marketplace = {
+        "name": "fred-skills",
+        "owner": {"name": "fderuiter"},
+        "metadata": {
+            "description": (
+                "Portable engineering workflows for investigating repositories, planning"
+                " useful fixes, and verifying that those fixes work."
+            )
+        },
+        "plugins": plugins,
+    }
     return {
-        "catalog/skills.json": json.dumps(
-            {"schema_version": "1.0", "skills": entries}, indent=2, ensure_ascii=False
-        )
-        + "\n",
+        "catalog/skills.json": (
+            json.dumps(
+                {"schema_version": "1.0", "skills": entries},
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n"
+        ),
         "docs/catalog.md": markdown,
+        ".claude-plugin/marketplace.json": (
+            json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+        ),
     }
 
 

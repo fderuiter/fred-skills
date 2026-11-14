@@ -93,13 +93,57 @@ class PackageTests(unittest.TestCase):
         self.manifest()
         self.assertEqual([], build(self.root))
         first = (self.root / "catalog/skills.json").read_bytes()
+        first_marketplace = (self.root / ".claude-plugin/marketplace.json").read_bytes()
         self.assertEqual([], build(self.root, check=True))
         build(self.root)
         self.assertEqual(first, (self.root / "catalog/skills.json").read_bytes())
+        self.assertEqual(
+            first_marketplace,
+            (self.root / ".claude-plugin/marketplace.json").read_bytes(),
+        )
         self.entry.write_text(
             self.entry.read_text().replace("synthetic contracts", "revised contracts")
         )
-        self.assertTrue(build(self.root, check=True))
+        problems = build(self.root, check=True)
+        self.assertTrue(problems)
+        self.assertTrue(
+            any(".claude-plugin/marketplace.json" in problem for problem in problems)
+        )
+
+    def test_marketplace_drift_is_detected(self):
+        self.manifest()
+        self.assertEqual([], build(self.root))
+        marketplace_path = self.root / ".claude-plugin/marketplace.json"
+        self.assertTrue(marketplace_path.is_file())
+        marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        problems = build(self.root, check=True)
+        self.assertTrue(
+            any(".claude-plugin/marketplace.json" in problem for problem in problems)
+        )
+
+    def test_listed_skill_without_valid_entry_point_is_rejected(self):
+        self.manifest()
+        self.entry.unlink()
+        with self.assertRaises(ValueError) as ctx:
+            build(self.root)
+        self.assertIn("missing entry point file", str(ctx.exception))
+
+    def test_committed_marketplace_manifest_is_valid_and_current(self):
+        self.assertEqual([], build(ROOT, check=True))
+        manifest_path = ROOT / ".claude-plugin/marketplace.json"
+        self.assertTrue(manifest_path.is_file())
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["name"], "fred-skills")
+        self.assertEqual(data["owner"]["name"], "fderuiter")
+        plugins = data["plugins"]
+        self.assertEqual(len(plugins), 35)
+        for plugin in plugins:
+            self.assertIn("name", plugin)
+            self.assertIn("description", plugin)
+            self.assertIn("source", plugin)
+            self.assertTrue(plugin["source"].startswith("./skills/"))
+            entry_file = ROOT / plugin["source"] / "SKILL.md"
+            self.assertTrue(entry_file.is_file())
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
         self.manifest()
