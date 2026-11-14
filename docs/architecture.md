@@ -59,15 +59,18 @@ It validates the repository without invoking an external agent or requiring secr
 
 ## Optional local toolkit
 
-The original 35-package audit family remains intact. A six-package workflow family
-uses `shared/repo-workflows/` for finding verification, independent regression specification,
-fix planning/application/verification, and reconciliation. The resource synchronizer reads
-family manifests; each resulting package is independently portable.
+The 36-package audit family and six-package workflow family provide 42 total packages
+across the repository. The workflow family uses `shared/repo-workflows/` for finding
+verification, independent regression specification, fix planning/application/verification,
+and reconciliation. The resource synchronizer reads family manifests; each resulting
+package is independently portable.
 
 Root `scripts/fred.py` provides discovery and explicitly selected local operations.
 `fredlib` separates source inventory/Git metadata, planning/run state, installation,
 rendering, evaluation, and release archives (documented authoritatively in the
-[Developer API Guide](api.md)). It neither dispatches an agent nor installs
+[Developer API Guide](api.md)). Operational recovery workflows and troubleshooting
+procedures for locks, receipts, and git resolution are documented in [operational runbooks](runbooks.md).
+It neither dispatches an agent nor installs
 an analyzer. Standard library code handles filesystem/subprocess work; jsonschema and
 PyYAML validate records and opt-in configuration. Playwright is optional browser QA only.
 

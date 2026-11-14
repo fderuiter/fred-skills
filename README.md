@@ -123,8 +123,10 @@ tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
 
 See the [CLI guide](docs/toolkit.md) for resuming work, source freshness, reports,
 comparisons, scanner imports, project profiles, and installation recovery. See
-[usage](docs/usage.md) for portable invocation and [evaluations](evals/README.md) for
-baseline/with-skill adapters, raw fixtures, and grading limits.
+[operational runbooks](docs/runbooks.md) for failure recovery, lock contention,
+corrupted receipts, and Git resolution errors. See [usage](docs/usage.md) for
+portable invocation and [evaluations](evals/README.md) for baseline/with-skill
+adapters, raw fixtures, and grading limits.
 
 ## Trust and validation
 
@@ -147,6 +149,6 @@ make check
 Use `make fix` to repair drift or regenerate shared copies and discovery catalogs. For environments without `make`, direct Python commands remain supported as documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
-[architecture](docs/architecture.md), [security](SECURITY.md), and
+[architecture](docs/architecture.md), [runbooks](docs/runbooks.md), [security](SECURITY.md), and
 [research](docs/research.md). [Licensing](docs/licensing.md) requires an owner decision
 before public release publication; this PR does not select a license or publish a tag.

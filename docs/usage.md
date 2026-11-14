@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 36 audit skills directly via plugin marketplaces:
+Install all 36 audit skills directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
 
 ### Claude Code
 
@@ -31,7 +31,19 @@ Install all 36 audit skills directly via plugin marketplaces:
 codex plugin marketplace add fderuiter/fred-skills
 ```
 
-For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install`.
+### Antigravity and Gemini CLI
+
+For Antigravity, Gemini CLI, and manual or offline installations, install skills with the toolkit CLI:
+
+```sh
+# Antigravity (project scope)
+python scripts/fred.py install --destination /path/to/project --host antigravity --pack starter
+
+# Gemini CLI (project scope)
+python scripts/fred.py install --destination /path/to/project --host gemini-cli --pack starter
+```
+
+For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install`. See the [integration guide](integration.md) for detailed host adapter setup, marker detection rules, and multi-agent orchestration.
 
 ## Focused investigation
 
@@ -84,34 +96,32 @@ fixable causes remain separate even if symptoms overlap.
 
 ## Download and verify release archives
 
-Official releases publish standalone tarball packages for all 36 audit specialists
-as well as a consolidated suite archive (`fred-skills-suite.tar.gz`), each accompanied by
-a cryptographic SHA-256 entry in `checksums.sha256` and GitHub SLSA build provenance attestations.
+Official releases publish versioned pack archives (such as `starter`, `full-audit`, or the complete 42-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file.
 
 ### Download
 
-Fetch release artifacts directly from GitHub Releases or via `curl`:
+Fetch release pack artifacts directly from GitHub Releases or via `curl`:
 
 ```sh
-# Download a single specialist and checksum manifest
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/repo-audit-concurrency.tar.gz
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/checksums.sha256
+# Download a versioned pack archive and checksum manifest
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-starter.tar
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/manifest.json
 
-# Or download the complete 36-skill audit suite
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-suite.tar.gz
+# Or download the complete 42-package pack
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-complete.tar
 ```
 
-### Verify checksums and attestations
+### Verify checksums and manifest
 
-Check artifact integrity and authenticate release origin:
+Check artifact integrity against the release manifest or checksums:
 
 ```sh
 # Verify SHA-256 checksum against manifest
-sha256sum --ignore-missing -c checksums.sha256
+sha256sum --ignore-missing -c SHA256SUMS
 
-# Verify cryptographic SLSA provenance attestation against repository origin
-gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills
-gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
+# Or verify release archives using the fred toolkit
+python scripts/fred.py verify-release manifest.json
 ```
 
 ### Extract and deploy
@@ -119,10 +129,10 @@ gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
 Unpack verified archives into your agent host skills destination:
 
 ```sh
-# Deploy single specialist (creates repo-audit-concurrency/ directory)
-tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/
+# Deploy starter pack
+tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agent/skills/
 
-# Deploy complete audit suite (creates all 36 repo-audit-*/ directories)
-tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
+# Deploy complete pack (creates all 42 skill directories)
+tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agent/skills/
 ```
 

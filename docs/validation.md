@@ -45,7 +45,7 @@ misses, false positives, and environment constraints when extending the suite.
 
 ## 0.2.0 usability and correction-workflow validation
 
-The expanded deterministic suite exercises 41 standalone packages, generated recipes,
+The expanded deterministic suite exercises 42 total packages, generated recipes,
 packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
 proof requirements, comparison collisions, safe SARIF imports, HTML escaping, managed
 installation lifecycle/recovery, deterministic archives/tamper detection, and evaluation

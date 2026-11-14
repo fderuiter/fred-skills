@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: skills-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   PYTHONDONTWRITEBYTECODE: '1'
   PYTHONIOENCODING: utf-8

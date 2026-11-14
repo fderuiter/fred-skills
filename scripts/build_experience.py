@@ -26,7 +26,7 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
     doc += "\n## Packs\n\n| Pack | Purpose | Packages |\n| --- | --- | --- |\n"
     for name, pack in packs.items():
         doc += f"| `{name}` | {pack['description']} | {len(pack['skills'])} |\n"
-    doc += "\n## Host adapters\n\nPaths are relative to the explicit project/home destination. Filesystem checks are not host behavior certification.\n\n| Host | Project | User | Behavioral status |\n| --- | --- | --- | --- |\n"
+    doc += "\n## Host adapters\n\nPaths are relative to the explicit project/home destination. Filesystem checks are not host behavior certification. See the [integration guide](integration.md) for host setup and orchestration instructions.\n\n| Host | Project | User | Behavioral status |\n| --- | --- | --- | --- |\n"
     for name, host in hosts.items():
         doc += f"| {name} | `{host['project_path']}` | `{host['user_path']}` | {host['behavior_test']} |\n"
     cards = []
