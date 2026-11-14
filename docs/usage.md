@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 35 audit skills directly via plugin marketplaces:
+Install all 36 audit skills directly via plugin marketplaces:
 
 ### Claude Code
 
@@ -84,7 +84,7 @@ fixable causes remain separate even if symptoms overlap.
 
 ## Download and verify release archives
 
-Official releases publish standalone tarball packages for all 35 audit specialists
+Official releases publish standalone tarball packages for all 36 audit specialists
 as well as a consolidated suite archive (`fred-skills-suite.tar.gz`), each accompanied by
 a cryptographic SHA-256 entry in `checksums.sha256` and GitHub SLSA build provenance attestations.
 
@@ -97,7 +97,7 @@ Fetch release artifacts directly from GitHub Releases or via `curl`:
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/repo-audit-concurrency.tar.gz
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/checksums.sha256
 
-# Or download the complete 35-skill audit suite
+# Or download the complete 36-skill audit suite
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-suite.tar.gz
 ```
 
@@ -122,7 +122,7 @@ Unpack verified archives into your agent host skills destination:
 # Deploy single specialist (creates repo-audit-concurrency/ directory)
 tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/
 
-# Deploy complete audit suite (creates all 35 repo-audit-*/ directories)
+# Deploy complete audit suite (creates all 36 repo-audit-*/ directories)
 tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
 ```
 
