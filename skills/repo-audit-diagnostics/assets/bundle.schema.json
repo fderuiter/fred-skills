@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AuditSessionDiagnosticBundle",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "timestamp",
+    "failure_classification",
+    "environment",
+    "recovery",
+    "scrubbed_transcript"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "failure_classification": {
+      "type": "object",
+      "required": [
+        "failure_type",
+        "summary",
+        "line_number"
+      ],
+      "properties": {
+        "failure_type": {
+          "type": "string",
+          "enum": [
+            "tool_timeout",
+            "schema_validation_error",
+            "context_limit",
+            "unclassified_failure"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "line_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "matched_line": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "correlated_domain": {
+      "type": "object",
+      "properties": {
+        "specialist_skill": {
+          "type": ["string", "null"]
+        },
+        "topic": {
+          "type": ["string", "null"]
+        },
+        "ledger_references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "platform",
+        "python_version"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "python_version": {
+          "type": "string"
+        },
+        "repository_path": {
+          "type": ["string", "null"]
+        },
+        "run_id": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "required": [
+        "instructions"
+      ],
+      "properties": {
+        "last_checkpoint": {
+          "type": ["string", "null"]
+        },
+        "instructions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "scrubbed_transcript": {
+      "type": "string"
+    }
+  }
+}

@@ -405,6 +405,34 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "repo-audit-diagnostics",
+      "title": "Repository Audit Session Diagnostics",
+      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
+      "path": "skills/repo-audit-diagnostics/SKILL.md",
+      "suite": "repository-audits",
+      "phase": 0,
+      "phase_title": "Coordinator",
+      "maturity": "experimental",
+      "symptoms": [
+        "stalled",
+        "timeout",
+        "schema",
+        "triage",
+        "diagnostics",
+        "transcript"
+      ],
+      "expected_inputs": [
+        "session transcript",
+        "workspace run directory",
+        "audit ledger"
+      ],
+      "outcomes": [
+        "Evidence-backed diagnostic report, scrubbed bundle, and recovery handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "repo-audit-domain-models",
       "title": "Implicit Domain Models",
       "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
