@@ -1,16 +1,17 @@
 """Automated tests for audit to SARIF v2.1.0 converter."""
+
 from __future__ import annotations
 
 import copy
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = ROOT / "scripts/audit_to_sarif.py"
@@ -56,6 +57,7 @@ class AuditToSarifTests(unittest.TestCase):
         if SARIF_SCHEMA_PATH.exists():
             try:
                 import jsonschema
+
                 schema = json.loads(SARIF_SCHEMA_PATH.read_text(encoding="utf-8"))
                 validator = jsonschema.Draft202012Validator(schema)
                 errors = list(validator.iter_errors(sarif))
@@ -76,7 +78,7 @@ class AuditToSarifTests(unittest.TestCase):
         audit["findings"] = []
         for i, (sev, expected_level) in enumerate(cases):
             f = copy.deepcopy(self.base_audit["findings"][0])
-            f["id"] = f"F-{i+1}"
+            f["id"] = f"F-{i + 1}"
             f["severity"] = sev
             audit["findings"].append(f)
 
@@ -136,20 +138,30 @@ class AuditToSarifTests(unittest.TestCase):
         self.assertEqual(3, len(result["locations"]))
 
         loc1 = result["locations"][0]
-        self.assertEqual("src/core/auth.py", loc1["physicalLocation"]["artifactLocation"]["uri"])
-        self.assertEqual("%SRCROOT%", loc1["physicalLocation"]["artifactLocation"]["uriBaseId"])
+        self.assertEqual(
+            "src/core/auth.py", loc1["physicalLocation"]["artifactLocation"]["uri"]
+        )
+        self.assertEqual(
+            "%SRCROOT%", loc1["physicalLocation"]["artifactLocation"]["uriBaseId"]
+        )
         self.assertEqual(42, loc1["physicalLocation"]["region"]["startLine"])
         self.assertEqual(55, loc1["physicalLocation"]["region"]["endLine"])
         self.assertEqual([{"name": "authenticate_user"}], loc1["logicalLocations"])
-        self.assertEqual({"text": "Token signature verification skipped"}, loc1["message"])
+        self.assertEqual(
+            {"text": "Token signature verification skipped"}, loc1["message"]
+        )
 
         loc2 = result["locations"][1]
-        self.assertEqual("config/settings.yaml", loc2["physicalLocation"]["artifactLocation"]["uri"])
+        self.assertEqual(
+            "config/settings.yaml", loc2["physicalLocation"]["artifactLocation"]["uri"]
+        )
         self.assertEqual(10, loc2["physicalLocation"]["region"]["startLine"])
         self.assertEqual(10, loc2["physicalLocation"]["region"]["endLine"])
 
         loc3 = result["locations"][2]
-        self.assertEqual("src/auth/provider.py", loc3["physicalLocation"]["artifactLocation"]["uri"])
+        self.assertEqual(
+            "src/auth/provider.py", loc3["physicalLocation"]["artifactLocation"]["uri"]
+        )
         self.assertEqual(1, loc3["physicalLocation"]["region"]["startLine"])
         self.assertEqual(5, loc3["physicalLocation"]["region"]["endLine"])
 
@@ -286,7 +298,14 @@ class AuditToSarifTests(unittest.TestCase):
         for script in [SCRIPT_PATH, SKILL_SCRIPT_PATH]:
             with self.subTest(script=script.name):
                 proc = subprocess.run(
-                    [sys.executable, str(script), str(input_path), "-o", str(output_path)],
+                    [
+                        sys.executable,
+                        str(script),
+                        str(input_path),
+                        "-o",
+                        str(output_path),
+                    ],
+                    check=False,
                     capture_output=True,
                     text=True,
                 )
@@ -303,6 +322,7 @@ class AuditToSarifTests(unittest.TestCase):
 
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), str(input_path), str(output_path)],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -317,6 +337,7 @@ class AuditToSarifTests(unittest.TestCase):
 
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), str(input_path)],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -329,6 +350,7 @@ class AuditToSarifTests(unittest.TestCase):
         missing = self.temp_path / "does_not_exist.json"
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), str(missing)],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -341,6 +363,7 @@ class AuditToSarifTests(unittest.TestCase):
         bad_json.write_text("{ not json }", encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), str(bad_json)],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -352,6 +375,7 @@ class AuditToSarifTests(unittest.TestCase):
         array_json.write_text("[1, 2, 3]", encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), str(array_json)],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -360,33 +384,36 @@ class AuditToSarifTests(unittest.TestCase):
 
     def test_cli_filter_flags(self):
         audit = copy.deepcopy(self.base_audit)
-        audit["findings"].append({
-            "id": "F-refuted-cli",
-            "topic": "cache",
-            "title": "Refuted claim",
-            "status": "refuted",
-            "severity": "info",
-            "confidence": "low",
-            "contract_ids": [],
-            "evidence_ids": [],
-            "preconditions": "none",
-            "sequence": ["check"],
-            "expected": "ok",
-            "actual": "ok",
-            "impact": "none",
-            "root_cause": "none",
-            "counterevidence": "Refuted by test",
-            "remedy": "None needed",
-            "acceptance": ["pass"],
-            "validation": {"state": "not-run", "commands": [], "result": "none"},
-            "related_findings": [],
-        })
+        audit["findings"].append(
+            {
+                "id": "F-refuted-cli",
+                "topic": "cache",
+                "title": "Refuted claim",
+                "status": "refuted",
+                "severity": "info",
+                "confidence": "low",
+                "contract_ids": [],
+                "evidence_ids": [],
+                "preconditions": "none",
+                "sequence": ["check"],
+                "expected": "ok",
+                "actual": "ok",
+                "impact": "none",
+                "root_cause": "none",
+                "counterevidence": "Refuted by test",
+                "remedy": "None needed",
+                "acceptance": ["pass"],
+                "validation": {"state": "not-run", "commands": [], "result": "none"},
+                "related_findings": [],
+            }
+        )
         input_path = self.temp_path / "audit_with_refuted.json"
         input_path.write_text(json.dumps(audit), encoding="utf-8")
 
         # Test --filter-refuted
         proc = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), str(input_path), "--filter-refuted"],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -398,7 +425,13 @@ class AuditToSarifTests(unittest.TestCase):
 
         # Test --filter-refuted-or-info
         proc = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), str(input_path), "--filter-refuted-or-info"],
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                str(input_path),
+                "--filter-refuted-or-info",
+            ],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -420,6 +453,7 @@ class AuditToSarifTests(unittest.TestCase):
                 "--output",
                 str(output_path),
             ],
+            check=False,
             capture_output=True,
             text=True,
         )
@@ -438,43 +472,53 @@ class AuditToSarifTests(unittest.TestCase):
         # Create 500 evidence items and 500 findings across multiple severities
         severities = ["critical", "high", "medium", "low", "info"]
         for i in range(500):
-            ev_id = f"E-{i+1}"
-            audit["evidence"].append({
-                "id": ev_id,
-                "path": f"src/module_{i % 20}/file_{i}.py",
-                "line_start": (i * 10) + 1,
-                "line_end": (i * 10) + 5,
-                "symbol": f"func_{i}",
-                "context": f"Audit context {i}",
-            })
-            audit["findings"].append({
-                "id": f"F-{i+1}",
-                "topic": f"topic_{i % 10}",
-                "tags": [f"tag_{i % 5}"],
-                "title": f"Finding title {i}",
-                "status": "supported",
-                "severity": severities[i % len(severities)],
-                "confidence": "high",
-                "contract_ids": ["C-1"],
-                "evidence_ids": [ev_id],
-                "preconditions": f"Precondition {i}",
-                "sequence": [f"Step {i}"],
-                "expected": f"Expected behavior {i}",
-                "actual": f"Actual behavior {i}",
-                "impact": f"Impact description {i}",
-                "root_cause": f"Root cause description {i}",
-                "counterevidence": f"Counterevidence {i}",
-                "remedy": f"Fix instructions {i}",
-                "acceptance": [f"Acceptance test {i}"],
-                "validation": {"state": "not-run", "commands": [], "result": "none"},
-                "related_findings": [],
-            })
+            ev_id = f"E-{i + 1}"
+            audit["evidence"].append(
+                {
+                    "id": ev_id,
+                    "path": f"src/module_{i % 20}/file_{i}.py",
+                    "line_start": (i * 10) + 1,
+                    "line_end": (i * 10) + 5,
+                    "symbol": f"func_{i}",
+                    "context": f"Audit context {i}",
+                }
+            )
+            audit["findings"].append(
+                {
+                    "id": f"F-{i + 1}",
+                    "topic": f"topic_{i % 10}",
+                    "tags": [f"tag_{i % 5}"],
+                    "title": f"Finding title {i}",
+                    "status": "supported",
+                    "severity": severities[i % len(severities)],
+                    "confidence": "high",
+                    "contract_ids": ["C-1"],
+                    "evidence_ids": [ev_id],
+                    "preconditions": f"Precondition {i}",
+                    "sequence": [f"Step {i}"],
+                    "expected": f"Expected behavior {i}",
+                    "actual": f"Actual behavior {i}",
+                    "impact": f"Impact description {i}",
+                    "root_cause": f"Root cause description {i}",
+                    "counterevidence": f"Counterevidence {i}",
+                    "remedy": f"Fix instructions {i}",
+                    "acceptance": [f"Acceptance test {i}"],
+                    "validation": {
+                        "state": "not-run",
+                        "commands": [],
+                        "result": "none",
+                    },
+                    "related_findings": [],
+                }
+            )
 
         start = time.perf_counter()
         sarif = audit_to_sarif(audit)
         duration = time.perf_counter() - start
 
-        self.assertLess(duration, 2.0, f"Conversion took {duration:.3f}s, expected < 2.0s")
+        self.assertLess(
+            duration, 2.0, f"Conversion took {duration:.3f}s, expected < 2.0s"
+        )
         self.assertEqual(500, len(sarif["runs"][0]["results"]))
         self.assertEqual(500, len(sarif["runs"][0]["tool"]["driver"]["rules"]))
 

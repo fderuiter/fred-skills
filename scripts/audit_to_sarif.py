@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Convert repository audit findings (audit.json) to SARIF v2.1.0 format."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 SEVERITY_TO_SARIF_LEVEL = {
@@ -25,7 +26,7 @@ def audit_to_sarif(
 ) -> dict[str, Any]:
     """Convert audit data conforming to audit.schema.json into SARIF v2.1.0."""
     if not isinstance(data, dict):
-        raise ValueError("Audit data must be a JSON object")
+        raise TypeError("Audit data must be a JSON object")
 
     evidence_map: dict[str, dict[str, Any]] = {}
     for ev in data.get("evidence", []):
@@ -225,7 +226,7 @@ def convert_file(
         raise ValueError(f"Invalid JSON in '{input_path}': {exc}") from exc
 
     if not isinstance(data, dict):
-        raise ValueError(f"Input file '{input_path}' must contain a JSON object")
+        raise TypeError(f"Input file '{input_path}' must contain a JSON object")
 
     sarif = audit_to_sarif(
         data,
@@ -241,7 +242,9 @@ def convert_file(
                 encoding="utf-8",
             )
         except OSError as exc:
-            raise ValueError(f"Cannot write output file '{output_path}': {exc}") from exc
+            raise ValueError(
+                f"Cannot write output file '{output_path}': {exc}"
+            ) from exc
 
     return sarif
 
@@ -313,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
             filter_info=filter_info,
             indent=args.indent,
         )
-    except (ValueError, OSError) as exc:
+    except (ValueError, TypeError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 

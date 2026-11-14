@@ -221,6 +221,7 @@ def dispatch(a):
         return {"observations": len(data["observations"]), "output": str(a.output)}
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
+
         data = convert_file(
             a.audit,
             a.output,
