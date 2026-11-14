@@ -248,6 +248,51 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(default_result.returncode, 0)
         self.assertIn("scripts/validate_skills.py", default_result.stdout)
 
+    def test_documentation_files_state_accurate_package_count(self):
+        suites_doc = json.loads(
+            (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
+        )
+        suite_skills = [
+            skill
+            for suite in suites_doc["suites"]
+            for phase in suite["phases"]
+            for skill in phase["skills"]
+        ]
+        self.assertEqual(42, len(suite_skills))
+
+        arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+        self.assertIn("42 total packages", arch_text)
+
+        val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
+        self.assertIn("42 total packages", val_text)
+
+        impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
+        self.assertIn("42 total packages", impl_text)
+
+        usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
+        self.assertIn("complete 42-package pack", usage_text)
+        self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
+
+        for doc_name in [
+            "docs/architecture.md",
+            "docs/validation.md",
+            "docs/implementation-status.md",
+            "docs/release-notes-0.2.0.md",
+        ]:
+            doc_content = (ROOT / doc_name).read_text(encoding="utf-8")
+            self.assertNotIn("41 packages", doc_content)
+            self.assertNotIn("41 skills", doc_content)
+
+        exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "| `full-audit` | All 33 specialist audits plus coordinator and synthesis. | 35 |",
+            exp_text,
+        )
+        self.assertIn(
+            "| `complete` | Every audit and engineering workflow. | 42 |",
+            exp_text,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
