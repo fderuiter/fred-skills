@@ -64,6 +64,12 @@ def parser() -> argparse.ArgumentParser:
     sub = commands.add_parser("import-sarif")
     sub.add_argument("source", type=Path)
     sub.add_argument("--output", type=Path, required=True)
+    sub = commands.add_parser("export-sarif")
+    sub.add_argument("audit", type=Path)
+    sub.add_argument("--output", type=Path, required=True)
+    sub.add_argument("--filter-refuted", action="store_true")
+    sub.add_argument("--filter-info", action="store_true")
+    sub.add_argument("--filter-refuted-or-info", action="store_true")
     for command in ["install", "update", "remove", "rollback", "recover-install"]:
         sub = commands.add_parser(command)
         sub.add_argument("--destination", type=Path, required=True, help="Explicit project root, or home directory with --scope user")
@@ -142,6 +148,15 @@ def dispatch(a):
         data = runs.import_sarif(a.source)
         atomic_json(a.output, data)
         return {"observations": len(data["observations"]), "output": str(a.output)}
+    if a.command == "export-sarif":
+        from audit_to_sarif import convert_file
+        data = convert_file(
+            a.audit,
+            a.output,
+            filter_refuted=a.filter_refuted or a.filter_refuted_or_info,
+            filter_info=a.filter_info or a.filter_refuted_or_info,
+        )
+        return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
     if a.command in {"install", "update"}:
         return installation.install(a.destination, a.host, a.scope, a.pack, a.skill, a.command == "update", a.dry_run)
     if a.command == "remove":
