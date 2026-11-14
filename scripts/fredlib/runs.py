@@ -93,11 +93,11 @@ def plan(
             key=lambda name: ordered.index(name) if name in ordered else len(ordered)
         )
         # The coordinator is an entry point, not a second pass over every specialist.
-        selected = [
-            name
-            for name in selected
-            if name not in ("repo-audit-program", "repo-audit-diagnostics")
-        ]
+        # Standard comprehensive plans exclude diagnostics, but recovery planning allows explicit selection.
+        excluded_specialists = {"repo-audit-program"}
+        if "repo-audit-diagnostics" not in recipe["skills"]:
+            excluded_specialists.add("repo-audit-diagnostics")
+        selected = [name for name in selected if name not in excluded_specialists]
         notes.append(
             "Comprehensive scope still requires workflow slices and explicit remaining coverage."
         )
@@ -115,14 +115,24 @@ def plan(
     deferred = selected[limit:]
     selected = selected[:limit]
     if (
+        "repo-audit-diagnostics" in recipe["skills"]
+        and "repo-audit-diagnostics" not in selected
+        and deferred
+    ):
+        deferred = [name for name in deferred if name != "repo-audit-diagnostics"] + [
+            selected[-1]
+        ]
+        selected[-1] = "repo-audit-diagnostics"
+    if (
         "repo-audit-synthesis" in recipe["skills"]
         and "repo-audit-synthesis" not in selected
         and deferred
     ):
+        idx = -1 if selected[-1] != "repo-audit-diagnostics" else -2
         deferred = [name for name in deferred if name != "repo-audit-synthesis"] + [
-            selected[-1]
+            selected[idx]
         ]
-        selected[-1] = "repo-audit-synthesis"
+        selected[idx] = "repo-audit-synthesis"
     if deferred:
         notes.append(
             "Budget bounds selected investigations; deferred topics remain unreviewed, not implicitly safe."

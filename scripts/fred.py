@@ -132,6 +132,51 @@ def parser() -> argparse.ArgumentParser:
     sub.add_argument("--pack", default="full-audit")
     sub = commands.add_parser("verify-release")
     sub.add_argument("manifest", type=Path)
+    sub = commands.add_parser("triage")
+    sub.add_argument(
+        "transcript",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Session transcript file (.json, .jsonl, .txt, .md)",
+    )
+    sub.add_argument(
+        "--transcript",
+        type=Path,
+        dest="transcript_opt",
+        default=None,
+        help="Session transcript file (.json, .jsonl, .txt, .md)",
+    )
+    sub.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="Optional audit run workspace directory with run.json/audit.json",
+    )
+    sub.add_argument(
+        "--workspace-dir",
+        type=Path,
+        default=None,
+        help="Optional audit run workspace directory with run.json/audit.json",
+    )
+    sub.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Directory to write scrubbed diagnostic_bundle.json and report",
+    )
+    sub.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to write scrubbed diagnostic_bundle.json and report",
+    )
+    sub.add_argument("--session-id", default=None, help="Explicit session or run ID")
+    sub.add_argument(
+        "--check-schema",
+        action="store_true",
+        help="Validate generated bundle against bundle.schema.json",
+    )
     return root
 
 
@@ -264,6 +309,30 @@ def dispatch(a):
         return releases.build(a.output, a.pack)
     if a.command == "verify-release":
         return releases.verify(a.manifest)
+    if a.command == "triage":
+        transcript = a.transcript or a.transcript_opt
+        if not transcript:
+            raise ValueError("Transcript file path is required")
+        if not transcript.is_file():
+            raise ValueError(f"Transcript file not found: {transcript}")
+        workspace = a.workspace or a.workspace_dir
+        output_dir = a.output or a.output_dir
+
+        import importlib.util
+
+        script_path = ROOT / "skills/repo-audit-diagnostics/scripts/triage.py"
+        if not script_path.is_file():
+            raise ValueError(f"Triage script not found at {script_path}")
+        spec = importlib.util.spec_from_file_location("diagnostics_triage", script_path)
+        triage = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(triage)
+
+        bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
+        if a.check_schema:
+            triage.validate_bundle(bundle)
+        if output_dir:
+            triage.export_bundle(bundle, output_dir)
+        return bundle
     raise ValueError("Unknown command")
 
 

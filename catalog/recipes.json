@@ -257,6 +257,23 @@
         "validation record",
         "continuation or implementation handoff"
       ]
+    },
+    "recover-audit": {
+      "outcome": "Triage interrupted or stalled audit sessions and plan recovery steps.",
+      "skills": [
+        "repo-audit-diagnostics",
+        "repo-audit-synthesis"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Interrupted session transcripts, checkpoint resumption, and scrubbed bundles"
+      ],
+      "outputs": [
+        "diagnostic_bundle.json",
+        "diagnostic_report.md",
+        "audit.json",
+        "continuation or implementation handoff"
+      ]
     }
   }
 }
