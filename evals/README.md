@@ -36,12 +36,21 @@ For a cross-platform harness self-check from the repository root:
 ```python
 from pathlib import Path
 import sys
+
 sys.path.insert(0, "scripts")
 from fredlib.evaluations import evaluate
-result = evaluate(Path("audit-output/evaluation"), [
-    sys.executable, str(Path("evals/reference_adapter.py").resolve()),
-    "--prompt", "{prompt_file}", "--output", "{output_file}"
-])
+
+result = evaluate(
+    Path("audit-output/evaluation"),
+    [
+        sys.executable,
+        str(Path("evals/reference_adapter.py").resolve()),
+        "--prompt",
+        "{prompt_file}",
+        "--output",
+        "{output_file}",
+    ],
+)
 print(result["summary"])
 ```
 

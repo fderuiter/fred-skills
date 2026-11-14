@@ -1,10 +1,12 @@
 """Validate installable skill structure and package-local resource references."""
+
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
 import jsonschema
 import yaml
 from skill_tools import ROOT, read_frontmatter, suite_members
@@ -17,24 +19,35 @@ def validate_skill(package: Path) -> list[str]:
     errors = []
     try:
         metadata, body = read_frontmatter(package / "SKILL.md")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         return [str(exc)]
     name = metadata.get("name")
-    if not isinstance(name, str) or not NAME.fullmatch(name) or len(name) > 64 or name != package.name:
+    if (
+        not isinstance(name, str)
+        or not NAME.fullmatch(name)
+        or len(name) > 64
+        or name != package.name
+    ):
         errors.append("Invalid name or directory mismatch")
     description = metadata.get("description")
     if not isinstance(description, str) or not 1 <= len(description.strip()) <= 1024:
-        errors.append("Description must be a nonempty string of at most 1024 characters")
+        errors.append(
+            "Description must be a nonempty string of at most 1024 characters"
+        )
     if not body.strip() or len(body.splitlines()) >= 500:
         errors.append("Skill body must be nonempty and under 500 lines")
     for path in package.rglob("*"):
         if path.is_symlink():
-            errors.append(f"Symlink breaks standalone packaging: {path.relative_to(package)}")
+            errors.append(
+                f"Symlink breaks standalone packaging: {path.relative_to(package)}"
+            )
             continue
         if not path.is_file():
             continue
         if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
-            errors.append(f"Generated Python cache in package: {path.relative_to(package)}")
+            errors.append(
+                f"Generated Python cache in package: {path.relative_to(package)}"
+            )
         try:
             if path.suffix == ".json":
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -56,7 +69,10 @@ def validate_skill(package: Path) -> list[str]:
     if ui_path.exists():
         try:
             ui = yaml.safe_load(ui_path.read_text(encoding="utf-8"))["interface"]
-            if not isinstance(ui.get("display_name"), str) or not ui["display_name"].strip():
+            if (
+                not isinstance(ui.get("display_name"), str)
+                or not ui["display_name"].strip()
+            ):
                 errors.append("Missing display name")
             short = ui.get("short_description")
             if not isinstance(short, str) or not 25 <= len(short) <= 64:
@@ -82,9 +98,11 @@ def validate(root: Path = ROOT) -> list[str]:
             description = meta.get("description")
             if isinstance(description, str):
                 if description in descriptions:
-                    problems.append(f"Duplicate activation description: {package.name} and {descriptions[description]}")
+                    problems.append(
+                        f"Duplicate activation description: {package.name} and {descriptions[description]}"
+                    )
                 descriptions[description] = package.name
-        except (OSError, ValueError, yaml.YAMLError):
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
             pass  # The package-level validator already reports this failure.
     try:
         for name in suite_members(root):

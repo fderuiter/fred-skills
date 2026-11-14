@@ -37,12 +37,16 @@ To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-ve
 To regenerate shared copies and indexes or run verification scripts directly:
 
 ```sh
+ruff check .
+ruff format --check .
 python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
 python scripts/build_experience.py
 python scripts/validate_skills.py
 python -m unittest discover -s tests -v
 ```
+
+To automatically format code or apply safe lint fixes, use `ruff format .` and `ruff check --fix .`.
 
 For CI-equivalent non-mutating checks, add `--check` to the the resource and discovery generators. All
 commands run without network access once the development dependencies are installed.
