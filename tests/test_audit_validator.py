@@ -119,10 +119,12 @@ class AuditValidatorTests(unittest.TestCase):
                 sys.executable,
                 "-c",
                 (
-                    "import sys, runpy; sys.modules['jsonschema'] = None; "
-                    f"sys.argv = ['{SCRIPT}', '{fixture}']; "
-                    f"runpy.run_path('{SCRIPT}', run_name='__main__')"
+                    "import runpy, sys; sys.modules['jsonschema'] = None; "
+                    "sys.argv = sys.argv[1:]; "
+                    "runpy.run_path(sys.argv[0], run_name='__main__')"
                 ),
+                str(SCRIPT),
+                str(fixture),
             ],
             capture_output=True,
             text=True,
