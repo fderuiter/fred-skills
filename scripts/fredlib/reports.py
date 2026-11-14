@@ -5,11 +5,10 @@ import hashlib
 from html import escape
 from pathlib import Path
 
-from .common import atomic_json, read_json, relative_path
-from .runs import audit_errors, compare, fingerprint
+from .runs import audit_errors, compare
 
-STYLE = '''body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #ddd;padding:.6rem}.badge{font-weight:650}.muted{color:#53667a}input,select{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px}label{display:inline-block;margin:.4rem}article[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #e8a52c}@media(prefers-color-scheme:dark){body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}input,select{background:#101821;color:#e3ecf5}}'''
-SCRIPT = '''const q=document.querySelector('#query'),s=document.querySelector('#status');function filter(){let n=0;for(const a of document.querySelectorAll('article.finding')){a.hidden=!(a.textContent.toLowerCase().includes(q.value.toLowerCase())&&(!s.value||a.dataset.status===s.value));if(!a.hidden)n++;}const c=document.querySelector('#count');c.textContent=n+' '+(c.dataset.noun||'findings')+' shown';}q.addEventListener('input',filter);s.addEventListener('change',filter);filter();'''
+STYLE = """body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #ddd;padding:.6rem}.badge{font-weight:650}.muted{color:#53667a}input,select{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px}label{display:inline-block;margin:.4rem}article[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #e8a52c}@media(prefers-color-scheme:dark){body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}input,select{background:#101821;color:#e3ecf5}}"""
+SCRIPT = """const q=document.querySelector('#query'),s=document.querySelector('#status');function filter(){let n=0;for(const a of document.querySelectorAll('article.finding')){a.hidden=!(a.textContent.toLowerCase().includes(q.value.toLowerCase())&&(!s.value||a.dataset.status===s.value));if(!a.hidden)n++;}const c=document.querySelector('#count');c.textContent=n+' '+(c.dataset.noun||'findings')+' shown';}q.addEventListener('input',filter);s.addEventListener('change',filter);filter();"""
 
 
 def text(value) -> str:
@@ -21,28 +20,48 @@ def render(audit: dict, output: Path, prior: dict | None = None) -> None:
     if errors:
         raise ValueError("Invalid audit ledger: " + "; ".join(errors[:5]))
     evidence = {e["id"]: e for e in audit["evidence"]}
-    findings = sorted(audit["findings"], key=lambda f: (["critical", "high", "medium", "low", "info"].index(f["severity"]), f["id"]))
+    findings = sorted(
+        audit["findings"],
+        key=lambda f: (
+            ["critical", "high", "medium", "low", "info"].index(f["severity"]),
+            f["id"],
+        ),
+    )
     cards = []
     for f in findings:
-        locations = "".join(f'<li><code>{text(evidence[eid]["path"])}:{evidence[eid]["line_start"]}–{evidence[eid]["line_end"]}</code> — {text(evidence[eid]["symbol"])} — {text(evidence[eid]["context"])}</li>' for eid in f["evidence_ids"])
+        locations = "".join(
+            f"<li><code>{text(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']}</code> — {text(evidence[eid]['symbol'])} — {text(evidence[eid]['context'])}</li>"
+            for eid in f["evidence_ids"]
+        )
         sequence = "".join(f"<li>{text(step)}</li>" for step in f["sequence"])
         criteria = "".join(f"<li>{text(step)}</li>" for step in f["acceptance"])
-        cards.append(f'''<article class="finding" data-status="{text(f['status'])}" id="{text(f['id'])}"><h3>{text(f['id'])}: {text(f['title'])}</h3>
-<p class="badge">{text(f['severity'])} · {text(f['status'])} · confidence {text(f['confidence'])}</p>
-<p>{text(f['impact'])}</p><details><summary>Developer: failure, source, and correction</summary><p>{text(f['preconditions'])}</p><ol class="trace">{sequence}</ol><p><b>Expected:</b> {text(f['expected'])}</p><p><b>Actual:</b> {text(f['actual'])}</p><ul>{locations}</ul><p><b>Cause:</b> {text(f['root_cause'])}</p><p><b>Proposed remedy:</b> {text(f['remedy'])}</p></details>
-<details><summary>Reviewer: contracts, safeguards, and verification</summary><p>Contracts: {text(', '.join(f['contract_ids']))}</p><p>{text(f['counterevidence'])}</p><p>Validation: {text(f['validation']['state'])}</p><pre>{text(chr(10).join(f['validation']['commands']))}</pre><p>{text(f['validation']['result'])}</p></details>
-<details><summary>Implementation: acceptance and relationships</summary><ul>{criteria}</ul><p>Related findings: {text(', '.join(f['related_findings']))}</p><p class="muted">Evidence certainty is separate from remediation state.</p></details></article>''')
-    coverage = "".join(f"<tr><td>{text(c['topic'])}</td><td>{text(c['scope'])}</td><td>{text(c['status'])}</td><td>{text(c['notes'])}</td><td>{text(c['next_action'])}</td></tr>" for c in audit["coverage"])
+        cards.append(f'''<article class="finding" data-status="{text(f["status"])}" id="{text(f["id"])}"><h3>{text(f["id"])}: {text(f["title"])}</h3>
+<p class="badge">{text(f["severity"])} · {text(f["status"])} · confidence {text(f["confidence"])}</p>
+<p>{text(f["impact"])}</p><details><summary>Developer: failure, source, and correction</summary><p>{text(f["preconditions"])}</p><ol class="trace">{sequence}</ol><p><b>Expected:</b> {text(f["expected"])}</p><p><b>Actual:</b> {text(f["actual"])}</p><ul>{locations}</ul><p><b>Cause:</b> {text(f["root_cause"])}</p><p><b>Proposed remedy:</b> {text(f["remedy"])}</p></details>
+<details><summary>Reviewer: contracts, safeguards, and verification</summary><p>Contracts: {text(", ".join(f["contract_ids"]))}</p><p>{text(f["counterevidence"])}</p><p>Validation: {text(f["validation"]["state"])}</p><pre>{text(chr(10).join(f["validation"]["commands"]))}</pre><p>{text(f["validation"]["result"])}</p></details>
+<details><summary>Implementation: acceptance and relationships</summary><ul>{criteria}</ul><p>Related findings: {text(", ".join(f["related_findings"]))}</p><p class="muted">Evidence certainty is separate from remediation state.</p></details></article>''')
+    coverage = "".join(
+        f"<tr><td>{text(c['topic'])}</td><td>{text(c['scope'])}</td><td>{text(c['status'])}</td><td>{text(c['notes'])}</td><td>{text(c['next_action'])}</td></tr>"
+        for c in audit["coverage"]
+    )
     limitations = "".join(f"<li>{text(item)}</li>" for item in audit["limitations"])
-    checks = "".join(f"<tr><td>{text(c['name'])}</td><td>{text(c['state'])}</td><td><code>{text(c['command'])}</code></td><td>{text(c['result'])}</td></tr>" for c in audit["checks"])
+    checks = "".join(
+        f"<tr><td>{text(c['name'])}</td><td>{text(c['state'])}</td><td><code>{text(c['command'])}</code></td><td>{text(c['result'])}</td></tr>"
+        for c in audit["checks"]
+    )
     import json
-    comparison = text(json.dumps(compare(prior, audit), indent=2)) if prior else "No prior ledger supplied. Missing findings on another run do not prove resolution."
+
+    comparison = (
+        text(json.dumps(compare(prior, audit), indent=2))
+        if prior
+        else "No prior ledger supplied. Missing findings on another run do not prove resolution."
+    )
     script_hash = base64.b64encode(hashlib.sha256(SCRIPT.encode()).digest()).decode()
     csp = f"default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{script_hash}'; base-uri 'none'; form-action 'none'; connect-src 'none'"
-    html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="{escape(csp, quote=True)}"><title>Repository audit — {text(audit['run_id'])}</title><style>{STYLE}</style></head><body>
-<header><p class="muted">fred-skills · local evidence report</p><h1>Repository audit</h1><p>{text(audit['run_id'])} · {text(audit['repository']['identity'])}</p><p>Revision: <code>{text(audit['repository']['revision'])}</code> · dirty: {text(audit['repository']['dirty'])}</p><nav aria-label="Report views"><a href="#executive">Executive</a><a href="#findings">Findings</a><a href="#coverage">Coverage</a><a href="#checks">Checks</a><a href="#comparison">Comparison</a></nav></header>
-<section id="executive"><h2>Executive view</h2><p>{len(findings)} finding records; {sum(f['status']=='confirmed' for f in findings)} reproduced; {sum(f['status']=='refuted' for f in findings)} refuted. These counts are not a repository safety score.</p><ul>{limitations}</ul></section>
-<section id="findings"><h2>Review findings</h2><label for="query">Search findings <input id="query" type="search"></label><label for="status">Evidence status <select id="status"><option value="">All statuses</option>{''.join(f'<option>{s}</option>' for s in ['confirmed','supported','needs-validation','hardening','refuted'])}</select></label><p id="count" role="status" aria-live="polite"></p>{''.join(cards) or '<p>No findings recorded. Review coverage before drawing conclusions.</p>'}</section>
+    html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="{escape(csp, quote=True)}"><title>Repository audit — {text(audit["run_id"])}</title><style>{STYLE}</style></head><body>
+<header><p class="muted">fred-skills · local evidence report</p><h1>Repository audit</h1><p>{text(audit["run_id"])} · {text(audit["repository"]["identity"])}</p><p>Revision: <code>{text(audit["repository"]["revision"])}</code> · dirty: {text(audit["repository"]["dirty"])}</p><nav aria-label="Report views"><a href="#executive">Executive</a><a href="#findings">Findings</a><a href="#coverage">Coverage</a><a href="#checks">Checks</a><a href="#comparison">Comparison</a></nav></header>
+<section id="executive"><h2>Executive view</h2><p>{len(findings)} finding records; {sum(f["status"] == "confirmed" for f in findings)} reproduced; {sum(f["status"] == "refuted" for f in findings)} refuted. These counts are not a repository safety score.</p><ul>{limitations}</ul></section>
+<section id="findings"><h2>Review findings</h2><label for="query">Search findings <input id="query" type="search"></label><label for="status">Evidence status <select id="status"><option value="">All statuses</option>{"".join(f"<option>{s}</option>" for s in ["confirmed", "supported", "needs-validation", "hardening", "refuted"])}</select></label><p id="count" role="status" aria-live="polite"></p>{"".join(cards) or "<p>No findings recorded. Review coverage before drawing conclusions.</p>"}</section>
 <section id="coverage"><h2>Coverage and continuation</h2><table><thead><tr><th>Topic</th><th>Scope</th><th>Status</th><th>Notes</th><th>Next action</th></tr></thead><tbody>{coverage}</tbody></table></section>
 <section id="checks"><h2>Executed and unexecuted checks</h2><table><thead><tr><th>Check</th><th>State</th><th>Command</th><th>Result</th></tr></thead><tbody>{checks}</tbody></table></section><section id="comparison"><h2>Comparison</h2><pre>{comparison}</pre></section><script>{SCRIPT}</script></body></html>'''
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -55,7 +74,9 @@ def issue_drafts(audit: dict, output: Path) -> list[str]:
         raise ValueError("Invalid ledger; cannot draft issues")
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
-        raise ValueError("Issue output directory must be empty; stale drafts will not be mixed with current results")
+        raise ValueError(
+            "Issue output directory must be empty; stale drafts will not be mixed with current results"
+        )
     findings = {f["id"]: f for f in audit["findings"]}
     evidence = {e["id"]: e for e in audit["evidence"]}
     paths = []
@@ -63,21 +84,50 @@ def issue_drafts(audit: dict, output: Path) -> list[str]:
         if issue["publication"] != "draft":
             continue
         import re
+
         if not re.fullmatch(r"[A-Za-z0-9_-]+", issue["id"]):
             raise ValueError("Issue IDs must be filename-safe")
-        sections = [f"# {issue['title']}", "Publication state: local draft; no external write performed."]
+        sections = [
+            f"# {issue['title']}",
+            "Publication state: local draft; no external write performed.",
+        ]
         for fid in issue["finding_ids"]:
             f = findings[fid]
-            sections.extend([f"## {fid}: {f['title']}", f"Evidence: {f['status']}; severity: {f['severity']}; confidence: {f['confidence']}",
-                f["impact"], "### Preconditions", f["preconditions"],
-                "### Expected and actual behavior", "Expected: " + f["expected"], "Actual: " + f["actual"],
-                "### Source evidence", "\n".join(f"- {evidence[eid]['path']}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({evidence[eid]['symbol']}): {evidence[eid]['context']}" for eid in f["evidence_ids"]),
-                "### Contract and cause", "Contract IDs: " + ", ".join(f["contract_ids"]), f["root_cause"],
-                "### Failure sequence", "\n".join(f"{i}. {step}" for i, step in enumerate(f["sequence"], 1)),
-                "### Counterevidence", f["counterevidence"], "### Proposed correction", f["remedy"],
-                "### Acceptance", "\n".join("- " + a for a in f["acceptance"]),
-                "### Validation", f["validation"]["state"] + ": " + f["validation"]["result"],
-                "\n".join("    " + command for command in f["validation"]["commands"])])
+            sections.extend(
+                [
+                    f"## {fid}: {f['title']}",
+                    f"Evidence: {f['status']}; severity: {f['severity']}; confidence: {f['confidence']}",
+                    f["impact"],
+                    "### Preconditions",
+                    f["preconditions"],
+                    "### Expected and actual behavior",
+                    "Expected: " + f["expected"],
+                    "Actual: " + f["actual"],
+                    "### Source evidence",
+                    "\n".join(
+                        f"- {evidence[eid]['path']}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({evidence[eid]['symbol']}): {evidence[eid]['context']}"
+                        for eid in f["evidence_ids"]
+                    ),
+                    "### Contract and cause",
+                    "Contract IDs: " + ", ".join(f["contract_ids"]),
+                    f["root_cause"],
+                    "### Failure sequence",
+                    "\n".join(
+                        f"{i}. {step}" for i, step in enumerate(f["sequence"], 1)
+                    ),
+                    "### Counterevidence",
+                    f["counterevidence"],
+                    "### Proposed correction",
+                    f["remedy"],
+                    "### Acceptance",
+                    "\n".join("- " + a for a in f["acceptance"]),
+                    "### Validation",
+                    f["validation"]["state"] + ": " + f["validation"]["result"],
+                    "\n".join(
+                        "    " + command for command in f["validation"]["commands"]
+                    ),
+                ]
+            )
         sections.append("Dependencies: " + ", ".join(issue["depends_on"]))
         path = output / (issue["id"] + ".md")
         path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")

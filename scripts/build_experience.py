@@ -1,12 +1,13 @@
 """Generate a searchable offline catalog and task/pack/host documentation."""
+
 import argparse
-from html import escape
-import json
-from pathlib import Path
-from fredlib.common import ROOT, read_json
-from fredlib.reports import SCRIPT, STYLE
 import base64
 import hashlib
+from html import escape
+from pathlib import Path
+
+from fredlib.common import ROOT, read_json
+from fredlib.reports import SCRIPT, STYLE
 
 
 def outputs(root: Path = ROOT) -> dict[str, str]:
@@ -30,11 +31,20 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
         doc += f"| {name} | `{host['project_path']}` | `{host['user_path']}` | {host['behavior_test']} |\n"
     cards = []
     for entry in catalog:
-        e = lambda key: escape(str(entry.get(key, "")), quote=True)
-        cards.append(f'<article class="finding" data-status="{e("suite")}"><h2><a href="../{e("path")}">{e("title")}</a></h2><p><code>{e("name")}</code></p><p>{e("description")}</p><p>Symptoms: {escape(", ".join(entry.get("symptoms", [])))}</p><p>Maturity: {e("maturity")}</p><details><summary>Inputs and outcomes</summary><p>{escape("; ".join(entry.get("expected_inputs", [])))}</p><p>{escape("; ".join(entry.get("outcomes", [])))}</p><p>{e("behavior_evaluation")}</p></details></article>')
-    tasks = "".join(f'<details><summary>{escape(name)} — {escape(item["outcome"])}</summary><pre>python scripts/fred.py plan /path/to/repo --task {escape(name)}'+(' --mode changes --base main' if item.get('requires_base') else '')+'</pre><p>'+escape(', '.join(item['skills']))+'</p></details>' for name,item in recipes.items())
+        e = lambda key, entry=entry: escape(str(entry.get(key, "")), quote=True)
+        cards.append(
+            f'<article class="finding" data-status="{e("suite")}"><h2><a href="../{e("path")}">{e("title")}</a></h2><p><code>{e("name")}</code></p><p>{e("description")}</p><p>Symptoms: {escape(", ".join(entry.get("symptoms", [])))}</p><p>Maturity: {e("maturity")}</p><details><summary>Inputs and outcomes</summary><p>{escape("; ".join(entry.get("expected_inputs", [])))}</p><p>{escape("; ".join(entry.get("outcomes", [])))}</p><p>{e("behavior_evaluation")}</p></details></article>'
+        )
+    tasks = "".join(
+        f"<details><summary>{escape(name)} — {escape(item['outcome'])}</summary><pre>python scripts/fred.py plan /path/to/repo --task {escape(name)}"
+        + (" --mode changes --base main" if item.get("requires_base") else "")
+        + "</pre><p>"
+        + escape(", ".join(item["skills"]))
+        + "</p></details>"
+        for name, item in recipes.items()
+    )
     h = base64.b64encode(hashlib.sha256(SCRIPT.encode()).digest()).decode()
-    html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';script-src 'sha256-{h}';base-uri 'none';connect-src 'none'"><title>fred-skills task explorer</title><style>{STYLE}</style></head><body><header><h1>Find an engineering workflow</h1><p>Choose an outcome, then inspect a small relevant set of portable skills.</p><nav><a href="../README.md">Quickstart</a><a href="toolkit.md">CLI guide</a><a href="validation.md">What has been tested</a></nav></header><section><h2>Start from your task</h2>{tasks}</section><section><h2>Search skills</h2><label for="query">Task or symptom <input id="query" type="search" placeholder="stale response, tenant, migration…"></label><label for="status">Family <select id="status"><option value="">All</option><option value="repository-audits">Audits</option><option value="repository-workflows">Verified engineering</option></select></label><p id="count" data-noun="skills" role="status" aria-live="polite"></p>{''.join(cards)}</section><script>{SCRIPT}</script></body></html>'''
+    html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';script-src 'sha256-{h}';base-uri 'none';connect-src 'none'"><title>fred-skills task explorer</title><style>{STYLE}</style></head><body><header><h1>Find an engineering workflow</h1><p>Choose an outcome, then inspect a small relevant set of portable skills.</p><nav><a href="../README.md">Quickstart</a><a href="toolkit.md">CLI guide</a><a href="validation.md">What has been tested</a></nav></header><section><h2>Start from your task</h2>{tasks}</section><section><h2>Search skills</h2><label for="query">Task or symptom <input id="query" type="search" placeholder="stale response, tenant, migration…"></label><label for="status">Family <select id="status"><option value="">All</option><option value="repository-audits">Audits</option><option value="repository-workflows">Verified engineering</option></select></label><p id="count" data-noun="skills" role="status" aria-live="polite"></p>{"".join(cards)}</section><script>{SCRIPT}</script></body></html>"""
     return {"docs/experience.md": doc, "docs/explorer.html": html}
 
 
