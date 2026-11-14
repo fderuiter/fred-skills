@@ -514,7 +514,8 @@ def parser() -> argparse.ArgumentParser:
         )
         sub.add_argument(
             "--host",
-            required=True,
+            required=False,
+            default=None,
             choices=HOST_CHOICES,
             help=f"Target agent host ({', '.join(HOST_CHOICES)})",
         )

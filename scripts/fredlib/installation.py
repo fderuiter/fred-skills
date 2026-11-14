@@ -18,7 +18,76 @@ from .common import (
 )
 
 
-def locations(destination: Path, host: str, scope: str, root: Path = ROOT):
+def _receipt_identifies_host(
+    destination: Path, host_name: str, scope: str | None = None
+) -> bool:
+    state_root = destination / ".fred-skills"
+    if not state_root.is_dir():
+        return False
+    if scope and (state_root / f"{host_name}-{scope}" / "receipt.json").is_file():
+        return True
+    if any(state_root.glob(f"{host_name}*/receipt.json")):
+        return True
+    if (state_root / host_name / "receipt.json").is_file():
+        return True
+    for json_file in state_root.rglob("receipt*.json"):
+        if json_file.is_file():
+            try:
+                data = read_json(json_file)
+            except (OSError, ValueError, KeyError):
+                continue
+            if isinstance(data, dict):
+                if data.get("host") == host_name:
+                    return True
+                for entry in data.get("history", []):
+                    if isinstance(entry, dict) and entry.get("host") == host_name:
+                        return True
+    return False
+
+
+def detect_host(destination: Path, scope: str = "project") -> str:
+    dest = destination.resolve()
+    marker_map = {
+        ".claude": "claude-code",
+        ".agents": "codex",
+        ".gemini": "gemini-cli",
+    }
+    found = [m for m in marker_map if (dest / m).exists()]
+    if not found:
+        raise ValueError(
+            f"No host markers (.claude, .agents, .gemini) found in destination '{destination}'; please specify --host"
+        )
+    if len(found) > 1:
+        markers_str = ", ".join(sorted(found))
+        raise ValueError(
+            f"Multiple host markers found ({markers_str}) in destination '{destination}'; please specify --host"
+        )
+
+    marker = found[0]
+    if marker == ".claude":
+        return "claude-code"
+    if marker == ".gemini":
+        return "gemini-cli"
+
+    has_antigravity = _receipt_identifies_host(dest, "antigravity", scope)
+    has_codex = _receipt_identifies_host(dest, "codex", scope)
+    if has_antigravity and has_codex:
+        raise ValueError(
+            f"Ambiguous host receipts for both codex and antigravity found in destination '{destination}'; please specify --host"
+        )
+    if has_antigravity:
+        return "antigravity"
+    return "codex"
+
+
+def locations(
+    destination: Path,
+    host: str | None = None,
+    scope: str = "project",
+    root: Path = ROOT,
+):
+    if host is None:
+        host = detect_host(destination, scope)
     hosts = read_json(root / "catalog/hosts.json")["hosts"]
     if host not in hosts or scope not in {"project", "user"}:
         raise ValueError("Unknown host or installation scope")
@@ -85,7 +154,7 @@ def require_unmodified(path: Path, record: dict | None):
 
 def install(
     destination: Path,
-    host: str,
+    host: str | None = None,
     scope: str = "project",
     pack: str | None = None,
     skills: list[str] | None = None,
@@ -93,6 +162,8 @@ def install(
     dry_run: bool = False,
     root: Path = ROOT,
 ) -> dict:
+    if host is None:
+        host = detect_host(destination, scope)
     selected = choose_skills(root, pack, skills)
     target, state = locations(destination, host, scope, root)
     current = receipt(state)
@@ -168,6 +239,7 @@ def install(
                     "files": files,
                     "content_hash": digest(files),
                 }
+            current["host"] = host
             current["skills"] = new_records
             current["history"].append(
                 {
@@ -196,13 +268,15 @@ def install(
 
 def remove(
     destination: Path,
-    host: str,
-    scope: str,
-    skills: list[str],
+    host: str | None = None,
+    scope: str = "project",
+    skills: list[str] | None = None,
     dry_run: bool = False,
     root: Path = ROOT,
 ) -> dict:
-    skills = list(dict.fromkeys(skills))
+    if host is None:
+        host = detect_host(destination, scope)
+    skills = list(dict.fromkeys(skills or []))
     target, state = locations(destination, host, scope, root)
     if dry_run:
         current = receipt(state)
@@ -244,7 +318,14 @@ def remove(
         return preview
 
 
-def rollback(destination: Path, host: str, scope: str, root: Path = ROOT) -> dict:
+def rollback(
+    destination: Path,
+    host: str | None = None,
+    scope: str = "project",
+    root: Path = ROOT,
+) -> dict:
+    if host is None:
+        host = detect_host(destination, scope)
     target, state = locations(destination, host, scope, root)
     with lock(state):
         current = receipt(state)
@@ -299,9 +380,9 @@ def rollback(destination: Path, host: str, scope: str, root: Path = ROOT) -> dic
 
 def recover(
     destination: Path,
-    host: str,
-    scope: str,
-    confirm_interrupted: bool,
+    host: str | None = None,
+    scope: str = "project",
+    confirm_interrupted: bool = False,
     root: Path = ROOT,
 ) -> dict:
     """Recover a prepared install after the user confirms its writer has stopped."""
@@ -309,6 +390,8 @@ def recover(
         raise ValueError(
             "Recovery requires --confirm-interrupted after verifying the previous writer has stopped"
         )
+    if host is None:
+        host = detect_host(destination, scope)
     target, state = locations(destination, host, scope, root)
     journal = read_json(state / "operation.json")
     current = receipt(state)
