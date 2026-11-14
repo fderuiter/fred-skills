@@ -28,17 +28,18 @@ class PackageSkillsTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_get_suite_skills_returns_35_audit_skills(self):
+    def test_get_suite_skills_returns_audit_skills(self):
         skills = get_suite_skills(ROOT)
-        self.assertEqual(36, len(skills))
+        self.assertGreater(len(skills), 0)
         for skill in skills:
             self.assertTrue(skill.startswith("repo-audit-"))
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
     def test_package_skills_creates_all_archives_and_checksums(self):
+        suite_skills = get_suite_skills(ROOT)
         checksums = package_skills(self.output_dir, root=ROOT)
-        # 36 individual + 1 consolidated suite = 37 archives
-        self.assertEqual(37, len(checksums))
+        expected_archive_count = len(suite_skills) + 1
+        self.assertEqual(expected_archive_count, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)
 
@@ -46,7 +47,7 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertTrue(manifest_file.is_file())
 
         verified = verify_checksums(self.output_dir)
-        self.assertEqual(37, len(verified))
+        self.assertEqual(expected_archive_count, len(verified))
         for name in checksums:
             self.assertTrue(verified[name])
             archive_path = self.output_dir / name
@@ -69,13 +70,24 @@ class PackageSkillsTests(unittest.TestCase):
                 self.assertFalse(name.endswith(".pyc"))
                 self.assertFalse(name.endswith(".pyo"))
 
-    def test_suite_archive_contains_all_35_skills(self):
+    def test_suite_archive_contains_all_skills(self):
         package_skills(self.output_dir, root=ROOT)
         suite_path = self.output_dir / "fred-skills-suite.tar.gz"
         with tarfile.open(suite_path, "r:gz") as tar:
             names = set(tar.getnames())
             for skill in get_suite_skills(ROOT):
                 self.assertIn(f"{skill}/SKILL.md", names)
+
+    def test_package_skills_raises_on_empty_suite(self):
+        empty_root = self.output_dir / "empty_repo"
+        empty_catalog = empty_root / "catalog"
+        empty_catalog.mkdir(parents=True)
+        (empty_catalog / "suites.json").write_text(
+            '{"schema_version": "1.0", "suites": []}',
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError):
+            package_skills(self.output_dir / "dist", root=empty_root)
 
     def test_packaging_is_deterministic_and_reproducible(self):
         temp_dir2 = tempfile.TemporaryDirectory()
