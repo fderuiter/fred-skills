@@ -205,6 +205,7 @@ class PackageTests(unittest.TestCase):
                 any(line.startswith(f"{target}:") for line in content.splitlines()),
                 f"Target {target} must be defined",
             )
+        self.assertIn("RUFF ?= ruff", content)
         self.assertIn("scripts/sync_audit_resources.py", content)
         self.assertIn("scripts/build_catalog.py", content)
         self.assertIn("scripts/validate_skills.py", content)
@@ -228,12 +229,16 @@ class PackageTests(unittest.TestCase):
             )
             output = result.stdout
             if target == "check":
+                self.assertIn("ruff check .", output)
+                self.assertIn("ruff format --check .", output)
                 self.assertIn("scripts/sync_audit_resources.py", output)
                 self.assertIn("--check", output)
                 self.assertIn("scripts/build_catalog.py", output)
                 self.assertIn("scripts/validate_skills.py", output)
                 self.assertIn("unittest", output)
             elif target == "fix":
+                self.assertIn("ruff format .", output)
+                self.assertIn("ruff check --fix .", output)
                 self.assertIn("scripts/sync_audit_resources.py", output)
                 self.assertIn("scripts/build_catalog.py", output)
             elif target == "test":
@@ -247,6 +252,8 @@ class PackageTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(default_result.returncode, 0)
+        self.assertIn("ruff check .", default_result.stdout)
+        self.assertIn("ruff format --check .", default_result.stdout)
         self.assertIn("scripts/validate_skills.py", default_result.stdout)
 
 
