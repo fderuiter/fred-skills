@@ -19,13 +19,13 @@ it is not an audit of this repository or proof about any consuming application.
 - Do not add private installation IDs, absolute workspace paths, credentials, or real
   application audit data. Use synthetic fixtures for repeatable validation.
 
-Run from the repository root before proposing a change:
+Run from the repository root before proposing a change (executes Ruff linting, formatting checks, script validations, and tests):
 
 ```sh
 make check
 ```
 
-To repair drift or regenerate discovery catalogs:
+To automatically format code and apply safe lint fixes with Ruff, repair drift, or regenerate discovery catalogs:
 
 ```sh
 make fix
@@ -38,7 +38,7 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-For environments without `make`, execute verification checks directly:
+`make check` and `make fix` run Ruff automatically. For environments without `make`, execute verification checks directly:
 
 ```sh
 ruff check .
@@ -51,7 +51,7 @@ python scripts/package_skills.py --output /tmp/release-verify
 python -m unittest discover -s tests -v
 ```
 
-To automatically format code or apply safe lint fixes locally, run `ruff format .` and `ruff check --fix .`.
+Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
 Once installed, hooks run automatically on `git commit`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
 

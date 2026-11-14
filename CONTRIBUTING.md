@@ -34,13 +34,13 @@ pre-commit run --all-files
 
 To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
 
-Run verification checks with `make`:
+Run verification checks with `make` (which runs Ruff linting, code formatting checks, script validation, and unit tests):
 
 ```sh
 make check
 ```
 
-To repair drift or regenerate shared copies and discovery indexes:
+To automatically format code and apply safe lint fixes with Ruff, repair drift, or regenerate shared copies and discovery indexes:
 
 ```sh
 make fix
@@ -52,7 +52,7 @@ To run the unit test suite:
 make test
 ```
 
-For environments without `make`, run direct Python commands:
+`make check` and `make fix` run Ruff automatically. For environments without `make`, run direct Python and Ruff commands:
 
 ```sh
 # Linting and formatting checks
@@ -72,7 +72,7 @@ python scripts/build_catalog.py
 python scripts/build_experience.py
 ```
 
-To automatically format code or apply safe lint fixes, use `ruff format .` and `ruff check --fix .`.
+Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
 All commands run without network access once the development dependencies are installed.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.
