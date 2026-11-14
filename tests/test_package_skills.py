@@ -28,17 +28,17 @@ class PackageSkillsTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_get_suite_skills_returns_35_audit_skills(self):
+    def test_get_suite_skills_returns_36_audit_skills(self):
         skills = get_suite_skills(ROOT)
-        self.assertEqual(35, len(skills))
+        self.assertEqual(36, len(skills))
         for skill in skills:
             self.assertTrue(skill.startswith("repo-audit-"))
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
     def test_package_skills_creates_all_archives_and_checksums(self):
         checksums = package_skills(self.output_dir, root=ROOT)
-        # 35 individual + 1 consolidated suite = 36 archives
-        self.assertEqual(36, len(checksums))
+        # 36 individual + 1 consolidated suite = 37 archives
+        self.assertEqual(37, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)
 
@@ -46,7 +46,7 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertTrue(manifest_file.is_file())
 
         verified = verify_checksums(self.output_dir)
-        self.assertEqual(36, len(verified))
+        self.assertEqual(37, len(verified))
         for name in checksums:
             self.assertTrue(verified[name])
             archive_path = self.output_dir / name
@@ -69,7 +69,7 @@ class PackageSkillsTests(unittest.TestCase):
                 self.assertFalse(name.endswith(".pyc"))
                 self.assertFalse(name.endswith(".pyo"))
 
-    def test_suite_archive_contains_all_35_skills(self):
+    def test_suite_archive_contains_all_36_skills(self):
         package_skills(self.output_dir, root=ROOT)
         suite_path = self.output_dir / "fred-skills-suite.tar.gz"
         with tarfile.open(suite_path, "r:gz") as tar:

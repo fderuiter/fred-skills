@@ -20,7 +20,7 @@ or choose a package from the [catalog](docs/catalog.md).
 
 ## Installation
 
-Install all 35 repository audit skills with a single marketplace command:
+Install all 36 repository audit skills with a single marketplace command:
 
 ### Claude Code
 
@@ -77,7 +77,7 @@ remains supported; Python is unnecessary for instruction-only use.
 
 ## Release archives and supply chain verification
 
-Official releases provide standalone tarball archives for each of the 35 audit skills
+Official releases provide standalone tarball archives for each of the 36 audit skills
 (e.g., `repo-audit-concurrency.tar.gz`), as well as a consolidated suite archive
 (`fred-skills-suite.tar.gz`). Every published archive is accompanied by a SHA-256
 checksum manifest (`checksums.sha256`) and cryptographically signed SLSA provenance
@@ -117,7 +117,7 @@ Extract the verified tarball directly into your agent's skills directory:
 # Extract single specialist (creates repo-audit-concurrency/ directory)
 tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/
 
-# Extract complete suite (creates all 35 repo-audit-*/ directories)
+# Extract complete suite (creates all 36 repo-audit-*/ directories)
 tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
 ```
 
