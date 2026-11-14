@@ -40,6 +40,7 @@ LIFECYCLE_GROUPS = {
         "reconcile",
         "import-sarif",
         "export-sarif",
+        "triage",
     ],
     "Installation": [
         "install",
@@ -441,6 +442,58 @@ def parser() -> argparse.ArgumentParser:
         help="Exclude both refuted and informational findings from export",
     )
 
+    sub_tri = commands.add_parser(
+        "triage",
+        parents=[sub_common],
+        help="Diagnose stalled or interrupted audit sessions from transcripts and workspace artifacts",
+    )
+    sub_tri.add_argument(
+        "transcript",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Session transcript file (.json, .jsonl, .txt, .md)",
+    )
+    sub_tri.add_argument(
+        "--transcript",
+        type=Path,
+        dest="transcript_opt",
+        default=None,
+        help="Session transcript file (.json, .jsonl, .txt, .md)",
+    )
+    sub_tri.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="Optional audit run workspace directory with run.json/audit.json",
+    )
+    sub_tri.add_argument(
+        "--workspace-dir",
+        type=Path,
+        default=None,
+        help="Optional audit run workspace directory with run.json/audit.json",
+    )
+    sub_tri.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Directory to write scrubbed diagnostic_bundle.json and report",
+    )
+    sub_tri.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to write scrubbed diagnostic_bundle.json and report",
+    )
+    sub_tri.add_argument(
+        "--session-id", default=None, help="Explicit session or run ID"
+    )
+    sub_tri.add_argument(
+        "--check-schema",
+        action="store_true",
+        help="Validate generated bundle against bundle.schema.json",
+    )
+
     # 4. Installation commands
     install_helps = {
         "install": "Install audit skills or packs into an agent host environment",
@@ -583,7 +636,6 @@ def parser() -> argparse.ArgumentParser:
         grp = subcmd_to_group.get(action.dest)
         if grp and grp in lifecycle_arg_groups:
             lifecycle_arg_groups[grp]._group_actions.append(action)
-
     return root
 
 
@@ -722,6 +774,30 @@ def dispatch(a: argparse.Namespace) -> Any:
         return releases.build(a.output, a.pack)
     if a.command == "verify-release":
         return releases.verify(a.manifest)
+    if a.command == "triage":
+        transcript = a.transcript or a.transcript_opt
+        if not transcript:
+            raise ValueError("Transcript file path is required")
+        if not transcript.is_file():
+            raise ValueError(f"Transcript file not found: {transcript}")
+        workspace = a.workspace or a.workspace_dir
+        output_dir = a.output or a.output_dir
+
+        import importlib.util
+
+        script_path = ROOT / "skills/repo-audit-diagnostics/scripts/triage.py"
+        if not script_path.is_file():
+            raise ValueError(f"Triage script not found at {script_path}")
+        spec = importlib.util.spec_from_file_location("diagnostics_triage", script_path)
+        triage = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(triage)
+
+        bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
+        if a.check_schema:
+            triage.validate_bundle(bundle)
+        if output_dir:
+            triage.export_bundle(bundle, output_dir)
+        return bundle
     raise ValueError("Unknown command")
 
 

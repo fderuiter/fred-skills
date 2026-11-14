@@ -10,7 +10,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 PACKAGE = ROOT / "skills/repo-audit-diagnostics"
 SCRIPT = PACKAGE / "scripts/triage.py"
 
@@ -231,6 +234,123 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue((export_dir / "diagnostic_bundle.json").is_file())
         self.assertTrue((export_dir / "diagnostic_report.md").is_file())
+
+    def test_fred_cli_triage_prints_json_summary(self):
+        transcript_file = self.temp_path / "fred_cli_transcript.txt"
+        transcript_file.write_text(
+            "[2026-11-13T20:01:40Z] Command 'ripgrep' timed out after 30.0 seconds\n",
+            encoding="utf-8",
+        )
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [sys.executable, str(fred_cli), "triage", str(transcript_file)]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads(proc.stdout)
+        self.assertEqual(summary["schema_version"], "1.0")
+        self.assertEqual(
+            summary["failure_classification"]["failure_type"], "tool_timeout"
+        )
+        self.assertIn("recovery", summary)
+        self.assertIn("environment", summary)
+
+    def test_fred_cli_triage_output_directory_and_check_schema(self):
+        transcript_file = self.temp_path / "fred_cli_schema.txt"
+        transcript_file.write_text(
+            "Starting repo-audit-trust-boundaries\njsonschema.exceptions.ValidationError: Duplicate IDs in findings: F-1\n",
+            encoding="utf-8",
+        )
+        export_dir = self.temp_path / "fred_cli_output"
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [
+            sys.executable,
+            str(fred_cli),
+            "triage",
+            str(transcript_file),
+            "--output",
+            str(export_dir),
+            "--check-schema",
+            "--session-id",
+            "session-fred-test",
+        ]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        bundle_file = export_dir / "diagnostic_bundle.json"
+        report_file = export_dir / "diagnostic_report.md"
+        self.assertTrue(bundle_file.is_file())
+        self.assertTrue(report_file.is_file())
+
+        bundle = json.loads(bundle_file.read_text(encoding="utf-8"))
+        self.assertEqual(bundle["session_id"], "session-fred-test")
+        self.assertEqual(
+            bundle["failure_classification"]["failure_type"],
+            "schema_validation_error",
+        )
+        report_text = report_file.read_text(encoding="utf-8")
+        self.assertIn("# Diagnostic Triage Report", report_text)
+        self.assertIn("session-fred-test", report_text)
+
+    def test_fred_cli_triage_scrubs_credentials(self):
+        transcript_file = self.temp_path / "sensitive_fred.txt"
+        transcript_file.write_text(
+            "Authorization: Bearer supersecrettokenvalue123456\nsk-proj-9999999999abcdef9999999999\npassword: 'myplaintextpassword'\nCommand timed out after 10 seconds\n",
+            encoding="utf-8",
+        )
+        export_dir = self.temp_path / "scrub_output"
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [
+            sys.executable,
+            str(fred_cli),
+            "triage",
+            str(transcript_file),
+            "--output",
+            str(export_dir),
+        ]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        self.assertNotIn("supersecrettokenvalue123456", proc.stdout)
+        self.assertNotIn("sk-proj-9999999999abcdef9999999999", proc.stdout)
+        self.assertNotIn("myplaintextpassword", proc.stdout)
+
+        bundle_content = (export_dir / "diagnostic_bundle.json").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("supersecrettokenvalue123456", bundle_content)
+        self.assertNotIn("sk-proj-9999999999abcdef9999999999", bundle_content)
+        self.assertNotIn("myplaintextpassword", bundle_content)
+        self.assertIn("[REDACTED_AUTH_TOKEN]", bundle_content)
+        self.assertIn("[REDACTED_API_KEY]", bundle_content)
+
+    def test_recover_audit_recipe_in_tasks_and_planning(self):
+        fred_cli = ROOT / "scripts/fred.py"
+        proc = subprocess.run(
+            [sys.executable, str(fred_cli), "tasks"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        tasks_data = json.loads(proc.stdout)
+        recipes = tasks_data.get("recipes", {})
+        self.assertIn("recover-audit", recipes)
+        self.assertIn("repo-audit-diagnostics", recipes["recover-audit"]["skills"])
+
+        from fredlib import runs
+
+        # Standard comprehensive planning should not include repo-audit-diagnostics
+        plan_standard, _ = runs.plan(ROOT, task="understand-repo", mode="comprehensive")
+        self.assertNotIn("repo-audit-diagnostics", plan_standard["skills"])
+        self.assertNotIn("repo-audit-diagnostics", plan_standard["deferred_skills"])
+
+        # Planning with recover-audit task includes repo-audit-diagnostics
+        plan_recovery, _ = runs.plan(ROOT, task="recover-audit")
+        self.assertIn("repo-audit-diagnostics", plan_recovery["skills"])
+
+        # Comprehensive mode on recover-audit also preserves repo-audit-diagnostics
+        plan_recovery_comp, _ = runs.plan(
+            ROOT, task="recover-audit", mode="comprehensive"
+        )
+        self.assertIn("repo-audit-diagnostics", plan_recovery_comp["skills"])
 
 
 if __name__ == "__main__":

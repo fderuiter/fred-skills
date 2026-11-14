@@ -438,6 +438,28 @@ have been redacted from this bundle.
 """
 
 
+def validate_bundle(bundle: dict, schema_path: Path | None = None) -> None:
+    """Validate generated bundle against bundle.schema.json."""
+    schema_file = (
+        schema_path or Path(__file__).resolve().parents[1] / "assets/bundle.schema.json"
+    )
+    if not schema_file.is_file():
+        raise ValueError(f"Bundle schema not found at {schema_file}")
+    try:
+        import jsonschema
+
+        jsonschema.validate(bundle, json.loads(schema_file.read_text(encoding="utf-8")))
+    except ImportError:
+        raise ValueError("jsonschema not installed, cannot validate bundle schema")
+    except (
+        ValueError,
+        OSError,
+        jsonschema.ValidationError,
+        jsonschema.SchemaError,
+    ) as e:
+        raise ValueError(f"Schema validation error: {e}")
+
+
 def export_bundle(bundle: dict, output_dir: Path) -> tuple[Path, Path]:
     """Export diagnostic bundle JSON and Markdown report to output directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -487,27 +509,11 @@ def main() -> int:
     )
 
     if args.check_schema:
-        schema_path = Path(__file__).resolve().parents[1] / "assets/bundle.schema.json"
-        if schema_path.is_file():
-            try:
-                import jsonschema
-
-                jsonschema.validate(
-                    bundle, json.loads(schema_path.read_text(encoding="utf-8"))
-                )
-            except ImportError:
-                print(
-                    "Warning: jsonschema not installed, skipping schema validation",
-                    file=sys.stderr,
-                )
-            except (
-                ValueError,
-                OSError,
-                jsonschema.ValidationError,
-                jsonschema.SchemaError,
-            ) as e:
-                print(f"Schema validation error: {e}", file=sys.stderr)
-                return 1
+        try:
+            validate_bundle(bundle)
+        except ValueError as e:
+            print(f"Schema validation error: {e}", file=sys.stderr)
+            return 1
 
     if args.output_dir:
         json_path, report_path = export_bundle(bundle, args.output_dir)

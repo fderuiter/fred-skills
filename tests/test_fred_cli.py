@@ -2,11 +2,15 @@
 
 import json
 import os
-import pty
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+
+try:
+    import pty
+except ImportError:
+    pty = None
 
 ROOT = Path(__file__).resolve().parents[1]
 FRED_PY = ROOT / "scripts/fred.py"
@@ -23,6 +27,8 @@ class FredCLITests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+        if pty is None:
+            self.skipTest("pty module is not available on this platform")
         master, slave = pty.openpty()
         proc = subprocess.run(
             [sys.executable, str(FRED_PY), *args],
@@ -61,7 +67,7 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("Installation:", stdout)
         self.assertIn("Release:", stdout)
 
-        # Verify all 24 subcommands appear under their respective sections
+        # Verify all 25 subcommands appear under their respective sections
         discovery_subcmds = ["tasks", "packs", "hosts", "search"]
         planning_subcmds = ["preflight", "plan", "init"]
         run_mgmt_subcmds = [
@@ -75,6 +81,7 @@ class FredCLITests(unittest.TestCase):
             "reconcile",
             "import-sarif",
             "export-sarif",
+            "triage",
         ]
         install_subcmds = [
             "install",
