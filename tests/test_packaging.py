@@ -176,6 +176,7 @@ class PackageTests(unittest.TestCase):
         for hook_id in [
             "sync-audit-resources",
             "build-catalog",
+            "build-experience",
             "validate-skills",
             "unit-tests",
         ]:
