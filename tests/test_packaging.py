@@ -13,6 +13,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_catalog import build
+from package_skills import get_suite_skills
 from sync_audit_resources import sync
 from validate_skills import validate_skill
 
@@ -136,7 +137,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(data["name"], "fred-skills")
         self.assertEqual(data["owner"]["name"], "fderuiter")
         plugins = data["plugins"]
-        self.assertEqual(len(plugins), 36)
+        self.assertEqual(len(plugins), len(get_suite_skills(ROOT)))
         for plugin in plugins:
             self.assertIn("name", plugin)
             self.assertIn("description", plugin)
