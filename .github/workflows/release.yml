@@ -1,19 +1,14 @@
-name: Prepare versioned skill bundles
+name: Release
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      pack:
-        description: Pack to build
-        type: choice
-        options: [starter, async-correctness, backend-consistency, web-review, release-readiness, verified-fixes, full-audit, complete]
-        default: complete
-      publish:
-        description: Create a draft release (requires existing v<VERSION> tag and LICENSE)
-        type: boolean
-        default: false
+      tag:
+        description: 'Release tag (defaults to v<VERSION>)'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -21,12 +16,13 @@ permissions:
 env:
   PYTHONDONTWRITEBYTECODE: '1'
   PYTHONIOENCODING: utf-8
-  RELEASE_PACK: ${{ inputs.pack || 'complete' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -34,7 +30,10 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
-      - run: python -m pip install -r requirements-dev.txt
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements-dev.txt
       - name: Validate source and fixtures
         run: |
           python scripts/sync_audit_resources.py --check
@@ -42,51 +41,56 @@ jobs:
           python scripts/build_experience.py --check
           python scripts/validate_skills.py
           python -m unittest discover -s tests -v
-      - name: Build selected pack
-        run: python scripts/fred.py release --pack "$RELEASE_PACK" --output dist/release
-      - run: python scripts/fred.py verify-release dist/release/manifest.json
+      - name: Package standalone skills and complete suite
+        run: python scripts/package_skills.py --output dist/release
+      - name: Verify checksum manifest
+        run: |
+          cd dist/release
+          sha256sum -c checksums.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: skill-bundles
+          name: release-artifacts
           path: dist/release/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
-  draft:
+  release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
-    permissions:
-      contents: write
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4
         with:
-          python-version: '3.12'
-      - name: Require owner license and matching tag
-        env:
-          RELEASE_REF: ${{ github.ref }}
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          expected = 'refs/tags/v' + Path('VERSION').read_text().strip()
-          if os.environ['RELEASE_REF'] != expected:
-              raise SystemExit('Draft publication requires an existing tag matching VERSION')
-          if not Path('LICENSE').is_file() or not Path('LICENSE').read_text().strip():
-              raise SystemExit('Owner must select a nonempty LICENSE before release publication')
-          PY
-      - run: python -m pip install -r requirements-dev.txt
-      - name: Rebuild reviewed version and verify
-        run: |
-          python scripts/fred.py release --pack "$RELEASE_PACK" --output dist/release
-          python scripts/fred.py verify-release dist/release/manifest.json
-      - name: Create draft only
+          name: release-artifacts
+          path: dist/release
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@c074443f1a5fb4aeeae8296ba60daec12367e163 # v2.2.3
+        with:
+          subject-path: 'dist/release/*'
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/release/* --draft --verify-tag --title "$RELEASE_TAG" --notes-file docs/release-notes-0.2.0.md
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            if [ "$REF_TYPE" = "tag" ]; then
+              TAG="$REF_NAME"
+            else
+              TAG="v$(cat VERSION | tr -d '[:space:]')"
+            fi
+          fi
+          gh release create "$TAG" dist/release/* \
+            --title "$TAG" \
+            --generate-notes
