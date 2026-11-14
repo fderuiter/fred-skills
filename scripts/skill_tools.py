@@ -1,8 +1,10 @@
 """Small authoring utilities. No agent host or network access required."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,8 +20,8 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
         raise ValueError(f"{path}: unterminated YAML frontmatter")
     metadata = yaml.safe_load("".join(lines[1:end]))
     if not isinstance(metadata, dict):
-        raise ValueError(f"{path}: frontmatter must be a mapping")
-    return metadata, "".join(lines[end + 1:])
+        raise TypeError(f"{path}: frontmatter must be a mapping")
+    return metadata, "".join(lines[end + 1 :])
 
 
 def suite_members(root: Path = ROOT) -> dict[str, dict]:
@@ -31,7 +33,17 @@ def suite_members(root: Path = ROOT) -> dict[str, dict]:
                 if name in members:
                     raise ValueError(f"Duplicate suite membership: {name}")
                 # Manifest entries are identifiers, not arbitrary filesystem paths.
-                if not isinstance(name, str) or not name or Path(name).name != name or name in {".", ".."} or "\\" in name:
+                if (
+                    not isinstance(name, str)
+                    or not name
+                    or Path(name).name != name
+                    or name in {".", ".."}
+                    or "\\" in name
+                ):
                     raise ValueError(f"Invalid skill identifier: {name!r}")
-                members[name] = {"suite": suite["name"], "phase": phase["id"], "phase_title": phase["title"]}
+                members[name] = {
+                    "suite": suite["name"],
+                    "phase": phase["id"],
+                    "phase_title": phase["title"],
+                }
     return members
