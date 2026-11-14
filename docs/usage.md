@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 36 audit skills directly via plugin marketplaces:
+Install all 36 audit skills directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
 
 ### Claude Code
 
@@ -31,7 +31,19 @@ Install all 36 audit skills directly via plugin marketplaces:
 codex plugin marketplace add fderuiter/fred-skills
 ```
 
-For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install`.
+### Antigravity and Gemini CLI
+
+For Antigravity, Gemini CLI, and manual or offline installations, install skills with the toolkit CLI:
+
+```sh
+# Antigravity (project scope)
+python scripts/fred.py install --destination /path/to/project --host antigravity --pack starter
+
+# Gemini CLI (project scope)
+python scripts/fred.py install --destination /path/to/project --host gemini-cli --pack starter
+```
+
+For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install`. See the [integration guide](integration.md) for detailed host adapter setup, marker detection rules, and multi-agent orchestration.
 
 ## Focused investigation
 
