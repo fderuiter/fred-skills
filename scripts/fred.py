@@ -352,6 +352,12 @@ def parser() -> argparse.ArgumentParser:
         required=True,
         help="Output directory path for markdown issue drafts",
     )
+    sub_iss.add_argument(
+        "--format",
+        choices=["markdown", "json"],
+        default="markdown",
+        help="Output format: markdown drafts or github-compatible json payloads",
+    )
 
     sub_cmp = commands.add_parser(
         "compare",
@@ -653,7 +659,9 @@ def dispatch(a: argparse.Namespace) -> Any:
         return {"output": str(a.output)}
     if a.command == "issues":
         return {
-            "drafts": reports.issue_drafts(read_json(a.audit), a.output),
+            "drafts": reports.issue_drafts(
+                read_json(a.audit), a.output, format=a.format
+            ),
             "remote_writes": 0,
         }
     if a.command == "compare":
