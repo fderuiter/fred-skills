@@ -33,6 +33,7 @@ python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check
 python scripts/validate_skills.py
+python scripts/package_skills.py --output /tmp/release-verify
 python -m unittest discover -s tests -v
 ```
 

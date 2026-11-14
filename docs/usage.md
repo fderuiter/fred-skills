@@ -63,3 +63,48 @@ Without that authorization, synthesis produces local drafts. Existing applicable
 authorization does not require repeated confirmation. Unverified risks remain bounded
 investigations; refuted candidates do not become defect issues. Distinct independently
 fixable causes remain separate even if symptoms overlap.
+
+## Download and verify release archives
+
+Official releases publish standalone tarball packages for all 35 audit specialists
+as well as a consolidated suite archive (`fred-skills-suite.tar.gz`), each accompanied by
+a cryptographic SHA-256 entry in `checksums.sha256` and GitHub SLSA build provenance attestations.
+
+### Download
+
+Fetch release artifacts directly from GitHub Releases or via `curl`:
+
+```sh
+# Download a single specialist and checksum manifest
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/repo-audit-concurrency.tar.gz
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/checksums.sha256
+
+# Or download the complete 35-skill audit suite
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-suite.tar.gz
+```
+
+### Verify checksums and attestations
+
+Check artifact integrity and authenticate release origin:
+
+```sh
+# Verify SHA-256 checksum against manifest
+sha256sum --ignore-missing -c checksums.sha256
+
+# Verify cryptographic SLSA provenance attestation against repository origin
+gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills
+gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
+```
+
+### Extract and deploy
+
+Unpack verified archives into your agent host skills destination:
+
+```sh
+# Deploy single specialist (creates repo-audit-concurrency/ directory)
+tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/
+
+# Deploy complete audit suite (creates all 35 repo-audit-*/ directories)
+tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
+```
+

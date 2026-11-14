@@ -57,6 +57,52 @@ locations, with dry runs, local-change protection, receipts, backups, and rollba
 Copy-path checks do not establish behavior on those hosts. Manual directory copying
 remains supported; Python is unnecessary for instruction-only use.
 
+## Release archives and supply chain verification
+
+Official releases provide standalone tarball archives for each of the 35 audit skills
+(e.g., `repo-audit-concurrency.tar.gz`), as well as a consolidated suite archive
+(`fred-skills-suite.tar.gz`). Every published archive is accompanied by a SHA-256
+checksum manifest (`checksums.sha256`) and cryptographically signed SLSA provenance
+attestations.
+
+### Download release artifacts
+
+Download individual specialist packages or the full suite from GitHub Releases:
+
+```sh
+# Single skill archive and manifest
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/repo-audit-concurrency.tar.gz
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/checksums.sha256
+
+# Complete audit suite archive
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-suite.tar.gz
+```
+
+### Verify integrity and build provenance
+
+Verify cryptographic checksums and build provenance before extracting:
+
+```sh
+# Verify SHA-256 checksum for downloaded archives
+sha256sum --ignore-missing -c checksums.sha256
+
+# Verify SLSA build provenance attestation using GitHub CLI
+gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills
+gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
+```
+
+### Install into an agent environment
+
+Extract the verified tarball directly into your agent's skills directory:
+
+```sh
+# Extract single specialist (creates repo-audit-concurrency/ directory)
+tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/
+
+# Extract complete suite (creates all 35 repo-audit-*/ directories)
+tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
+```
+
 See the [CLI guide](docs/toolkit.md) for resuming work, source freshness, reports,
 comparisons, scanner imports, project profiles, and installation recovery. See
 [usage](docs/usage.md) for portable invocation and [evaluations](evals/README.md) for
