@@ -1,12 +1,13 @@
 """Artifact consistency tests; no agent or live repository is involved."""
+
 import copy
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,9 +28,15 @@ class AuditValidatorTests(unittest.TestCase):
         return validator.validate(self.audit, SCHEMA)
 
     def issue(self, identifier="I-1", dependencies=None):
-        return {"id": identifier, "title": "Synthetic correction", "finding_ids": ["F-1"],
-                "depends_on": dependencies or [], "related_issues": [],
-                "existing_url": None, "publication": "draft"}
+        return {
+            "id": identifier,
+            "title": "Synthetic correction",
+            "finding_ids": ["F-1"],
+            "depends_on": dependencies or [],
+            "related_issues": [],
+            "existing_url": None,
+            "publication": "draft",
+        }
 
     def test_supported_finding_without_execution_is_valid(self):
         self.assertEqual([], self.errors())
@@ -37,18 +44,30 @@ class AuditValidatorTests(unittest.TestCase):
     def test_missing_and_duplicate_evidence_are_rejected(self):
         self.audit["findings"][0]["evidence_ids"] = ["E-missing"]
         errors = self.errors()
-        self.assertTrue(any("Unknown evidence" in error and "F-1" in error and "evidence_ids" in error and "E-missing" in error for error in errors))
+        self.assertTrue(
+            any(
+                "Unknown evidence" in error
+                and "F-1" in error
+                and "evidence_ids" in error
+                and "E-missing" in error
+                for error in errors
+            )
+        )
         self.audit = copy.deepcopy(BASE)
         self.audit["evidence"].append(copy.deepcopy(self.audit["evidence"][0]))
         errors = self.errors()
-        self.assertTrue(any("Duplicate IDs in evidence: E-1" in error for error in errors))
+        self.assertTrue(
+            any("Duplicate IDs in evidence: E-1" in error for error in errors)
+        )
 
     def test_invalid_source_locations_are_rejected(self):
         for path in ["/tmp/source.mjs", "../source.mjs"]:
             with self.subTest(path=path):
                 self.audit = copy.deepcopy(BASE)
                 self.audit["evidence"][0]["path"] = path
-                self.assertTrue(any("repository-relative" in error for error in self.errors()))
+                self.assertTrue(
+                    any("repository-relative" in error for error in self.errors())
+                )
         self.audit = copy.deepcopy(BASE)
         self.audit["evidence"][0].update(line_start=5, line_end=2)
         self.assertTrue(any("Reversed lines" in error for error in self.errors()))
@@ -57,7 +76,9 @@ class AuditValidatorTests(unittest.TestCase):
         finding = self.audit["findings"][0]
         finding["status"] = "confirmed"
         self.assertTrue(any("Confirmed finding" in error for error in self.errors()))
-        finding["validation"].update(state="executed", commands=["node synthetic-check.mjs"])
+        finding["validation"].update(
+            state="executed", commands=["node synthetic-check.mjs"]
+        )
         self.assertEqual([], self.errors())
 
     def test_supported_requires_evidence_and_contract(self):
@@ -65,7 +86,9 @@ class AuditValidatorTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.audit = copy.deepcopy(BASE)
                 self.audit["findings"][0][field] = []
-                self.assertTrue(any("lacks contract/evidence" in error for error in self.errors()))
+                self.assertTrue(
+                    any("lacks contract/evidence" in error for error in self.errors())
+                )
 
     def test_refuted_candidate_cannot_be_a_defect_issue(self):
         self.audit["findings"][0].update(status="refuted", severity="info")
@@ -96,7 +119,13 @@ class AuditValidatorTests(unittest.TestCase):
         self.audit = copy.deepcopy(BASE)
         del self.audit["schema_version"]
         errors = self.errors()
-        self.assertTrue(any(error.startswith("root:") and "'schema_version' is a required property" in error for error in errors))
+        self.assertTrue(
+            any(
+                error.startswith("root:")
+                and "'schema_version' is a required property" in error
+                for error in errors
+            )
+        )
 
     def test_empty_record_lists_are_valid(self):
         self.audit["evidence"] = []
@@ -107,12 +136,22 @@ class AuditValidatorTests(unittest.TestCase):
 
     def test_cli_accepts_valid_fixture_and_rejects_malformed_json(self):
         fixture = ROOT / "tests/fixtures/audit-valid.json"
-        valid = subprocess.run([sys.executable, str(SCRIPT), str(fixture)], capture_output=True, text=True)
+        valid = subprocess.run(
+            [sys.executable, str(SCRIPT), str(fixture)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(0, valid.returncode, valid.stderr)
         with tempfile.TemporaryDirectory() as temp:
             bad = Path(temp) / "bad.json"
             bad.write_text("{")
-            invalid = subprocess.run([sys.executable, str(SCRIPT), str(bad)], capture_output=True, text=True)
+            invalid = subprocess.run(
+                [sys.executable, str(SCRIPT), str(bad)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
             self.assertEqual(2, invalid.returncode)
         missing_dep = subprocess.run(
             [
@@ -124,6 +163,7 @@ class AuditValidatorTests(unittest.TestCase):
                     f"runpy.run_path('{SCRIPT}', run_name='__main__')"
                 ),
             ],
+            check=False,
             capture_output=True,
             text=True,
         )

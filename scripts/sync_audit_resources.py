@@ -1,9 +1,11 @@
 """Materialize standalone skill resources, or detect drift with --check."""
+
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+
 from skill_tools import ROOT, suite_members
 
 

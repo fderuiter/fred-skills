@@ -1,18 +1,16 @@
 import copy
-import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
-from fredlib.common import atomic_json, read_json
 from fredlib import reports, repository, runs
+from fredlib.common import atomic_json, read_json
 
 
 class RunTests(unittest.TestCase):
@@ -28,19 +26,26 @@ class RunTests(unittest.TestCase):
         self.temp.cleanup()
 
     def initialize(self):
-        return runs.initialize(self.repo, self.output, "investigate-bug", budget="brief")
+        return runs.initialize(
+            self.repo, self.output, "investigate-bug", budget="brief"
+        )
 
     def fixture(self):
         run = self.initialize()
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
-        audit["run_id"], audit["repository"] = run["run_id"], runs.empty_audit(run)["repository"]
+        audit["run_id"], audit["repository"] = (
+            run["run_id"],
+            runs.empty_audit(run)["repository"],
+        )
         audit["evidence"][0]["path"] = "source.py"
         atomic_json(self.output / "audit.json", audit)
         return audit
 
     def test_init_preserves_authority_and_validates(self):
         run = self.initialize()
-        self.assertEqual({"application_changes": False, "issue_publication": False}, run["authority"])
+        self.assertEqual(
+            {"application_changes": False, "issue_publication": False}, run["authority"]
+        )
         self.assertEqual([], runs.validate_run(self.output))
         self.assertIn("Deferred skills:", (self.output / "prompt.md").read_text())
         with self.assertRaises(ValueError):
@@ -57,10 +62,15 @@ class RunTests(unittest.TestCase):
 
     def test_checkpoint_and_memory_have_provenance(self):
         self.fixture()
-        changed = runs.checkpoint(self.output, "paused", "Inspect the completion caller next")
+        changed = runs.checkpoint(
+            self.output, "paused", "Inspect the completion caller next"
+        )
         self.assertEqual("paused", changed["state"])
         memory = runs.memory(self.output)
-        self.assertEqual(changed["snapshot"]["files"]["source.py"], memory["evidence"][0]["content_sha256"])
+        self.assertEqual(
+            changed["snapshot"]["files"]["source.py"],
+            memory["evidence"][0]["content_sha256"],
+        )
         self.assertTrue(memory["limitations"])
 
     def test_internal_output_is_excluded_from_snapshot(self):
@@ -77,11 +87,19 @@ class RunTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "Git unavailable")
     def test_git_diff_planning_includes_committed_and_dirty_changes(self):
-        for argv in [["init", "-q"], ["config", "user.name", "Fixture"], ["config", "user.email", "fixture@example.invalid"], ["add", "."], ["commit", "-qm", "fixture"]]:
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "fixture"],
+        ]:
             subprocess.run(["git", "-C", str(self.repo), *argv], check=True)
         base = repository.git(self.repo, "rev-parse", "HEAD", required=True)
         (self.repo / "source.py").write_text("value = 3\n")
-        selected, detected = runs.plan(self.repo, "review-pr", mode="changes", base=base)
+        selected, detected = runs.plan(
+            self.repo, "review-pr", mode="changes", base=base
+        )
         self.assertEqual(["source.py"], selected["changed_files"])
         self.assertTrue(detected["repository"]["dirty"])
 
@@ -106,14 +124,18 @@ class RunTests(unittest.TestCase):
         run = self.initialize()
         run["snapshot"]["files"]["source.py"] = "invented"
         atomic_json(self.output / "run.json", run)
-        self.assertTrue(any("content identity" in error for error in runs.validate_run(self.output)))
+        self.assertTrue(
+            any("content identity" in error for error in runs.validate_run(self.output))
+        )
 
     def test_project_config_cannot_supply_commands_or_authority(self):
         config = self.root / "settings.yml"
         config.write_text('commands: ["do something"]\n')
         with self.assertRaises(ValueError):
             runs.plan(self.repo, "understand-repo", config=config)
-        config.write_text('profile: browser-async\ncritical_workflows: ["Camera lifecycle"]\nexclude: ["fixtures/**"]\n')
+        config.write_text(
+            'profile: browser-async\ncritical_workflows: ["Camera lifecycle"]\nexclude: ["fixtures/**"]\n'
+        )
         selected, detected = runs.plan(self.repo, "understand-repo", config=config)
         self.assertEqual(["Camera lifecycle"], selected["critical_workflows"])
         self.assertIn("repo-audit-cancellation", selected["skills"])
@@ -124,7 +146,10 @@ class RunTests(unittest.TestCase):
         after = copy.deepcopy(before)
         after["findings"][0]["id"] = "F-new"
         after["evidence"][0]["line_start"] = 80
-        self.assertEqual([{"before": "F-1", "after": "F-new"}], runs.compare(before, after)["persisting"])
+        self.assertEqual(
+            [{"before": "F-1", "after": "F-new"}],
+            runs.compare(before, after)["persisting"],
+        )
         after["findings"] = []
         result = runs.compare(before, after)
         self.assertEqual(["F-1"], result["not_observed"])
@@ -140,24 +165,67 @@ class RunTests(unittest.TestCase):
         audit = self.fixture()
         with self.assertRaises(ValueError):
             runs.reconcile(self.output, "F-1", "verified-fixed", "looks fixed")
-        proof = {"before_revision": "before", "after_revision": "after", "original_reproduced": True,
-                 "regression_passed": True, "safe_controls_passed": True, "commands": ["python synthetic.py"], "result": "Synthetic controls passed"}
+        proof = {
+            "before_revision": "before",
+            "after_revision": "after",
+            "original_reproduced": True,
+            "regression_passed": True,
+            "safe_controls_passed": True,
+            "commands": ["python synthetic.py"],
+            "result": "Synthetic controls passed",
+        }
         atomic_json(self.root / "proof.json", proof)
-        record = runs.reconcile(self.output, "F-1", "verified-fixed", "reviewed", self.root / "proof.json")
+        record = runs.reconcile(
+            self.output, "F-1", "verified-fixed", "reviewed", self.root / "proof.json"
+        )
         self.assertEqual("verified-fixed", record["state"])
-        self.assertEqual(audit["findings"][0]["status"], read_json(self.output / "audit.json")["findings"][0]["status"])
+        self.assertEqual(
+            audit["findings"][0]["status"],
+            read_json(self.output / "audit.json")["findings"][0]["status"],
+        )
         proof["safe_controls_passed"] = False
         atomic_json(self.root / "proof.json", proof)
         with self.assertRaises(ValueError):
-            runs.reconcile(self.output, "F-1", "verified-fixed", "not verified", self.root / "proof.json")
+            runs.reconcile(
+                self.output,
+                "F-1",
+                "verified-fixed",
+                "not verified",
+                self.root / "proof.json",
+            )
 
     def test_sarif_import_does_not_promote_scanner_claims_or_external_paths(self):
-        sarif = {"runs": [{"tool": {"driver": {"name": "synthetic"}}, "results": [{"ruleId": "R-1", "message": {"text": "reported concern"}, "locations": [
-            {"physicalLocation": {"artifactLocation": {"uri": "../escape"}}},
-            {"physicalLocation": {"artifactLocation": {"uri": "source.py"}, "region": {"startLine": 1}}}]}]}]}
+        sarif = {
+            "runs": [
+                {
+                    "tool": {"driver": {"name": "synthetic"}},
+                    "results": [
+                        {
+                            "ruleId": "R-1",
+                            "message": {"text": "reported concern"},
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "../escape"}
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "source.py"},
+                                        "region": {"startLine": 1},
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
         atomic_json(self.root / "scan.json", sarif)
         result = runs.import_sarif(self.root / "scan.json")
-        self.assertEqual([{"path": "source.py", "line": 1}], result["observations"][0]["locations"])
+        self.assertEqual(
+            [{"path": "source.py", "line": 1}], result["observations"][0]["locations"]
+        )
         self.assertNotIn("findings", result)
 
 
@@ -170,13 +238,23 @@ class ReportTests(unittest.TestCase):
             reports.render(audit, path)
             page = path.read_text()
             self.assertIn("&lt;img", page)
-            self.assertNotIn('<img src=x', page)
+            self.assertNotIn("<img src=x", page)
             self.assertIn("connect-src", page)
             self.assertIn("sha256-", page)
 
     def test_issue_drafts_exclude_published_records_and_do_not_overwrite(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
-        audit["issues"] = [{"id": "I-1", "title": "Correct publication", "finding_ids": ["F-1"], "depends_on": [], "related_issues": [], "existing_url": None, "publication": "draft"}]
+        audit["issues"] = [
+            {
+                "id": "I-1",
+                "title": "Correct publication",
+                "finding_ids": ["F-1"],
+                "depends_on": [],
+                "related_issues": [],
+                "existing_url": None,
+                "publication": "draft",
+            }
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "issues"
             self.assertEqual(1, len(reports.issue_drafts(audit, output)))
