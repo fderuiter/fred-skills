@@ -74,6 +74,14 @@ agent runs, and unexecuted scenario specifications. Host behavior and broad mode
 quality are not certified. The [implementation status](docs/implementation-status.md)
 records delivered features and remaining validation or owner decisions.
 
+Run automated validation locally with:
+
+```sh
+make check
+```
+
+Use `make fix` to repair drift or regenerate shared copies and discovery catalogs. For environments without `make`, direct Python commands remain supported as documented in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
 [architecture](docs/architecture.md), [security](SECURITY.md), and
 [research](docs/research.md). [Licensing](docs/licensing.md) requires an owner decision
