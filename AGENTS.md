@@ -22,11 +22,23 @@ it is not an audit of this repository or proof about any consuming application.
 Run from the repository root before proposing a change:
 
 ```sh
+make check
+```
+
+To repair drift or regenerate discovery catalogs:
+
+```sh
+make fix
+```
+
+Or run pre-commit hooks:
+
+```sh
 pre-commit install
 pre-commit run --all-files
 ```
 
-Or execute verification checks directly:
+For environments without `make`, execute verification checks directly:
 
 ```sh
 ruff check .

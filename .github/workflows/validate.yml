@@ -43,14 +43,17 @@ jobs:
         run: ruff check .
       - name: Verify code formatting
         run: ruff format --check .
-      - name: Check canonical resources and discovery
+      - name: Check skill packages and test suites
+        if: runner.os != 'Windows'
+        run: make check
+      - name: Check skill packages and test suites (Windows fallback)
+        if: runner.os == 'Windows'
         run: |
           python scripts/sync_audit_resources.py --check
           python scripts/build_catalog.py --check
           python scripts/build_experience.py --check
           python scripts/validate_skills.py
-      - name: Test validation and local workflows
-        run: python -m unittest discover -s tests -v
+          python -m unittest discover -s tests -v
       - name: Execute original, correction, and safe controls
         run: python -c "import os, subprocess, sys; subprocess.run([sys.executable, 'examples/walkthrough/run_demo.py', '--output', os.path.join(os.environ['RUNNER_TEMP'], 'fred-demo')], check=True)"
       - name: Build and verify a standalone pack

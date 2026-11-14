@@ -1,6 +1,8 @@
 """Negative package fixtures and generated-artifact drift checks."""
 
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -145,6 +147,61 @@ class PackageTests(unittest.TestCase):
         reqs = reqs_path.read_text(encoding="utf-8")
         self.assertIn("pre-commit", reqs)
         self.assertIn("ruff", reqs)
+
+    def test_makefile_target_definitions(self):
+        makefile_path = ROOT / "Makefile"
+        self.assertTrue(makefile_path.is_file(), "Root Makefile must exist")
+        content = makefile_path.read_text(encoding="utf-8")
+        self.assertIn(".PHONY:", content)
+        for target in ["check", "fix", "test"]:
+            self.assertIn(target, content.split(".PHONY:")[1].splitlines()[0])
+            self.assertTrue(
+                any(line.startswith(f"{target}:") for line in content.splitlines()),
+                f"Target {target} must be defined",
+            )
+        self.assertIn("scripts/sync_audit_resources.py", content)
+        self.assertIn("scripts/build_catalog.py", content)
+        self.assertIn("scripts/validate_skills.py", content)
+        self.assertIn("unittest", content)
+
+    def test_makefile_dry_run_execution(self):
+        if not shutil.which("make"):
+            self.skipTest("make is not available on this host")
+        for target in ["check", "fix", "test"]:
+            result = subprocess.run(
+                ["make", "-n", target],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"make -n {target} failed with error: {result.stderr}",
+            )
+            output = result.stdout
+            if target == "check":
+                self.assertIn("scripts/sync_audit_resources.py", output)
+                self.assertIn("--check", output)
+                self.assertIn("scripts/build_catalog.py", output)
+                self.assertIn("scripts/validate_skills.py", output)
+                self.assertIn("unittest", output)
+            elif target == "fix":
+                self.assertIn("scripts/sync_audit_resources.py", output)
+                self.assertIn("scripts/build_catalog.py", output)
+            elif target == "test":
+                self.assertIn("unittest", output)
+
+        default_result = subprocess.run(
+            ["make", "-n"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(default_result.returncode, 0)
+        self.assertIn("scripts/validate_skills.py", default_result.stdout)
 
 
 if __name__ == "__main__":

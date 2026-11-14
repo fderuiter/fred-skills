@@ -34,22 +34,47 @@ pre-commit run --all-files
 
 To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
 
-To regenerate shared copies and indexes or run verification scripts directly:
+Run verification checks with `make`:
 
 ```sh
+make check
+```
+
+To repair drift or regenerate shared copies and discovery indexes:
+
+```sh
+make fix
+```
+
+To run the unit test suite:
+
+```sh
+make test
+```
+
+For environments without `make`, run direct Python commands:
+
+```sh
+# Linting and formatting checks
 ruff check .
 ruff format --check .
+
+# Verification checks (CI-equivalent non-mutating checks)
+python scripts/sync_audit_resources.py --check
+python scripts/build_catalog.py --check
+python scripts/build_experience.py --check
+python scripts/validate_skills.py
+python -m unittest discover -s tests -v
+
+# Regenerate shared copies and indexes
 python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
 python scripts/build_experience.py
-python scripts/validate_skills.py
-python -m unittest discover -s tests -v
 ```
 
 To automatically format code or apply safe lint fixes, use `ruff format .` and `ruff check --fix .`.
 
-For CI-equivalent non-mutating checks, add `--check` to the the resource and discovery generators. All
-commands run without network access once the development dependencies are installed.
+All commands run without network access once the development dependencies are installed.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.
 
 ## Change a skill
