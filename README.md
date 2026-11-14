@@ -18,6 +18,24 @@ or choose a package from the [catalog](docs/catalog.md).
 | Correct and independently verify a defect | `apply-fix`, then `verify-fix` |
 | Prepare a release | `release-ready` |
 
+## Installation
+
+Install all 35 repository audit skills with a single marketplace command:
+
+### Claude Code
+
+```sh
+/plugin marketplace add fderuiter/fred-skills
+```
+
+### Codex
+
+```sh
+codex plugin marketplace add fderuiter/fred-skills
+```
+
+Manual directory copying and local installer workflows (`scripts/fred.py install`) remain supported for environments without marketplace access.
+
 ## Try the local walkthrough
 
 Use Python 3.12+; the synthetic walkthrough also needs Node.js 20+.
