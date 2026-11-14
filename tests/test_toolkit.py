@@ -261,6 +261,113 @@ class ReportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reports.issue_drafts(audit, output)
 
+    def test_issue_drafts_json_format_matches_github_schema_and_preserves_metadata(
+        self,
+    ):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        audit["issues"] = [
+            {
+                "id": "I-1",
+                "title": "Race condition in cache",
+                "finding_ids": ["F-1"],
+                "depends_on": [],
+                "related_issues": [],
+                "existing_url": None,
+                "publication": "draft",
+                "labels": ["bug", "security"],
+                "assignees": ["octocat"],
+            },
+            {
+                "id": "I-2",
+                "title": "Missing precondition check",
+                "finding_ids": ["F-1"],
+                "depends_on": ["I-1"],
+                "related_issues": [],
+                "existing_url": None,
+                "publication": "draft",
+            },
+            {
+                "id": "I-3",
+                "title": "Already published issue",
+                "finding_ids": ["F-1"],
+                "depends_on": [],
+                "related_issues": [],
+                "existing_url": "https://github.com/example/repo/issues/42",
+                "publication": "created",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "issues-json"
+            paths = reports.issue_drafts(audit, output, format="json")
+            self.assertEqual(2, len(paths))
+
+            p1 = output / "I-1.json"
+            self.assertTrue(p1.is_file())
+            d1 = read_json(p1)
+            self.assertEqual(d1["title"], "Race condition in cache")
+            self.assertIn("F-1", d1["body"])
+            self.assertIn("Contract and cause", d1["body"])
+            self.assertIn("Failure sequence", d1["body"])
+            self.assertEqual(d1["labels"], ["bug", "security"])
+            self.assertEqual(d1["assignees"], ["octocat"])
+
+            p2 = output / "I-2.json"
+            self.assertTrue(p2.is_file())
+            d2 = read_json(p2)
+            self.assertEqual(d2["title"], "Missing precondition check")
+            self.assertIn("F-1", d2["body"])
+            self.assertEqual(d2["labels"], [])
+            self.assertEqual(d2["assignees"], [])
+
+            # Safety check: non-empty directory cannot be overwritten
+            with self.assertRaises(ValueError):
+                reports.issue_drafts(audit, output, format="json")
+
+    def test_issue_drafts_unsupported_format_raises_error(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
+            reports.issue_drafts(audit, Path(tmp) / "out", format="yaml")
+
+    def test_cli_issues_command_supports_format_flag(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        audit["issues"] = [
+            {
+                "id": "I-test",
+                "title": "CLI JSON export test",
+                "finding_ids": ["F-1"],
+                "depends_on": [],
+                "related_issues": [],
+                "existing_url": None,
+                "publication": "draft",
+                "labels": ["audit"],
+                "assignees": ["tester"],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_path = Path(tmp) / "audit.json"
+            atomic_json(audit_path, audit)
+            json_out = Path(tmp) / "json-out"
+            res = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/fred.py"),
+                    "issues",
+                    str(audit_path),
+                    "--output",
+                    str(json_out),
+                    "--format",
+                    "json",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn("I-test.json", res.stdout)
+            payload = read_json(json_out / "I-test.json")
+            self.assertEqual(payload["title"], "CLI JSON export test")
+            self.assertEqual(payload["labels"], ["audit"])
+            self.assertEqual(payload["assignees"], ["tester"])
+
 
 if __name__ == "__main__":
     unittest.main()
