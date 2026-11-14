@@ -66,7 +66,9 @@ family manifests; each resulting package is independently portable.
 
 Root `scripts/fred.py` provides discovery and explicitly selected local operations.
 `fredlib` separates source inventory/Git metadata, planning/run state, installation,
-rendering, evaluation, and release archives. It neither dispatches an agent nor installs
+rendering, evaluation, and release archives. Operational recovery workflows and troubleshooting
+procedures for locks, receipts, and git resolution are documented in [operational runbooks](runbooks.md).
+It neither dispatches an agent nor installs
 an analyzer. Standard library code handles filesystem/subprocess work; jsonschema and
 PyYAML validate records and opt-in configuration. Playwright is optional browser QA only.
 
