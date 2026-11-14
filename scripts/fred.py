@@ -108,7 +108,7 @@ def parser() -> argparse.ArgumentParser:
             required=True,
             help="Explicit project root, or home directory with --scope user",
         )
-        sub.add_argument("--host", required=True)
+        sub.add_argument("--host", required=False, default=None)
         sub.add_argument("--scope", choices=["project", "user"], default="project")
         if command not in {"rollback", "recover-install"}:
             sub.add_argument("--skill", action="append", default=[])

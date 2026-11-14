@@ -203,6 +203,129 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(expected_before, (target / "sample/SKILL.md").read_bytes())
         self.assertFalse((state / "operation.lock").exists())
 
+    def test_auto_detect_claude_marker(self):
+        dest = self.root / "claude_project"
+        (dest / ".claude").mkdir(parents=True)
+        res = installation.install(dest, pack="starter", root=self.source)
+        self.assertEqual("claude-code", res["host"])
+        self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
+
+    def test_auto_detect_gemini_marker(self):
+        dest = self.root / "gemini_project"
+        (dest / ".gemini").mkdir(parents=True)
+        res = installation.install(dest, pack="starter", root=self.source)
+        self.assertEqual("gemini-cli", res["host"])
+        self.assertTrue((dest / ".gemini/skills/sample/SKILL.md").is_file())
+
+    def test_auto_detect_agents_marker_defaults_to_codex(self):
+        dest = self.root / "codex_project"
+        (dest / ".agents").mkdir(parents=True)
+        res = installation.install(dest, pack="starter", root=self.source)
+        self.assertEqual("codex", res["host"])
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+
+    def test_auto_detect_agents_resolves_antigravity_with_existing_receipt(self):
+        dest = self.root / "antigravity_project"
+        (dest / ".agents").mkdir(parents=True)
+        # First install explicitly with antigravity host
+        res1 = installation.install(
+            dest, host="antigravity", pack="starter", root=self.source
+        )
+        self.assertEqual("antigravity", res1["host"])
+        # Now update without specifying host
+        (self.source / "skills/sample/SKILL.md").write_text("Updated antigravity skill")
+        res2 = installation.install(
+            dest, host=None, pack="starter", update=True, root=self.source
+        )
+        self.assertEqual("antigravity", res2["host"])
+        self.assertEqual(
+            "Updated antigravity skill",
+            (dest / ".agents/skills/sample/SKILL.md").read_text(),
+        )
+
+    def test_auto_detect_fails_with_zero_markers(self):
+        dest = self.root / "empty_project"
+        dest.mkdir(parents=True)
+        with self.assertRaises(ValueError) as ctx:
+            installation.install(dest, pack="starter", root=self.source)
+        self.assertIn("--host", str(ctx.exception))
+
+    def test_auto_detect_fails_with_ambiguous_markers(self):
+        dest = self.root / "ambiguous_project"
+        (dest / ".claude").mkdir(parents=True)
+        (dest / ".agents").mkdir(parents=True)
+        with self.assertRaises(ValueError) as ctx:
+            installation.install(dest, pack="starter", root=self.source)
+        self.assertIn("--host", str(ctx.exception))
+
+    def test_auto_detect_fails_with_conflicting_receipts(self):
+        dest = self.root / "conflicting_project"
+        (dest / ".agents").mkdir(parents=True)
+        state_codex = dest / ".fred-skills/codex-project"
+        state_antigravity = dest / ".fred-skills/antigravity-project"
+        state_codex.mkdir(parents=True)
+        state_antigravity.mkdir(parents=True)
+        atomic_json(
+            state_codex / "receipt.json",
+            {"schema_version": "1.0", "host": "codex", "skills": {}, "history": []},
+        )
+        atomic_json(
+            state_antigravity / "receipt.json",
+            {
+                "schema_version": "1.0",
+                "host": "antigravity",
+                "skills": {},
+                "history": [],
+            },
+        )
+        with self.assertRaises(ValueError) as ctx:
+            installation.detect_host(dest)
+        self.assertIn("--host", str(ctx.exception))
+
+    def test_explicit_host_overrides_markers(self):
+        dest = self.root / "override_project"
+        (dest / ".claude").mkdir(parents=True)
+        res = installation.install(dest, host="codex", pack="starter", root=self.source)
+        self.assertEqual("codex", res["host"])
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+
+        dest2 = self.root / "no_marker_project"
+        dest2.mkdir(parents=True)
+        res2 = installation.install(
+            dest2, host="claude-code", pack="starter", root=self.source
+        )
+        self.assertEqual("claude-code", res2["host"])
+        self.assertTrue((dest2 / ".claude/skills/sample/SKILL.md").is_file())
+
+        dest3 = self.root / "ambiguous_override_project"
+        (dest3 / ".claude").mkdir(parents=True)
+        (dest3 / ".gemini").mkdir(parents=True)
+        res3 = installation.install(
+            dest3, host="codex", pack="starter", root=self.source
+        )
+        self.assertEqual("codex", res3["host"])
+
+    def test_cli_parser_makes_host_optional(self):
+        import fred
+
+        p = fred.parser()
+        for cmd in ["install", "update", "remove", "rollback", "recover-install"]:
+            args = p.parse_args([cmd, "--destination", str(self.destination)])
+            self.assertIsNone(args.host)
+            self.assertEqual(self.destination, args.destination)
+
+    def test_remove_and_rollback_with_auto_detect_host(self):
+        dest = self.root / "auto_remove_rollback"
+        (dest / ".claude").mkdir(parents=True)
+        installation.install(dest, pack="starter", root=self.source)
+        self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
+        # remove without host
+        installation.remove(dest, skills=["sample"], root=self.source)
+        self.assertFalse((dest / ".claude/skills/sample").exists())
+        # rollback without host
+        installation.rollback(dest, root=self.source)
+        self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
