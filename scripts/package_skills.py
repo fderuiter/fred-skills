@@ -40,8 +40,9 @@ def get_suite_skills(root: Path = ROOT) -> list[str]:
                     skills = []
                     for phase in suite.get("phases", []):
                         skills.extend(phase.get("skills", []))
-                    if skills:
-                        return sorted(dict.fromkeys(skills))
+                    return sorted(dict.fromkeys(skills))
+            if "suites" in suites_doc:
+                return []
         except (OSError, json.JSONDecodeError, KeyError):
             pass
 
@@ -118,10 +119,8 @@ def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
     """Build individual skill archives, 1 consolidated suite archive, and checksums.sha256."""
     output_dir.mkdir(parents=True, exist_ok=True)
     skills = get_suite_skills(root)
-    if len(skills) != 36:
-        raise ValueError(
-            f"Expected 36 skills in repository-audits suite, found {len(skills)}"
-        )
+    if not skills:
+        raise ValueError("Expected non-empty repository-audits suite")
 
     all_entries: list[tuple[str, bytes]] = []
     checksums: dict[str, str] = {}

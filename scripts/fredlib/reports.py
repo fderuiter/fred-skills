@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from html import escape
 from pathlib import Path
 
@@ -74,7 +75,9 @@ def render(audit: dict, output: Path, prior: dict | None = None) -> None:
     output.write_text(html, encoding="utf-8")
 
 
-def issue_drafts(audit: dict, output: Path) -> list[str]:
+def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
+    if format not in ("markdown", "json"):
+        raise ValueError(f"Unsupported issue format: {format}")
     errors = audit_errors(audit)
     if errors:
         raise ValueError("Invalid ledger; cannot draft issues")
@@ -135,7 +138,18 @@ def issue_drafts(audit: dict, output: Path) -> list[str]:
                 ]
             )
         sections.append("Dependencies: " + ", ".join(issue["depends_on"]))
-        path = output / (issue["id"] + ".md")
-        path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+        body_text = "\n\n".join(sections)
+        if format == "json":
+            payload = {
+                "title": issue["title"],
+                "body": body_text,
+                "labels": list(issue.get("labels", [])),
+                "assignees": list(issue.get("assignees", [])),
+            }
+            path = output / (issue["id"] + ".json")
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        else:
+            path = output / (issue["id"] + ".md")
+            path.write_text(body_text + "\n", encoding="utf-8")
         paths.append(str(path))
     return paths
