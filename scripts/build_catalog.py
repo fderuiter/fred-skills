@@ -82,7 +82,9 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
     return {
         "catalog/skills.json": (
             json.dumps(
-                {"schema_version": "1.0", "skills": entries}, indent=2, ensure_ascii=False
+                {"schema_version": "1.0", "skills": entries},
+                indent=2,
+                ensure_ascii=False,
             )
             + "\n"
         ),

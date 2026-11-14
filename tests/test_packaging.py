@@ -96,7 +96,8 @@ class PackageTests(unittest.TestCase):
         build(self.root)
         self.assertEqual(first, (self.root / "catalog/skills.json").read_bytes())
         self.assertEqual(
-            first_marketplace, (self.root / ".claude-plugin/marketplace.json").read_bytes()
+            first_marketplace,
+            (self.root / ".claude-plugin/marketplace.json").read_bytes(),
         )
         self.entry.write_text(
             self.entry.read_text().replace("synthetic contracts", "revised contracts")
