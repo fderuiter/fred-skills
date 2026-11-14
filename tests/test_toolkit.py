@@ -241,6 +241,45 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn("<img src=x", page)
             self.assertIn("connect-src", page)
             self.assertIn("sha256-", page)
+            self.assertIn(
+                '<tr><td colspan="5" class="empty-state">No coverage recorded.</td></tr>',
+                page,
+            )
+            self.assertIn(
+                '<tr><td colspan="4" class="empty-state">No checks recorded.</td></tr>',
+                page,
+            )
+            self.assertIn('class="badge badge-medium medium"', page)
+            self.assertIn('<div class="table-container"><table>', page)
+            self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
+            self.assertIn('id="reset-filters"', page)
+            self.assertIn("--table-border", page)
+
+    def test_mixed_empty_sections_and_badge_severities(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        audit["coverage"] = [
+            {
+                "topic": "concurrency",
+                "scope": "core",
+                "status": "inspected",
+                "evidence_ids": ["E-1"],
+                "notes": "Verified thread safety",
+                "next_action": "none",
+            }
+        ]
+        audit["checks"] = []
+        audit["findings"][0]["severity"] = "critical"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.html"
+            reports.render(audit, path)
+            page = path.read_text()
+            self.assertIn("Verified thread safety", page)
+            self.assertNotIn("No coverage recorded.", page)
+            self.assertIn(
+                '<tr><td colspan="4" class="empty-state">No checks recorded.</td></tr>',
+                page,
+            )
+            self.assertIn('class="badge badge-critical critical"', page)
 
     def test_issue_drafts_exclude_published_records_and_do_not_overwrite(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
