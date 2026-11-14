@@ -127,6 +127,7 @@
         "repo-audit-configuration",
         "repo-audit-data-integrity",
         "repo-audit-dead-code",
+        "repo-audit-diagnostics",
         "repo-audit-domain-models",
         "repo-audit-error-semantics",
         "repo-audit-failure-modes",

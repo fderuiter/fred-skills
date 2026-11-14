@@ -93,7 +93,11 @@ def plan(
             key=lambda name: ordered.index(name) if name in ordered else len(ordered)
         )
         # The coordinator is an entry point, not a second pass over every specialist.
-        selected = [name for name in selected if name != "repo-audit-program"]
+        selected = [
+            name
+            for name in selected
+            if name not in ("repo-audit-program", "repo-audit-diagnostics")
+        ]
         notes.append(
             "Comprehensive scope still requires workflow slices and explicit remaining coverage."
         )

@@ -54,6 +54,10 @@ partition by independent subsystems or bounded specialist tasks, allocate ID ran
 merge returned artifacts centrally. Give raw source plus contract/evidence artifacts, not
 expected findings. Do not let workers write the canonical ledger concurrently.
 
+If an audit run stalls, crashes, or halts due to tool timeouts or schema validation
+errors, invoke repo-audit-diagnostics with the session transcript to extract line-level
+root causes, scrub secrets, and generate recovery instructions before resuming.
+
 On resume compare source snapshots, revalidate changed evidence and dependent contracts,
 then continue from recorded scope. Preserve healthy patterns and refuted candidates.
 Use one root-cause finding with cross-topic tags where appropriate; do not collapse

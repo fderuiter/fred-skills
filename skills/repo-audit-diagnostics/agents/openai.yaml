@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Session Diagnostics"
+  short_description: "Triage stalled audit sessions and generate scrubbed bundles"
+  default_prompt: "Diagnose this stalled audit run using $repo-audit-diagnostics."
