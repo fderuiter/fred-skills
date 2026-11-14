@@ -1,41 +1,76 @@
 #!/usr/bin/env python3
 """Triage failed audit runs, scrub secrets, and export diagnostic bundles."""
+
 from __future__ import annotations
 
 import argparse
 import datetime
 import json
-from pathlib import Path
 import platform
 import re
 import sys
+from pathlib import Path
 
 # Redaction patterns for credential scrubbing
 CREDENTIAL_PATTERNS = [
     # Authorization header: Authorization: Bearer / Basic / Token ...
-    (re.compile(r"(?i)(authorization\s*:\s*(?:bearer|basic|token)\s+)([^\s\r\n'\"]+)", re.IGNORECASE), r"\1[REDACTED_AUTH_TOKEN]"),
-    (re.compile(r"(?i)\b(bearer\s+)([a-zA-Z0-9_\-\.]{16,})\b", re.IGNORECASE), r"\1[REDACTED_BEARER_TOKEN]"),
+    (
+        re.compile(
+            r"(?i)(authorization\s*:\s*(?:bearer|basic|token)\s+)([^\s\r\n'\"]+)",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED_AUTH_TOKEN]",
+    ),
+    (
+        re.compile(r"(?i)\b(bearer\s+)([a-zA-Z0-9_\-\.]{16,})\b", re.IGNORECASE),
+        r"\1[REDACTED_BEARER_TOKEN]",
+    ),
     # OpenAI / Anthropic / general API keys
     (re.compile(r"\b(sk-[a-zA-Z0-9_\-]{20,})\b"), "[REDACTED_API_KEY]"),
     # GitHub personal access tokens
-    (re.compile(r"\b(gh[pousr]_[a-zA-Z0-9]{36,}|github_pat_[a-zA-Z0-9_]{30,})\b"), "[REDACTED_GITHUB_TOKEN]"),
+    (
+        re.compile(r"\b(gh[pousr]_[a-zA-Z0-9]{36,}|github_pat_[a-zA-Z0-9_]{30,})\b"),
+        "[REDACTED_GITHUB_TOKEN]",
+    ),
     # Slack tokens
     (re.compile(r"\b(xox[baprs]-[a-zA-Z0-9_\-]{10,})\b"), "[REDACTED_SLACK_TOKEN]"),
     # AWS Access Key ID
     (re.compile(r"\b(AKIA[0-9A-Z]{16})\b"), "[REDACTED_AWS_KEY]"),
     # JWT tokens (3 base64url segments separated by dots)
-    (re.compile(r"\b(eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,})\b"), "[REDACTED_JWT_TOKEN]"),
+    (
+        re.compile(
+            r"\b(eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,})\b"
+        ),
+        "[REDACTED_JWT_TOKEN]",
+    ),
     # Private Key blocks
-    (re.compile(r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----"), "[REDACTED_PRIVATE_KEY]"),
+    (
+        re.compile(
+            r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----"
+        ),
+        "[REDACTED_PRIVATE_KEY]",
+    ),
     # Generic key-value secrets (quoted: password="...", api_key='...', secret: ...)
-    (re.compile(r"(?i)\b((?:api[_-]?key|secret|password|passwd|token|auth[_-]?token)\s*[:=]\s*(['\"]))(.*?)\2"), r"\1[REDACTED_SECRET]\2"),
+    (
+        re.compile(
+            r"(?i)\b((?:api[_-]?key|secret|password|passwd|token|auth[_-]?token)\s*[:=]\s*(['\"]))(.*?)\2"
+        ),
+        r"\1[REDACTED_SECRET]\2",
+    ),
     # Generic key-value secrets (unquoted: password=..., token: ...)
-    (re.compile(r"(?i)\b((?:api[_-]?key|secret|password|passwd|token|auth[_-]?token)\s*[:=]\s*)([^\s'\",;\r\n]+)"), r"\1[REDACTED_SECRET]"),
+    (
+        re.compile(
+            r"(?i)\b((?:api[_-]?key|secret|password|passwd|token|auth[_-]?token)\s*[:=]\s*)([^\s'\",;\r\n]+)"
+        ),
+        r"\1[REDACTED_SECRET]",
+    ),
 ]
 
 # Signatures for failure detection
 TIMEOUT_PATTERNS = [
-    re.compile(r"(?i)(?:command|process|tool|execution|query)\s+(?:timed out|has timed out)"),
+    re.compile(
+        r"(?i)(?:command|process|tool|execution|query)\s+(?:timed out|has timed out)"
+    ),
     re.compile(r"(?i)timed out after \d+(?:\.\d+)?\s*(?:seconds|s|sec)"),
     re.compile(r"\bTimeoutError\b:?"),
     re.compile(r"(?i)\bdeadline exceeded\b"),
@@ -45,7 +80,9 @@ TIMEOUT_PATTERNS = [
 
 SCHEMA_PATTERNS = [
     re.compile(r"\bjsonschema(?:\.exceptions)?\.ValidationError\b"),
-    re.compile(r"'(?:schema_version|contracts|evidence|findings|issues)' is a required property"),
+    re.compile(
+        r"'(?:schema_version|contracts|evidence|findings|issues)' is a required property"
+    ),
     re.compile(r"(?i)\bschema mismatch\b"),
     re.compile(r"(?i)\bschema validation (?:failed|error)\b"),
     re.compile(r"(?i)is not valid under any of the given schemas"),
@@ -174,7 +211,9 @@ def detect_failures(transcript_text: str) -> dict:
     }
 
 
-def correlate_audit_domain(transcript_text: str, audit_data: dict | None = None) -> dict:
+def correlate_audit_domain(
+    transcript_text: str, audit_data: dict | None = None
+) -> dict:
     """Correlate failed transcript steps with specialist audit skills and ledger entries."""
     specialist_found = None
     topic_found = None
@@ -233,27 +272,57 @@ def formulate_recovery_instructions(
 
     ftype = failure.get("failure_type")
     if ftype == "tool_timeout":
-        instructions.append(f"1. Check the command that timed out at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'.")
-        instructions.append("2. Add file exclusion patterns or narrow the target scope in the tool arguments.")
-        instructions.append(f"3. Mark current state paused: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Paused after tool timeout triage'.")
-        instructions.append(f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}")
+        instructions.append(
+            f"1. Check the command that timed out at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
+        )
+        instructions.append(
+            "2. Add file exclusion patterns or narrow the target scope in the tool arguments."
+        )
+        instructions.append(
+            f"3. Mark current state paused: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Paused after tool timeout triage'."
+        )
+        instructions.append(
+            f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}"
+        )
 
     elif ftype == "schema_validation_error":
-        instructions.append(f"1. Inspect the schema validation error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'.")
-        instructions.append(f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {dir_str}/audit.json")
-        instructions.append("3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json.")
-        instructions.append(f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}")
+        instructions.append(
+            f"1. Inspect the schema validation error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
+        )
+        instructions.append(
+            f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {dir_str}/audit.json"
+        )
+        instructions.append(
+            "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json."
+        )
+        instructions.append(
+            f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}"
+        )
 
     elif ftype == "context_limit":
-        instructions.append(f"1. Context limit reached at line {failure.get('line_number')}.")
-        instructions.append(f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Context limit reached; clearing context'.")
-        instructions.append("3. Split the specialist analysis into smaller bounded workflow slices.")
-        instructions.append(f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {dir_str}")
+        instructions.append(
+            f"1. Context limit reached at line {failure.get('line_number')}."
+        )
+        instructions.append(
+            f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Context limit reached; clearing context'."
+        )
+        instructions.append(
+            "3. Split the specialist analysis into smaller bounded workflow slices."
+        )
+        instructions.append(
+            f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {dir_str}"
+        )
 
     else:
-        instructions.append(f"1. Review the unclassified error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'.")
-        instructions.append(f"2. Inspect {dir_str}/run.json and {dir_str}/audit.json for partial progress.")
-        instructions.append(f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}")
+        instructions.append(
+            f"1. Review the unclassified error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
+        )
+        instructions.append(
+            f"2. Inspect {dir_str}/run.json and {dir_str}/audit.json for partial progress."
+        )
+        instructions.append(
+            f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
+        )
 
     return {
         "last_checkpoint": last_checkpoint,
@@ -286,7 +355,11 @@ def generate_diagnostic_bundle(
             except (OSError, ValueError):
                 pass
 
-    resolved_session_id = session_id or (run_data.get("run_id") if run_data else None) or transcript_path.stem
+    resolved_session_id = (
+        session_id
+        or (run_data.get("run_id") if run_data else None)
+        or transcript_path.stem
+    )
 
     # Detect failures first on raw text
     failure = detect_failures(raw_text)
@@ -305,13 +378,15 @@ def generate_diagnostic_bundle(
     bundle = {
         "schema_version": "1.0",
         "session_id": resolved_session_id,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
         "failure_classification": failure,
         "correlated_domain": correlated,
         "environment": {
             "platform": f"{platform.system()} {platform.release()}",
             "python_version": sys.version.split()[0],
-            "repository_path": run_data.get("repository", {}).get("path") if run_data else None,
+            "repository_path": run_data.get("repository", {}).get("path")
+            if run_data
+            else None,
             "run_id": run_data.get("run_id") if run_data else None,
         },
         "recovery": recovery,
@@ -332,24 +407,24 @@ def render_report(bundle: dict) -> str:
 
     return f"""# Diagnostic Triage Report
 
-- **Session / Run ID:** {bundle.get('session_id', 'unknown')}
-- **Timestamp:** {bundle.get('timestamp', 'unknown')}
-- **Failure Classification:** {fc.get('failure_type', 'unknown')}
-- **Root Cause Line:** {fc.get('line_number', 'unknown')}
-- **Correlated Domain:** {cd.get('specialist_skill') or 'None identified'}
+- **Session / Run ID:** {bundle.get("session_id", "unknown")}
+- **Timestamp:** {bundle.get("timestamp", "unknown")}
+- **Failure Classification:** {fc.get("failure_type", "unknown")}
+- **Root Cause Line:** {fc.get("line_number", "unknown")}
+- **Correlated Domain:** {cd.get("specialist_skill") or "None identified"}
 
 ## Summary of failure
 
-{fc.get('summary', '')}
+{fc.get("summary", "")}
 
 ```
-{fc.get('matched_line', '')}
+{fc.get("matched_line", "")}
 ```
 
 ## Audit domain and ledger correlation
 
-- **Specialist Skill:** {cd.get('specialist_skill') or 'None identified'}
-- **Domain Topic:** {cd.get('topic') or 'None identified'}
+- **Specialist Skill:** {cd.get("specialist_skill") or "None identified"}
+- **Domain Topic:** {cd.get("topic") or "None identified"}
 - **Correlated Ledger Entries:** {ledger_refs}
 
 ## Actionable recovery instructions
@@ -369,7 +444,9 @@ def export_bundle(bundle: dict, output_dir: Path) -> tuple[Path, Path]:
     json_path = output_dir / "diagnostic_bundle.json"
     report_path = output_dir / "diagnostic_report.md"
 
-    json_path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(bundle, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     report_path.write_text(render_report(bundle), encoding="utf-8")
 
     return json_path, report_path
@@ -377,11 +454,27 @@ def export_bundle(bundle: dict, output_dir: Path) -> tuple[Path, Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("transcript", type=Path, help="Session transcript file (.json, .jsonl, .txt, .md)")
-    parser.add_argument("--workspace", type=Path, help="Optional audit run workspace directory with run.json/audit.json")
-    parser.add_argument("--output-dir", type=Path, help="Directory to write scrubbed diagnostic_bundle.json and report")
+    parser.add_argument(
+        "transcript",
+        type=Path,
+        help="Session transcript file (.json, .jsonl, .txt, .md)",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        help="Optional audit run workspace directory with run.json/audit.json",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Directory to write scrubbed diagnostic_bundle.json and report",
+    )
     parser.add_argument("--session-id", help="Explicit session or run ID")
-    parser.add_argument("--check-schema", action="store_true", help="Validate generated bundle against bundle.schema.json")
+    parser.add_argument(
+        "--check-schema",
+        action="store_true",
+        help="Validate generated bundle against bundle.schema.json",
+    )
 
     args = parser.parse_args()
 
@@ -389,17 +482,30 @@ def main() -> int:
         print(f"Error: Transcript file not found: {args.transcript}", file=sys.stderr)
         return 2
 
-    bundle = generate_diagnostic_bundle(args.transcript, args.workspace, args.session_id)
+    bundle = generate_diagnostic_bundle(
+        args.transcript, args.workspace, args.session_id
+    )
 
     if args.check_schema:
         schema_path = Path(__file__).resolve().parents[1] / "assets/bundle.schema.json"
         if schema_path.is_file():
             try:
                 import jsonschema
-                jsonschema.validate(bundle, json.loads(schema_path.read_text(encoding="utf-8")))
+
+                jsonschema.validate(
+                    bundle, json.loads(schema_path.read_text(encoding="utf-8"))
+                )
             except ImportError:
-                print("Warning: jsonschema not installed, skipping schema validation", file=sys.stderr)
-            except Exception as e:
+                print(
+                    "Warning: jsonschema not installed, skipping schema validation",
+                    file=sys.stderr,
+                )
+            except (
+                ValueError,
+                OSError,
+                jsonschema.ValidationError,
+                jsonschema.SchemaError,
+            ) as e:
                 print(f"Schema validation error: {e}", file=sys.stderr)
                 return 1
 

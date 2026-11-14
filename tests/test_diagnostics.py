@@ -1,14 +1,14 @@
 """Tests for repo-audit-diagnostics triage, secret scrubbing, and bundle generation."""
+
 from __future__ import annotations
 
-import copy
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "skills/repo-audit-diagnostics"
@@ -51,7 +51,9 @@ class DiagnosticsTests(unittest.TestCase):
         failure = triage.detect_failures(transcript)
         self.assertEqual(failure["failure_type"], "schema_validation_error")
         self.assertEqual(failure["line_number"], 3)
-        self.assertIn("'schema_version' is a required property", failure["matched_line"])
+        self.assertIn(
+            "'schema_version' is a required property", failure["matched_line"]
+        )
 
     def test_detect_context_window_limit(self):
         transcript = """[2026-11-13T20:15:00Z] Sending prompt to agent model...
@@ -70,9 +72,18 @@ Recorded candidate finding F-1 backed by evidence E-1 and contract C-1
 Execution failed during verification
 """
         audit_data = {
-            "evidence": [{"id": "E-1", "path": "src/queue.py", "line_start": 10, "line_end": 20}],
+            "evidence": [
+                {"id": "E-1", "path": "src/queue.py", "line_start": 10, "line_end": 20}
+            ],
             "contracts": [{"id": "C-1", "name": "FIFO order", "evidence_ids": ["E-1"]}],
-            "findings": [{"id": "F-1", "topic": "concurrency", "evidence_ids": ["E-1"], "contract_ids": ["C-1"]}],
+            "findings": [
+                {
+                    "id": "F-1",
+                    "topic": "concurrency",
+                    "evidence_ids": ["E-1"],
+                    "contract_ids": ["C-1"],
+                }
+            ],
         }
         correlation = triage.correlate_audit_domain(transcript, audit_data)
         self.assertEqual(correlation["specialist_skill"], "repo-audit-concurrency")
@@ -102,7 +113,9 @@ Token: api_key='secret_key_value_999'
         self.assertNotIn("sk-proj-1234567890abcdef1234567890abcdef", scrubbed)
         self.assertNotIn("ghp_1234567890abcdef1234567890abcdef1234", scrubbed)
         self.assertNotIn("AKIAIOSFODNN7EXAMPLE", scrubbed)
-        self.assertNotIn("MIIEowIBAAKCAQEA0Y1+abcdefghijklmnopqrstuvwxyz1234567890", scrubbed)
+        self.assertNotIn(
+            "MIIEowIBAAKCAQEA0Y1+abcdefghijklmnopqrstuvwxyz1234567890", scrubbed
+        )
         self.assertNotIn("SuperSecretPassword123", scrubbed)
         self.assertNotIn("secret_key_value_999", scrubbed)
 
@@ -133,14 +146,20 @@ Bearer sk-proj-1234567890abcdef1234567890
         workspace_dir = self.temp_path / "workspace"
         workspace_dir.mkdir()
         (workspace_dir / "run.json").write_text(
-            json.dumps({
-                "schema_version": "1.0",
-                "run_id": "run-test-123",
-                "repository": {"path": "/app/test-repo"},
-                "checkpoints": [
-                    {"at": "2026-11-13T20:00:00Z", "state": "running", "note": "Pass 1 complete"}
-                ]
-            }),
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "run_id": "run-test-123",
+                    "repository": {"path": "/app/test-repo"},
+                    "checkpoints": [
+                        {
+                            "at": "2026-11-13T20:00:00Z",
+                            "state": "running",
+                            "note": "Pass 1 complete",
+                        }
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -152,17 +171,27 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertEqual([], errors, [e.message for e in errors])
 
         self.assertEqual(bundle["session_id"], "run-test-123")
-        self.assertEqual(bundle["failure_classification"]["failure_type"], "tool_timeout")
-        self.assertEqual(bundle["correlated_domain"]["specialist_skill"], "repo-audit-failure-modes")
+        self.assertEqual(
+            bundle["failure_classification"]["failure_type"], "tool_timeout"
+        )
+        self.assertEqual(
+            bundle["correlated_domain"]["specialist_skill"], "repo-audit-failure-modes"
+        )
         self.assertIn("running: Pass 1 complete", bundle["recovery"]["last_checkpoint"])
-        self.assertTrue(any("checkpoint" in inst for inst in bundle["recovery"]["instructions"]))
+        self.assertTrue(
+            any("checkpoint" in inst for inst in bundle["recovery"]["instructions"])
+        )
         self.assertNotIn("sk-proj", bundle["scrubbed_transcript"])
 
     def test_export_bundle_generates_json_and_markdown(self):
         transcript_file = self.temp_path / "transcript.txt"
-        transcript_file.write_text("Tool execution timed out after 15 seconds\n", encoding="utf-8")
+        transcript_file.write_text(
+            "Tool execution timed out after 15 seconds\n", encoding="utf-8"
+        )
 
-        bundle = triage.generate_diagnostic_bundle(transcript_file, session_id="test-export-session")
+        bundle = triage.generate_diagnostic_bundle(
+            transcript_file, session_id="test-export-session"
+        )
         output_dir = self.temp_path / "bundle_export"
 
         json_path, report_path = triage.export_bundle(bundle, output_dir)
@@ -171,7 +200,9 @@ Bearer sk-proj-1234567890abcdef1234567890
 
         loaded = json.loads(json_path.read_text(encoding="utf-8"))
         self.assertEqual(loaded["session_id"], "test-export-session")
-        self.assertEqual(loaded["failure_classification"]["failure_type"], "tool_timeout")
+        self.assertEqual(
+            loaded["failure_classification"]["failure_type"], "tool_timeout"
+        )
 
         report_content = report_path.read_text(encoding="utf-8")
         self.assertIn("# Diagnostic Triage Report", report_content)
@@ -196,7 +227,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             "cli-test-session",
             "--check-schema",
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue((export_dir / "diagnostic_bundle.json").is_file())
         self.assertTrue((export_dir / "diagnostic_report.md").is_file())
