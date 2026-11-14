@@ -30,7 +30,7 @@ EXCLUDED_FILE_NAMES = {".DS_Store", ".gitignore", ".gitattributes"}
 
 
 def get_suite_skills(root: Path = ROOT) -> list[str]:
-    """Retrieve the 35 skills comprising the repository-audits suite."""
+    """Retrieve the skills comprising the repository-audits suite."""
     suites_path = root / "catalog" / "suites.json"
     if suites_path.is_file():
         try:
@@ -40,8 +40,9 @@ def get_suite_skills(root: Path = ROOT) -> list[str]:
                     skills = []
                     for phase in suite.get("phases", []):
                         skills.extend(phase.get("skills", []))
-                    if skills:
-                        return sorted(dict.fromkeys(skills))
+                    return sorted(dict.fromkeys(skills))
+            if "suites" in suites_doc:
+                return []
         except (OSError, json.JSONDecodeError, KeyError):
             pass
 
@@ -115,13 +116,11 @@ def create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
 
 
 def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
-    """Build 35 individual skill archives, 1 consolidated suite archive, and checksums.sha256."""
+    """Build individual skill archives, 1 consolidated suite archive, and checksums.sha256."""
     output_dir.mkdir(parents=True, exist_ok=True)
     skills = get_suite_skills(root)
-    if len(skills) != 35:
-        raise ValueError(
-            f"Expected 35 skills in repository-audits suite, found {len(skills)}"
-        )
+    if not skills:
+        raise ValueError("Expected non-empty repository-audits suite")
 
     all_entries: list[tuple[str, bytes]] = []
     checksums: dict[str, str] = {}
