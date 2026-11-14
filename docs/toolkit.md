@@ -81,6 +81,8 @@ Recovery validates receipt, destination, and backup hashes, preserves interrupte
 and restores the before state or recognizes an already committed operation. It refuses
 ambiguous or locally modified content. Power loss during remove/rollback may need manual
 recovery from the receipt and backup directories; never delete them to silence an error.
+For step-by-step diagnostic workflows, lock clearing, and manual state restoration procedures,
+see the [operational runbooks](runbooks.md).
 These safeguards are local consistency checks, not isolation from another program editing
 the same paths or a hostile filesystem.
 
