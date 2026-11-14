@@ -134,6 +134,22 @@ class AuditValidatorTests(unittest.TestCase):
         self.audit["issues"] = []
         self.assertEqual([], self.errors())
 
+    def test_issue_labels_and_assignees_schema_validation(self):
+        issue = self.issue()
+        issue["labels"] = ["security", "concurrency"]
+        issue["assignees"] = ["auditor"]
+        self.audit["issues"] = [issue]
+        self.assertEqual([], self.errors())
+
+        # Invalid label type (e.g. integer) is rejected by schema
+        issue["labels"] = [123]
+        self.assertTrue(any("issues/0/labels/0" in error for error in self.errors()))
+
+        # Invalid assignee type is rejected by schema
+        issue["labels"] = ["valid"]
+        issue["assignees"] = [True]
+        self.assertTrue(any("issues/0/assignees/0" in error for error in self.errors()))
+
     def test_cli_accepts_valid_fixture_and_rejects_malformed_json(self):
         fixture = ROOT / "tests/fixtures/audit-valid.json"
         valid = subprocess.run(
