@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Package standalone skill archives and full suite with SHA-256 checksums."""
+
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import io
 import json
-from pathlib import Path
 import sys
 import tarfile
-import gzip
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,10 +57,13 @@ def get_suite_skills(root: Path = ROOT) -> list[str]:
 
     skills_dir = root / "skills"
     if skills_dir.is_dir():
-        audit_dirs = sorted([
-            d.name for d in skills_dir.iterdir()
-            if d.is_dir() and d.name.startswith("repo-audit-")
-        ])
+        audit_dirs = sorted(
+            [
+                d.name
+                for d in skills_dir.iterdir()
+                if d.is_dir() and d.name.startswith("repo-audit-")
+            ]
+        )
         if audit_dirs:
             return audit_dirs
 
@@ -93,18 +97,20 @@ def collect_skill_files(package_dir: Path) -> list[tuple[str, bytes]]:
 def create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
     """Create a deterministic, reproducible .tar.gz archive from entries: (archive_path, data)."""
     buf = io.BytesIO()
-    with gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz:
-        with tarfile.open(mode="w", fileobj=gz, format=tarfile.PAX_FORMAT) as tar:
-            for name, data in sorted(entries, key=lambda x: x[0]):
-                info = tarfile.TarInfo(name)
-                info.size = len(data)
-                info.mtime = 0
-                info.mode = 0o644
-                info.uid = 0
-                info.gid = 0
-                info.uname = ""
-                info.gname = ""
-                tar.addfile(info, io.BytesIO(data))
+    with (
+        gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz,
+        tarfile.open(mode="w", fileobj=gz, format=tarfile.PAX_FORMAT) as tar,
+    ):
+        for name, data in sorted(entries, key=lambda x: x[0]):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mtime = 0
+            info.mode = 0o644
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            tar.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 
 
@@ -113,7 +119,9 @@ def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     skills = get_suite_skills(root)
     if len(skills) != 35:
-        raise ValueError(f"Expected 35 skills in repository-audits suite, found {len(skills)}")
+        raise ValueError(
+            f"Expected 35 skills in repository-audits suite, found {len(skills)}"
+        )
 
     all_entries: list[tuple[str, bytes]] = []
     checksums: dict[str, str] = {}
@@ -140,10 +148,11 @@ def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
 
     # Write checksums.sha256
     manifest_lines = [
-        f"{checksums[name]}  {name}\n"
-        for name in sorted(checksums.keys())
+        f"{checksums[name]}  {name}\n" for name in sorted(checksums.keys())
     ]
-    (output_dir / "checksums.sha256").write_text("".join(manifest_lines), encoding="utf-8")
+    (output_dir / "checksums.sha256").write_text(
+        "".join(manifest_lines), encoding="utf-8"
+    )
 
     return checksums
 
@@ -167,7 +176,9 @@ def verify_checksums(output_dir: Path) -> dict[str, bool]:
             raise FileNotFoundError(f"Missing archive listed in checksums: {filename}")
         actual_hash = hashlib.sha256(target_file.read_bytes()).hexdigest()
         if actual_hash != expected_hash:
-            raise ValueError(f"Checksum mismatch for {filename}: expected {expected_hash}, got {actual_hash}")
+            raise ValueError(
+                f"Checksum mismatch for {filename}: expected {expected_hash}, got {actual_hash}"
+            )
         results[filename] = True
     return results
 

@@ -1,16 +1,15 @@
-import json
-from pathlib import Path
 import shutil
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
-from fredlib.common import atomic_json, read_json
 from fredlib import installation, releases
+from fredlib.common import atomic_json, read_json
 
 
 class InstallationTests(unittest.TestCase):
@@ -20,9 +19,17 @@ class InstallationTests(unittest.TestCase):
         self.source, self.destination = self.root / "toolkit", self.root / "project"
         (self.source / "catalog").mkdir(parents=True)
         (self.source / "VERSION").write_text("0.2.0\n")
-        atomic_json(self.source / "catalog/hosts.json", read_json(ROOT / "catalog/hosts.json"))
-        atomic_json(self.source / "catalog/skills.json", {"skills": [{"name": "sample"}, {"name": "other"}]})
-        atomic_json(self.source / "catalog/packs.json", {"packs": {"starter": {"skills": ["sample", "other"]}}})
+        atomic_json(
+            self.source / "catalog/hosts.json", read_json(ROOT / "catalog/hosts.json")
+        )
+        atomic_json(
+            self.source / "catalog/skills.json",
+            {"skills": [{"name": "sample"}, {"name": "other"}]},
+        )
+        atomic_json(
+            self.source / "catalog/packs.json",
+            {"packs": {"starter": {"skills": ["sample", "other"]}}},
+        )
         for name in ["sample", "other"]:
             path = self.source / "skills" / name
             path.mkdir(parents=True)
@@ -32,7 +39,9 @@ class InstallationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def install(self, **options):
-        return installation.install(self.destination, "codex", pack="starter", root=self.source, **options)
+        return installation.install(
+            self.destination, "codex", pack="starter", root=self.source, **options
+        )
 
     def test_dry_run_writes_nothing(self):
         self.assertTrue(self.install(dry_run=True)["dry_run"])
@@ -42,12 +51,19 @@ class InstallationTests(unittest.TestCase):
         for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
             destination = self.root / host
             installation.install(destination, host, pack="starter", root=self.source)
-            target, _ = installation.locations(destination, host, "project", self.source)
-            self.assertEqual((self.source / "skills/sample/SKILL.md").read_bytes(), (target / "sample/SKILL.md").read_bytes())
+            target, _ = installation.locations(
+                destination, host, "project", self.source
+            )
+            self.assertEqual(
+                (self.source / "skills/sample/SKILL.md").read_bytes(),
+                (target / "sample/SKILL.md").read_bytes(),
+            )
 
     def test_update_and_rollback_restore_exact_previous_bytes(self):
         self.install()
-        target, _ = installation.locations(self.destination, "codex", "project", self.source)
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
         before = (target / "sample/SKILL.md").read_bytes()
         (self.source / "skills/sample/SKILL.md").write_text("Updated synthetic package")
         self.install(update=True)
@@ -56,7 +72,9 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(before, (target / "sample/SKILL.md").read_bytes())
 
     def test_unmanaged_and_modified_packages_are_preserved(self):
-        target, _ = installation.locations(self.destination, "codex", "project", self.source)
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
         (target / "sample").mkdir(parents=True)
         (target / "sample/SKILL.md").write_text("User content")
         with self.assertRaises(ValueError):
@@ -68,12 +86,18 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.install(update=True)
         with self.assertRaises(ValueError):
-            installation.remove(self.destination, "codex", "project", ["sample"], root=self.source)
+            installation.remove(
+                self.destination, "codex", "project", ["sample"], root=self.source
+            )
 
     def test_remove_and_rollback_preserve_other_skills(self):
         self.install()
-        target, _ = installation.locations(self.destination, "codex", "project", self.source)
-        installation.remove(self.destination, "codex", "project", ["sample"], root=self.source)
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        installation.remove(
+            self.destination, "codex", "project", ["sample"], root=self.source
+        )
         self.assertFalse((target / "sample").exists())
         self.assertTrue((target / "other").exists())
         installation.rollback(self.destination, "codex", "project", self.source)
@@ -81,14 +105,18 @@ class InstallationTests(unittest.TestCase):
 
     def test_first_install_rollback_removes_only_managed_packages(self):
         self.install()
-        target, _ = installation.locations(self.destination, "codex", "project", self.source)
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
         (target / "unrelated").mkdir()
         installation.rollback(self.destination, "codex", "project", self.source)
         self.assertFalse((target / "sample").exists())
         self.assertTrue((target / "unrelated").exists())
 
     def test_lock_prevents_overlapping_writes(self):
-        _, state = installation.locations(self.destination, "codex", "project", self.source)
+        _, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
         state.mkdir(parents=True)
         (state / "operation.lock").write_text("held")
         with self.assertRaises(ValueError):
@@ -96,18 +124,25 @@ class InstallationTests(unittest.TestCase):
 
     def test_failed_install_rolls_back_all_already_moved_packages(self):
         import os
+
         self.install()
-        target, _ = installation.locations(self.destination, "codex", "project", self.source)
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
         before = (target / "sample/SKILL.md").read_bytes()
         (self.source / "skills/sample/SKILL.md").write_text("New version")
         original = os.replace
+
         def fail_second_stage(source, dest):
             if "staging" in Path(source).parts and Path(source).name == "other":
                 raise OSError("Synthetic write failure")
             return original(source, dest)
-        with patch.object(installation.os, "replace", side_effect=fail_second_stage):
-            with self.assertRaises(OSError):
-                self.install(update=True)
+
+        with (
+            patch.object(installation.os, "replace", side_effect=fail_second_stage),
+            self.assertRaises(OSError),
+        ):
+            self.install(update=True)
         self.assertEqual(before, (target / "sample/SKILL.md").read_bytes())
         self.assertTrue((target / "other/SKILL.md").exists())
 
@@ -131,9 +166,13 @@ class InstallationTests(unittest.TestCase):
 
     def test_recovery_restores_a_partially_swapped_install(self):
         import os
+
         from fredlib.common import digest, package_files
+
         self.install()
-        target, state = installation.locations(self.destination, "codex", "project", self.source)
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
         before = installation.receipt(state)
         backups = state / "backups/crash-fixture"
         backups.mkdir()
@@ -141,12 +180,25 @@ class InstallationTests(unittest.TestCase):
         os.replace(target / "sample", backups / "sample")
         (target / "sample").mkdir()
         (target / "sample/SKILL.md").write_text("Interrupted new package")
-        atomic_json(state / "operation.json", {"id": "crash-fixture", "phase": "prepared", "skills": ["sample"],
-            "before": before["skills"], "backups": str(backups), "after_hashes": {"sample": digest(package_files(target / "sample"))}})
+        atomic_json(
+            state / "operation.json",
+            {
+                "id": "crash-fixture",
+                "phase": "prepared",
+                "skills": ["sample"],
+                "before": before["skills"],
+                "backups": str(backups),
+                "after_hashes": {"sample": digest(package_files(target / "sample"))},
+            },
+        )
         (state / "operation.lock").write_text("interrupted")
         with self.assertRaises(ValueError):
-            installation.recover(self.destination, "codex", "project", False, self.source)
-        result = installation.recover(self.destination, "codex", "project", True, self.source)
+            installation.recover(
+                self.destination, "codex", "project", False, self.source
+            )
+        result = installation.recover(
+            self.destination, "codex", "project", True, self.source
+        )
         self.assertEqual("restored-before-state", result["recovery"])
         self.assertEqual(expected_before, (target / "sample/SKILL.md").read_bytes())
         self.assertFalse((state / "operation.lock").exists())
