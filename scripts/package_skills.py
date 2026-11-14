@@ -115,7 +115,7 @@ def create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
 
 
 def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
-    """Build 36 individual skill archives, 1 consolidated suite archive, and checksums.sha256."""
+    """Build individual skill archives, 1 consolidated suite archive, and checksums.sha256."""
     output_dir.mkdir(parents=True, exist_ok=True)
     skills = get_suite_skills(root)
     if len(skills) != 36:

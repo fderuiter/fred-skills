@@ -71,6 +71,13 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument("--output", type=Path, required=True)
         if command == "report":
             sub.add_argument("--prior", type=Path)
+        if command == "issues":
+            sub.add_argument(
+                "--format",
+                choices=["markdown", "json"],
+                default="markdown",
+                help="Output format: markdown drafts or github-compatible json payloads",
+            )
     sub = commands.add_parser("compare")
     sub.add_argument("before", type=Path)
     sub.add_argument("after", type=Path)
@@ -253,7 +260,9 @@ def dispatch(a):
         return {"output": str(a.output)}
     if a.command == "issues":
         return {
-            "drafts": reports.issue_drafts(read_json(a.audit), a.output),
+            "drafts": reports.issue_drafts(
+                read_json(a.audit), a.output, format=a.format
+            ),
             "remote_writes": 0,
         }
     if a.command == "compare":

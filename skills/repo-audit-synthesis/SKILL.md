@@ -49,13 +49,17 @@ Draft each issue with [issue template](assets/issue-template.md), then provide a
 implementation-agent prompt with exact snapshot, scope, ordered tasks, acceptance criteria,
 tests to run, known safe controls, and completion evidence. Include [handoff](assets/handoff-template.md).
 
+Generate structured GitHub REST API issue payloads using `python scripts/fred.py issues <audit.json> --output <dir> --format json` (or Markdown drafts with `--format markdown`). Each generated JSON payload includes `title`, `body`, `labels`, and `assignees` conforming to GitHub REST API issue creation requirements.
+
 Create/update actual issues only when the user's current or earlier applicable instruction
 authorizes those mutations. Authorization already given does not require reconfirmation.
 Before writing, verify repository, issue format/conventions, visibility, duplicates, and
-actual dependency links. Do not publish private security details or sensitive source
-payloads into public records. Verify returned URLs and partial failures; distinguish
-drafted, created, and linked records. Use provider-supported tools or CLI and translate
-this workflow to available capabilities; do not fabricate tool names or labels.
+actual dependency links. To publish drafted issues, submit each JSON payload via the GitHub
+REST API (`POST /repos/{owner}/{repo}/issues`) using provider-supported tools or GitHub CLI
+(`gh api -X POST repos/{owner}/{repo}/issues --input <payload.json>`). Do not publish private
+security details or sensitive source payloads into public records. Verify returned URLs and
+partial failures; distinguish drafted, created, and linked records. Translate this workflow
+to available capabilities; do not fabricate tool names or labels.
 
 Keep audit.json consistent with [schema](assets/audit.schema.json). Use the coordinator's
 validator if available or schema checks in the local environment. Report consolidation

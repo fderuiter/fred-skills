@@ -394,6 +394,20 @@
               "null"
             ]
           },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "publication": {
             "enum": [
               "draft",
