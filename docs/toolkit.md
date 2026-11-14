@@ -129,6 +129,8 @@ python scripts/fred.py compare audit-output/previous/audit.json audit-output/bug
 python scripts/fred.py report audit-output/bug/audit.json --prior audit-output/previous/audit.json --output audit-output/bug/comparison.html
 python scripts/fred.py memory audit-output/bug --output audit-output/bug/memory.json
 python scripts/fred.py import-sarif /path/to/results.sarif --output audit-output/scanner-observations.json
+python scripts/fred.py export-sarif audit-output/bug/audit.json --output audit-output/bug/audit.sarif
+python scripts/audit_to_sarif.py audit-output/bug/audit.json --output audit-output/bug/audit.sarif
 ```
 
 HTML is self-contained, searchable, and escaped as text, with executive, developer,
