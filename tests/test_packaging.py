@@ -187,6 +187,11 @@ class PackageTests(unittest.TestCase):
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
+        for hook_id in ["check-doc-links", "verify-doc-snippets"]:
+            self.assertIn(hook_id, hooks)
+            self.assertEqual(hooks[hook_id].get("language"), "system")
+            self.assertEqual(hooks[hook_id].get("files"), r"\.md$")
+            self.assertFalse(hooks[hook_id].get("pass_filenames", True))
 
         reqs_path = ROOT / "requirements-dev.txt"
         self.assertTrue(reqs_path.is_file())
@@ -209,6 +214,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("scripts/sync_audit_resources.py", content)
         self.assertIn("scripts/build_catalog.py", content)
         self.assertIn("scripts/validate_skills.py", content)
+        self.assertIn("scripts/check_doc_links.py", content)
+        self.assertIn("scripts/verify_doc_snippets.py", content)
         self.assertIn("unittest", content)
 
     def test_makefile_dry_run_execution(self):
@@ -235,6 +242,8 @@ class PackageTests(unittest.TestCase):
                 self.assertIn("--check", output)
                 self.assertIn("scripts/build_catalog.py", output)
                 self.assertIn("scripts/validate_skills.py", output)
+                self.assertIn("scripts/check_doc_links.py", output)
+                self.assertIn("scripts/verify_doc_snippets.py", output)
                 self.assertIn("unittest", output)
             elif target == "fix":
                 self.assertIn("ruff format .", output)

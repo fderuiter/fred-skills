@@ -35,6 +35,18 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: check-doc-links
+        name: Check relative documentation links
+        entry: python scripts/check_doc_links.py
+        language: system
+        files: \.md$
+        pass_filenames: false
+      - id: verify-doc-snippets
+        name: Verify documentation command snippets
+        entry: python scripts/verify_doc_snippets.py
+        language: system
+        files: \.md$
+        pass_filenames: false
       - id: unit-tests
         name: Test validation and synthetic contracts
         entry: python -m unittest discover -s tests -v
