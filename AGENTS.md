@@ -29,12 +29,16 @@ pre-commit run --all-files
 Or execute verification checks directly:
 
 ```sh
+ruff check .
+ruff format --check .
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check
 python scripts/validate_skills.py
 python -m unittest discover -s tests -v
 ```
+
+To automatically format code or apply safe lint fixes locally, run `ruff format .` and `ruff check --fix .`.
 
 Once installed, hooks run automatically on `git commit`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
 
