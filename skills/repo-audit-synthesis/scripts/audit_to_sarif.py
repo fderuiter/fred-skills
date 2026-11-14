@@ -127,7 +127,7 @@ def audit_to_sarif(
             if not path_str or not isinstance(path_str, str):
                 continue
 
-            clean_uri = path_str.lstrip("/").replace("\\", "/")
+            clean_uri = path_str.replace("\\", "/").lstrip("/")
             physical_loc: dict[str, Any] = {
                 "artifactLocation": {
                     "uri": clean_uri,

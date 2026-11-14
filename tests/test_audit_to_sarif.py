@@ -120,12 +120,20 @@ class AuditToSarifTests(unittest.TestCase):
                 "symbol": "debug_mode",
                 "context": "Debug enabled in production",
             },
+            {
+                "id": "E-3",
+                "path": r"\src\auth\provider.py",
+                "line_start": 1,
+                "line_end": 5,
+                "symbol": "auth_provider",
+                "context": "Windows path normalization",
+            },
         ]
-        audit["findings"][0]["evidence_ids"] = ["E-1", "E-2"]
+        audit["findings"][0]["evidence_ids"] = ["E-1", "E-2", "E-3"]
 
         sarif = audit_to_sarif(audit)
         result = sarif["runs"][0]["results"][0]
-        self.assertEqual(2, len(result["locations"]))
+        self.assertEqual(3, len(result["locations"]))
 
         loc1 = result["locations"][0]
         self.assertEqual("src/core/auth.py", loc1["physicalLocation"]["artifactLocation"]["uri"])
@@ -139,6 +147,11 @@ class AuditToSarifTests(unittest.TestCase):
         self.assertEqual("config/settings.yaml", loc2["physicalLocation"]["artifactLocation"]["uri"])
         self.assertEqual(10, loc2["physicalLocation"]["region"]["startLine"])
         self.assertEqual(10, loc2["physicalLocation"]["region"]["endLine"])
+
+        loc3 = result["locations"][2]
+        self.assertEqual("src/auth/provider.py", loc3["physicalLocation"]["artifactLocation"]["uri"])
+        self.assertEqual(1, loc3["physicalLocation"]["region"]["startLine"])
+        self.assertEqual(5, loc3["physicalLocation"]["region"]["endLine"])
 
     def test_single_line_and_reversed_line_evidence_normalization(self):
         audit = copy.deepcopy(self.base_audit)
