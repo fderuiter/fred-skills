@@ -88,6 +88,11 @@
       "source": "./skills/repo-audit-dead-code"
     },
     {
+      "name": "repo-audit-diagnostics",
+      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
+      "source": "./skills/repo-audit-diagnostics"
+    },
+    {
       "name": "repo-audit-domain-models",
       "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
       "source": "./skills/repo-audit-domain-models"
