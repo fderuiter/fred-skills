@@ -2,11 +2,15 @@
 
 import json
 import os
-import pty
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+
+try:
+    import pty
+except ImportError:
+    pty = None
 
 ROOT = Path(__file__).resolve().parents[1]
 FRED_PY = ROOT / "scripts/fred.py"
@@ -23,6 +27,8 @@ class FredCLITests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+        if pty is None:
+            self.skipTest("pty module is not available on this platform")
         master, slave = pty.openpty()
         proc = subprocess.run(
             [sys.executable, str(FRED_PY), *args],
