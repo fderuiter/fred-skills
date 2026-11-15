@@ -22,11 +22,69 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
             if not (package / "SKILL.md").is_file():
                 problems.append(f"Missing skill package: {name}")
                 continue
-            for relative in manifest["files"]:
+            file_targets: list[tuple[str, Path]] = []
+            for relative in manifest.get("files", []):
                 rel = Path(relative)
                 if rel.is_absolute() or ".." in rel.parts or "\\" in relative:
                     raise ValueError(f"Invalid shared resource path: {relative}")
                 source = shared / "resources" / rel
+                file_targets.append((relative, source))
+
+            scripts = manifest.get("scripts", [])
+            if isinstance(scripts, dict):
+                for s_path, s_targets in scripts.items():
+                    if name in s_targets:
+                        rel = Path(s_path)
+                        if rel.is_absolute() or ".." in rel.parts or "\\" in s_path:
+                            raise ValueError(f"Invalid shared resource path: {s_path}")
+                        source = shared / "resources" / rel
+                        if not source.is_file():
+                            source = root / rel
+                        file_targets.append((s_path, source))
+            elif isinstance(scripts, list):
+                for s_item in scripts:
+                    if isinstance(s_item, str):
+                        rel = Path(s_item)
+                        if rel.is_absolute() or ".." in rel.parts or "\\" in s_item:
+                            raise ValueError(f"Invalid shared resource path: {s_item}")
+                        if s_item == "scripts/audit_to_sarif.py":
+                            if name == "repo-audit-synthesis":
+                                source = shared / "resources" / rel
+                                if not source.is_file():
+                                    source = root / rel
+                                file_targets.append((s_item, source))
+                            elif (package / s_item).is_file():
+                                if check:
+                                    problems.append(
+                                        f"Unexpected script in non-synthesis skill: {name}/{s_item}"
+                                    )
+                                else:
+                                    (package / s_item).unlink()
+                        else:
+                            source = shared / "resources" / rel
+                            if not source.is_file():
+                                source = root / rel
+                            file_targets.append((s_item, source))
+                    elif isinstance(s_item, dict):
+                        rel_path = s_item.get("path") or s_item.get("file")
+                        targets = s_item.get("targets") or s_item.get("skills", [])
+                        if rel_path and name in targets:
+                            rel = Path(rel_path)
+                            if (
+                                rel.is_absolute()
+                                or ".." in rel.parts
+                                or "\\" in rel_path
+                            ):
+                                raise ValueError(
+                                    f"Invalid shared resource path: {rel_path}"
+                                )
+                            source = shared / "resources" / rel
+                            if not source.is_file():
+                                source = root / rel
+                            file_targets.append((rel_path, source))
+
+            for relative, source in file_targets:
+                rel = Path(relative)
                 target = package / rel
                 if not target.resolve().is_relative_to(package.resolve()):
                     raise ValueError(f"Shared destination escapes package: {target}")

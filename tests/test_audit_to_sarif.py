@@ -14,6 +14,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from sync_audit_resources import sync
+
 SCRIPT_PATH = ROOT / "scripts/audit_to_sarif.py"
 SKILL_SCRIPT_PATH = ROOT / "skills/repo-audit-synthesis/scripts/audit_to_sarif.py"
 FIXTURE_PATH = ROOT / "tests/fixtures/audit-valid.json"
@@ -291,6 +294,11 @@ class AuditToSarifTests(unittest.TestCase):
 
     def test_cli_execution_with_file_output(self):
         """Criterion 3: Exit code zero on success."""
+        self.assertEqual(
+            SCRIPT_PATH.read_bytes(),
+            SKILL_SCRIPT_PATH.read_bytes(),
+            "Canonical script and skill script copy must have identical contents",
+        )
         input_path = self.temp_path / "audit.json"
         input_path.write_text(json.dumps(self.base_audit), encoding="utf-8")
         output_path = self.temp_path / "output.sarif"
@@ -521,6 +529,105 @@ class AuditToSarifTests(unittest.TestCase):
         )
         self.assertEqual(500, len(sarif["runs"][0]["results"]))
         self.assertEqual(500, len(sarif["runs"][0]["tool"]["driver"]["rules"]))
+
+
+class AuditToSarifSyncTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_repo_scripts_are_synchronized(self):
+        self.assertEqual(
+            SCRIPT_PATH.read_bytes(),
+            SKILL_SCRIPT_PATH.read_bytes(),
+            "scripts/audit_to_sarif.py and skills/repo-audit-synthesis/scripts/audit_to_sarif.py must be identical",
+        )
+        problems = sync(ROOT, check=True)
+        script_problems = [p for p in problems if "scripts/audit_to_sarif.py" in p]
+        self.assertEqual([], script_problems)
+
+    def test_sync_detects_and_repairs_script_drift(self):
+        (self.temp_root / "catalog").mkdir(parents=True)
+        document = {
+            "schema_version": "1.0",
+            "suites": [
+                {
+                    "name": "repository-audits",
+                    "phases": [
+                        {
+                            "id": 4,
+                            "title": "Findings and issue planning",
+                            "skills": ["repo-audit-synthesis", "repo-audit-other"],
+                        }
+                    ],
+                }
+            ],
+        }
+        (self.temp_root / "catalog/suites.json").write_text(json.dumps(document))
+
+        for skill_name in ["repo-audit-synthesis", "repo-audit-other"]:
+            skill_dir = self.temp_root / "skills" / skill_name
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {skill_name}\ndescription: Test skill\n---\n# Test\n"
+            )
+
+        shared_dir = self.temp_root / "shared/repo-audit"
+        shared_dir.mkdir(parents=True)
+        (shared_dir / "manifest.json").write_text(
+            json.dumps({"files": [], "scripts": ["scripts/audit_to_sarif.py"]})
+        )
+
+        (self.temp_root / "scripts").mkdir(parents=True)
+        canonical_script = self.temp_root / "scripts/audit_to_sarif.py"
+        canonical_script.write_text("print('canonical')\n")
+
+        # 1. Target does not exist yet -> drift detected with check=True
+        problems = sync(self.temp_root, check=True)
+        self.assertTrue(
+            any("repo-audit-synthesis/scripts/audit_to_sarif.py" in p for p in problems)
+        )
+
+        # 2. Sync repairs and writes to target safely creating missing directories
+        target_script = (
+            self.temp_root / "skills/repo-audit-synthesis/scripts/audit_to_sarif.py"
+        )
+        self.assertFalse(target_script.exists())
+        self.assertEqual([], sync(self.temp_root, check=False))
+        self.assertTrue(target_script.is_file())
+        self.assertEqual(canonical_script.read_bytes(), target_script.read_bytes())
+
+        # 3. Check passes now
+        self.assertEqual([], sync(self.temp_root, check=True))
+
+        # 4. Non-synthesis audit skill did NOT receive the script
+        other_script = (
+            self.temp_root / "skills/repo-audit-other/scripts/audit_to_sarif.py"
+        )
+        self.assertFalse(other_script.exists())
+
+        # 5. Modifying skill script causes drift detection
+        target_script.write_text("print('divergent')\n")
+        problems = sync(self.temp_root, check=True)
+        self.assertTrue(
+            any("repo-audit-synthesis/scripts/audit_to_sarif.py" in p for p in problems)
+        )
+
+        # 6. Running sync repairs drift again
+        self.assertEqual([], sync(self.temp_root, check=False))
+        self.assertEqual(canonical_script.read_bytes(), target_script.read_bytes())
+        self.assertEqual([], sync(self.temp_root, check=True))
+
+        # 7. If non-synthesis skill has stray script, check detects it and sync removes it
+        other_script.parent.mkdir(parents=True, exist_ok=True)
+        other_script.write_text("print('stray')\n")
+        problems = sync(self.temp_root, check=True)
+        self.assertTrue(any("repo-audit-other" in p for p in problems))
+        self.assertEqual([], sync(self.temp_root, check=False))
+        self.assertFalse(other_script.exists())
 
 
 if __name__ == "__main__":
