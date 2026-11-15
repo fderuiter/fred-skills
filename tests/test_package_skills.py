@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 import tarfile
 import tempfile
@@ -30,18 +31,26 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_get_suite_skills_returns_audit_skills(self):
         skills = get_suite_skills(ROOT)
-        self.assertGreater(len(skills), 0)
+        self.assertEqual(42, len(skills))
         for skill in skills:
+            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
+
+        audit_skills = get_suite_skills(ROOT, suite_name="repository-audits")
+        self.assertEqual(36, len(audit_skills))
+        for skill in audit_skills:
             self.assertTrue(skill.startswith("repo-audit-"))
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
     def test_package_skills_creates_all_archives_and_checksums(self):
         suite_skills = get_suite_skills(ROOT)
+        self.assertEqual(42, len(suite_skills))
         checksums = package_skills(self.output_dir, root=ROOT)
         expected_archive_count = len(suite_skills) + 1
+        self.assertEqual(43, expected_archive_count)
         self.assertEqual(expected_archive_count, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)
+        self.assertIn("repo-apply-fix.tar.gz", checksums)
 
         manifest_file = self.output_dir / "checksums.sha256"
         self.assertTrue(manifest_file.is_file())
@@ -120,6 +129,52 @@ class PackageSkillsTests(unittest.TestCase):
             self.assertNotIn("__pycache__", rel)
             self.assertFalse(rel.endswith(".pyc"))
             self.assertFalse(rel.endswith(".pyo"))
+
+    def test_get_suite_skills_fallback_to_packs(self):
+        repo_root = self.output_dir / "repo_packs_fallback"
+        catalog_dir = repo_root / "catalog"
+        catalog_dir.mkdir(parents=True)
+        (catalog_dir / "packs.json").write_text(
+            '{"schema_version": "1.0", "packs": {"complete": {"skills": ["skill-b", "skill-a", "skill-b"]}}}',
+            encoding="utf-8",
+        )
+        skills = get_suite_skills(repo_root)
+        self.assertEqual(["skill-a", "skill-b"], skills)
+
+    def test_get_suite_skills_fallback_to_skills_dir(self):
+        repo_root = self.output_dir / "repo_dir_fallback"
+        skills_dir = repo_root / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "skill-1").mkdir()
+        (skills_dir / "skill-1" / "SKILL.md").write_text("# S1", encoding="utf-8")
+        (skills_dir / "skill-2").mkdir()
+        (skills_dir / "skill-2" / "SKILL.md").write_text("# S2", encoding="utf-8")
+        skills = get_suite_skills(repo_root)
+        self.assertEqual(["skill-1", "skill-2"], skills)
+
+    def test_get_suite_skills_deduplicates_phases(self):
+        repo_root = self.output_dir / "repo_dedup"
+        catalog_dir = repo_root / "catalog"
+        catalog_dir.mkdir(parents=True)
+        (catalog_dir / "suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "suite-1",
+                            "phases": [
+                                {"id": 0, "skills": ["skill-z", "skill-a"]},
+                                {"id": 1, "skills": ["skill-a", "skill-m"]},
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        skills = get_suite_skills(repo_root)
+        self.assertEqual(["skill-a", "skill-m", "skill-z"], skills)
 
 
 if __name__ == "__main__":
