@@ -5,5 +5,8 @@
     "assets/audit.schema.json",
     "assets/report-template.md",
     "assets/handoff-template.md"
+  ],
+  "scripts": [
+    "scripts/audit_to_sarif.py"
   ]
 }
