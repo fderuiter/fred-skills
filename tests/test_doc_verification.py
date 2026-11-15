@@ -224,6 +224,12 @@ class DocSnippetVerificationTests(unittest.TestCase):
         errors = verify_all_snippets(root=ROOT, files=["docs/runbooks.md"])
         self.assertEqual([], errors, f"Single file verification failed: {errors}")
 
+        # Verifying with Windows backslashes
+        errors_win = verify_all_snippets(root=ROOT, files=["docs\\runbooks.md"])
+        self.assertEqual(
+            [], errors_win, f"Windows path verification failed: {errors_win}"
+        )
+
         # Verifying non-existent file reports an error for that file only
         errors = verify_all_snippets(root=ROOT, files=["nonexistent_file.md"])
         self.assertEqual(1, len(errors))

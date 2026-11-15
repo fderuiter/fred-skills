@@ -62,9 +62,9 @@ def extract_blocks_from_file(
         return []
 
     try:
-        rel_path = str(file_path.resolve().relative_to(root.resolve()))
+        rel_path = file_path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
-        rel_path = str(file_path)
+        rel_path = str(file_path).replace("\\", "/")
 
     blocks: list[CommandBlock] = []
     in_block = False
@@ -509,15 +509,16 @@ def execute_snippet_command(
 
 
 def _normalize_target_path(target: str | Path, root: Path = ROOT) -> str:
-    path = Path(target)
+    path_str = str(target).replace("\\", "/")
+    path = Path(path_str)
     if not path.is_absolute():
         path = (root / path).resolve()
     else:
         path = path.resolve()
     try:
-        return str(path.relative_to(root.resolve()))
+        return path.relative_to(root.resolve()).as_posix()
     except ValueError:
-        return str(target).lstrip("./")
+        return path_str.lstrip("./")
 
 
 def verify_all_snippets(
