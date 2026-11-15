@@ -164,6 +164,40 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             releases.verify(one / "manifest.json")
 
+    def test_unified_release_builds_all_documented_packs_and_standalone_skills(self):
+        one = self.root / "unified_one"
+        two = self.root / "unified_two"
+        first = releases.build(one, all_packs=True, root=ROOT)
+        second = releases.build(two, all_packs=True, root=ROOT)
+        self.assertEqual(first, second)
+
+        manifest_path = one / "manifest.json"
+        self.assertTrue(manifest_path.is_file())
+        self.assertTrue((one / "SHA256SUMS").is_file())
+        self.assertTrue((one / "checksums.sha256").is_file())
+
+        ver_result = releases.verify(manifest_path)
+        self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
+
+        # Check documented packs (tar and zip)
+        for pack in ["starter", "full-audit", "complete"]:
+            self.assertTrue(
+                (one / f"fred-skills-{first['version']}-{pack}.tar").is_file()
+            )
+            self.assertTrue(
+                (one / f"fred-skills-{first['version']}-{pack}.zip").is_file()
+            )
+
+        # Check consolidated suite and standalone skills
+        self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
+        self.assertTrue((one / "repo-audit-concurrency.tar.gz").is_file())
+
+        # Verify tampering is detected
+        corrupt_target = one / first["archives"][0]["file"]
+        corrupt_target.write_bytes(corrupt_target.read_bytes() + b"tampered")
+        with self.assertRaises(ValueError):
+            releases.verify(manifest_path)
+
     def test_recovery_restores_a_partially_swapped_install(self):
         import os
 

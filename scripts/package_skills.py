@@ -4,85 +4,24 @@
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
-import io
-import json
 import sys
-import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 
-EXCLUDED_DIR_NAMES = {
-    "__pycache__",
-    ".git",
-    ".github",
-    ".venv",
-    "venv",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    "node_modules",
-}
-EXCLUDED_FILE_SUFFIXES = {".pyc", ".pyo", ".pyd"}
-EXCLUDED_FILE_NAMES = {".DS_Store", ".gitignore", ".gitattributes"}
+from fredlib.releases import (
+    _collect_skill_files,
+    _create_tar_gz_bytes,
+    _get_suite_skills,
+)
 
 
 def get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[str]:
     """Retrieve the skills comprising catalog suites, or a single suite if specified."""
-    suites_path = root / "catalog" / "suites.json"
-    if suites_path.is_file():
-        try:
-            suites_doc = json.loads(suites_path.read_text(encoding="utf-8"))
-            suites = suites_doc.get("suites", [])
-            skills: list[str] = []
-            matched = False
-            for suite in suites:
-                if suite_name is None or suite.get("name") == suite_name:
-                    matched = True
-                    for phase in suite.get("phases", []):
-                        skills.extend(phase.get("skills", []))
-            if matched or "suites" in suites_doc:
-                return sorted(dict.fromkeys(skills))
-        except (OSError, json.JSONDecodeError, KeyError):
-            pass
-
-    packs_path = root / "catalog" / "packs.json"
-    if packs_path.is_file():
-        try:
-            packs_doc = json.loads(packs_path.read_text(encoding="utf-8"))
-            packs = packs_doc.get("packs", {})
-            if suite_name == "repository-audits":
-                pack = packs.get("full-audit", {})
-            elif suite_name == "repository-workflows":
-                pack = packs.get("verified-fixes", {})
-            elif suite_name is not None:
-                pack = packs.get(suite_name, {})
-            else:
-                pack = packs.get("complete", {})
-            if "skills" in pack:
-                return sorted(dict.fromkeys(pack["skills"]))
-        except (OSError, json.JSONDecodeError, KeyError):
-            pass
-
-    skills_dir = root / "skills"
-    if skills_dir.is_dir():
-        dirs = sorted(
-            [
-                d.name
-                for d in skills_dir.iterdir()
-                if d.is_dir() and not d.is_symlink() and (d / "SKILL.md").is_file()
-            ]
-        )
-        if suite_name == "repository-audits":
-            dirs = [d for d in dirs if d.startswith("repo-audit-")]
-        elif suite_name == "repository-workflows":
-            dirs = [d for d in dirs if not d.startswith("repo-audit-")]
-        if dirs:
-            return dirs
-
-    raise ValueError("Unable to determine suite skills from catalog")
+    return _get_suite_skills(root, suite_name=suite_name)
 
 
 def collect_skill_files(package_dir: Path) -> list[tuple[str, bytes]]:
@@ -90,43 +29,12 @@ def collect_skill_files(package_dir: Path) -> list[tuple[str, bytes]]:
 
     Excludes authoring scripts, tests, root documents, and cache directories.
     """
-    if not package_dir.is_dir() or package_dir.is_symlink():
-        raise ValueError(f"Expected a real package directory: {package_dir}")
-    files: list[tuple[str, bytes]] = []
-    for path in sorted(package_dir.rglob("*")):
-        if path.is_symlink():
-            raise ValueError(f"Symlinks not supported in skill packages: {path}")
-        if not path.is_file():
-            continue
-        if any(part in EXCLUDED_DIR_NAMES for part in path.parts):
-            continue
-        if path.suffix in EXCLUDED_FILE_SUFFIXES or path.name in EXCLUDED_FILE_NAMES:
-            continue
-        rel = path.relative_to(package_dir).as_posix()
-        files.append((rel, path.read_bytes()))
-    if not files:
-        raise ValueError(f"No files found in skill package: {package_dir}")
-    return files
+    return _collect_skill_files(package_dir)
 
 
 def create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
     """Create a deterministic, reproducible .tar.gz archive from entries: (archive_path, data)."""
-    buf = io.BytesIO()
-    with (
-        gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz,
-        tarfile.open(mode="w", fileobj=gz, format=tarfile.PAX_FORMAT) as tar,
-    ):
-        for name, data in sorted(entries, key=lambda x: x[0]):
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            info.mtime = 0
-            info.mode = 0o644
-            info.uid = 0
-            info.gid = 0
-            info.uname = ""
-            info.gname = ""
-            tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    return _create_tar_gz_bytes(entries)
 
 
 def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
@@ -218,12 +126,28 @@ def main() -> int:
         action="store_true",
         help="Verify existing archives against checksums.sha256 without re-packaging",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Package all documented packs and standalone skills into unified release",
+    )
     args = parser.parse_args()
 
     try:
         if args.verify_only:
             results = verify_checksums(args.output)
             print(f"PASS: verified {len(results)} archives against checksums.sha256")
+            return 0
+
+        if args.all:
+            from fredlib import releases
+
+            manifest = releases.build(args.output, all_packs=True, root=args.root)
+            releases.verify(args.output / "manifest.json")
+            verify_checksums(args.output)
+            print(
+                f"PASS: packaged {len(manifest['archives'])} release archives into {args.output}"
+            )
             return 0
 
         checksums = package_skills(args.output, root=args.root)
