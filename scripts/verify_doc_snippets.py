@@ -31,6 +31,8 @@ DOCUMENTED_RANGES: dict[str, tuple[int, int]] = {
     "AGENTS.md": (24, 52),
     "docs/toolkit.md": (10, 171),
     "docs/usage.md": (24, 127),
+    "docs/runbooks.md": (55, 57),
+    "docs/integration.md": (309, 340),
 }
 
 
@@ -71,7 +73,8 @@ def extract_blocks_from_file(
     block_start = 0
 
     for idx, line in enumerate(lines, start=1):
-        if line.startswith("```"):
+        stripped_line = line.strip()
+        if stripped_line.startswith("```"):
             if in_block:
                 block_end = idx
                 # Check overlap with range if specified
@@ -82,11 +85,35 @@ def extract_blocks_from_file(
                     in_range = False
 
                 if in_range:
-                    cmds = [
-                        (l_no, l_text.strip())
-                        for l_no, l_text in block_lines
-                        if l_text.strip() and not l_text.strip().startswith("#")
-                    ]
+                    cmds: list[tuple[int, str]] = []
+                    current_cmd_parts: list[str] = []
+                    current_cmd_line: int | None = None
+
+                    for l_no, l_text in block_lines:
+                        l_stripped = l_text.strip()
+                        if not l_stripped or l_stripped.startswith("#"):
+                            continue
+
+                        if current_cmd_line is None:
+                            current_cmd_line = l_no
+
+                        if l_stripped.endswith("\\"):
+                            current_cmd_parts.append(l_stripped[:-1].rstrip())
+                        else:
+                            current_cmd_parts.append(l_stripped)
+                            joined_cmd = " ".join(
+                                part for part in current_cmd_parts if part
+                            )
+                            cmds.append((current_cmd_line, joined_cmd))
+                            current_cmd_parts = []
+                            current_cmd_line = None
+
+                    if current_cmd_line is not None and current_cmd_parts:
+                        joined_cmd = " ".join(
+                            part for part in current_cmd_parts if part
+                        )
+                        cmds.append((current_cmd_line, joined_cmd))
+
                     blocks.append(
                         CommandBlock(
                             file_path=file_path,
@@ -100,7 +127,7 @@ def extract_blocks_from_file(
                 in_block = False
                 block_lines = []
             else:
-                block_lang = line[3:].strip()
+                block_lang = stripped_line[3:].strip()
                 block_start = idx
                 in_block = True
         elif in_block:
@@ -111,7 +138,9 @@ def extract_blocks_from_file(
 
 def discover_doc_blocks(
     root: Path = ROOT,
-    ranges: dict[str, tuple[int, int]] | None = None,
+    ranges: dict[str, tuple[int, int]]
+    | dict[str, tuple[int | None, int | None]]
+    | None = None,
 ) -> dict[str, list[CommandBlock]]:
     """Discover all command blocks in the target documentation files."""
     if ranges is None:
@@ -234,7 +263,11 @@ def execute_snippet_command(
 
     Respects constraints: runs in dry-run mode without network calls or destructive writes.
     """
-    parts = shlex.split(cmd)
+    try:
+        parts = shlex.split(cmd)
+    except ValueError as exc:
+        return False, f"Failed to parse command syntax: {exc}"
+
     if not parts:
         return True, ""
 
@@ -475,23 +508,63 @@ def execute_snippet_command(
     return True, ""
 
 
-def verify_all_snippets(root: Path = ROOT) -> list[str]:
-    """Verify and execute snippets across README.md, CONTRIBUTING.md, and other target docs."""
+def _normalize_target_path(target: str | Path, root: Path = ROOT) -> str:
+    path = Path(target)
+    if not path.is_absolute():
+        path = (root / path).resolve()
+    else:
+        path = path.resolve()
+    try:
+        return str(path.relative_to(root.resolve()))
+    except ValueError:
+        return str(target).lstrip("./")
+
+
+def verify_all_snippets(
+    root: Path = ROOT,
+    files: list[str] | None = None,
+    target_files: list[str] | None = None,
+) -> list[str]:
+    """Verify and execute snippets across documentation files."""
     errors: list[str] = []
+    selected = files if files is not None else target_files
+    target_rel_paths = (
+        {_normalize_target_path(f, root=root) for f in selected}
+        if selected is not None
+        else None
+    )
 
     # 1. Verify docs/toolkit.md subcommands against scripts/fred.py:L1-L150
-    subcmd_errors = verify_toolkit_subcommands(root=root)
-    errors.extend(subcmd_errors)
+    if target_rel_paths is None or "docs/toolkit.md" in target_rel_paths:
+        subcmd_errors = verify_toolkit_subcommands(root=root)
+        errors.extend(subcmd_errors)
 
-    # 2. Discover and verify command blocks in all 5 specified documentation files
-    blocks_by_file = discover_doc_blocks(root=root)
+    # 2. Discover and verify command blocks in target documentation files
+    if target_rel_paths is not None:
+        ranges_to_check: dict[str, tuple[int, int] | tuple[None, None]] = {
+            rel_path: DOCUMENTED_RANGES.get(rel_path, (None, None))
+            for rel_path in target_rel_paths
+        }
+    else:
+        ranges_to_check = DOCUMENTED_RANGES
+
+    blocks_by_file = discover_doc_blocks(root=root, ranges=ranges_to_check)
     for rel_path, blocks in blocks_by_file.items():
+        doc_path = root / rel_path
+        if not doc_path.is_file():
+            errors.append(f"{rel_path}: File does not exist")
+            continue
+
         if not blocks:
             errors.append(f"{rel_path}: No code blocks discovered in specified range")
             continue
 
-        # Requirement 1: Extract and execute snippets from README.md and CONTRIBUTING.md
-        should_execute = rel_path in ("README.md", "CONTRIBUTING.md")
+        should_execute = target_rel_paths is not None or rel_path in (
+            "README.md",
+            "CONTRIBUTING.md",
+            "docs/runbooks.md",
+            "docs/integration.md",
+        )
         for block in blocks:
             if block.language not in ("sh", "bash", "shell"):
                 continue
@@ -527,8 +600,8 @@ def main() -> int:
         help="Optional specific files to check",
     )
 
-    parser.parse_args()
-    errors = verify_all_snippets(root=ROOT)
+    args = parser.parse_args()
+    errors = verify_all_snippets(root=ROOT, files=args.files if args.files else None)
 
     if errors:
         for err in errors:
