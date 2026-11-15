@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 
@@ -185,6 +186,38 @@ Bearer sk-proj-1234567890abcdef1234567890
             any("checkpoint" in inst for inst in bundle["recovery"]["instructions"])
         )
         self.assertNotIn("sk-proj", bundle["scrubbed_transcript"])
+
+        # triage.validate_bundle succeeds on valid bundle
+        triage.validate_bundle(bundle)
+
+    def test_validate_bundle_schema_validation_error_chains_cause(self):
+        import jsonschema
+
+        with self.assertRaises(ValueError) as ctx:
+            triage.validate_bundle({"schema_version": "invalid-schema"})
+        self.assertIn("Schema validation error", str(ctx.exception))
+        self.assertIsInstance(ctx.exception.__cause__, jsonschema.ValidationError)
+        self.assertTrue(ctx.exception.__suppress_context__)
+
+    def test_validate_bundle_missing_jsonschema_suppresses_context(self):
+        with patch.dict("sys.modules", {"jsonschema": None}):
+            with self.assertRaises(ValueError) as ctx:
+                triage.validate_bundle({})
+            self.assertIn("jsonschema not installed", str(ctx.exception))
+            self.assertIsNone(ctx.exception.__cause__)
+            self.assertTrue(ctx.exception.__suppress_context__)
+
+    def test_generate_bundle_suppresses_corrupted_workspace_state(self):
+        transcript_file = self.temp_path / "transcript_corrupt.txt"
+        transcript_file.write_text("Tool execution timed out\n", encoding="utf-8")
+        corrupt_workspace = self.temp_path / "corrupt_workspace"
+        corrupt_workspace.mkdir()
+        (corrupt_workspace / "run.json").write_text("invalid json {", encoding="utf-8")
+        (corrupt_workspace / "audit.json").write_text(
+            "{not valid json", encoding="utf-8"
+        )
+        bundle = triage.generate_diagnostic_bundle(transcript_file, corrupt_workspace)
+        self.assertEqual(bundle["session_id"], transcript_file.stem)
 
     def test_export_bundle_generates_json_and_markdown(self):
         transcript_file = self.temp_path / "transcript.txt"

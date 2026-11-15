@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import json
 import platform
@@ -344,16 +345,12 @@ def generate_diagnostic_bundle(
     if workspace_dir:
         run_file = workspace_dir / "run.json"
         if run_file.is_file():
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 run_data = json.loads(run_file.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
         audit_file = workspace_dir / "audit.json"
         if audit_file.is_file():
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 audit_data = json.loads(audit_file.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
 
     resolved_session_id = (
         session_id
@@ -450,14 +447,16 @@ def validate_bundle(bundle: dict, schema_path: Path | None = None) -> None:
 
         jsonschema.validate(bundle, json.loads(schema_file.read_text(encoding="utf-8")))
     except ImportError:
-        raise ValueError("jsonschema not installed, cannot validate bundle schema")
+        raise ValueError(
+            "jsonschema not installed, cannot validate bundle schema"
+        ) from None
     except (
         ValueError,
         OSError,
         jsonschema.ValidationError,
         jsonschema.SchemaError,
     ) as e:
-        raise ValueError(f"Schema validation error: {e}")
+        raise ValueError(f"Schema validation error: {e}") from e
 
 
 def export_bundle(bundle: dict, output_dir: Path) -> tuple[Path, Path]:

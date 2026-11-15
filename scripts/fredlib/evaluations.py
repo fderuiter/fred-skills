@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import signal
@@ -93,10 +94,8 @@ def evaluate(
                             proc.wait(timeout=timeout)
                         except subprocess.TimeoutExpired:
                             if os.name == "posix":
-                                try:
+                                with contextlib.suppress(ProcessLookupError):
                                     os.killpg(proc.pid, signal.SIGKILL)
-                                except ProcessLookupError:
-                                    pass
                             else:
                                 proc.kill()
                             proc.wait()
