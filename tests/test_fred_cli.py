@@ -265,6 +265,20 @@ class FredCLITests(unittest.TestCase):
         data2 = json.loads(proc2.stdout)
         self.assertIn("hosts", data2)
 
+    def test_release_all_cli_command_and_verify(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "release_bundle"
+            proc = self.run_cli("release", "--all", "--output", str(out_dir))
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertTrue((out_dir / "manifest.json").is_file())
+            self.assertTrue((out_dir / "SHA256SUMS").is_file())
+            self.assertTrue((out_dir / "checksums.sha256").is_file())
+
+            verify_proc = self.run_cli("verify-release", str(out_dir / "manifest.json"))
+            self.assertEqual(0, verify_proc.returncode, verify_proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

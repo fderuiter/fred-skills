@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import re
@@ -11,11 +12,136 @@ from .common import (
     ROOT,
     atomic_json,
     choose_skills,
-    package_files,
     read_json,
     relative_path,
     version,
 )
+
+DOCUMENTED_PACKS = ("starter", "full-audit", "complete")
+
+_EXCLUDED_DIR_NAMES = {
+    "__pycache__",
+    ".git",
+    ".github",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "node_modules",
+}
+_EXCLUDED_FILE_SUFFIXES = {".pyc", ".pyo", ".pyd"}
+_EXCLUDED_FILE_NAMES = {".DS_Store", ".gitignore", ".gitattributes"}
+
+
+def _collect_skill_files(
+    package_dir: Path, root: Path = ROOT
+) -> list[tuple[str, bytes]]:
+    if not package_dir.is_dir() or package_dir.is_symlink():
+        raise ValueError(f"Expected a real package directory: {package_dir}")
+    if not package_dir.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"Package directory escapes repository root: {package_dir}")
+    files: list[tuple[str, bytes]] = []
+    for path in sorted(package_dir.rglob("*")):
+        if path.is_symlink():
+            raise ValueError(f"Symlinks not supported in skill packages: {path}")
+        if not path.resolve().is_relative_to(root.resolve()):
+            raise ValueError(f"File escapes repository root: {path}")
+        if not path.is_file():
+            continue
+        if any(part in _EXCLUDED_DIR_NAMES for part in path.parts):
+            continue
+        if path.suffix in _EXCLUDED_FILE_SUFFIXES or path.name in _EXCLUDED_FILE_NAMES:
+            continue
+        rel = path.relative_to(package_dir).as_posix()
+        files.append((rel, path.read_bytes()))
+    if not files:
+        raise ValueError(f"No files found in skill package: {package_dir}")
+    return files
+
+
+def _get_suite_skills(root: Path = ROOT) -> list[str]:
+    suites_path = root / "catalog" / "suites.json"
+    if suites_path.is_file():
+        try:
+            suites_doc = read_json(suites_path)
+            for suite in suites_doc.get("suites", []):
+                if suite.get("name") == "repository-audits":
+                    skills = []
+                    for phase in suite.get("phases", []):
+                        skills.extend(phase.get("skills", []))
+                    return sorted(dict.fromkeys(skills))
+            if "suites" in suites_doc:
+                return []
+        except (OSError, ValueError, KeyError):
+            pass
+
+    packs_path = root / "catalog" / "packs.json"
+    if packs_path.is_file():
+        try:
+            packs_doc = read_json(packs_path)
+            full_audit = packs_doc.get("packs", {}).get("full-audit", {})
+            if "skills" in full_audit:
+                return sorted(dict.fromkeys(full_audit["skills"]))
+        except (OSError, ValueError, KeyError):
+            pass
+
+    skills_dir = root / "skills"
+    if skills_dir.is_dir():
+        audit_dirs = sorted(
+            [
+                d.name
+                for d in skills_dir.iterdir()
+                if d.is_dir() and d.name.startswith("repo-audit-")
+            ]
+        )
+        if audit_dirs:
+            return audit_dirs
+
+    raise ValueError("Unable to determine audit suite skills from catalog")
+
+
+def _write_zip_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> None:
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in sorted(entries, key=lambda x: x[0]):
+            info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, data)
+
+
+def _write_tar_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> None:
+    with tarfile.open(archive_path, "w", format=tarfile.PAX_FORMAT) as archive:
+        for name, data in sorted(entries, key=lambda x: x[0]):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            info.mtime = 0
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            archive.addfile(info, io.BytesIO(data))
+
+
+def _create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with (
+        gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz,
+        tarfile.open(mode="w", fileobj=gz, format=tarfile.PAX_FORMAT) as tar,
+    ):
+        for name, data in sorted(entries, key=lambda x: x[0]):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mtime = 0
+            info.mode = 0o644
+            info.uid = 0
+            info.gid = 0
+            info.uname = ""
+            info.gname = ""
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
 
 def build(
@@ -23,11 +149,85 @@ def build(
     pack: str | None = None,
     skills: list[str] | None = None,
     root: Path = ROOT,
+    all_packs: bool = False,
 ) -> dict:
-    selected = choose_skills(root, pack, skills)
     if output.exists() and any(output.iterdir()):
         raise ValueError("Release output must be new or empty")
     output.mkdir(parents=True, exist_ok=True)
+
+    if all_packs or pack == "all":
+        packs_doc = read_json(root / "catalog/packs.json").get("packs", {})
+        available_packs = [p for p in DOCUMENTED_PACKS if p in packs_doc]
+        if not available_packs:
+            raise ValueError("No documented packs found in catalog/packs.json")
+
+        archive_skills: dict[str, list[str]] = {}
+        packs_map: dict[str, list[str]] = {}
+
+        for p in available_packs:
+            p_skills = choose_skills(root, pack=p)
+            packs_map[p] = p_skills
+            p_stem = f"fred-skills-{version(root)}-{p}"
+            p_entries = []
+            for s_name in sorted(p_skills):
+                pkg = root / "skills" / s_name
+                for rel, data in _collect_skill_files(pkg, root=root):
+                    p_entries.append((f"{s_name}/{rel}", data))
+            zip_name = f"{p_stem}.zip"
+            tar_name = f"{p_stem}.tar"
+            _write_zip_archive(output / zip_name, p_entries)
+            _write_tar_archive(output / tar_name, p_entries)
+            archive_skills[zip_name] = p_skills
+            archive_skills[tar_name] = p_skills
+
+        suite_skills = _get_suite_skills(root)
+        all_suite_entries: list[tuple[str, bytes]] = []
+        for s_name in sorted(suite_skills):
+            pkg = root / "skills" / s_name
+            s_files = _collect_skill_files(pkg, root=root)
+            s_entries = [(f"{s_name}/{rel}", data) for rel, data in s_files]
+            all_suite_entries.extend(s_entries)
+            tar_gz_bytes = _create_tar_gz_bytes(s_entries)
+            archive_name = f"{s_name}.tar.gz"
+            (output / archive_name).write_bytes(tar_gz_bytes)
+            archive_skills[archive_name] = [s_name]
+
+        suite_bytes = _create_tar_gz_bytes(all_suite_entries)
+        suite_name = "fred-skills-suite.tar.gz"
+        (output / suite_name).write_bytes(suite_bytes)
+        archive_skills[suite_name] = suite_skills
+
+        all_skills = sorted(set().union(*archive_skills.values()))
+        manifest = {
+            "schema_version": "1.0",
+            "version": version(root),
+            "pack": "all",
+            "packs": packs_map,
+            "skills": all_skills,
+            "licensing": "Owner license selection not yet declared"
+            if not (root / "LICENSE").exists()
+            else "See repository LICENSE",
+            "archives": [
+                {
+                    "file": path.name,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "bytes": path.stat().st_size,
+                    "skills": archive_skills.get(path.name, []),
+                }
+                for path in sorted(output.iterdir())
+                if path.is_file()
+                and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
+            ],
+        }
+        atomic_json(output / "manifest.json", manifest)
+        checksum_lines = "".join(
+            f"{item['sha256']}  {item['file']}\n" for item in manifest["archives"]
+        )
+        (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
+        (output / "checksums.sha256").write_text(checksum_lines, encoding="utf-8")
+        return manifest
+
+    selected = choose_skills(root, pack, skills)
     label = pack or "selected"
     if not re.fullmatch(r"[a-z0-9-]+", label):
         raise ValueError("Invalid pack name")
@@ -35,24 +235,10 @@ def build(
     entries = []
     for name in sorted(selected):
         package = root / "skills" / name
-        for relative in package_files(package):
-            entries.append((name + "/" + relative, (package / relative).read_bytes()))
-    with zipfile.ZipFile(
-        output / (stem + ".zip"), "w", zipfile.ZIP_DEFLATED
-    ) as archive:
-        for name, data in entries:
-            info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-            info.create_system = 3
-            info.external_attr = 0o100644 << 16
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, data)
-    with tarfile.open(
-        output / (stem + ".tar"), "w", format=tarfile.PAX_FORMAT
-    ) as archive:
-        for name, data in entries:
-            info = tarfile.TarInfo(name)
-            info.size, info.mode, info.mtime = len(data), 0o644, 0
-            archive.addfile(info, io.BytesIO(data))
+        for rel, data in _collect_skill_files(package, root=root):
+            entries.append((f"{name}/{rel}", data))
+    _write_zip_archive(output / (stem + ".zip"), entries)
+    _write_tar_archive(output / (stem + ".tar"), entries)
     manifest = {
         "schema_version": "1.0",
         "version": version(root),
@@ -69,13 +255,15 @@ def build(
             }
             for path in sorted(output.iterdir())
             if path.is_file()
+            and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
         ],
     }
     atomic_json(output / "manifest.json", manifest)
-    (output / "SHA256SUMS").write_text(
-        "".join(f"{item['sha256']}  {item['file']}\n" for item in manifest["archives"]),
-        encoding="utf-8",
+    checksum_lines = "".join(
+        f"{item['sha256']}  {item['file']}\n" for item in manifest["archives"]
     )
+    (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
+    (output / "checksums.sha256").write_text(checksum_lines, encoding="utf-8")
     return manifest
 
 

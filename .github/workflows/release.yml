@@ -45,11 +45,13 @@ jobs:
           python scripts/build_experience.py --check
           python scripts/validate_skills.py
           python -m unittest discover -s tests -v
-      - name: Package standalone skills and complete suite
-        run: python scripts/package_skills.py --output dist/release
-      - name: Verify checksum manifest
+      - name: Package release assets
+        run: python scripts/fred.py release --all --output dist/release
+      - name: Verify release manifest and checksums
         run: |
+          python scripts/fred.py verify-release dist/release/manifest.json
           cd dist/release
+          sha256sum -c SHA256SUMS
           sha256sum -c checksums.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

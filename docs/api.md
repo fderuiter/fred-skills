@@ -682,6 +682,7 @@ def build(
     pack: str | None = None,
     skills: list[str] | None = None,
     root: Path = ROOT,
+    all_packs: bool = False,
 ) -> dict
 ```
 
@@ -692,6 +693,7 @@ Builds reproducible release distribution archives containing selected standalone
   - `pack` (`str | None`, default: `None`): Named pack identifier from `catalog/packs.json`.
   - `skills` (`list[str] | None`, default: `None`): Explicit skill names list.
   - `root` (`Path`, default: repository root): Toolkit root directory.
+  - `all_packs` (`bool`, default: `False`): If `True`, package all documented packs, standalone skill archives, and unified manifest.
 - **Returns:** `dict` — Manifest dictionary containing `"schema_version"`, `"version"`, `"pack"`, `"skills"`, `"licensing"`, and `"archives"` (listing filenames, byte counts, and SHA-256 hashes).
 - **Exceptions:**
   - `ValueError`: Raised if `output` exists and is non-empty, or if pack label contains invalid characters.

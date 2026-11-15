@@ -608,6 +608,11 @@ def parser() -> argparse.ArgumentParser:
         choices=PACK_CHOICES,
         help=f"Skill pack to package into release ({', '.join(PACK_CHOICES)})",
     )
+    sub_rel.add_argument(
+        "--all",
+        action="store_true",
+        help="Package all documented packs and standalone skills into unified release",
+    )
 
     sub_vrel = commands.add_parser(
         "verify-release",
@@ -771,7 +776,7 @@ def dispatch(a: argparse.Namespace) -> Any:
             raise ValueError("Adapter argv must be a nonempty JSON array of strings")
         return evaluations.evaluate(a.output, argv, a.case, a.repeats, a.timeout)
     if a.command == "release":
-        return releases.build(a.output, a.pack)
+        return releases.build(a.output, a.pack, all_packs=a.all)
     if a.command == "verify-release":
         return releases.verify(a.manifest)
     if a.command == "triage":
