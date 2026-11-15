@@ -140,10 +140,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
         # Non-existent script
         ok, msg = execute_snippet_command(
             "python scripts/nonexistent_script.py --check",
-            10,
-            ROOT / "README.md",
             root=ROOT,
-            dry_run=True,
         )
         self.assertFalse(ok)
         self.assertIn("does not exist", msg)
@@ -151,20 +148,14 @@ class DocSnippetVerificationTests(unittest.TestCase):
         # Invalid make target
         ok, msg = execute_snippet_command(
             "make non_existent_target",
-            20,
-            ROOT / "README.md",
             root=ROOT,
-            dry_run=True,
         )
         self.assertFalse(ok)
 
         # Invalid fred.py argument
         ok, msg = execute_snippet_command(
             "python scripts/fred.py search --invalid-flag-that-does-not-exist",
-            30,
-            ROOT / "README.md",
             root=ROOT,
-            dry_run=True,
         )
         self.assertFalse(ok)
 
@@ -192,9 +183,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
         line_no, cmd = block.commands[0]
         self.assertEqual(line_no, 56)
         self.assertIn("pgrep", cmd)
-        ok, msg = execute_snippet_command(
-            cmd, line_no, runbooks, root=ROOT, dry_run=True
-        )
+        ok, msg = execute_snippet_command(cmd, root=ROOT)
         self.assertTrue(ok, f"Runbooks snippet failed: {msg}")
 
     def test_multiline_commands_in_integration(self):
@@ -213,9 +202,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertIn("--output ./audit-workspace", joined_init_cmds[0])
 
         for line_no, cmd in block.commands:
-            ok, msg = execute_snippet_command(
-                cmd, line_no, integration, root=ROOT, dry_run=True
-            )
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
             self.assertTrue(ok, f"Integration snippet at L{line_no} failed: {msg}")
 
     def test_cli_file_arguments_route_to_runner(self):
@@ -239,10 +226,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
         """Unclosed quotes or shell syntax anomalies must be handled safely without unhandled exceptions."""
         ok, msg = execute_snippet_command(
             'python -c "unclosed quote',
-            10,
-            ROOT / "README.md",
             root=ROOT,
-            dry_run=True,
         )
         self.assertFalse(ok)
         self.assertIn("Failed to parse command syntax", msg)

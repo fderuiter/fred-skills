@@ -76,7 +76,7 @@ class AuditToSarifTests(unittest.TestCase):
         ]
         audit = copy.deepcopy(self.base_audit)
         audit["findings"] = []
-        for i, (sev, expected_level) in enumerate(cases):
+        for i, (sev, _expected_level) in enumerate(cases):
             f = copy.deepcopy(self.base_audit["findings"][0])
             f["id"] = f"F-{i + 1}"
             f["severity"] = sev

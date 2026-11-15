@@ -254,10 +254,7 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
 
 def execute_snippet_command(
     cmd: str,
-    line_no: int,
-    file_path: Path,
     root: Path = ROOT,
-    dry_run: bool = True,
 ) -> tuple[bool, str]:
     """Execute or dry-run validate a single documented shell command.
 
@@ -573,10 +570,7 @@ def verify_all_snippets(
                 if should_execute:
                     ok, msg = execute_snippet_command(
                         cmd,
-                        line_no,
-                        block.file_path,
                         root=root,
-                        dry_run=True,
                     )
                     if not ok:
                         errors.append(
