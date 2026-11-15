@@ -179,6 +179,74 @@ class DocSnippetVerificationTests(unittest.TestCase):
         blocks = extract_blocks_from_file(readme, start_line=27, end_line=35, root=ROOT)
         self.assertGreaterEqual(len(blocks), 1)
 
+    def test_indented_code_blocks_in_runbooks(self):
+        """Indented code blocks in docs/runbooks.md (L55-L57) must be discovered and validated."""
+        runbooks = ROOT / "docs/runbooks.md"
+        blocks = extract_blocks_from_file(
+            runbooks, start_line=55, end_line=57, root=ROOT
+        )
+        self.assertGreaterEqual(len(blocks), 1)
+        block = blocks[0]
+        self.assertEqual(block.language, "sh")
+        self.assertTrue(len(block.commands) > 0)
+        line_no, cmd = block.commands[0]
+        self.assertEqual(line_no, 56)
+        self.assertIn("pgrep", cmd)
+        ok, msg = execute_snippet_command(
+            cmd, line_no, runbooks, root=ROOT, dry_run=True
+        )
+        self.assertTrue(ok, f"Runbooks snippet failed: {msg}")
+
+    def test_multiline_commands_in_integration(self):
+        """Multiline commands with continuation backslashes in docs/integration.md (L309-L340) must parse and execute without ValueError."""
+        integration = ROOT / "docs/integration.md"
+        blocks = extract_blocks_from_file(
+            integration, start_line=309, end_line=340, root=ROOT
+        )
+        self.assertGreaterEqual(len(blocks), 1)
+        block = blocks[0]
+        self.assertEqual(block.language, "sh")
+        # Ensure commands are joined
+        joined_init_cmds = [cmd for _, cmd in block.commands if "init" in cmd]
+        self.assertEqual(len(joined_init_cmds), 1)
+        self.assertIn("--task investigate-bug", joined_init_cmds[0])
+        self.assertIn("--output ./audit-workspace", joined_init_cmds[0])
+
+        for line_no, cmd in block.commands:
+            ok, msg = execute_snippet_command(
+                cmd, line_no, integration, root=ROOT, dry_run=True
+            )
+            self.assertTrue(ok, f"Integration snippet at L{line_no} failed: {msg}")
+
+    def test_cli_file_arguments_route_to_runner(self):
+        """Passing file arguments limits verification to the specified target files."""
+        # Verifying only docs/runbooks.md
+        errors = verify_all_snippets(root=ROOT, files=["docs/runbooks.md"])
+        self.assertEqual([], errors, f"Single file verification failed: {errors}")
+
+        # Verifying with Windows backslashes
+        errors_win = verify_all_snippets(root=ROOT, files=["docs\\runbooks.md"])
+        self.assertEqual(
+            [], errors_win, f"Windows path verification failed: {errors_win}"
+        )
+
+        # Verifying non-existent file reports an error for that file only
+        errors = verify_all_snippets(root=ROOT, files=["nonexistent_file.md"])
+        self.assertEqual(1, len(errors))
+        self.assertIn("nonexistent_file.md", errors[0])
+
+    def test_shell_syntax_error_safety(self):
+        """Unclosed quotes or shell syntax anomalies must be handled safely without unhandled exceptions."""
+        ok, msg = execute_snippet_command(
+            'python -c "unclosed quote',
+            10,
+            ROOT / "README.md",
+            root=ROOT,
+            dry_run=True,
+        )
+        self.assertFalse(ok)
+        self.assertIn("Failed to parse command syntax", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

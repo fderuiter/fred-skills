@@ -19,9 +19,9 @@ from fredlib.releases import (
 )
 
 
-def get_suite_skills(root: Path = ROOT) -> list[str]:
-    """Retrieve the skills comprising the repository-audits suite."""
-    return _get_suite_skills(root)
+def get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[str]:
+    """Retrieve the skills comprising catalog suites, or a single suite if specified."""
+    return _get_suite_skills(root, suite_name=suite_name)
 
 
 def collect_skill_files(package_dir: Path) -> list[tuple[str, bytes]]:
@@ -42,7 +42,7 @@ def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     skills = get_suite_skills(root)
     if not skills:
-        raise ValueError("Expected non-empty repository-audits suite")
+        raise ValueError("Expected non-empty suite")
 
     all_entries: list[tuple[str, bytes]] = []
     checksums: dict[str, str] = {}

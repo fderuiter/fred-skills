@@ -60,19 +60,21 @@ def _collect_skill_files(
     return files
 
 
-def _get_suite_skills(root: Path = ROOT) -> list[str]:
+def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[str]:
     suites_path = root / "catalog" / "suites.json"
     if suites_path.is_file():
         try:
             suites_doc = read_json(suites_path)
-            for suite in suites_doc.get("suites", []):
-                if suite.get("name") == "repository-audits":
-                    skills = []
+            suites = suites_doc.get("suites", [])
+            skills: list[str] = []
+            matched = False
+            for suite in suites:
+                if suite_name is None or suite.get("name") == suite_name:
+                    matched = True
                     for phase in suite.get("phases", []):
                         skills.extend(phase.get("skills", []))
-                    return sorted(dict.fromkeys(skills))
-            if "suites" in suites_doc:
-                return []
+            if matched or "suites" in suites_doc:
+                return sorted(dict.fromkeys(skills))
         except (OSError, ValueError, KeyError):
             pass
 
@@ -80,25 +82,37 @@ def _get_suite_skills(root: Path = ROOT) -> list[str]:
     if packs_path.is_file():
         try:
             packs_doc = read_json(packs_path)
-            full_audit = packs_doc.get("packs", {}).get("full-audit", {})
-            if "skills" in full_audit:
-                return sorted(dict.fromkeys(full_audit["skills"]))
+            packs = packs_doc.get("packs", {})
+            if suite_name == "repository-audits":
+                pack = packs.get("full-audit", {})
+            elif suite_name == "repository-workflows":
+                pack = packs.get("verified-fixes", {})
+            elif suite_name is not None:
+                pack = packs.get(suite_name, {})
+            else:
+                pack = packs.get("complete", {})
+            if "skills" in pack:
+                return sorted(dict.fromkeys(pack["skills"]))
         except (OSError, ValueError, KeyError):
             pass
 
     skills_dir = root / "skills"
     if skills_dir.is_dir():
-        audit_dirs = sorted(
+        dirs = sorted(
             [
                 d.name
                 for d in skills_dir.iterdir()
-                if d.is_dir() and d.name.startswith("repo-audit-")
+                if d.is_dir() and not d.is_symlink() and (d / "SKILL.md").is_file()
             ]
         )
-        if audit_dirs:
-            return audit_dirs
+        if suite_name == "repository-audits":
+            dirs = [d for d in dirs if d.startswith("repo-audit-")]
+        elif suite_name == "repository-workflows":
+            dirs = [d for d in dirs if not d.startswith("repo-audit-")]
+        if dirs:
+            return dirs
 
-    raise ValueError("Unable to determine audit suite skills from catalog")
+    raise ValueError("Unable to determine suite skills from catalog")
 
 
 def _write_zip_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> None:

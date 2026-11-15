@@ -137,7 +137,9 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(data["name"], "fred-skills")
         self.assertEqual(data["owner"]["name"], "fderuiter")
         plugins = data["plugins"]
-        self.assertEqual(len(plugins), len(get_suite_skills(ROOT)))
+        self.assertEqual(
+            len(plugins), len(get_suite_skills(ROOT, suite_name="repository-audits"))
+        )
         for plugin in plugins:
             self.assertIn("name", plugin)
             self.assertIn("description", plugin)
