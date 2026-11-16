@@ -66,7 +66,7 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
             "source": f"./skills/{entry['name']}",
         }
         for entry in sorted(entries, key=lambda item: item["name"])
-        if entry.get("suite") == "repository-audits"
+        if entry["name"] in membership
     ]
     marketplace = {
         "name": "fred-skills",

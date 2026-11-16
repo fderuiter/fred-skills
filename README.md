@@ -20,7 +20,7 @@ or choose a package from the [catalog](docs/catalog.md).
 
 ## Installation
 
-Install all 36 repository audit skills with a single marketplace command:
+Install all 42 packages with a single marketplace command:
 
 ### Claude Code
 

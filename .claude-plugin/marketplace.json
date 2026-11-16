@@ -8,6 +8,11 @@
   },
   "plugins": [
     {
+      "name": "repo-apply-fix",
+      "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
+      "source": "./skills/repo-apply-fix"
+    },
+    {
       "name": "repo-audit-accessibility-state",
       "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
       "source": "./skills/repo-audit-accessibility-state"
@@ -186,6 +191,31 @@
       "name": "repo-audit-trust-boundaries",
       "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
       "source": "./skills/repo-audit-trust-boundaries"
+    },
+    {
+      "name": "repo-plan-fix",
+      "description": "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff.",
+      "source": "./skills/repo-plan-fix"
+    },
+    {
+      "name": "repo-reconcile-findings",
+      "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
+      "source": "./skills/repo-reconcile-findings"
+    },
+    {
+      "name": "repo-specify-regression",
+      "description": "Use when defining an independent regression test for a supported behavioral defect.",
+      "source": "./skills/repo-specify-regression"
+    },
+    {
+      "name": "repo-verify-finding",
+      "description": "Use when verifying, reproducing, refuting, or narrowing an existing repository finding.",
+      "source": "./skills/repo-verify-finding"
+    },
+    {
+      "name": "repo-verify-fix",
+      "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+      "source": "./skills/repo-verify-fix"
     }
   ]
 }

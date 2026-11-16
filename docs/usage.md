@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 36 audit skills directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
+Install all 42 packages directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
 
 ### Claude Code
 

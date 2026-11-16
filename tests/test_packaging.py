@@ -122,6 +122,38 @@ class PackageTests(unittest.TestCase):
             any(".claude-plugin/marketplace.json" in problem for problem in problems)
         )
 
+    def test_marketplace_manifest_includes_all_suites(self):
+        workflow_skill = self.root / "skills/sample-workflow"
+        workflow_skill.mkdir(parents=True)
+        (workflow_skill / "SKILL.md").write_text(
+            '---\nname: sample-workflow\ndescription: "Workflow package."\n---\n\n# Workflow\n'
+        )
+        (self.root / "catalog").mkdir(exist_ok=True)
+        document = {
+            "schema_version": "1.0",
+            "suites": [
+                {
+                    "name": "repository-audits",
+                    "phases": [
+                        {"id": 1, "title": "Discovery", "skills": ["sample-audit"]}
+                    ],
+                },
+                {
+                    "name": "repository-workflows",
+                    "phases": [
+                        {"id": 0, "title": "Workflow", "skills": ["sample-workflow"]}
+                    ],
+                },
+            ],
+        }
+        (self.root / "catalog/suites.json").write_text(json.dumps(document))
+        self.assertEqual([], build(self.root))
+        manifest = json.loads(
+            (self.root / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+        )
+        names = [plugin["name"] for plugin in manifest["plugins"]]
+        self.assertEqual(names, ["sample-audit", "sample-workflow"])
+
     def test_listed_skill_without_valid_entry_point_is_rejected(self):
         self.manifest()
         self.entry.unlink()
@@ -137,9 +169,10 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(data["name"], "fred-skills")
         self.assertEqual(data["owner"]["name"], "fderuiter")
         plugins = data["plugins"]
-        self.assertEqual(
-            len(plugins), len(get_suite_skills(ROOT, suite_name="repository-audits"))
-        )
+        self.assertEqual(len(plugins), len(get_suite_skills(ROOT)))
+        plugin_names = {plugin["name"] for plugin in plugins}
+        for workflow_skill in get_suite_skills(ROOT, suite_name="repository-workflows"):
+            self.assertIn(workflow_skill, plugin_names)
         for plugin in plugins:
             self.assertIn("name", plugin)
             self.assertIn("description", plugin)
@@ -291,6 +324,14 @@ class PackageTests(unittest.TestCase):
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
         self.assertIn("complete 42-package pack", usage_text)
         self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
+        self.assertIn(
+            "Install all 42 packages directly via plugin marketplaces", usage_text
+        )
+
+        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Install all 42 packages with a single marketplace command:", readme_text
+        )
 
         for doc_name in [
             "docs/architecture.md",
