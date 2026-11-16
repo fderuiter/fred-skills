@@ -34,6 +34,34 @@ class PackageTests(unittest.TestCase):
         self.prompt.write_text(
             "Use sample-audit on <repository> at <revision>.\n", encoding="utf-8"
         )
+        self.scenarios_file = self.skill / "references/evaluation-scenarios.json"
+        self.scenarios_file.parent.mkdir(parents=True, exist_ok=True)
+        self.scenarios_file.write_text(
+            json.dumps(
+                {
+                    "topic": "sample-audit",
+                    "scenarios": [
+                        {
+                            "id": "sample-audit-failure",
+                            "prompt": "Audit synthetic contracts when explicitly requested.",
+                            "expected_behavior": ["Report finding with evidence."],
+                        },
+                        {
+                            "id": "sample-audit-safe",
+                            "prompt": "Audit synthetic contracts when explicitly requested.",
+                            "expected_behavior": ["Safeguards verified, no defect."],
+                        },
+                        {
+                            "id": "sample-audit-routing",
+                            "prompt": "Fix a spelling mistake in the project description.",
+                            "expected_behavior": [
+                                "Do not activate this specialist solely because the task concerns a repository."
+                            ],
+                        },
+                    ],
+                }
+            )
+        )
 
     def tearDown(self):
         self.temp.cleanup()
@@ -55,6 +83,20 @@ class PackageTests(unittest.TestCase):
 
     def test_minimal_portable_package_is_valid(self):
         self.assertEqual([], validate_skill(self.skill))
+
+    def test_missing_evaluation_scenarios_is_rejected(self):
+        self.scenarios_file.unlink()
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("references/evaluation-scenarios.json" in error for error in errors)
+        )
+
+    def test_malformed_evaluation_scenarios_is_rejected(self):
+        self.scenarios_file.write_text('{"topic": "sample-audit"}')
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("references/evaluation-scenarios.json" in error for error in errors)
+        )
 
     def test_name_mismatch_is_rejected(self):
         self.entry.write_text(
@@ -91,7 +133,7 @@ class PackageTests(unittest.TestCase):
 
     def test_skill_markdown_supports_html_images_and_reference_links(self):
         references_dir = self.skill / "references"
-        references_dir.mkdir(parents=True)
+        references_dir.mkdir(parents=True, exist_ok=True)
         (references_dir / "valid.md").write_text("# Valid\n", encoding="utf-8")
         self.entry.write_text(
             self.entry.read_text()
@@ -347,6 +389,16 @@ class PackageTests(unittest.TestCase):
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
         self.assertIn("42 total packages", val_text)
+        self.assertIn(
+            "Each of the 42 skills in the suite includes three scenario specifications",
+            val_text,
+        )
+        self.assertIn(
+            "These 126 specifications are not 126 executed evaluations",
+            val_text,
+        )
+        self.assertNotIn("35 skills in the suite", val_text)
+        self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
         self.assertIn("42 total packages", impl_text)
