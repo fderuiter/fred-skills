@@ -1,5 +1,6 @@
 """Tests for documentation verification harnesses: relative links and CLI snippet verification."""
 
+import shlex
 import sys
 import tempfile
 import unittest
@@ -85,47 +86,69 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 self.assertLessEqual(block.start_line, e_line)
 
     def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self):
-        """Documented subcommands from docs/toolkit.md (L10-L171) must match scripts/fred.py:L1-L150."""
+        """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
         errors = verify_toolkit_subcommands(root=ROOT)
         self.assertEqual(
             [], errors, f"Toolkit subcommand verification failed: {errors}"
         )
 
-        # Explicitly verify key documented subcommands
+        # Dynamic verification of bidirectional parity against LIFECYCLE_GROUPS
         groups = get_registered_fred_subcommands(root=ROOT)
         registered = {cmd for cmds in groups.values() for cmd in cmds}
 
-        expected_subcmds = [
-            "tasks",
-            "packs",
-            "hosts",
-            "search",
-            "preflight",
-            "plan",
-            "install",
-            "update",
-            "remove",
-            "rollback",
-            "recover-install",
-            "init",
-            "checkpoint",
-            "validate-run",
-            "resume",
-            "report",
-            "issues",
-            "compare",
-            "memory",
-            "import-sarif",
-            "export-sarif",
-            "reconcile",
-            "release",
-            "verify-release",
-        ]
-        for subcmd in expected_subcmds:
-            self.assertIn(
-                subcmd,
-                registered,
-                f"Expected subcommand '{subcmd}' missing from scripts/fred.py",
+        # Assert complete coverage of all 26 registered subcommands
+        self.assertEqual(
+            len(registered),
+            26,
+            f"Expected exactly 26 registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
+        )
+
+        start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 195))
+        blocks = extract_blocks_from_file(
+            ROOT / "docs/toolkit.md", start_line, end_line, root=ROOT
+        )
+        documented: set[str] = set()
+        for block in blocks:
+            for _, cmd in block.commands:
+                if "scripts/fred.py" not in cmd:
+                    continue
+                parts = shlex.split(cmd)
+                for idx, part in enumerate(parts):
+                    if part.endswith("fred.py") and idx + 1 < len(parts):
+                        subcmd = parts[idx + 1]
+                        if not subcmd.startswith("-"):
+                            documented.add(subcmd)
+
+        self.assertEqual(
+            registered,
+            documented,
+            f"Discrepancy between registered and documented subcommands: missing={sorted(registered - documented)}, unexpected={sorted(documented - registered)}",
+        )
+
+    def test_omitting_subcommand_from_docs_fails_verification(self):
+        """Omitting any registered subcommand from docs/toolkit.md causes verify_toolkit_subcommands to fail."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            docs_dir = tmp_root / "docs"
+            docs_dir.mkdir(parents=True)
+            original_toolkit = (ROOT / "docs/toolkit.md").read_text(encoding="utf-8")
+            # Create a toolkit.md that omits triage snippets
+            omitted_lines = [
+                line
+                for line in original_toolkit.splitlines(keepends=True)
+                if "triage" not in line
+            ]
+            (docs_dir / "toolkit.md").write_text(
+                "".join(omitted_lines), encoding="utf-8"
+            )
+
+            errors = verify_toolkit_subcommands(root=tmp_root)
+            self.assertTrue(
+                any(
+                    "Registered subcommand 'triage' lacks documentation snippets" in err
+                    for err in errors
+                ),
+                f"Expected error for missing triage subcommand, got: {errors}",
             )
 
     def test_extract_and_execute_snippets_from_readme_and_contributing(self):
