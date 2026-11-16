@@ -1,0 +1,4 @@
+interface:
+  display_name: "Invariant Verification"
+  short_description: "Verify invariants and regression hazards in diffs"
+  default_prompt: "Use $review-invariant-violations on this pull request diff and invariant rules."

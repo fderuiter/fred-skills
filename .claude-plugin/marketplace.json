@@ -8,6 +8,21 @@
   },
   "plugins": [
     {
+      "name": "arch-boundary-specification",
+      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "source": "./skills/arch-boundary-specification"
+    },
+    {
+      "name": "arch-component-decomposition",
+      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "source": "./skills/arch-component-decomposition"
+    },
+    {
+      "name": "arch-decision-record",
+      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "source": "./skills/arch-decision-record"
+    },
+    {
       "name": "repo-apply-fix",
       "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
       "source": "./skills/repo-apply-fix"
@@ -216,6 +231,36 @@
       "name": "repo-verify-fix",
       "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
       "source": "./skills/repo-verify-fix"
+    },
+    {
+      "name": "review-actionable-feedback",
+      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "source": "./skills/review-actionable-feedback"
+    },
+    {
+      "name": "review-diff-analysis",
+      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "source": "./skills/review-diff-analysis"
+    },
+    {
+      "name": "review-invariant-violations",
+      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "source": "./skills/review-invariant-violations"
+    },
+    {
+      "name": "test-case-generation",
+      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "source": "./skills/test-case-generation"
+    },
+    {
+      "name": "test-gap-analysis",
+      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "source": "./skills/test-gap-analysis"
+    },
+    {
+      "name": "test-suite-verification",
+      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "source": "./skills/test-suite-verification"
     }
   ]
 }

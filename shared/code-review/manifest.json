@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "suite": "code-review",
+  "files": [
+    "references/review-protocol.md",
+    "assets/review-template.md",
+    "assets/review.schema.json"
+  ]
+}

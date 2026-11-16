@@ -2,6 +2,84 @@
   "schema_version": "1.0",
   "skills": [
     {
+      "name": "arch-boundary-specification",
+      "title": "Boundary Specification",
+      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "path": "skills/arch-boundary-specification/SKILL.md",
+      "suite": "software-architecture",
+      "phase": 1,
+      "phase_title": "Boundary Specification",
+      "maturity": "experimental",
+      "symptoms": [
+        "boundary",
+        "isolation",
+        "trust",
+        "modules"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "system boundaries",
+        "existing interfaces if available"
+      ],
+      "outcomes": [
+        "Evidence-backed boundary specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "arch-component-decomposition",
+      "title": "Component Decomposition",
+      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "path": "skills/arch-component-decomposition/SKILL.md",
+      "suite": "software-architecture",
+      "phase": 2,
+      "phase_title": "System Decomposition",
+      "maturity": "experimental",
+      "symptoms": [
+        "decomposition",
+        "components",
+        "interfaces",
+        "modularity"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "system capabilities",
+        "existing domain models if available"
+      ],
+      "outcomes": [
+        "Evidence-backed component decomposition handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "arch-decision-record",
+      "title": "Architectural Decision Records",
+      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "path": "skills/arch-decision-record/SKILL.md",
+      "suite": "software-architecture",
+      "phase": 0,
+      "phase_title": "Decision Records",
+      "maturity": "experimental",
+      "symptoms": [
+        "architecture",
+        "adr",
+        "decisions",
+        "tradeoffs"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "architectural context",
+        "existing decisions if available"
+      ],
+      "outcomes": [
+        "Evidence-backed architectural decision record"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "repo-apply-fix",
       "title": "Scoped Correction",
       "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
@@ -1010,6 +1088,162 @@
       ],
       "outcomes": [
         "Evidence-backed verify fix handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "review-actionable-feedback",
+      "title": "Feedback Synthesis",
+      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "path": "skills/review-actionable-feedback/SKILL.md",
+      "suite": "code-review",
+      "phase": 2,
+      "phase_title": "Feedback Synthesis",
+      "maturity": "experimental",
+      "symptoms": [
+        "feedback",
+        "code-review",
+        "actionable-guidance",
+        "verdict"
+      ],
+      "expected_inputs": [
+        "review findings",
+        "diff context",
+        "codebase guidelines"
+      ],
+      "outcomes": [
+        "Evidence-backed code review feedback handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "review-diff-analysis",
+      "title": "Diff Analysis",
+      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "path": "skills/review-diff-analysis/SKILL.md",
+      "suite": "code-review",
+      "phase": 0,
+      "phase_title": "Diff Analysis",
+      "maturity": "experimental",
+      "symptoms": [
+        "diff",
+        "review",
+        "pull-request",
+        "impact"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "target branch",
+        "modified files"
+      ],
+      "outcomes": [
+        "Evidence-backed diff impact analysis handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "review-invariant-violations",
+      "title": "Invariant Verification",
+      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "path": "skills/review-invariant-violations/SKILL.md",
+      "suite": "code-review",
+      "phase": 1,
+      "phase_title": "Invariant Verification",
+      "maturity": "experimental",
+      "symptoms": [
+        "invariants",
+        "regressions",
+        "concurrency",
+        "state-machine"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "system invariants",
+        "caller assumptions"
+      ],
+      "outcomes": [
+        "Evidence-backed invariant verification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "test-case-generation",
+      "title": "Test Case Generation",
+      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "path": "skills/test-case-generation/SKILL.md",
+      "suite": "automated-testing",
+      "phase": 1,
+      "phase_title": "Test Generation",
+      "maturity": "experimental",
+      "symptoms": [
+        "test-generation",
+        "regression-tests",
+        "unit-tests",
+        "oracles"
+      ],
+      "expected_inputs": [
+        "untested behavioral contracts",
+        "test framework",
+        "defect specification"
+      ],
+      "outcomes": [
+        "Evidence-backed test case generation handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "test-gap-analysis",
+      "title": "Test Gap Analysis",
+      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "path": "skills/test-gap-analysis/SKILL.md",
+      "suite": "automated-testing",
+      "phase": 0,
+      "phase_title": "Gap Analysis",
+      "maturity": "experimental",
+      "symptoms": [
+        "testing",
+        "coverage",
+        "test-gaps",
+        "untested-paths"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "existing test suite",
+        "behavioral contracts"
+      ],
+      "outcomes": [
+        "Evidence-backed test gap analysis handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "test-suite-verification",
+      "title": "Test Suite Verification",
+      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "path": "skills/test-suite-verification/SKILL.md",
+      "suite": "automated-testing",
+      "phase": 2,
+      "phase_title": "Test Verification",
+      "maturity": "experimental",
+      "symptoms": [
+        "test-verification",
+        "oracle-validation",
+        "flakiness",
+        "regression-runner"
+      ],
+      "expected_inputs": [
+        "test suite execution results",
+        "target test files",
+        "environment configuration"
+      ],
+      "outcomes": [
+        "Evidence-backed test suite verification handoff"
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"

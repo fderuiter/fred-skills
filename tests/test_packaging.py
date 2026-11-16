@@ -334,27 +334,27 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(42, len(suite_skills))
+        self.assertEqual(51, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("42 total packages", arch_text)
+        self.assertIn("51 total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("42 total packages", val_text)
+        self.assertIn("51 total packages", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("42 total packages", impl_text)
+        self.assertIn("51 total packages", impl_text)
 
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 42-package pack", usage_text)
+        self.assertIn("complete 51-package pack", usage_text)
         self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
         self.assertIn(
-            "Install all 42 packages directly via plugin marketplaces", usage_text
+            "Install all 51 packages directly via plugin marketplaces", usage_text
         )
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Install all 42 packages with a single marketplace command:", readme_text
+            "Install all 51 packages with a single marketplace command:", readme_text
         )
 
         for doc_name in [
@@ -373,7 +373,7 @@ class PackageTests(unittest.TestCase):
             exp_text,
         )
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 42 |",
+            "| `complete` | Every audit and engineering workflow. | 51 |",
             exp_text,
         )
 

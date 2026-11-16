@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Case Generation"
+  short_description: "Generate automated regression and unit test cases"
+  default_prompt: "Use $test-case-generation on this component and its test specification."

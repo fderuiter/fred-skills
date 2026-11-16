@@ -1,0 +1,4 @@
+interface:
+  display_name: "Architectural Decisions"
+  short_description: "Record architecture trade-offs and decision artifacts"
+  default_prompt: "Use $arch-decision-record on this source and its architectural context."

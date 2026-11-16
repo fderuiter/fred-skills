@@ -59,7 +59,7 @@ It validates the repository without invoking an external agent or requiring secr
 
 ## Optional local toolkit
 
-The 36-package audit family and six-package workflow family provide 42 total packages
+The 36-package audit family, six-package workflow family, and nine engineering suite packages provide 51 total packages
 across the repository. The workflow family uses `shared/repo-workflows/` for finding
 verification, independent regression specification, fix planning/application/verification,
 and reconciliation. The resource synchronizer reads family manifests; each resulting

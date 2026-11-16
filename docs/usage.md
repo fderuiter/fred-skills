@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 42 packages directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
+Install all 51 packages directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
 
 ### Claude Code
 
@@ -108,7 +108,7 @@ curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/manifest.json
 
-# Or download the complete 42-package pack
+# Or download the complete 51-package pack
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-complete.tar
 ```
 
@@ -132,7 +132,7 @@ Unpack verified archives into your agent host skills destination:
 # Deploy starter pack
 tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agent/skills/
 
-# Deploy complete pack (creates all 42 skill directories)
+# Deploy complete pack (creates all 51 skill directories)
 tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agent/skills/
 ```
 
