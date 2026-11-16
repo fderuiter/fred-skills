@@ -279,6 +279,64 @@ class FredCLITests(unittest.TestCase):
             verify_proc = self.run_cli("verify-release", str(out_dir / "manifest.json"))
             self.assertEqual(0, verify_proc.returncode, verify_proc.stderr)
 
+    def test_report_help_describes_html_report_and_output_options(self):
+        root_proc = self.run_cli("--help")
+        self.assertEqual(0, root_proc.returncode, root_proc.stderr)
+        self.assertIn(
+            "Render human-readable HTML report from an audit", root_proc.stdout
+        )
+        self.assertNotIn("Markdown summary reports", root_proc.stdout)
+
+        sub_proc = self.run_cli("report", "--help")
+        self.assertEqual(0, sub_proc.returncode, sub_proc.stderr)
+        self.assertIn(
+            "Output directory or file path for rendered report", sub_proc.stdout
+        )
+
+    def test_report_with_existing_directory(self):
+        import tempfile
+
+        audit_path = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            proc = self.run_cli("report", str(audit_path), "--output", tmp_dir)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            expected_report = Path(tmp_dir) / "report.html"
+            self.assertEqual(str(expected_report), data["output"])
+            self.assertTrue(expected_report.is_file())
+            self.assertIn(
+                "<!doctype html>", expected_report.read_text(encoding="utf-8")
+            )
+
+    def test_report_with_new_directory(self):
+        import tempfile
+
+        audit_path = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            new_dir = Path(tmp_dir) / "new_report_dir"
+            proc = self.run_cli("report", str(audit_path), "--output", str(new_dir))
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            expected_report = new_dir / "report.html"
+            self.assertEqual(str(expected_report), data["output"])
+            self.assertTrue(expected_report.is_file())
+            self.assertIn(
+                "<!doctype html>", expected_report.read_text(encoding="utf-8")
+            )
+
+    def test_report_with_file_path(self):
+        import tempfile
+
+        audit_path = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            custom_file = Path(tmp_dir) / "nested" / "custom_report.html"
+            proc = self.run_cli("report", str(audit_path), "--output", str(custom_file))
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(str(custom_file), data["output"])
+            self.assertTrue(custom_file.is_file())
+            self.assertIn("<!doctype html>", custom_file.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

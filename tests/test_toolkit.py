@@ -281,6 +281,30 @@ class ReportTests(unittest.TestCase):
             )
             self.assertIn('class="badge badge-critical critical"', page)
 
+    def test_render_output_path_resolution(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            # Case 1: existing directory
+            existing_dir = tmp_path / "existing_dir"
+            existing_dir.mkdir()
+            res1 = reports.render(audit, existing_dir)
+            self.assertEqual(existing_dir / "report.html", res1)
+            self.assertTrue(res1.is_file())
+
+            # Case 2: new directory without suffix
+            new_dir = tmp_path / "new_dir"
+            res2 = reports.render(audit, new_dir)
+            self.assertEqual(new_dir / "report.html", res2)
+            self.assertTrue(res2.is_file())
+
+            # Case 3: file path with nested directories
+            nested_file = tmp_path / "sub" / "deep" / "custom.html"
+            res3 = reports.render(audit, nested_file)
+            self.assertEqual(nested_file, res3)
+            self.assertTrue(res3.is_file())
+
     def test_issue_drafts_exclude_published_records_and_do_not_overwrite(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
         audit["issues"] = [
