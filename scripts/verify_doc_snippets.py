@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import io
 import re
@@ -11,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,15 +27,66 @@ except ImportError:
     fred = None
 
 # Line ranges for acceptance criteria verification
-DOCUMENTED_RANGES: dict[str, tuple[int, int]] = {
+DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = {
     "README.md": (27, 122),
     "CONTRIBUTING.md": (22, 73),
     "AGENTS.md": (24, 52),
     "docs/toolkit.md": (10, 171),
     "docs/usage.md": (24, 127),
-    "docs/runbooks.md": (55, 57),
-    "docs/integration.md": (309, 340),
+    "docs/runbooks.md": (1, None),
+    "docs/integration.md": (1, None),
 }
+
+PLACEHOLDER_DEFAULTS: dict[str, str] = {
+    "host": "codex",
+    "scope": "project",
+    "skill-name": "repo-audit-concurrency",
+    "name": "repo-audit-concurrency",
+    "skill": "repo-audit-concurrency",
+    "skill-1": "repo-audit-concurrency",
+    "skill-2": "repo-audit-trust-boundaries",
+    "base": "main",
+    "revision": "HEAD",
+    "branch": "main",
+    "tag": "v1.0.0",
+}
+
+
+def has_unclosed_quotes(text: str) -> bool:
+    """Return True if text contains unclosed single or double quotes."""
+    in_single = False
+    in_double = False
+    escape = False
+    for char in text:
+        if escape:
+            escape = False
+            continue
+        if char == "\\" and not in_single:
+            escape = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+    return in_single or in_double
+
+
+def normalize_cli_token(token: str) -> str:
+    """Replace documented placeholder tokens (e.g. <host>, <scope>) with valid default values."""
+
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1).lower()
+        if key in PLACEHOLDER_DEFAULTS:
+            return PLACEHOLDER_DEFAULTS[key]
+        if "host" in key:
+            return "codex"
+        if "scope" in key:
+            return "project"
+        if "skill" in key or "name" in key:
+            return "repo-audit-concurrency"
+        return "placeholder"
+
+    return re.sub(r"<([a-zA-Z0-9_\-]+)>", _replace, token)
 
 
 @dataclass
@@ -86,33 +139,44 @@ def extract_blocks_from_file(
 
                 if in_range:
                     cmds: list[tuple[int, str]] = []
-                    current_cmd_parts: list[str] = []
-                    current_cmd_line: int | None = None
+                    current_cmd_lines: list[tuple[int, str]] = []
 
                     for l_no, l_text in block_lines:
-                        l_stripped = l_text.strip()
-                        if not l_stripped or l_stripped.startswith("#"):
-                            continue
-
-                        if current_cmd_line is None:
-                            current_cmd_line = l_no
-
-                        if l_stripped.endswith("\\"):
-                            current_cmd_parts.append(l_stripped[:-1].rstrip())
+                        if not current_cmd_lines:
+                            l_stripped = l_text.strip()
+                            if not l_stripped or l_stripped.startswith("#"):
+                                continue
+                            current_cmd_lines.append((l_no, l_text))
                         else:
-                            current_cmd_parts.append(l_stripped)
-                            joined_cmd = " ".join(
-                                part for part in current_cmd_parts if part
-                            )
-                            cmds.append((current_cmd_line, joined_cmd))
-                            current_cmd_parts = []
-                            current_cmd_line = None
+                            current_cmd_lines.append((l_no, l_text))
 
-                    if current_cmd_line is not None and current_cmd_parts:
-                        joined_cmd = " ".join(
-                            part for part in current_cmd_parts if part
-                        )
-                        cmds.append((current_cmd_line, joined_cmd))
+                        last_line = current_cmd_lines[-1][1].rstrip()
+                        ends_with_backslash = last_line.endswith("\\")
+                        accum_text = "\n".join(t for _, t in current_cmd_lines)
+                        unclosed = has_unclosed_quotes(accum_text)
+
+                        if not ends_with_backslash and not unclosed:
+                            formatted_parts: list[str] = []
+                            cont = ""
+                            for _, t in current_cmd_lines:
+                                s = t.rstrip()
+                                if s.endswith("\\"):
+                                    part = s[:-1].strip()
+                                    cont = f"{cont} {part}".strip() if cont else part
+                                else:
+                                    if cont:
+                                        part = f"{cont} {t.strip()}".strip()
+                                        cont = ""
+                                    else:
+                                        part = t
+                                    formatted_parts.append(part)
+                            cmd_str = "\n".join(formatted_parts).strip()
+                            cmds.append((current_cmd_lines[0][0], cmd_str))
+                            current_cmd_lines = []
+
+                    if current_cmd_lines:
+                        cmd_str = "\n".join(t for _, t in current_cmd_lines).strip()
+                        cmds.append((current_cmd_lines[0][0], cmd_str))
 
                     blocks.append(
                         CommandBlock(
@@ -230,7 +294,7 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
 
             # Validate command arguments against parser
             if cli_parser:
-                args = parts[script_idx + 1 :]
+                args = [normalize_cli_token(arg) for arg in parts[script_idx + 1 :]]
                 err_buf = io.StringIO()
                 try:
                     with contextlib.redirect_stderr(err_buf):
@@ -320,6 +384,17 @@ def execute_snippet_command(
         if len(parts) < 2:
             return True, ""
 
+        # Inline script execution: python -c "..."
+        if parts[1] == "-c":
+            if len(parts) < 3:
+                return False, "Incomplete python -c command"
+            code = parts[2]
+            try:
+                ast.parse(textwrap.dedent(code))
+                return True, ""
+            except SyntaxError as exc:
+                return False, f"Inline Python syntax error: {exc}"
+
         # Module execution: python -m ...
         if parts[1] == "-m":
             if len(parts) < 3:
@@ -369,10 +444,11 @@ def execute_snippet_command(
 
         # If it's scripts/fred.py: validate arguments with fred.parser()
         if script_arg.endswith("fred.py") and fred and hasattr(fred, "parser"):
+            normalized_args = [normalize_cli_token(arg) for arg in parts[2:]]
             err_buf = io.StringIO()
             try:
                 with contextlib.redirect_stderr(err_buf):
-                    fred.parser().parse_args(parts[2:])
+                    fred.parser().parse_args(normalized_args)
             except SystemExit as exc:
                 err_msg = err_buf.getvalue().strip()
                 return (
@@ -384,8 +460,9 @@ def execute_snippet_command(
 
             # If it's search command, run directly (it is safe and read-only)
             if len(parts) >= 3 and parts[2] == "search":
+                search_args = [normalize_cli_token(arg) for arg in parts[2:]]
                 proc = subprocess.run(
-                    [sys.executable, str(script_path), *parts[2:]],
+                    [sys.executable, str(script_path), *search_args],
                     cwd=root,
                     capture_output=True,
                     text=True,
