@@ -486,7 +486,7 @@ class PackageTests(unittest.TestCase):
     def test_all_repository_prompt_templates_comply(self):
         skills_dir = ROOT / "skills"
         packages = sorted(p for p in skills_dir.iterdir() if p.is_dir())
-        self.assertEqual(42, len(packages))
+        self.assertEqual(51, len(packages))
         for package in packages:
             prompt_file = package / "assets/prompt.md"
             self.assertTrue(prompt_file.is_file(), f"{package.name} missing prompt.md")
