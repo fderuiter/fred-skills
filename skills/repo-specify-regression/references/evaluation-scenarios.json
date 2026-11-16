@@ -1,0 +1,36 @@
+{
+  "topic": "specify-regression",
+  "scenarios": [
+    {
+      "id": "specify-regression-failure",
+      "prompt": "Specify an independent regression test for the supported behavioral defect in this repository.",
+      "fixture_shape": "A test uses a fragile timing sleep and imports the flawed production implementation to compute its expected assertion values.",
+      "expected_behavior": [
+        "Choose a deterministic test boundary that crosses the defect without sleeps.",
+        "Establish independent expected outcomes rather than reusing flawed implementation logic.",
+        "Demonstrate that the regression test fails against the uncorrected source."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "specify-regression-safe",
+      "prompt": "Specify an independent regression test for the supported behavioral defect in this repository.",
+      "fixture_shape": "A deterministic test controls event completion order using explicit deferred promises and checks exact contract invariants.",
+      "expected_behavior": [
+        "Construct independent test oracles with deterministic control flow.",
+        "Preserve passing assertions on valid baseline behaviors.",
+        "Deliver the failure command, expected output, and target boundary."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "specify-regression-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

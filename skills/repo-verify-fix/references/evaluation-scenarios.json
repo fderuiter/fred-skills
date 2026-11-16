@@ -1,0 +1,36 @@
+{
+  "topic": "verify-fix",
+  "scenarios": [
+    {
+      "id": "verify-fix-failure",
+      "prompt": "Verify whether the proposed correction resolves the reported defect without regressing safe behavior.",
+      "fixture_shape": "A proposed fix resolves the original failing test by deleting the assertion, while breaking adjacent safe controls.",
+      "expected_behavior": [
+        "Verify that the original failure reproduced on the before revision.",
+        "Confirm that the independent regression passes without weakened assertions.",
+        "Exercise safe controls and reject corrections that break valid behavior."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "verify-fix-safe",
+      "prompt": "Verify whether the proposed correction resolves the reported defect without regressing safe behavior.",
+      "fixture_shape": "The correction resolves the race condition, regression test passes on after revision, and all existing controls remain green.",
+      "expected_behavior": [
+        "Run before/after execution checks in isolated environment.",
+        "Confirm regression passes and safe controls pass on corrected source.",
+        "Emit structured verification record satisfying verification.schema.json."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "verify-fix-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}
