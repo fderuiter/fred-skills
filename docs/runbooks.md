@@ -578,6 +578,94 @@ If `Git is required for a revision/diff-based plan` occurs:
 
 ---
 
+## Runbook 5: Diagnosing Stalled or Interrupted Audit Sessions via Session Triage
+
+### Context and Cause
+
+During long-running or autonomous repository audits, an agent session may stall, crash, or fail to produce an audit report. Common root causes include:
+- Execution timeouts on external tools, build commands, or test suites.
+- Schema validation mismatches where intermediate or output records fail schema invariants.
+- Context window token exhaustion where prompt size or command output exceeds LLM context limits.
+- Unexpected unhandled exceptions or system-level crashes during audit execution.
+
+The session triage subsystem (`scripts/fred.py triage` and `skills/repo-audit-diagnostics/scripts/triage.py`) scans session transcripts and workspace artifacts to isolate the decisive failure signature and generate a sanitized diagnostic bundle and Markdown report.
+
+### Core Operational Safeguards
+
+1. **Strict preservation of canonical session ledgers:** Triage operates as a read-only analytical diagnostic tool. Modifying canonical session ledgers (`run.json`, `audit.json`) or mutating historical audit findings during triage remains strictly out of scope.
+2. **Automated credential scrubbing:** Triage applies deterministic regex sanitizers (`skills/repo-audit-diagnostics/scripts/triage.py:L16-L60`) to redact sensitive authentication material prior to exporting bundles. This scrubs authorization headers (`Bearer`, `Basic`, `Token`), OpenAI/Anthropic API keys (`sk-...`), GitHub personal access tokens (`ghp_...`, `github_pat_...`), Slack tokens (`xox...`), AWS access keys (`AKIA...`), JWT tokens, private key blocks, and key-value secret definitions (`password`, `secret`, `api_key`).
+
+### Symptoms
+
+- An audit session ceases execution without producing the expected `audit.json` or `report.html`.
+- CLI commands return exit code `1` or `2` during run execution.
+- Session transcript ends abruptly or contains unhandled traceback or error lines.
+- Triage CLI errors on `stderr`:
+  - `fred-skills: Transcript file path is required`
+  - `fred-skills: Transcript file not found: <path>`
+  - `fred-skills: Triage script not found at <path>`
+  - `fred-skills: Schema validation error: <details>`
+
+### Diagnostic Checks and Procedures
+
+1. **Identify the session transcript and workspace directory:**
+   Locate the agent transcript file (`.json`, `.jsonl`, `.txt`, `.md`) and optional audit workspace containing `run.json` and `audit.json`:
+   ```sh
+   ls -la audit-output/bug/
+   ```
+
+2. **Execute session triage to extract scrubbed diagnostics:**
+   Run `scripts/fred.py triage` pointing to the transcript and output directory:
+   ```sh
+   python scripts/fred.py triage audit-output/bug/session-transcript.jsonl --workspace audit-output/bug --output audit-output/bug/diagnostics
+   ```
+
+3. **Validate diagnostic bundle schema conformance:**
+   Add `--check-schema` to ensure the generated `diagnostic_bundle.json` strictly satisfies `bundle.schema.json`:
+   ```sh
+   python scripts/fred.py triage audit-output/bug/session-transcript.jsonl --workspace audit-output/bug --output audit-output/bug/diagnostics --check-schema
+   ```
+
+4. **Interpret failure signatures and determine remediation:**
+   Inspect `audit-output/bug/diagnostics/diagnostic_report.md` and `diagnostic_bundle.json` for the `failure_type`:
+
+   #### Scenario A: Tool Execution Timeout (`tool_timeout`)
+   If the report identifies `tool_timeout`:
+   - Cause: A subprocess, test run, or repository search exceeded execution timeout limits.
+   - Action: Increase tool execution timeout budget or subdivide large benchmark runs into smaller targeted scopes.
+
+   #### Scenario B: Schema Validation Error (`schema_validation_error`)
+   If the report identifies `schema_validation_error`:
+   - Cause: Agent emitted malformed JSON or violated schema invariants (e.g., duplicate IDs, ungrounded findings, reversed line numbers).
+   - Action: Inspect the matched error line in `diagnostic_bundle.json`, adjust prompt instructions or schema constraints, and resume the run.
+
+   #### Scenario C: Context Window Token Limit Exceeded (`context_limit`)
+   If the report identifies `context_limit`:
+   - Cause: Cumulative prompt history or bulky tool outputs exceeded the model's context window.
+   - Action: Configure exclusions (`--exclude`) for verbose paths, use `--budget brief` to restrict scope, or run audits incrementally across subsystems.
+
+   #### Scenario D: Unclassified Failure (`unclassified_failure`)
+   If the report identifies `unclassified_failure`:
+   - Cause: Unhandled runtime exception or environmental defect outside recognized patterns.
+   - Action: Review the sanitized stack trace in `diagnostic_report.md` to identify the failing module.
+
+### Verification Steps
+
+1. Confirm `diagnostic_bundle.json` and `diagnostic_report.md` are created in the output directory:
+   ```sh
+   ls -lh audit-output/bug/diagnostics/
+   ```
+2. Verify that no raw credentials appear in exported reports:
+   ```sh
+   grep -E "(sk-[a-zA-Z0-9_\-]{20,}|ghp_[a-zA-Z0-9]{36,}|AKIA[0-9A-Z]{16})" audit-output/bug/diagnostics/* || echo "Credentials scrubbed successfully"
+   ```
+3. Confirm canonical session artifacts (`run.json`, `audit.json`) remain untouched:
+   ```sh
+   git status --short audit-output/bug/
+   ```
+
+---
+
 ## Operational Diagnostic Quick Reference
 
 | Error Message | Exit Code | Source Location | Root Cause | Immediate Action |
@@ -592,3 +680,11 @@ If `Git is required for a revision/diff-based plan` occurs:
 | `Git could not resolve the requested repository or revision` | 1 | `repository.py:L38` | Base branch not fetched, invalid ref, or shallow clone | Run `git fetch origin <branch>`; test `git merge-base` |
 | `Base did not resolve to a commit` | 1 | `repository.py:L113` | Ref points to non-commit object | Use commit SHA or `<tag>^{commit}` |
 | `Git is required for a revision/diff-based plan` | 1 | `repository.py:L28` | `git` executable not found in `PATH` | Install Git and add to `PATH` |
+| `Transcript file path is required` | 1 | `fred.py:L785` | Transcript positional or `--transcript` argument omitted | Pass transcript path: `python scripts/fred.py triage <transcript>` |
+| `Transcript file not found: <path>` | 1 | `fred.py:L787` | Transcript path does not exist or unreadable | Check file path and read permissions |
+| `Triage script not found at <path>` | 1 | `fred.py:L795` | `repo-audit-diagnostics` skill package missing or moved | Reinstall `repo-audit-diagnostics` package via `fred.py install` |
+| `Schema validation error: <details>` | 1 | `triage.py:L459` | Generated bundle violates `bundle.schema.json` | Review transcript format or run without `--check-schema` for raw dump |
+| `Tool execution timed out: <cmd>` | 0 | `triage.py:L167` | Tool/subprocess execution deadline exceeded during audit | Increase tool timeout budget or isolate hanging command |
+| `Audit schema validation error: <msg>` | 0 | `triage.py:L178` | Agent output violated audit schema invariants | Review transcript schema mismatch line and repair prompt constraints |
+| `Context window token limit exceeded: <msg>` | 0 | `triage.py:L189` | Model context window limit reached | Use `--budget brief`, exclude verbose paths, or split audit run |
+| `Unclassified execution failure: <line>` | 0 | `triage.py:L200` | Unhandled traceback or runtime error in transcript | Review sanitized traceback in `diagnostic_report.md` |

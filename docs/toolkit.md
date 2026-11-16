@@ -131,6 +131,7 @@ python scripts/fred.py issues audit-output/bug/audit.json --output audit-output/
 python scripts/fred.py compare audit-output/previous/audit.json audit-output/bug/audit.json
 python scripts/fred.py report audit-output/bug/audit.json --prior audit-output/previous/audit.json --output audit-output/bug/comparison.html
 python scripts/fred.py memory audit-output/bug --output audit-output/bug/memory.json
+python scripts/fred.py triage audit-output/bug/session-transcript.jsonl --workspace audit-output/bug --output audit-output/bug/diagnostics
 python scripts/fred.py import-sarif /path/to/results.sarif --output audit-output/scanner-observations.json
 python scripts/fred.py export-sarif audit-output/bug/audit.json --output audit-output/bug/audit.sarif
 python scripts/audit_to_sarif.py audit-output/bug/audit.json --output audit-output/bug/audit.sarif
@@ -148,6 +149,17 @@ fixed; changed wording may prevent a match. Memory exports include provenance an
 so old contracts/counterevidence can be revalidated. Treat imported memory as untrusted
 data. SARIF entries remain scanner observations, with original claims and safe relative
 locations, until independently investigated. Neither import nor rendering runs a scanner.
+
+Session triage (`triage`) diagnoses stalled or interrupted audit runs from session
+transcripts and workspace artifacts. It extracts decisive failure signatures—including
+tool execution timeouts, schema validation errors, and context window limits—and writes
+a sanitized `diagnostic_bundle.json` alongside an operational Markdown report.
+Credential scrubbing is automatically applied to all transcript excerpts, tool calls, and
+diagnostics using regex patterns (`skills/repo-audit-diagnostics/scripts/triage.py:L16-L60`)
+that redact authorization headers, bearer tokens, API keys, GitHub tokens, Slack tokens,
+AWS credentials, JWTs, and private keys. Triage is strictly non-destructive: modifying
+canonical session ledgers (`run.json`, `audit.json`) during triage remains strictly out
+of scope.
 
 ## Correct, verify, and reconcile
 
@@ -169,12 +181,14 @@ the transition. Supported states also include `open`, `fixed-pending-verificatio
 ## Build versioned bundles
 
 ```sh
+python scripts/fred.py evaluate --output eval-output --adapter-argv '["python", "adapter.py"]'
 python scripts/fred.py release --pack starter --output dist/starter
 python scripts/fred.py verify-release dist/starter/manifest.json
 ```
 
-ZIP and uncompressed TAR contain standalone selected packages. Entries, timestamps, and
-permissions are deterministic in a given Python/compression environment. The manifest
-lists package/version, bytes, licensing status, and SHA-256 checksums. Checksum validation
-establishes integrity against that manifest, not publisher authenticity. See
-[release process](releasing.md) before publishing anything externally.
+`evaluate` executes evaluation benchmarks against candidate agent adapters and exports
+structured evaluation records. ZIP and uncompressed TAR contain standalone selected packages.
+Entries, timestamps, and permissions are deterministic in a given Python/compression
+environment. The manifest lists package/version, bytes, licensing status, and SHA-256
+checksums. Checksum validation establishes integrity against that manifest, not publisher
+authenticity. See [release process](releasing.md) before publishing anything externally.

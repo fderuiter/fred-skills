@@ -29,7 +29,7 @@ DOCUMENTED_RANGES: dict[str, tuple[int, int]] = {
     "README.md": (27, 122),
     "CONTRIBUTING.md": (22, 73),
     "AGENTS.md": (24, 52),
-    "docs/toolkit.md": (10, 171),
+    "docs/toolkit.md": (10, 195),
     "docs/usage.md": (24, 127),
     "docs/runbooks.md": (55, 57),
     "docs/integration.md": (309, 340),
@@ -189,10 +189,10 @@ def get_registered_fred_subcommands(root: Path = ROOT) -> dict[str, list[str]]:
 
 
 def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
-    """Verify that all documented CLI subcommands in docs/toolkit.md (L10-L171) exist in scripts/fred.py."""
+    """Verify bidirectional parity between documented CLI subcommands in docs/toolkit.md and scripts/fred.py LIFECYCLE_GROUPS."""
     errors: list[str] = []
     toolkit_path = root / "docs/toolkit.md"
-    start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 171))
+    start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 195))
     blocks = extract_blocks_from_file(toolkit_path, start_line, end_line, root=root)
 
     groups = get_registered_fred_subcommands(root)
@@ -203,6 +203,7 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
         cli_parser = fred.parser()
 
     verified_cmds = 0
+    documented_subcmds: set[str] = set()
     for block in blocks:
         for line_no, cmd in block.commands:
             if "scripts/fred.py" not in cmd:
@@ -221,6 +222,8 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
             subcmd = parts[script_idx + 1]
             if subcmd.startswith("-"):
                 continue
+
+            documented_subcmds.add(subcmd)
 
             if subcmd not in all_registered:
                 errors.append(
@@ -245,6 +248,13 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
                     errors.append(
                         f"docs/toolkit.md:L{line_no}: CLI argument error for '{cmd}': {exc}"
                     )
+
+    # Bidirectional validation: check for any registered subcommand missing from documentation
+    missing_subcmds = sorted(all_registered - documented_subcmds)
+    for missing_cmd in missing_subcmds:
+        errors.append(
+            f"docs/toolkit.md: Registered subcommand '{missing_cmd}' lacks documentation snippets"
+        )
 
     if not errors and verified_cmds == 0:
         errors.append("docs/toolkit.md: No fred.py subcommands were found to verify")
