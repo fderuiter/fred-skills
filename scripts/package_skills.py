@@ -16,6 +16,7 @@ from fredlib.releases import (
     _collect_skill_files,
     _create_tar_gz_bytes,
     _get_suite_skills,
+    _package_skills,
 )
 
 
@@ -39,33 +40,12 @@ def create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
 
 def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:
     """Build individual skill archives, 1 consolidated suite archive, and checksums.sha256."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    skills = get_suite_skills(root)
-    if not skills:
-        raise ValueError("Expected non-empty suite")
-
-    all_entries: list[tuple[str, bytes]] = []
+    archive_skills = _package_skills(output_dir, root=root)
     checksums: dict[str, str] = {}
 
-    for skill_name in skills:
-        pkg_dir = root / "skills" / skill_name
-        files = collect_skill_files(pkg_dir)
-        entries = [(f"{skill_name}/{rel}", data) for rel, data in files]
-        all_entries.extend(entries)
-
-        archive_bytes = create_tar_gz_bytes(entries)
-        archive_name = f"{skill_name}.tar.gz"
+    for archive_name in sorted(archive_skills.keys()):
         archive_path = output_dir / archive_name
-        archive_path.write_bytes(archive_bytes)
-
-        digest = hashlib.sha256(archive_bytes).hexdigest()
-        checksums[archive_name] = digest
-
-    # Consolidated suite archive
-    suite_bytes = create_tar_gz_bytes(all_entries)
-    suite_name = "fred-skills-suite.tar.gz"
-    (output_dir / suite_name).write_bytes(suite_bytes)
-    checksums[suite_name] = hashlib.sha256(suite_bytes).hexdigest()
+        checksums[archive_name] = hashlib.sha256(archive_path.read_bytes()).hexdigest()
 
     # Write checksums.sha256
     manifest_lines = [

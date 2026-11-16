@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import jsonschema
+import yaml
 
 from .common import ROOT, atomic_json, digest, read_json, relative_path, version
 from .repository import changed_files, preflight, snapshot
@@ -27,8 +29,6 @@ def plan(
 ) -> tuple[dict, dict]:
     settings = {}
     if config:
-        import yaml
-
         settings = yaml.safe_load(config.read_text(encoding="utf-8"))
         if not isinstance(settings, dict) or set(settings) - {
             "profile",
@@ -265,8 +265,6 @@ def audit_errors(audit: dict) -> list[str]:
     script = ROOT / "skills/repo-audit-program/scripts/validate_audit.py"
     spec = importlib.util.spec_from_file_location("fred_audit_validator", script)
     module = importlib.util.module_from_spec(spec)
-    import sys
-
     previous = sys.dont_write_bytecode
     try:
         sys.dont_write_bytecode = True

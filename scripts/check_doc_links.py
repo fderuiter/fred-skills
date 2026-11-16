@@ -72,11 +72,6 @@ def main() -> int:
         description="Verify that relative file links in markdown documents resolve to existing files."
     )
     parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Non-mutating verification mode (standard repository flag)",
-    )
-    parser.add_argument(
         "files",
         nargs="*",
         help="Specific markdown files to verify (defaults to all markdown files in repo)",
