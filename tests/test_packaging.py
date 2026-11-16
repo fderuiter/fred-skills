@@ -28,6 +28,12 @@ class PackageTests(unittest.TestCase):
         self.entry.write_text(
             '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n'
         )
+        assets_dir = self.skill / "assets"
+        assets_dir.mkdir(parents=True)
+        self.prompt = assets_dir / "prompt.md"
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n", encoding="utf-8"
+        )
 
     def tearDown(self):
         self.temp.cleanup()
@@ -376,6 +382,73 @@ class PackageTests(unittest.TestCase):
             "| `complete` | Every audit and engineering workflow. | 42 |",
             exp_text,
         )
+
+    def test_prompt_template_present_and_within_budget_is_valid(self):
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_missing_prompt_template_is_rejected(self):
+        self.prompt.unlink()
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "Missing prompt template: assets/prompt.md" in error for error in errors
+            )
+        )
+
+    def test_prompt_template_exceeding_character_budget_is_rejected(self):
+        self.prompt.write_text("A" * 1201, encoding="utf-8")
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "prompt template exceeds budget" in error and "1200 characters" in error
+                for error in errors
+            )
+        )
+
+    def test_prompt_template_exceeding_line_budget_is_rejected(self):
+        self.prompt.write_text("\n".join(["line"] * 21), encoding="utf-8")
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "prompt template exceeds line budget" in error and "20 lines" in error
+                for error in errors
+            )
+        )
+
+    def test_prompt_template_with_unauthorized_placeholder_is_rejected(self):
+        self.prompt.write_text(
+            "Use sample-audit on <unauthorized_token> at <revision>.\n",
+            encoding="utf-8",
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "unauthorized placeholder '<unauthorized_token>'" in error
+                and "<repository>" in error
+                for error in errors
+            )
+        )
+
+    def test_all_repository_prompt_templates_comply(self):
+        skills_dir = ROOT / "skills"
+        packages = sorted(p for p in skills_dir.iterdir() if p.is_dir())
+        self.assertEqual(42, len(packages))
+        for package in packages:
+            prompt_file = package / "assets/prompt.md"
+            self.assertTrue(prompt_file.is_file(), f"{package.name} missing prompt.md")
+            content = prompt_file.read_text(encoding="utf-8")
+            self.assertLessEqual(
+                len(content),
+                1200,
+                f"{package.name} prompt exceeds 1200 characters ({len(content)})",
+            )
+            self.assertLessEqual(
+                len(content.splitlines()),
+                20,
+                f"{package.name} prompt exceeds 20 lines ({len(content.splitlines())})",
+            )
+            errors = validate_skill(package)
+            self.assertEqual([], errors, f"{package.name} failed validation: {errors}")
 
 
 if __name__ == "__main__":

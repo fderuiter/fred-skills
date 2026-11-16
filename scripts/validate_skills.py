@@ -12,6 +12,25 @@ import yaml
 from skill_tools import ROOT, extract_relative_links, read_frontmatter, suite_members
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+MAX_PROMPT_CHARS = 1200
+MAX_PROMPT_LINES = 20
+PLACEHOLDER_PATTERN = re.compile(r"<[^>]+>")
+ALLOWED_PROMPT_PLACEHOLDERS = frozenset(
+    {
+        "<audit workspace/reports>",
+        "<critical workflows>",
+        "<existing audit workspace, if any>",
+        "<existing audit workspace>",
+        "<finding/run artifacts>",
+        "<path-to-diagnostic-bundle-output>",
+        "<path-to-run-workspace-directory>",
+        "<path-to-session-transcript>",
+        "<repository/revision>",
+        "<repository>",
+        "<revision>",
+    }
+)
+ALLOWED_PLACEHOLDERS = ALLOWED_PROMPT_PLACEHOLDERS
 
 
 def validate_skill(package: Path) -> list[str]:
@@ -35,6 +54,36 @@ def validate_skill(package: Path) -> list[str]:
         )
     if not body.strip() or len(body.splitlines()) >= 500:
         errors.append("Skill body must be nonempty and under 500 lines")
+    prompt_path = package / "assets/prompt.md"
+    if not prompt_path.is_file():
+        errors.append(f"Missing prompt template: {prompt_path.relative_to(package)}")
+    else:
+        try:
+            prompt_content = prompt_path.read_text(encoding="utf-8")
+            if len(prompt_content) > MAX_PROMPT_CHARS:
+                errors.append(
+                    f"{prompt_path.relative_to(package)}: prompt template exceeds budget "
+                    f"({len(prompt_content)} > {MAX_PROMPT_CHARS} characters)"
+                )
+            lines = prompt_content.splitlines()
+            if len(lines) > MAX_PROMPT_LINES:
+                errors.append(
+                    f"{prompt_path.relative_to(package)}: prompt template exceeds line budget "
+                    f"({len(lines)} > {MAX_PROMPT_LINES} lines)"
+                )
+            placeholders = PLACEHOLDER_PATTERN.findall(prompt_content)
+            unauthorized = sorted(
+                {p for p in placeholders if p not in ALLOWED_PROMPT_PLACEHOLDERS}
+            )
+            if unauthorized:
+                allowed_str = ", ".join(sorted(ALLOWED_PROMPT_PLACEHOLDERS))
+                for bad in unauthorized:
+                    errors.append(
+                        f"{prompt_path.relative_to(package)}: unauthorized placeholder '{bad}' "
+                        f"(allowed: {allowed_str})"
+                    )
+        except OSError as exc:
+            errors.append(f"{prompt_path.relative_to(package)}: {exc}")
     for path in package.rglob("*"):
         if path.is_symlink():
             errors.append(
