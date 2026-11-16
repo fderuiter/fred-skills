@@ -158,6 +158,31 @@ def _create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
     return buf.getvalue()
 
 
+def _package_skills(output: Path, root: Path = ROOT) -> dict[str, list[str]]:
+    output.mkdir(parents=True, exist_ok=True)
+    suite_skills = _get_suite_skills(root)
+    if not suite_skills:
+        raise ValueError("Expected non-empty suite")
+
+    archive_skills: dict[str, list[str]] = {}
+    all_suite_entries: list[tuple[str, bytes]] = []
+    for s_name in sorted(suite_skills):
+        pkg = root / "skills" / s_name
+        s_files = _collect_skill_files(pkg, root=root)
+        s_entries = [(f"{s_name}/{rel}", data) for rel, data in s_files]
+        all_suite_entries.extend(s_entries)
+        tar_gz_bytes = _create_tar_gz_bytes(s_entries)
+        archive_name = f"{s_name}.tar.gz"
+        (output / archive_name).write_bytes(tar_gz_bytes)
+        archive_skills[archive_name] = [s_name]
+
+    suite_bytes = _create_tar_gz_bytes(all_suite_entries)
+    suite_name = "fred-skills-suite.tar.gz"
+    (output / suite_name).write_bytes(suite_bytes)
+    archive_skills[suite_name] = suite_skills
+    return archive_skills
+
+
 def build(
     output: Path,
     pack: str | None = None,
@@ -194,22 +219,7 @@ def build(
             archive_skills[zip_name] = p_skills
             archive_skills[tar_name] = p_skills
 
-        suite_skills = _get_suite_skills(root)
-        all_suite_entries: list[tuple[str, bytes]] = []
-        for s_name in sorted(suite_skills):
-            pkg = root / "skills" / s_name
-            s_files = _collect_skill_files(pkg, root=root)
-            s_entries = [(f"{s_name}/{rel}", data) for rel, data in s_files]
-            all_suite_entries.extend(s_entries)
-            tar_gz_bytes = _create_tar_gz_bytes(s_entries)
-            archive_name = f"{s_name}.tar.gz"
-            (output / archive_name).write_bytes(tar_gz_bytes)
-            archive_skills[archive_name] = [s_name]
-
-        suite_bytes = _create_tar_gz_bytes(all_suite_entries)
-        suite_name = "fred-skills-suite.tar.gz"
-        (output / suite_name).write_bytes(suite_bytes)
-        archive_skills[suite_name] = suite_skills
+        archive_skills.update(_package_skills(output, root=root))
 
         all_skills = sorted(set().union(*archive_skills.values()))
         manifest = {
