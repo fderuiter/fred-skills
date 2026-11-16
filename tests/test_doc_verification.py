@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from check_doc_links import check_docs, check_file_links, extract_relative_links
+from skill_tools import extract_relative_links as skill_tools_extract_relative_links
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
     discover_doc_blocks,
@@ -63,6 +64,25 @@ class DocLinkVerificationTests(unittest.TestCase):
             doc.write_text("[Target](target.md)\n", encoding="utf-8")
             errors = check_file_links(doc, root=tmp_path)
             self.assertEqual([], errors)
+
+    def test_extract_relative_links_exported_from_skill_tools(self):
+        """extract_relative_links is exported from skill_tools and shared with check_doc_links."""
+        self.assertIs(extract_relative_links, skill_tools_extract_relative_links)
+
+    def test_extract_relative_links_supports_html_images_and_references(self):
+        """Standard markdown links, inline images, HTML link tags, and reference links are extracted."""
+        content = (
+            "Markdown [guide](docs/guide.md) and image ![diagram](images/flow.png).\n"
+            'HTML link <a href="docs/api.md">API</a> and image <img src="images/logo.svg" />.\n'
+            "Reference [ref-doc] defined later.\n"
+            "[ref-doc]: docs/reference.md\n"
+        )
+        links = extract_relative_links(content)
+        self.assertIn("docs/guide.md", links)
+        self.assertIn("images/flow.png", links)
+        self.assertIn("docs/api.md", links)
+        self.assertIn("images/logo.svg", links)
+        self.assertIn("docs/reference.md", links)
 
     def test_cli_rejects_removed_check_flag(self):
         """CLI parser for check_doc_links must reject the removed --check flag."""

@@ -83,6 +83,30 @@ class PackageTests(unittest.TestCase):
         )
         self.assertEqual([], validate_skill(self.skill))
 
+    def test_skill_markdown_supports_html_images_and_reference_links(self):
+        references_dir = self.skill / "references"
+        references_dir.mkdir(parents=True)
+        (references_dir / "valid.md").write_text("# Valid\n", encoding="utf-8")
+        self.entry.write_text(
+            self.entry.read_text()
+            + "\n![Diagram](references/valid.md)\n"
+            + '<a href="references/valid.md#anchor?key=1">Valid</a>\n'
+            + "[ref]: references/valid.md\n"
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_skill_markdown_detects_broken_html_and_reference_links(self):
+        self.entry.write_text(
+            self.entry.read_text()
+            + '\n<a href="references/missing.md">Missing</a>\n'
+            + "[ref]: references/missing_ref.md\n"
+            + "![Image](references/missing.png)\n"
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(any("references/missing.md" in error for error in errors))
+        self.assertTrue(any("references/missing_ref.md" in error for error in errors))
+        self.assertTrue(any("references/missing.png" in error for error in errors))
+
     def test_symlinks_are_not_standalone_packages(self):
         try:
             (self.skill / "linked.md").symlink_to(self.entry)

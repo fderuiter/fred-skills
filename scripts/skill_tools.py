@@ -3,11 +3,40 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
+__all__ = ["ROOT", "extract_relative_links", "read_frontmatter", "suite_members"]
+
 ROOT = Path(__file__).resolve().parents[1]
+
+# Matches markdown links [text](target), images ![text](target)
+MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
+# Matches HTML href="..." or src="..."
+HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
+# Matches reference-style link definitions [label]: target
+MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
+
+
+def extract_relative_links(content: str) -> list[str]:
+    """Extract all link targets from markdown content."""
+    raw_targets = (
+        MD_LINK_RE.findall(content)
+        + HTML_LINK_RE.findall(content)
+        + MD_REF_LINK_RE.findall(content)
+    )
+    relative_paths = []
+    for target in raw_targets:
+        target = target.strip().strip("<>\"'")
+        parsed = urlsplit(target)
+        # Skip external links and in-page anchor links
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            continue
+        relative_paths.append(target)
+    return relative_paths
 
 
 def read_frontmatter(path: Path) -> tuple[dict, str]:
