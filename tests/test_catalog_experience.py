@@ -27,6 +27,9 @@ class ExperienceTests(unittest.TestCase):
 
     def test_searchable_experience_is_current(self):
         self.assertEqual([], build(check=True))
+        page = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
+        self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
+        self.assertIn('id="reset-filters"', page)
 
     def test_no_host_adapter_claims_behavioral_certification(self):
         for host in read_json(ROOT / "catalog/hosts.json")["hosts"].values():
