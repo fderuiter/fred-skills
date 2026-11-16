@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import os
 import platform
 import re
 import shutil
@@ -57,8 +58,6 @@ def snapshot(
         paths = [repo / p for p in listed.split("\0") if p]
     else:
         # Walk without descending through dependencies or symlinked directories.
-        import os
-
         paths = []
         for base, dirs, files in os.walk(repo, followlinks=False):
             dirs[:] = sorted(
