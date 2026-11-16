@@ -608,14 +608,12 @@ def _normalize_target_path(target: str | Path, root: Path = ROOT) -> str:
 def verify_all_snippets(
     root: Path = ROOT,
     files: list[str] | None = None,
-    target_files: list[str] | None = None,
 ) -> list[str]:
     """Verify and execute snippets across documentation files."""
     errors: list[str] = []
-    selected = files if files is not None else target_files
     target_rel_paths = (
-        {_normalize_target_path(f, root=root) for f in selected}
-        if selected is not None
+        {_normalize_target_path(f, root=root) for f in files}
+        if files is not None
         else None
     )
 

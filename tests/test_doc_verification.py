@@ -1,6 +1,8 @@
 """Tests for documentation verification harnesses: relative links and CLI snippet verification."""
 
+import inspect
 import shlex
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -62,6 +64,31 @@ class DocLinkVerificationTests(unittest.TestCase):
             errors = check_file_links(doc, root=tmp_path)
             self.assertEqual([], errors)
 
+    def test_cli_rejects_removed_check_flag(self):
+        """CLI parser for check_doc_links must reject the removed --check flag."""
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check_doc_links.py"), "--check"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("unrecognized arguments: --check", proc.stderr)
+
+    def test_cli_accepts_file_arguments(self):
+        """CLI for check_doc_links accepts specific files without --check flag."""
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check_doc_links.py"), "README.md"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(
+            "PASS: Relative links verified across 1 markdown documentation files.",
+            proc.stdout,
+        )
+
 
 class DocSnippetVerificationTests(unittest.TestCase):
     """Test discovery, extraction, and execution of documentation command snippets."""
@@ -87,11 +114,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 if e_line is not None:
                     self.assertLessEqual(block.start_line, e_line)
 
-        # Full-file discovery coverage for runbooks (59 blocks) and integration (32 blocks)
+        # Full-file discovery coverage for runbooks (65 blocks) and integration (32 blocks)
         self.assertEqual(
             len(discovered["docs/runbooks.md"]),
-            59,
-            "Must discover all 59 code blocks in docs/runbooks.md",
+            65,
+            "Must discover all 65 code blocks in docs/runbooks.md",
         )
         self.assertEqual(
             len(discovered["docs/integration.md"]),
@@ -259,6 +286,12 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertEqual(1, len(errors))
         self.assertIn("nonexistent_file.md", errors[0])
 
+    def test_verify_all_snippets_signature_excludes_target_files(self):
+        """verify_all_snippets signature accepts root and files, excluding redundant target_files."""
+        sig = inspect.signature(verify_all_snippets)
+        self.assertIn("files", sig.parameters)
+        self.assertNotIn("target_files", sig.parameters)
+
     def test_shell_syntax_error_safety(self):
         """Unclosed quotes or shell syntax anomalies must be handled safely without unhandled exceptions."""
         ok, msg = execute_snippet_command(
@@ -308,7 +341,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_full_file_runbooks_and_integration_snippets_pass(self):
-        """Full-file snippet verification across docs/runbooks.md (59 blocks) and docs/integration.md (32 blocks) passes with zero errors."""
+        """Full-file snippet verification across docs/runbooks.md (65 blocks) and docs/integration.md (32 blocks) passes with zero errors."""
         errors = verify_all_snippets(
             root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
         )
