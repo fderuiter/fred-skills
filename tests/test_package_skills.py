@@ -31,7 +31,7 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_get_suite_skills_returns_audit_skills(self):
         skills = get_suite_skills(ROOT)
-        self.assertEqual(42, len(skills))
+        self.assertEqual(51, len(skills))
         for skill in skills:
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
@@ -41,16 +41,37 @@ class PackageSkillsTests(unittest.TestCase):
             self.assertTrue(skill.startswith("repo-audit-"))
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
+        arch_skills = get_suite_skills(ROOT, suite_name="software-architecture")
+        self.assertEqual(3, len(arch_skills))
+        for skill in arch_skills:
+            self.assertTrue(skill.startswith("arch-"))
+            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
+
+        review_skills = get_suite_skills(ROOT, suite_name="code-review")
+        self.assertEqual(3, len(review_skills))
+        for skill in review_skills:
+            self.assertTrue(skill.startswith("review-"))
+            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
+
+        test_skills = get_suite_skills(ROOT, suite_name="automated-testing")
+        self.assertEqual(3, len(test_skills))
+        for skill in test_skills:
+            self.assertTrue(skill.startswith("test-"))
+            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
+
     def test_package_skills_creates_all_archives_and_checksums(self):
         suite_skills = get_suite_skills(ROOT)
-        self.assertEqual(42, len(suite_skills))
+        self.assertEqual(51, len(suite_skills))
         checksums = package_skills(self.output_dir, root=ROOT)
         expected_archive_count = len(suite_skills) + 1
-        self.assertEqual(43, expected_archive_count)
+        self.assertEqual(52, expected_archive_count)
         self.assertEqual(expected_archive_count, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)
         self.assertIn("repo-apply-fix.tar.gz", checksums)
+        self.assertIn("arch-decision-record.tar.gz", checksums)
+        self.assertIn("review-diff-analysis.tar.gz", checksums)
+        self.assertIn("test-gap-analysis.tar.gz", checksums)
 
         manifest_file = self.output_dir / "checksums.sha256"
         self.assertTrue(manifest_file.is_file())

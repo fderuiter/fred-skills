@@ -120,6 +120,87 @@
           ]
         }
       ]
+    },
+    {
+      "name": "software-architecture",
+      "protocol_version": "1.0",
+      "phases": [
+        {
+          "id": 0,
+          "title": "Decision Records",
+          "skills": [
+            "arch-decision-record"
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Boundary Specification",
+          "skills": [
+            "arch-boundary-specification"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "System Decomposition",
+          "skills": [
+            "arch-component-decomposition"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "code-review",
+      "protocol_version": "1.0",
+      "phases": [
+        {
+          "id": 0,
+          "title": "Diff Analysis",
+          "skills": [
+            "review-diff-analysis"
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Invariant Verification",
+          "skills": [
+            "review-invariant-violations"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Feedback Synthesis",
+          "skills": [
+            "review-actionable-feedback"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "automated-testing",
+      "protocol_version": "1.0",
+      "phases": [
+        {
+          "id": 0,
+          "title": "Gap Analysis",
+          "skills": [
+            "test-gap-analysis"
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Test Generation",
+          "skills": [
+            "test-case-generation"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Test Verification",
+          "skills": [
+            "test-suite-verification"
+          ]
+        }
+      ]
     }
   ]
 }

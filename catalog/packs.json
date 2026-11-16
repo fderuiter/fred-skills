@@ -68,6 +68,38 @@
         "repo-reconcile-findings"
       ]
     },
+    "software-architecture": {
+      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "skills": [
+        "arch-decision-record",
+        "arch-boundary-specification",
+        "arch-component-decomposition"
+      ]
+    },
+    "architecture": {
+      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "skills": [
+        "arch-decision-record",
+        "arch-boundary-specification",
+        "arch-component-decomposition"
+      ]
+    },
+    "code-review": {
+      "description": "Pull request diff review, invariant verification, and actionable feedback.",
+      "skills": [
+        "review-diff-analysis",
+        "review-invariant-violations",
+        "review-actionable-feedback"
+      ]
+    },
+    "automated-testing": {
+      "description": "Test gap detection, regression test generation, and test suite verification.",
+      "skills": [
+        "test-gap-analysis",
+        "test-case-generation",
+        "test-suite-verification"
+      ]
+    },
     "full-audit": {
       "description": "All 33 specialist audits plus coordinator and synthesis.",
       "skills": [
@@ -111,6 +143,9 @@
     "complete": {
       "description": "Every audit and engineering workflow.",
       "skills": [
+        "arch-boundary-specification",
+        "arch-component-decomposition",
+        "arch-decision-record",
         "repo-audit-accessibility-state",
         "repo-audit-api-consistency",
         "repo-audit-architecture",
@@ -152,7 +187,13 @@
         "repo-plan-fix",
         "repo-apply-fix",
         "repo-verify-fix",
-        "repo-reconcile-findings"
+        "repo-reconcile-findings",
+        "review-actionable-feedback",
+        "review-diff-analysis",
+        "review-invariant-violations",
+        "test-case-generation",
+        "test-gap-analysis",
+        "test-suite-verification"
       ]
     }
   }

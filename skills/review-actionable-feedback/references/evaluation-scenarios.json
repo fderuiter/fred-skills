@@ -1,0 +1,36 @@
+{
+  "topic": "review-actionable-feedback",
+  "scenarios": [
+    {
+      "id": "review-actionable-feedback-failure",
+      "prompt": "Synthesize review findings into prioritized, actionable feedback with correction guidance.",
+      "fixture_shape": "A code review emits vague comments like 'this looks wrong' without line citations, severity levels, or remediation advice.",
+      "expected_behavior": [
+        "Consolidate review findings and deduplicate overlapping observations.",
+        "Assign clear severity classifications (critical, high, medium, low, advisory).",
+        "Provide concrete code diffs or implementation patterns to assist remediation."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "review-actionable-feedback-safe",
+      "prompt": "Synthesize review findings into prioritized, actionable feedback with correction guidance.",
+      "fixture_shape": "A code review provides constructive, polite feedback citing specific lines, explaining defect impact, and suggesting concrete replacement code.",
+      "expected_behavior": [
+        "Draft clear, constructive comments explaining the rationale for each finding.",
+        "Summarize overall review verdict with actionable next steps.",
+        "Format review feedback conforming to the review schema."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "review-actionable-feedback-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

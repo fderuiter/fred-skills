@@ -32,9 +32,9 @@ unsafe fixture was correct. No production system or remote issue record was modi
 
 ## Specified evaluations are not executed evaluations
 
-Each of the 42 skills in the suite includes three scenario specifications in
+Each of the 51 skills in the suite includes three scenario specifications in
 `references/evaluation-scenarios.json`: relevant failure, safe control, and unrelated
-activation request. These 126 specifications are not 126 executed evaluations. They are
+activation request. These 153 specifications are not 153 executed evaluations. They are
 authoring inputs for future raw fixtures and fresh-context agent runs; do not supply
 their expected answers to the agent performing an audit.
 
@@ -45,7 +45,7 @@ misses, false positives, and environment constraints when extending the suite.
 
 ## 0.2.0 usability and correction-workflow validation
 
-The expanded deterministic suite exercises 42 total packages, generated recipes,
+The expanded deterministic suite exercises 51 total packages, generated recipes,
 packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
 proof requirements, comparison collisions, safe SARIF imports, HTML escaping, managed
 installation lifecycle/recovery, deterministic archives/tamper detection, and evaluation

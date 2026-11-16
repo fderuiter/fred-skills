@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "suite": "automated-testing",
+  "files": [
+    "references/testing-protocol.md",
+    "assets/testing-template.md",
+    "assets/testing.schema.json"
+  ]
+}

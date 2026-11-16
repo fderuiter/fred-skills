@@ -1,0 +1,4 @@
+interface:
+  display_name: "Component Decomposition"
+  short_description: "Decompose capabilities into modular components"
+  default_prompt: "Use $arch-component-decomposition on this source and its modular interfaces."

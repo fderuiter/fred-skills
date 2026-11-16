@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feedback Synthesis"
+  short_description: "Synthesize actionable code review feedback"
+  default_prompt: "Use $review-actionable-feedback on these review findings and diff context."

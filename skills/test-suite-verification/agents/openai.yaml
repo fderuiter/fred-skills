@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Suite Verification"
+  short_description: "Execute and verify generated test suites"
+  default_prompt: "Use $test-suite-verification on this test suite and execution environment."

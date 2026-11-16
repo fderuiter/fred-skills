@@ -1,0 +1,9 @@
+{
+  "version": "1.0",
+  "suite": "software-architecture",
+  "files": [
+    "references/architecture-protocol.md",
+    "assets/architecture-template.md",
+    "assets/architecture.schema.json"
+  ]
+}

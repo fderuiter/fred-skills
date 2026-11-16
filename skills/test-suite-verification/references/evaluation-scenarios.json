@@ -1,0 +1,36 @@
+{
+  "topic": "test-suite-verification",
+  "scenarios": [
+    {
+      "id": "test-suite-verification-failure",
+      "prompt": "Execute and verify generated test suites against regressions and failure oracles.",
+      "fixture_shape": "A test suite passes when run in isolation but fails when executed concurrently or after other tests due to shared global mutable state and missing cleanup.",
+      "expected_behavior": [
+        "Execute test suites across target environments and detect flakiness or state leakage.",
+        "Confirm that tests exercise stated boundaries without residual side effects.",
+        "Verify failure oracles by ensuring tests fail meaningfully when invariants are broken."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "test-suite-verification-safe",
+      "prompt": "Execute and verify generated test suites against regressions and failure oracles.",
+      "fixture_shape": "A verified test suite executes hermetically with zero state leakage, reliable failure detection under seeded defects, and bounded run times.",
+      "expected_behavior": [
+        "Measure execution overhead, timeout constraints, and isolation between test cases.",
+        "Verify test failure oracles and confirm deterministic pass/fail results.",
+        "Produce structured verification reports conforming to the testing schema."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "test-suite-verification-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

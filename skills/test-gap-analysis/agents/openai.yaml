@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Gap Analysis"
+  short_description: "Discover test gaps and unexercised error paths"
+  default_prompt: "Use $test-gap-analysis on this codebase and its existing test suite."

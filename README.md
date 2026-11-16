@@ -1,9 +1,10 @@
 # fred-skills
 
 Portable engineering workflows for investigating repositories, planning useful fixes,
-and verifying that those fixes work. **41 standalone skills**: 33 audit domains,
-a coordinator, findings synthesis, and six workflows from finding verification to
-remediation reconciliation. All packages currently have experimental maturity.
+and verifying that those fixes work. **51 standalone skills**: 33 audit domains,
+a coordinator, findings synthesis, six workflows from finding verification to
+remediation reconciliation, and nine software architecture, code review, and automated
+testing skills. All packages currently have experimental maturity.
 
 Start with a task in the [task guide](docs/experience.md), browse the
 [searchable offline explorer](docs/explorer.html) after downloading the repository,
@@ -20,7 +21,7 @@ or choose a package from the [catalog](docs/catalog.md).
 
 ## Installation
 
-Install all 42 packages with a single marketplace command:
+Install all 51 packages with a single marketplace command:
 
 ### Claude Code
 
