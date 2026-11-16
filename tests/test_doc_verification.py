@@ -87,11 +87,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 if e_line is not None:
                     self.assertLessEqual(block.start_line, e_line)
 
-        # Full-file discovery coverage for runbooks (59 blocks) and integration (32 blocks)
+        # Full-file discovery coverage for runbooks (65 blocks) and integration (32 blocks)
         self.assertEqual(
             len(discovered["docs/runbooks.md"]),
-            59,
-            "Must discover all 59 code blocks in docs/runbooks.md",
+            65,
+            "Must discover all 65 code blocks in docs/runbooks.md",
         )
         self.assertEqual(
             len(discovered["docs/integration.md"]),
@@ -308,7 +308,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_full_file_runbooks_and_integration_snippets_pass(self):
-        """Full-file snippet verification across docs/runbooks.md (59 blocks) and docs/integration.md (32 blocks) passes with zero errors."""
+        """Full-file snippet verification across docs/runbooks.md (65 blocks) and docs/integration.md (32 blocks) passes with zero errors."""
         errors = verify_all_snippets(
             root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
         )
