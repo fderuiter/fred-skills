@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 from html import escape
 from pathlib import Path
 
@@ -56,8 +57,6 @@ def render(audit: dict, output: Path, prior: dict | None = None) -> Path:
         )
         or '<tr><td colspan="4" class="empty-state">No checks recorded.</td></tr>'
     )
-    import json
-
     comparison = (
         text(json.dumps(compare(prior, audit), indent=2))
         if prior
@@ -99,8 +98,6 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
     for issue in audit["issues"]:
         if issue["publication"] != "draft":
             continue
-        import re
-
         if not re.fullmatch(r"[A-Za-z0-9_-]+", issue["id"]):
             raise ValueError("Issue IDs must be filename-safe")
         sections = [
