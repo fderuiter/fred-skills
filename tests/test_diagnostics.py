@@ -385,6 +385,234 @@ Bearer sk-proj-1234567890abcdef1234567890
         )
         self.assertIn("repo-audit-diagnostics", plan_recovery_comp["skills"])
 
+    def test_discover_transcript_single_candidate(self):
+        workspace = self.temp_path / "ws_single"
+        workspace.mkdir()
+        transcript = workspace / "session-transcript.jsonl"
+        transcript.write_text(
+            "Command 'ripgrep' timed out after 30.0 seconds\n", encoding="utf-8"
+        )
+
+        discovered = triage.discover_transcript(workspace)
+        self.assertEqual(discovered, transcript)
+
+    def test_discover_transcript_in_logs_subdirectory(self):
+        workspace = self.temp_path / "ws_logs"
+        logs = workspace / "logs"
+        logs.mkdir(parents=True)
+        transcript = logs / "session.json"
+        transcript.write_text(
+            "Command 'ripgrep' timed out after 30.0 seconds\n", encoding="utf-8"
+        )
+
+        discovered = triage.discover_transcript(workspace)
+        self.assertEqual(discovered, transcript)
+
+    def test_discover_transcript_newest_by_mtime(self):
+        import os
+
+        workspace = self.temp_path / "ws_multi"
+        workspace.mkdir()
+        t1 = workspace / "transcript.json"
+        t1.write_text("old failure\n", encoding="utf-8")
+        os.utime(t1, (1000, 1000))
+
+        t2 = workspace / "session-transcript.jsonl"
+        t2.write_text("new failure\n", encoding="utf-8")
+        os.utime(t2, (2000, 2000))
+
+        discovered = triage.discover_transcript(workspace)
+        self.assertEqual(discovered, t2)
+
+    def test_discover_transcript_naming_priority_tiebreak(self):
+        import os
+
+        workspace = self.temp_path / "ws_tie"
+        workspace.mkdir()
+        t_json = workspace / "transcript.json"
+        t_json.write_text("failure json\n", encoding="utf-8")
+        os.utime(t_json, (1500, 1500))
+
+        t_txt = workspace / "transcript.txt"
+        t_txt.write_text("failure txt\n", encoding="utf-8")
+        os.utime(t_txt, (1500, 1500))
+
+        discovered = triage.discover_transcript(workspace)
+        self.assertEqual(discovered, t_json)
+
+    def test_discover_transcript_missing_raises_informative_error(self):
+        workspace = self.temp_path / "ws_empty"
+        workspace.mkdir()
+
+        with self.assertRaises(triage.TranscriptNotFoundError) as cm:
+            triage.discover_transcript(workspace)
+
+        msg = str(cm.exception)
+        for pattern in (
+            "transcript.jsonl",
+            "transcript.json",
+            "session-transcript.jsonl",
+            "transcript.txt",
+            "session.json",
+        ):
+            self.assertIn(pattern, msg)
+
+    def test_fred_cli_triage_automatic_discovery(self):
+        workspace = self.temp_path / "ws_fred_discovery"
+        workspace.mkdir()
+        transcript = workspace / "session-transcript.jsonl"
+        transcript.write_text(
+            "[2026-11-13T20:01:40Z] Command 'ripgrep' timed out after 30.0 seconds\n",
+            encoding="utf-8",
+        )
+        export_dir = self.temp_path / "fred_auto_output"
+
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [
+            sys.executable,
+            str(fred_cli),
+            "triage",
+            "--workspace",
+            str(workspace),
+            "--output",
+            str(export_dir),
+            "--check-schema",
+        ]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Discovered transcript:", proc.stderr)
+        self.assertIn(str(transcript), proc.stderr)
+
+        summary = json.loads(proc.stdout)
+        self.assertEqual(
+            summary["failure_classification"]["failure_type"], "tool_timeout"
+        )
+        self.assertTrue((export_dir / "diagnostic_bundle.json").is_file())
+
+    def test_fred_cli_triage_explicit_transcript_bypasses_discovery(self):
+        workspace = self.temp_path / "ws_bypass"
+        workspace.mkdir()
+        auto_transcript = workspace / "transcript.jsonl"
+        auto_transcript.write_text("auto failure\n", encoding="utf-8")
+
+        explicit_transcript = self.temp_path / "explicit.txt"
+        explicit_transcript.write_text(
+            "[2026-11-13T20:01:40Z] Command 'ripgrep' timed out after 30.0 seconds\n",
+            encoding="utf-8",
+        )
+
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [
+            sys.executable,
+            str(fred_cli),
+            "triage",
+            str(explicit_transcript),
+            "--workspace",
+            str(workspace),
+        ]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("Discovered transcript:", proc.stderr)
+
+    def test_triage_script_cli_automatic_discovery(self):
+        workspace = self.temp_path / "ws_triage_script"
+        workspace.mkdir()
+        transcript = workspace / "session-transcript.jsonl"
+        transcript.write_text(
+            "Starting repo-audit-trust-boundaries\njsonschema.exceptions.ValidationError: Reversed lines: E-1\n",
+            encoding="utf-8",
+        )
+        export_dir = self.temp_path / "script_auto_output"
+
+        cmd = [
+            sys.executable,
+            str(SCRIPT),
+            "--workspace",
+            str(workspace),
+            "--output-dir",
+            str(export_dir),
+            "--check-schema",
+        ]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Discovered transcript:", proc.stderr)
+        self.assertTrue((export_dir / "diagnostic_bundle.json").is_file())
+
+    def test_triage_script_cli_missing_candidate_lists_patterns(self):
+        workspace = self.temp_path / "ws_triage_empty"
+        workspace.mkdir()
+
+        cmd = [sys.executable, str(SCRIPT), "--workspace", str(workspace)]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)
+        for pattern in (
+            "transcript.jsonl",
+            "transcript.json",
+            "session-transcript.jsonl",
+            "transcript.txt",
+            "session.json",
+        ):
+            self.assertIn(pattern, proc.stderr)
+
+    def test_fred_cli_triage_missing_candidate_lists_patterns(self):
+        workspace = self.temp_path / "ws_fred_empty"
+        workspace.mkdir()
+
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [sys.executable, str(fred_cli), "triage", "--workspace", str(workspace)]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("No candidate transcript found in workspace", proc.stderr)
+        for pattern in (
+            "transcript.jsonl",
+            "transcript.json",
+            "session-transcript.jsonl",
+            "transcript.txt",
+            "session.json",
+        ):
+            self.assertIn(pattern, proc.stderr)
+
+    def test_fred_cli_triage_missing_transcript_and_workspace_errors(self):
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [sys.executable, str(fred_cli), "triage"]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("Transcript file path is required", proc.stderr)
+
+    def test_discovered_transcript_preserves_ledgers_and_scrubs_secrets(self):
+        workspace = self.temp_path / "ws_security"
+        workspace.mkdir()
+        ledger_run = workspace / "run.json"
+        ledger_run.write_text(
+            '{"run_id": "test-run", "status": "active"}\n', encoding="utf-8"
+        )
+        ledger_audit = workspace / "audit.json"
+        ledger_audit.write_text('{"findings": []}\n', encoding="utf-8")
+
+        initial_run_content = ledger_run.read_text(encoding="utf-8")
+        initial_audit_content = ledger_audit.read_text(encoding="utf-8")
+
+        transcript = workspace / "session-transcript.jsonl"
+        transcript.write_text(
+            "Authorization: Bearer supersecretvalue1234567890\nCommand 'ripgrep' timed out after 30.0 seconds\n",
+            encoding="utf-8",
+        )
+
+        fred_cli = ROOT / "scripts/fred.py"
+        cmd = [sys.executable, str(fred_cli), "triage", "--workspace", str(workspace)]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        # Invariant: workspace ledgers must not be modified
+        self.assertEqual(ledger_run.read_text(encoding="utf-8"), initial_run_content)
+        self.assertEqual(
+            ledger_audit.read_text(encoding="utf-8"), initial_audit_content
+        )
+
+        # Invariant: credentials must be scrubbed
+        self.assertNotIn("supersecretvalue1234567890", proc.stdout)
+        self.assertIn("[REDACTED_AUTH_TOKEN]", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

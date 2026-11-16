@@ -459,6 +459,64 @@ def validate_bundle(bundle: dict, schema_path: Path | None = None) -> None:
         raise ValueError(f"Schema validation error: {e}") from e
 
 
+CANDIDATE_TRANSCRIPTS: tuple[str, ...] = (
+    "transcript.jsonl",
+    "transcript.json",
+    "session-transcript.jsonl",
+    "transcript.txt",
+    "session.json",
+)
+
+
+class TranscriptNotFoundError(FileNotFoundError, ValueError):
+    """Raised when no candidate transcript can be discovered in a workspace."""
+
+
+def find_candidate_transcripts(workspace_dir: Path) -> list[Path]:
+    """Scan candidate transcript files in workspace directory and immediate logs subdirectory."""
+    if not workspace_dir.is_dir():
+        return []
+
+    search_dirs: list[Path] = [workspace_dir]
+    logs_dir = workspace_dir / "logs"
+    if logs_dir.is_dir():
+        search_dirs.append(logs_dir)
+
+    candidates: list[Path] = []
+    for directory in search_dirs:
+        for name in CANDIDATE_TRANSCRIPTS:
+            candidate = directory / name
+            if candidate.is_file():
+                candidates.append(candidate)
+    return candidates
+
+
+def discover_transcript(workspace_dir: Path) -> Path:
+    """Discover the newest candidate transcript within workspace_dir.
+
+    Selects the newest candidate by file modification time. Ties are resolved
+    by naming priority in CANDIDATE_TRANSCRIPTS and workspace root over logs.
+    """
+    candidates = find_candidate_transcripts(workspace_dir)
+    if not candidates:
+        patterns_str = ", ".join(CANDIDATE_TRANSCRIPTS)
+        raise TranscriptNotFoundError(
+            f"No candidate transcript found in workspace '{workspace_dir}' "
+            f"(searched patterns: {patterns_str} in workspace and logs/). "
+            "Supply an explicit transcript file path via positional argument or --transcript."
+        )
+
+    candidates.sort(
+        key=lambda p: (
+            p.stat().st_mtime,
+            -CANDIDATE_TRANSCRIPTS.index(p.name),
+            0 if p.parent == workspace_dir else -1,
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
 def export_bundle(bundle: dict, output_dir: Path) -> tuple[Path, Path]:
     """Export diagnostic bundle JSON and Markdown report to output directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -478,16 +536,41 @@ def main() -> int:
     parser.add_argument(
         "transcript",
         type=Path,
+        nargs="?",
+        default=None,
+        help="Session transcript file (.json, .jsonl, .txt, .md)",
+    )
+    parser.add_argument(
+        "--transcript",
+        type=Path,
+        dest="transcript_opt",
+        default=None,
         help="Session transcript file (.json, .jsonl, .txt, .md)",
     )
     parser.add_argument(
         "--workspace",
         type=Path,
+        default=None,
         help="Optional audit run workspace directory with run.json/audit.json",
+    )
+    parser.add_argument(
+        "--workspace-dir",
+        type=Path,
+        dest="workspace_dir",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        dest="output",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
+        default=None,
         help="Directory to write scrubbed diagnostic_bundle.json and report",
     )
     parser.add_argument("--session-id", help="Explicit session or run ID")
@@ -499,13 +582,34 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if not args.transcript.is_file():
-        print(f"Error: Transcript file not found: {args.transcript}", file=sys.stderr)
+    workspace = args.workspace or getattr(args, "workspace_dir", None)
+    output_dir = args.output_dir or getattr(args, "output", None)
+    transcript = args.transcript or getattr(args, "transcript_opt", None)
+
+    if not transcript:
+        if workspace and workspace.is_dir():
+            try:
+                transcript = discover_transcript(workspace)
+                print(f"Discovered transcript: {transcript}", file=sys.stderr)
+            except TranscriptNotFoundError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 2
+        elif workspace:
+            print(f"Error: Workspace directory not found: {workspace}", file=sys.stderr)
+            return 2
+        else:
+            patterns_str = ", ".join(CANDIDATE_TRANSCRIPTS)
+            print(
+                f"Error: Transcript file path is required or specify --workspace <dir> containing a candidate transcript ({patterns_str})",
+                file=sys.stderr,
+            )
+            return 2
+
+    if not transcript.is_file():
+        print(f"Error: Transcript file not found: {transcript}", file=sys.stderr)
         return 2
 
-    bundle = generate_diagnostic_bundle(
-        args.transcript, args.workspace, args.session_id
-    )
+    bundle = generate_diagnostic_bundle(transcript, workspace, args.session_id)
 
     if args.check_schema:
         try:
@@ -514,8 +618,8 @@ def main() -> int:
             print(f"Schema validation error: {e}", file=sys.stderr)
             return 1
 
-    if args.output_dir:
-        json_path, report_path = export_bundle(bundle, args.output_dir)
+    if output_dir:
+        json_path, report_path = export_bundle(bundle, output_dir)
         print(f"Exported diagnostic bundle: {json_path}")
         print(f"Exported diagnostic report: {report_path}")
     else:
