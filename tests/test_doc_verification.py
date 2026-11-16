@@ -67,12 +67,12 @@ class DocSnippetVerificationTests(unittest.TestCase):
     """Test discovery, extraction, and execution of documentation command snippets."""
 
     def test_discover_command_blocks_across_all_five_targets(self):
-        """The test harness discovers command blocks in README, CONTRIBUTING, AGENTS, toolkit, and usage."""
+        """The test harness discovers command blocks across all configured documentation targets."""
         discovered = discover_doc_blocks(root=ROOT)
         self.assertEqual(
             set(DOCUMENTED_RANGES.keys()),
             set(discovered.keys()),
-            "Must discover blocks in all 5 specified documentation files",
+            "Must discover blocks in all specified documentation files",
         )
 
         for rel_path, (s_line, e_line) in DOCUMENTED_RANGES.items():
@@ -82,8 +82,22 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 f"Expected discovered blocks in {rel_path} (L{s_line}-L{e_line})",
             )
             for block in blocks:
-                self.assertGreaterEqual(block.end_line, s_line)
-                self.assertLessEqual(block.start_line, e_line)
+                if s_line is not None:
+                    self.assertGreaterEqual(block.end_line, s_line)
+                if e_line is not None:
+                    self.assertLessEqual(block.start_line, e_line)
+
+        # Full-file discovery coverage for runbooks (59 blocks) and integration (32 blocks)
+        self.assertEqual(
+            len(discovered["docs/runbooks.md"]),
+            59,
+            "Must discover all 59 code blocks in docs/runbooks.md",
+        )
+        self.assertEqual(
+            len(discovered["docs/integration.md"]),
+            32,
+            "Must discover all 32 code blocks in docs/integration.md",
+        )
 
     def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self):
         """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
@@ -253,6 +267,52 @@ class DocSnippetVerificationTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertIn("Failed to parse command syntax", msg)
+
+    def test_multiline_python_commands_in_runbooks(self):
+        """Multiline Python commands in docs/runbooks.md:L84-L93 and L409-L449 must parse without quotation errors."""
+        runbooks = ROOT / "docs/runbooks.md"
+        # Test L84-L93
+        blocks_early = extract_blocks_from_file(
+            runbooks, start_line=84, end_line=94, root=ROOT
+        )
+        self.assertEqual(1, len(blocks_early))
+        self.assertTrue(len(blocks_early[0].commands) > 0)
+        line_no, cmd = blocks_early[0].commands[0]
+        self.assertEqual(line_no, 84)
+        ok, msg = execute_snippet_command(cmd, root=ROOT)
+        self.assertTrue(ok, f"Runbooks snippet at L{line_no} failed: {msg}")
+
+        # Test L409-L449
+        blocks_late = extract_blocks_from_file(
+            runbooks, start_line=408, end_line=450, root=ROOT
+        )
+        self.assertEqual(1, len(blocks_late))
+        self.assertTrue(len(blocks_late[0].commands) > 0)
+        line_no, cmd = blocks_late[0].commands[0]
+        self.assertEqual(line_no, 409)
+        ok, msg = execute_snippet_command(cmd, root=ROOT)
+        self.assertTrue(ok, f"Runbooks snippet at L{line_no} failed: {msg}")
+
+    def test_cli_placeholder_tokens_normalization(self):
+        """CLI commands with placeholder tokens (<host>, <scope>, <skill-name>, etc.) must pass argument parsing."""
+        sample_cmds = [
+            "python scripts/fred.py recover-install --destination /path/to/project --host <host> --confirm-interrupted",
+            "python scripts/fred.py install --destination /path/to/project --host <host> --scope <scope> --pack starter",
+            "python scripts/fred.py remove --destination /path/to/project --host <host> --skill <skill-name>",
+            "python scripts/fred.py plan /path/to/repository --task review-pr --mode changes --base '<base>'",
+        ]
+        for cmd in sample_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(
+                ok, f"Command with placeholder tokens failed: {cmd} -> {msg}"
+            )
+
+    def test_full_file_runbooks_and_integration_snippets_pass(self):
+        """Full-file snippet verification across docs/runbooks.md (59 blocks) and docs/integration.md (32 blocks) passes with zero errors."""
+        errors = verify_all_snippets(
+            root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
+        )
+        self.assertEqual([], errors, f"Full-file verification failed: {errors}")
 
 
 if __name__ == "__main__":
