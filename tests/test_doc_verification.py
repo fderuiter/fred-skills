@@ -1,6 +1,8 @@
 """Tests for documentation verification harnesses: relative links and CLI snippet verification."""
 
+import inspect
 import shlex
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -61,6 +63,31 @@ class DocLinkVerificationTests(unittest.TestCase):
             doc.write_text("[Target](target.md)\n", encoding="utf-8")
             errors = check_file_links(doc, root=tmp_path)
             self.assertEqual([], errors)
+
+    def test_cli_rejects_removed_check_flag(self):
+        """CLI parser for check_doc_links must reject the removed --check flag."""
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check_doc_links.py"), "--check"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("unrecognized arguments: --check", proc.stderr)
+
+    def test_cli_accepts_file_arguments(self):
+        """CLI for check_doc_links accepts specific files without --check flag."""
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check_doc_links.py"), "README.md"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(
+            "PASS: Relative links verified across 1 markdown documentation files.",
+            proc.stdout,
+        )
 
 
 class DocSnippetVerificationTests(unittest.TestCase):
@@ -258,6 +285,12 @@ class DocSnippetVerificationTests(unittest.TestCase):
         errors = verify_all_snippets(root=ROOT, files=["nonexistent_file.md"])
         self.assertEqual(1, len(errors))
         self.assertIn("nonexistent_file.md", errors[0])
+
+    def test_verify_all_snippets_signature_excludes_target_files(self):
+        """verify_all_snippets signature accepts root and files, excluding redundant target_files."""
+        sig = inspect.signature(verify_all_snippets)
+        self.assertIn("files", sig.parameters)
+        self.assertNotIn("target_files", sig.parameters)
 
     def test_shell_syntax_error_safety(self):
         """Unclosed quotes or shell syntax anomalies must be handled safely without unhandled exceptions."""
