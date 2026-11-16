@@ -9,10 +9,9 @@ from urllib.parse import unquote, urlsplit
 
 import jsonschema
 import yaml
-from skill_tools import ROOT, read_frontmatter, suite_members
+from skill_tools import ROOT, extract_relative_links, read_frontmatter, suite_members
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-LINK = re.compile(r"\]\(([^)]+)\)")
 
 
 def validate_skill(package: Path) -> list[str]:
@@ -54,11 +53,13 @@ def validate_skill(package: Path) -> list[str]:
                 if path.name.endswith(".schema.json"):
                     jsonschema.Draft202012Validator.check_schema(data)
             if path.suffix == ".md":
-                for target in LINK.findall(path.read_text(encoding="utf-8")):
+                for target in extract_relative_links(path.read_text(encoding="utf-8")):
                     parsed = urlsplit(target)
-                    if parsed.scheme or parsed.netloc or not parsed.path:
+                    raw_path = unquote(parsed.path)
+                    clean_path = raw_path.split("#")[0].split("?")[0]
+                    if not clean_path:
                         continue
-                    resolved = (path.parent / unquote(parsed.path)).resolve()
+                    resolved = (path.parent / clean_path).resolve()
                     if not resolved.is_relative_to(package.resolve()):
                         errors.append(f"Reference escapes standalone package: {target}")
                     elif not resolved.is_file():
