@@ -326,14 +326,14 @@ def parser() -> argparse.ArgumentParser:
     sub_rep = commands.add_parser(
         "report",
         parents=[sub_common],
-        help="Render human-readable HTML and Markdown summary reports from an audit",
+        help="Render human-readable HTML report from an audit",
     )
     sub_rep.add_argument("audit", type=Path, help="Path to audit.json file")
     sub_rep.add_argument(
         "--output",
         type=Path,
         required=True,
-        help="Output directory path for rendered reports",
+        help="Output directory or file path for rendered report",
     )
     sub_rep.add_argument(
         "--prior",
@@ -711,10 +711,10 @@ def dispatch(a: argparse.Namespace) -> Any:
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "report":
-        reports.render(
+        target = reports.render(
             read_json(a.audit), a.output, read_json(a.prior) if a.prior else None
         )
-        return {"output": str(a.output)}
+        return {"output": str(target)}
     if a.command == "issues":
         return {
             "drafts": reports.issue_drafts(

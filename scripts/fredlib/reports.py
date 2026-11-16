@@ -16,7 +16,7 @@ def text(value) -> str:
     return escape(str(value), quote=True)
 
 
-def render(audit: dict, output: Path, prior: dict | None = None) -> None:
+def render(audit: dict, output: Path, prior: dict | None = None) -> Path:
     errors = audit_errors(audit)
     if errors:
         raise ValueError("Invalid audit ledger: " + "; ".join(errors[:5]))
@@ -71,8 +71,15 @@ def render(audit: dict, output: Path, prior: dict | None = None) -> None:
 <section id="findings"><h2>Review findings</h2><label for="query">Search findings <input id="query" type="search"></label><label for="status">Evidence status <select id="status"><option value="">All statuses</option>{"".join(f"<option>{s}</option>" for s in ["confirmed", "supported", "needs-validation", "hardening", "refuted"])}</select></label><p id="count" role="status" aria-live="polite"></p><div id="empty-state" class="empty-state" hidden><p>No findings match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>{"".join(cards) or "<p>No findings recorded. Review coverage before drawing conclusions.</p>"}</section>
 <section id="coverage"><h2>Coverage and continuation</h2><div class="table-container"><table><thead><tr><th>Topic</th><th>Scope</th><th>Status</th><th>Notes</th><th>Next action</th></tr></thead><tbody>{coverage}</tbody></table></div></section>
 <section id="checks"><h2>Executed and unexecuted checks</h2><div class="table-container"><table><thead><tr><th>Check</th><th>State</th><th>Command</th><th>Result</th></tr></thead><tbody>{checks}</tbody></table></div></section><section id="comparison"><h2>Comparison</h2><pre>{comparison}</pre></section><script>{SCRIPT}</script></body></html>'''
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(html, encoding="utf-8")
+    output = Path(output)
+    if output.is_dir() or not output.suffix:
+        output.mkdir(parents=True, exist_ok=True)
+        target = output / "report.html"
+    else:
+        target = output
+        target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(html, encoding="utf-8")
+    return target
 
 
 def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
