@@ -45,8 +45,11 @@ def _receipt_identifies_host(
     return False
 
 
-def detect_host(destination: Path, scope: str = "project") -> str:
-    dest = destination.resolve()
+def detect_host(destination: Path | None = None, scope: str = "project") -> str:
+    if destination is None:
+        dest = (Path.home() if scope == "user" else Path.cwd()).resolve()
+    else:
+        dest = destination.resolve()
     marker_map = {
         ".claude": "claude-code",
         ".agents": "codex",
@@ -55,12 +58,12 @@ def detect_host(destination: Path, scope: str = "project") -> str:
     found = [m for m in marker_map if (dest / m).exists()]
     if not found:
         raise ValueError(
-            f"No host markers (.claude, .agents, .gemini) found in destination '{destination}'; please specify --host"
+            f"No host markers (.claude, .agents, .gemini) found in destination '{dest}'; please specify --host"
         )
     if len(found) > 1:
         markers_str = ", ".join(sorted(found))
         raise ValueError(
-            f"Multiple host markers found ({markers_str}) in destination '{destination}'; please specify --host"
+            f"Multiple host markers found ({markers_str}) in destination '{dest}'; please specify --host"
         )
 
     marker = found[0]
@@ -73,7 +76,7 @@ def detect_host(destination: Path, scope: str = "project") -> str:
     has_codex = _receipt_identifies_host(dest, "codex", scope)
     if has_antigravity and has_codex:
         raise ValueError(
-            f"Ambiguous host receipts for both codex and antigravity found in destination '{destination}'; please specify --host"
+            f"Ambiguous host receipts for both codex and antigravity found in destination '{dest}'; please specify --host"
         )
     if has_antigravity:
         return "antigravity"
@@ -81,11 +84,13 @@ def detect_host(destination: Path, scope: str = "project") -> str:
 
 
 def locations(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
 ):
+    if destination is None:
+        destination = Path.home() if scope == "user" else Path.cwd()
     if host is None:
         host = detect_host(destination, scope)
     hosts = read_json(root / "catalog/hosts.json")["hosts"]
@@ -129,6 +134,113 @@ def receipt(state: Path) -> dict:
     )
 
 
+def query_installed(
+    destination: Path,
+    host: str | None = None,
+    scope: str = "project",
+    root: Path = ROOT,
+) -> dict:
+    """Read the installation receipt and harness paths for a target destination."""
+    dest = Path(destination).resolve()
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    if scope not in {"project", "user"}:
+        raise ValueError("Unknown installation scope")
+
+    if host is not None:
+        if host not in hosts:
+            raise ValueError(f"Unknown host: {host}")
+        target, state = locations(dest, host, scope, root)
+        rec_path = state / "receipt.json"
+        if not rec_path.is_file():
+            return {
+                "destination": str(dest),
+                "target": str(target),
+                "state": str(state),
+                "host": host,
+                "scope": scope,
+                "skills": {},
+                "message": f"No installation receipt found at destination for host '{host}'",
+            }
+        rec = receipt(state)
+        skills = rec.get("skills", {})
+        res = {
+            "destination": str(dest),
+            "target": str(target),
+            "state": str(state),
+            "host": host,
+            "scope": scope,
+            "skills": skills,
+        }
+        if not skills:
+            res["message"] = f"No skills installed at destination for host '{host}'"
+        return res
+
+    state_root = dest / ".fred-skills"
+    existing_receipt_hosts = []
+    if state_root.is_dir():
+        for h in hosts:
+            if (state_root / f"{h}-{scope}" / "receipt.json").is_file():
+                existing_receipt_hosts.append(h)
+
+    if len(existing_receipt_hosts) > 1:
+        if (
+            "antigravity" in existing_receipt_hosts
+            and "codex" in existing_receipt_hosts
+        ):
+            raise ValueError(
+                f"Ambiguous host receipts for both codex and antigravity found in destination '{destination}'; please specify --host"
+            )
+        hosts_str = ", ".join(sorted(existing_receipt_hosts))
+        raise ValueError(
+            f"Multiple host receipts found ({hosts_str}) in destination '{destination}'; please specify --host"
+        )
+
+    if len(existing_receipt_hosts) == 1:
+        detected_host = existing_receipt_hosts[0]
+        target, state = locations(dest, detected_host, scope, root)
+        rec = receipt(state)
+        skills = rec.get("skills", {})
+        res = {
+            "destination": str(dest),
+            "target": str(target),
+            "state": str(state),
+            "host": detected_host,
+            "scope": scope,
+            "skills": skills,
+        }
+        if not skills:
+            res["message"] = (
+                f"No skills installed at destination for host '{detected_host}'"
+            )
+        return res
+
+    try:
+        detected_host = detect_host(dest, scope)
+        target, state = locations(dest, detected_host, scope, root)
+        return {
+            "destination": str(dest),
+            "target": str(target),
+            "state": str(state),
+            "host": detected_host,
+            "scope": scope,
+            "skills": {},
+            "message": f"No installation receipt found at destination for host '{detected_host}'",
+        }
+    except ValueError as exc:
+        err_str = str(exc)
+        if "No host markers" in err_str:
+            return {
+                "destination": str(dest),
+                "target": None,
+                "state": None,
+                "host": None,
+                "scope": scope,
+                "skills": {},
+                "message": f"No installation receipt found at destination '{destination}'",
+            }
+        raise
+
+
 def checked_target(target: Path, name: str) -> Path:
     candidate = target / relative_path(name)
     if candidate.is_symlink() or not candidate.resolve().is_relative_to(
@@ -153,7 +265,7 @@ def require_unmodified(path: Path, record: dict | None):
 
 
 def install(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     pack: str | None = None,
@@ -267,7 +379,7 @@ def install(
 
 
 def remove(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     skills: list[str] | None = None,
@@ -319,7 +431,7 @@ def remove(
 
 
 def rollback(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
@@ -379,7 +491,7 @@ def rollback(
 
 
 def recover(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     confirm_interrupted: bool = False,

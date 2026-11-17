@@ -29,6 +29,7 @@ For command-line usage and CLI workflows, see the [Local Toolkit Guide](toolkit.
    - [`locations`](#locations)
    - [`lock`](#lock)
    - [`receipt`](#receipt)
+   - [`query_installed`](#query_installed)
    - [`checked_target`](#checked_target)
    - [`require_unmodified`](#require_unmodified)
    - [`install`](#install)
@@ -427,6 +428,30 @@ Reads the current installation receipt from `state / "receipt.json"`, or returns
   - `state` (`Path`): State directory path.
 - **Returns:** `dict` — Receipt dictionary with `"schema_version"`, `"skills"`, and `"history"`.
 - **Exceptions:** None.
+
+---
+
+### `query_installed`
+
+```python
+def query_installed(
+    destination: Path,
+    host: str | None = None,
+    scope: str = "project",
+    root: Path = ROOT,
+) -> dict
+```
+
+Reads the installation receipt and resolves host harness target paths for a target destination.
+
+- **Parameters:**
+  - `destination` (`Path`): Target installation root path.
+  - `host` (`str | None`, default: `None`): Agent host identifier, or `None` to auto-detect.
+  - `scope` (`str`, default: `"project"`): Target scope (`"project"` or `"user"`).
+  - `root` (`Path`, default: repository root): Toolkit root directory.
+- **Returns:** `dict` — Installation status dictionary containing `"destination"`, `"target"`, `"state"`, `"host"`, `"scope"`, and `"skills"`.
+- **Exceptions:**
+  - `ValueError`: Raised if multiple host receipts or markers exist without an explicit `host` parameter, or if `scope` or `host` is unknown.
 
 ---
 

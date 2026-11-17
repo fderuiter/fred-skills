@@ -157,11 +157,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
         groups = get_registered_fred_subcommands(root=ROOT)
         registered = {cmd for cmds in groups.values() for cmd in cmds}
 
-        # Assert complete coverage of all 26 registered subcommands
+        # Assert complete coverage of all 27 registered subcommands
         self.assertEqual(
             len(registered),
-            26,
-            f"Expected exactly 26 registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
+            27,
+            f"Expected exactly 27 registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
         )
 
         start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 195))
