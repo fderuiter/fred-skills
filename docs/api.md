@@ -359,13 +359,13 @@ The `fredlib.installation` module handles skill discovery, host environment mark
 ### `detect_host`
 
 ```python
-def detect_host(destination: Path, scope: str = "project") -> str
+def detect_host(destination: Path | None = None, scope: str = "project") -> str
 ```
 
 Inspects the target destination for agent configuration markers and historical receipts to identify the host platform automatically.
 
 - **Parameters:**
-  - `destination` (`Path`): Project root directory to inspect.
+  - `destination` (`Path | None`, default: `None`): Project root directory to inspect, or `None` to default to current working directory (project scope) or user home (user scope).
   - `scope` (`str`, default: `"project"`): Installation scope (`"project"` or `"user"`).
 - **Returns:** `str` — Detected host identifier: `"claude-code"`, `"gemini-cli"`, `"antigravity"`, or `"codex"`.
 - **Exceptions:**
@@ -377,7 +377,7 @@ Inspects the target destination for agent configuration markers and historical r
 
 ```python
 def locations(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
@@ -387,7 +387,7 @@ def locations(
 Resolves the target installation directory and internal state tracking directory for a specified host and scope.
 
 - **Parameters:**
-  - `destination` (`Path`): Target installation root path.
+  - `destination` (`Path | None`, default: `None`): Target installation root path, or `None` to default to current working directory (project scope) or user home (user scope).
   - `host` (`str | None`, default: `None`): Host identifier matching `catalog/hosts.json` (auto-detected via `detect_host` if `None`).
   - `scope` (`str`, default: `"project"`): Installation scope (`"project"` or `"user"`).
   - `root` (`Path`, default: repository root): Toolkit root containing catalogs.
@@ -435,7 +435,7 @@ Reads the current installation receipt from `state / "receipt.json"`, or returns
 
 ```python
 def query_installed(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
@@ -445,7 +445,7 @@ def query_installed(
 Reads the installation receipt and resolves host harness target paths for a target destination.
 
 - **Parameters:**
-  - `destination` (`Path`): Target installation root path.
+  - `destination` (`Path | None`, default: `None`): Target installation root path, or `None` to default to current working directory (project scope) or user home (user scope).
   - `host` (`str | None`, default: `None`): Agent host identifier, or `None` to auto-detect.
   - `scope` (`str`, default: `"project"`): Target scope (`"project"` or `"user"`).
   - `root` (`Path`, default: repository root): Toolkit root directory.
@@ -493,7 +493,7 @@ Verifies that an existing on-disk skill package matches the recorded content has
 
 ```python
 def install(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     pack: str | None = None,
@@ -507,7 +507,7 @@ def install(
 Installs or updates skills into the destination environment using a two-phase journaled staging and atomic swap workflow.
 
 - **Parameters:**
-  - `destination` (`Path`): Project or user root directory.
+  - `destination` (`Path | None`, default: `None`): Project or user root directory, or `None` to default to current working directory (project scope) or user home (user scope).
   - `host` (`str | None`, default: `None`): Host identifier (auto-detected if omitted).
   - `scope` (`str`, default: `"project"`): Installation scope (`"project"` or `"user"`).
   - `pack` (`str | None`, default: `None`): Named skill pack from `catalog/packs.json`.
@@ -525,7 +525,7 @@ Installs or updates skills into the destination environment using a two-phase jo
 
 ```python
 def remove(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     skills: list[str] | None = None,
@@ -537,7 +537,7 @@ def remove(
 Removes managed skills from the destination environment, archiving previous packages to backups under the state directory.
 
 - **Parameters:**
-  - `destination` (`Path`): Installation destination root.
+  - `destination` (`Path | None`, default: `None`): Installation destination root, or `None` to default to current working directory (project scope) or user home (user scope).
   - `host` (`str | None`, default: `None`): Host identifier (auto-detected if omitted).
   - `scope` (`str`, default: `"project"`): Installation scope.
   - `skills` (`list[str] | None`, default: `None`): List of skill names to remove.
@@ -553,7 +553,7 @@ Removes managed skills from the destination environment, archiving previous pack
 
 ```python
 def rollback(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
@@ -563,7 +563,7 @@ def rollback(
 Reverts the most recent installation or removal operation using backup archives recorded in receipt history.
 
 - **Parameters:**
-  - `destination` (`Path`): Installation destination root.
+  - `destination` (`Path | None`, default: `None`): Installation destination root, or `None` to default to current working directory (project scope) or user home (user scope).
   - `host` (`str | None`, default: `None`): Host identifier (auto-detected if omitted).
   - `scope` (`str`, default: `"project"`): Installation scope.
   - `root` (`Path`, default: repository root): Toolkit root.
@@ -577,7 +577,7 @@ Reverts the most recent installation or removal operation using backup archives 
 
 ```python
 def recover(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     confirm_interrupted: bool = False,
@@ -588,7 +588,7 @@ def recover(
 Recovers a partially completed or interrupted installation using the state journal (`operation.json`).
 
 - **Parameters:**
-  - `destination` (`Path`): Installation destination root.
+  - `destination` (`Path | None`, default: `None`): Installation destination root, or `None` to default to current working directory (project scope) or user home (user scope).
   - `host` (`str | None`, default: `None`): Host identifier (auto-detected if omitted).
   - `scope` (`str`, default: `"project"`): Installation scope.
   - `confirm_interrupted` (`bool`, default: `False`): Required confirmation flag confirming the previous writer process has halted.

@@ -58,9 +58,10 @@ python scripts/fred.py remove --destination /path/to/project --host claude-code 
 python scripts/fred.py rollback --destination /path/to/project --host claude-code
 ```
 
-`--destination` is always an explicit project root. For personal installation use
-`--scope user` and explicitly supply your home directory. Preview the resolved target
-with `--dry-run`. Host paths and primary documentation sources are listed in
+`--destination` is optional and defaults to the current working directory for
+project scope or user home for `--scope user`. An explicit project root or home
+directory can also be provided. Preview the resolved target with `--dry-run`. Host
+paths and primary documentation sources are listed in
 [catalog/hosts.json](../catalog/hosts.json). The installer copies packages; host loading,
 auto-activation, context precedence, and model behavior still need real host checks.
 
