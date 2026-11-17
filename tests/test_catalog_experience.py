@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -39,6 +40,19 @@ class ExperienceTests(unittest.TestCase):
             for skill in item["skills"]:
                 self.assertIn(f'<a href="#{skill}">{skill}</a>', page)
                 self.assertIn(f'id="{skill}"', page)
+
+    def test_experience_detects_drift(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            catalog_dir = tmp_root / "catalog"
+            catalog_dir.mkdir(parents=True)
+            for file in ["skills.json", "recipes.json", "packs.json", "hosts.json"]:
+                (catalog_dir / file).write_bytes((ROOT / "catalog" / file).read_bytes())
+            self.assertEqual([], build(root=tmp_root))
+            self.assertEqual([], build(root=tmp_root, check=True))
+            (tmp_root / "docs/experience.md").write_text("drift", encoding="utf-8")
+            errors = build(root=tmp_root, check=True)
+            self.assertTrue(any("docs/experience.md" in err for err in errors))
 
     def test_no_host_adapter_claims_behavioral_certification(self):
         for host in read_json(ROOT / "catalog/hosts.json")["hosts"].values():

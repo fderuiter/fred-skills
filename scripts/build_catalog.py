@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from skill_tools import ROOT, read_frontmatter, suite_members
+from skill_tools import ROOT, build_outputs, read_frontmatter, suite_members
 
 
 def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
@@ -96,16 +96,7 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
 
 
 def build(root: Path = ROOT, check: bool = False) -> list[str]:
-    problems = []
-    for relative, content in rendered_catalog(root).items():
-        path = root / relative
-        if check:
-            if not path.is_file() or path.read_bytes() != content.encode("utf-8"):
-                problems.append(f"Stale generated index: {relative}")
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8", newline="\n")
-    return problems
+    return build_outputs(rendered_catalog(root), root=root, check=check)
 
 
 def main() -> int:
