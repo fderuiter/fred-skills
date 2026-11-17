@@ -96,7 +96,7 @@ fixable causes remain separate even if symptoms overlap.
 
 ## Download and verify release archives
 
-Official releases publish versioned pack archives (such as `starter`, `full-audit`, or the complete 42-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file.
+Official releases publish versioned pack archives (such as `starter`, `full-audit`, or the complete 51-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file.
 
 ### Download
 

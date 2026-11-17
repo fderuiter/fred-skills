@@ -780,11 +780,6 @@ def dispatch(a: argparse.Namespace) -> Any:
     if a.command == "verify-release":
         return releases.verify(a.manifest)
     if a.command == "triage":
-        transcript = a.transcript or a.transcript_opt
-        if not transcript:
-            raise ValueError("Transcript file path is required")
-        if not transcript.is_file():
-            raise ValueError(f"Transcript file not found: {transcript}")
         workspace = a.workspace or a.workspace_dir
         output_dir = a.output or a.output_dir
 
@@ -796,6 +791,18 @@ def dispatch(a: argparse.Namespace) -> Any:
         spec = importlib.util.spec_from_file_location("diagnostics_triage", script_path)
         triage = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(triage)
+
+        transcript = a.transcript or a.transcript_opt
+        if not transcript:
+            if workspace and workspace.is_dir():
+                transcript = triage.discover_transcript(workspace)
+                print(f"Discovered transcript: {transcript}", file=sys.stderr)
+            elif workspace:
+                raise ValueError(f"Workspace directory not found: {workspace}")
+            else:
+                raise ValueError("Transcript file path is required")
+        if not transcript.is_file():
+            raise ValueError(f"Transcript file not found: {transcript}")
 
         bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
         if a.check_schema:
