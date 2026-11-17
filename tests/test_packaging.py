@@ -295,6 +295,8 @@ class PackageTests(unittest.TestCase):
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
+        self.assertIn("markdown", hooks["ruff-format"].get("types_or", []))
+        self.assertEqual(hooks["ruff-format"].get("types_or"), ["python", "markdown"])
         for hook_id in ["check-doc-links", "verify-doc-snippets"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
@@ -306,6 +308,20 @@ class PackageTests(unittest.TestCase):
         reqs = reqs_path.read_text(encoding="utf-8")
         self.assertIn("pre-commit", reqs)
         self.assertIn("ruff", reqs)
+
+        validate_wf_path = ROOT / ".github/workflows/validate.yml"
+        self.assertTrue(validate_wf_path.is_file())
+        with validate_wf_path.open("r", encoding="utf-8") as f:
+            validate_wf = yaml.safe_load(f)
+        validate_steps = (
+            validate_wf.get("jobs", {}).get("validate", {}).get("steps", [])
+        )
+        self.assertTrue(
+            any(
+                "pre-commit run --all-files" in s.get("run", "") for s in validate_steps
+            ),
+            "validate.yml must execute pre-commit run --all-files",
+        )
 
     def test_makefile_target_definitions(self):
         makefile_path = ROOT / "Makefile"
