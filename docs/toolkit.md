@@ -47,6 +47,8 @@ are prioritization hypotheses; they contain no claims about today's repositories
 ## Install, update, remove, or roll back
 
 ```sh
+python scripts/fred.py installed --destination /path/to/project --host claude-code
+python scripts/fred.py installed --destination /path/to/project
 python scripts/fred.py install --destination /path/to/project --host claude-code --pack starter --dry-run
 python scripts/fred.py install --destination /path/to/project --host claude-code --pack starter
 python scripts/fred.py update --destination /path/to/project --host claude-code --pack starter --dry-run

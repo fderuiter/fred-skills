@@ -134,6 +134,113 @@ def receipt(state: Path) -> dict:
     )
 
 
+def query_installed(
+    destination: Path,
+    host: str | None = None,
+    scope: str = "project",
+    root: Path = ROOT,
+) -> dict:
+    """Read the installation receipt and harness paths for a target destination."""
+    dest = Path(destination).resolve()
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    if scope not in {"project", "user"}:
+        raise ValueError("Unknown installation scope")
+
+    if host is not None:
+        if host not in hosts:
+            raise ValueError(f"Unknown host: {host}")
+        target, state = locations(dest, host, scope, root)
+        rec_path = state / "receipt.json"
+        if not rec_path.is_file():
+            return {
+                "destination": str(dest),
+                "target": str(target),
+                "state": str(state),
+                "host": host,
+                "scope": scope,
+                "skills": {},
+                "message": f"No installation receipt found at destination for host '{host}'",
+            }
+        rec = receipt(state)
+        skills = rec.get("skills", {})
+        res = {
+            "destination": str(dest),
+            "target": str(target),
+            "state": str(state),
+            "host": host,
+            "scope": scope,
+            "skills": skills,
+        }
+        if not skills:
+            res["message"] = f"No skills installed at destination for host '{host}'"
+        return res
+
+    state_root = dest / ".fred-skills"
+    existing_receipt_hosts = []
+    if state_root.is_dir():
+        for h in hosts:
+            if (state_root / f"{h}-{scope}" / "receipt.json").is_file():
+                existing_receipt_hosts.append(h)
+
+    if len(existing_receipt_hosts) > 1:
+        if (
+            "antigravity" in existing_receipt_hosts
+            and "codex" in existing_receipt_hosts
+        ):
+            raise ValueError(
+                f"Ambiguous host receipts for both codex and antigravity found in destination '{destination}'; please specify --host"
+            )
+        hosts_str = ", ".join(sorted(existing_receipt_hosts))
+        raise ValueError(
+            f"Multiple host receipts found ({hosts_str}) in destination '{destination}'; please specify --host"
+        )
+
+    if len(existing_receipt_hosts) == 1:
+        detected_host = existing_receipt_hosts[0]
+        target, state = locations(dest, detected_host, scope, root)
+        rec = receipt(state)
+        skills = rec.get("skills", {})
+        res = {
+            "destination": str(dest),
+            "target": str(target),
+            "state": str(state),
+            "host": detected_host,
+            "scope": scope,
+            "skills": skills,
+        }
+        if not skills:
+            res["message"] = (
+                f"No skills installed at destination for host '{detected_host}'"
+            )
+        return res
+
+    try:
+        detected_host = detect_host(dest, scope)
+        target, state = locations(dest, detected_host, scope, root)
+        return {
+            "destination": str(dest),
+            "target": str(target),
+            "state": str(state),
+            "host": detected_host,
+            "scope": scope,
+            "skills": {},
+            "message": f"No installation receipt found at destination for host '{detected_host}'",
+        }
+    except ValueError as exc:
+        err_str = str(exc)
+        if "No host markers" in err_str:
+            return {
+                "destination": str(dest),
+                "target": None,
+                "state": None,
+                "host": None,
+                "scope": scope,
+                "skills": {},
+                "message": f"No installation receipt found at destination '{destination}'",
+            }
+        raise
+
+
 def checked_target(target: Path, name: str) -> Path:
     candidate = target / relative_path(name)
     if candidate.is_symlink() or not candidate.resolve().is_relative_to(

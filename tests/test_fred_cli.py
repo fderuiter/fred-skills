@@ -87,6 +87,7 @@ class FredCLITests(unittest.TestCase):
             "triage",
         ]
         install_subcmds = [
+            "installed",
             "install",
             "update",
             "remove",
@@ -458,6 +459,109 @@ class FredCLITests(unittest.TestCase):
             self.assertEqual(str(custom_file), data["output"])
             self.assertTrue(custom_file.is_file())
             self.assertIn("<!doctype html>", custom_file.read_text(encoding="utf-8"))
+
+    def test_installed_table_in_terminal(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            install_proc = self.run_cli(
+                "install",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "codex",
+                "--pack",
+                "starter",
+            )
+            self.assertEqual(0, install_proc.returncode, install_proc.stderr)
+
+            proc = self.run_cli(
+                "installed",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "codex",
+                isatty=True,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertIn("Skill", proc.stdout)
+            self.assertIn("Version", proc.stdout)
+            self.assertIn("Harness Path", proc.stdout)
+            self.assertIn("repo-audit-concurrency", proc.stdout)
+
+    def test_installed_json_output(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            install_proc = self.run_cli(
+                "install",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "codex",
+                "--pack",
+                "starter",
+            )
+            self.assertEqual(0, install_proc.returncode, install_proc.stderr)
+
+            # Non-terminal piped output
+            proc = self.run_cli(
+                "installed",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "codex",
+                isatty=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual("codex", data["host"])
+            self.assertEqual("project", data["scope"])
+            self.assertIn("repo-audit-concurrency", data["skills"])
+            self.assertIn("content_hash", data["skills"]["repo-audit-concurrency"])
+
+            # Explicit --json flag with terminal
+            proc_json = self.run_cli(
+                "installed",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "codex",
+                "--json",
+                isatty=True,
+            )
+            self.assertEqual(0, proc_json.returncode, proc_json.stderr)
+            data_json = json.loads(proc_json.stdout)
+            self.assertEqual("codex", data_json["host"])
+
+    def test_installed_empty_destination_returns_empty_skills_with_message(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Piped JSON
+            proc = self.run_cli(
+                "installed",
+                "--destination",
+                tmp_dir,
+                isatty=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual({}, data["skills"])
+            self.assertIn("message", data)
+
+            # Interactive terminal
+            proc_tty = self.run_cli(
+                "installed",
+                "--destination",
+                tmp_dir,
+                isatty=True,
+            )
+            self.assertEqual(0, proc_tty.returncode, proc_tty.stderr)
+            self.assertTrue(
+                "No installation receipt" in proc_tty.stdout
+                or "No entries found." in proc_tty.stdout
+            )
 
 
 if __name__ == "__main__":
