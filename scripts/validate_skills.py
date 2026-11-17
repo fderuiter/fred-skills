@@ -68,20 +68,21 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
     if not body.strip() or len(body.splitlines()) >= 500:
         errors.append("Skill body must be nonempty and under 500 lines")
     prompt_path = package / "assets/prompt.md"
+    prompt_rel = prompt_path.relative_to(package).as_posix()
     if not prompt_path.is_file():
-        errors.append(f"Missing prompt template: {prompt_path.relative_to(package)}")
+        errors.append(f"Missing prompt template: {prompt_rel}")
     else:
         try:
             prompt_content = prompt_path.read_text(encoding="utf-8")
             if len(prompt_content) > MAX_PROMPT_CHARS:
                 errors.append(
-                    f"{prompt_path.relative_to(package)}: prompt template exceeds budget "
+                    f"{prompt_rel}: prompt template exceeds budget "
                     f"({len(prompt_content)} > {MAX_PROMPT_CHARS} characters)"
                 )
             lines = prompt_content.splitlines()
             if len(lines) > MAX_PROMPT_LINES:
                 errors.append(
-                    f"{prompt_path.relative_to(package)}: prompt template exceeds line budget "
+                    f"{prompt_rel}: prompt template exceeds line budget "
                     f"({len(lines)} > {MAX_PROMPT_LINES} lines)"
                 )
             placeholders = PLACEHOLDER_PATTERN.findall(prompt_content)
@@ -92,11 +93,11 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                 allowed_str = ", ".join(sorted(ALLOWED_PROMPT_PLACEHOLDERS))
                 for bad in unauthorized:
                     errors.append(
-                        f"{prompt_path.relative_to(package)}: unauthorized placeholder '{bad}' "
+                        f"{prompt_rel}: unauthorized placeholder '{bad}' "
                         f"(allowed: {allowed_str})"
                     )
         except OSError as exc:
-            errors.append(f"{prompt_path.relative_to(package)}: {exc}")
+            errors.append(f"{prompt_rel}: {exc}")
     scenarios_path = package / "references/evaluation-scenarios.json"
     if not scenarios_path.is_file():
         errors.append(
@@ -132,14 +133,14 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
     for path in package.rglob("*"):
         if path.is_symlink():
             errors.append(
-                f"Symlink breaks standalone packaging: {path.relative_to(package)}"
+                f"Symlink breaks standalone packaging: {path.relative_to(package).as_posix()}"
             )
             continue
         if not path.is_file():
             continue
         if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
             errors.append(
-                f"Generated Python cache in package: {path.relative_to(package)}"
+                f"Generated Python cache in package: {path.relative_to(package).as_posix()}"
             )
         try:
             if path.suffix == ".json":
@@ -159,7 +160,7 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                     elif not resolved.is_file():
                         errors.append(f"Missing relative reference: {target}")
         except (ValueError, OSError, jsonschema.SchemaError) as exc:
-            errors.append(f"{path.relative_to(package)}: {exc}")
+            errors.append(f"{path.relative_to(package).as_posix()}: {exc}")
     ui_path = package / "agents/openai.yaml"
     if ui_path.exists():
         try:
@@ -187,14 +188,14 @@ def validate(root: Path = ROOT) -> list[str]:
     schema_path = root / "schemas/evaluation-scenarios.schema.json"
     if not schema_path.is_file():
         problems.append(
-            f"Missing evaluation scenario schema: {schema_path.relative_to(root)}"
+            f"Missing evaluation scenario schema: {schema_path.relative_to(root).as_posix()}"
         )
     else:
         try:
             scenario_schema = json.loads(schema_path.read_text(encoding="utf-8"))
             jsonschema.Draft202012Validator.check_schema(scenario_schema)
         except (ValueError, OSError, jsonschema.SchemaError) as exc:
-            problems.append(f"{schema_path.relative_to(root)}: {exc}")
+            problems.append(f"{schema_path.relative_to(root).as_posix()}: {exc}")
             scenario_schema = None
     packages = sorted(path for path in (root / "skills").iterdir() if path.is_dir())
     if not packages:

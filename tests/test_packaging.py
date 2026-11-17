@@ -6,7 +6,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 import yaml
 
@@ -448,6 +449,23 @@ class PackageTests(unittest.TestCase):
                 "Missing prompt template: assets/prompt.md" in error for error in errors
             )
         )
+
+    def test_missing_prompt_template_uses_posix_separators_on_all_platforms(self):
+        self.prompt.unlink()
+        orig_rel = Path.relative_to
+
+        def mock_relative_to(path_obj, other):
+            rel = orig_rel(path_obj, other)
+            return PureWindowsPath(rel)
+
+        with patch.object(Path, "relative_to", mock_relative_to):
+            errors = validate_skill(self.skill)
+            self.assertTrue(
+                any(
+                    "Missing prompt template: assets/prompt.md" in error
+                    for error in errors
+                )
+            )
 
     def test_prompt_template_exceeding_character_budget_is_rejected(self):
         self.prompt.write_text("A" * 1201, encoding="utf-8")
