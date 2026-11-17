@@ -11,7 +11,7 @@ check:
 	$(PYTHON) scripts/sync_audit_resources.py --check
 	$(PYTHON) scripts/build_catalog.py --check
 	$(PYTHON) scripts/build_experience.py --check
-	$(PYTHON) scripts/validate_skills.py
+	$(PYTHON) scripts/validate_skills.py --telemetry validation-telemetry.json
 	$(PYTHON) scripts/check_doc_links.py
 	$(PYTHON) scripts/verify_doc_snippets.py
 	$(PYTHON) -m unittest discover -s tests -v

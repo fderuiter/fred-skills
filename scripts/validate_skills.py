@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
+import time
 from pathlib import Path
 
 import jsonschema
@@ -36,6 +38,23 @@ ALLOWED_PROMPT_PLACEHOLDERS = frozenset(
     }
 )
 ALLOWED_PLACEHOLDERS = ALLOWED_PROMPT_PLACEHOLDERS
+
+NEGATIVE_CONSTRAINT_PATTERN = re.compile(
+    r"\b(do not|never|must not|cannot|should not|prohibit\w*|forbid\w*|avoid\w*|disallow\w*|"
+    r"only\s+(?:if|when|after|under|with)|keep\s+[^.\n]+unchanged|preserve\s+[^.\n]+unchanged|"
+    r"without\s+[^.\n]+(?:authority|permission|prior|assuming)|honor\s+[^.\n]+scope)\b",
+    re.IGNORECASE,
+)
+BOUNDARY_GUARDRAIL_PATTERN = re.compile(
+    r"\b(boundar\w*|guardrail\w*|invariant\w*|constraint\w*|safe control\w*|"
+    r"isolation\w*|barrier\w*|safeguard\w*|precondition\w*|mutation scope|blast radius|"
+    r"acceptance criteria)\b",
+    re.IGNORECASE,
+)
+BOUNDARY_SECTION_PATTERN = re.compile(
+    r"^##+\s+.*(boundar\w*|guardrail\w*|deliver\w*|workflow\w*|inventory\w*|investigat\w*|challenge\w*|triage\w*|establish\w*|coordinate\w*|validate\w*)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 _SCENARIO_SCHEMA: dict | None = None
 
@@ -72,6 +91,10 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
         )
     if not body.strip() or len(body.splitlines()) >= 500:
         errors.append("Skill body must be nonempty and under 500 lines")
+    if not BOUNDARY_SECTION_PATTERN.search(body):
+        errors.append(
+            "SKILL.md: skill markdown lacks boundary sections (e.g. ## Deliver, ## Workflow, ## Boundary, ## Guardrails)"
+        )
     prompt_path = package / "assets/prompt.md"
     prompt_rel = prompt_path.relative_to(package).as_posix()
     if not prompt_path.is_file():
@@ -101,8 +124,30 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                         f"{prompt_rel}: unauthorized placeholder '{bad}' "
                         f"(allowed: {allowed_str})"
                     )
+            if not (
+                NEGATIVE_CONSTRAINT_PATTERN.search(prompt_content)
+                or BOUNDARY_GUARDRAIL_PATTERN.search(prompt_content)
+            ):
+                errors.append(
+                    f"{prompt_rel}: prompt template lacks negative constraints or boundary guardrails"
+                )
         except OSError as exc:
             errors.append(f"{prompt_rel}: {exc}")
+    output_schemas = [
+        p
+        for p in package.glob("assets/*.schema.json")
+        if not p.name.startswith("evaluation-scenarios")
+    ]
+    if not output_schemas:
+        output_schemas = [
+            p
+            for p in package.glob("*.schema.json")
+            if not p.name.startswith("evaluation-scenarios")
+        ]
+    if not output_schemas:
+        errors.append(
+            f"Missing output schema: {package.name} must define an output schema (*.schema.json in assets/)"
+        )
     scenarios_path = package / "references/evaluation-scenarios.json"
     if not scenarios_path.is_file():
         errors.append(
@@ -183,7 +228,8 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
     return errors
 
 
-def validate(root: Path = ROOT) -> list[str]:
+def validate_with_telemetry(root: Path = ROOT) -> tuple[list[str], dict]:
+    start_time = time.perf_counter()
     problems = []
     descriptions = {}
     scenario_schema = None
@@ -199,14 +245,62 @@ def validate(root: Path = ROOT) -> list[str]:
         except (ValueError, OSError, jsonschema.SchemaError) as exc:
             problems.append(f"{schema_path.relative_to(root).as_posix()}: {exc}")
             scenario_schema = None
+
     packages = sorted(path for path in (root / "skills").iterdir() if path.is_dir())
     if not packages:
         problems.append("No skill packages found")
+
+    package_telemetry = []
     for package in packages:
-        problems.extend(
-            f"{package.name}: {error}"
-            for error in validate_skill(package, scenario_schema=scenario_schema)
+        pkg_errors = validate_skill(package, scenario_schema=scenario_schema)
+        problems.extend(f"{package.name}: {error}" for error in pkg_errors)
+
+        output_schemas = [
+            p.relative_to(package).as_posix()
+            for p in package.glob("assets/*.schema.json")
+            if not p.name.startswith("evaluation-scenarios")
+        ]
+        if not output_schemas:
+            output_schemas = [
+                p.relative_to(package).as_posix()
+                for p in package.glob("*.schema.json")
+                if not p.name.startswith("evaluation-scenarios")
+            ]
+        has_schema = len(output_schemas) > 0
+
+        prompt_path = package / "assets/prompt.md"
+        prompt_text = (
+            prompt_path.read_text(encoding="utf-8") if prompt_path.is_file() else ""
         )
+        has_prompt_constraints = bool(
+            NEGATIVE_CONSTRAINT_PATTERN.search(prompt_text)
+            or BOUNDARY_GUARDRAIL_PATTERN.search(prompt_text)
+        )
+
+        skill_path = package / "SKILL.md"
+        skill_text = (
+            skill_path.read_text(encoding="utf-8") if skill_path.is_file() else ""
+        )
+        has_boundary_sections = bool(BOUNDARY_SECTION_PATTERN.search(skill_text))
+
+        pkg_valid = len(pkg_errors) == 0
+        deterministic_coverage = (
+            has_schema and has_prompt_constraints and has_boundary_sections
+        )
+
+        package_telemetry.append(
+            {
+                "name": package.name,
+                "valid": pkg_valid,
+                "has_output_schema": has_schema,
+                "output_schemas": output_schemas,
+                "has_prompt_constraints": has_prompt_constraints,
+                "has_boundary_sections": has_boundary_sections,
+                "deterministic_constraint_coverage": deterministic_coverage,
+                "errors": pkg_errors,
+            }
+        )
+
         try:
             meta, _ = read_frontmatter(package / "SKILL.md")
             description = meta.get("description")
@@ -218,19 +312,108 @@ def validate(root: Path = ROOT) -> list[str]:
                 descriptions[description] = package.name
         except (OSError, ValueError, TypeError, yaml.YAMLError):
             pass  # The package-level validator already reports this failure.
+
     try:
         for name in suite_members(root):
             if not (root / "skills" / name / "SKILL.md").is_file():
                 problems.append(f"Suite references absent skill: {name}")
     except (OSError, ValueError, KeyError) as exc:
         problems.append(f"Invalid suite manifest: {exc}")
-    return problems
+
+    total_pkgs = len(packages)
+    passed_pkgs = sum(1 for p in package_telemetry if p["valid"])
+    failed_pkgs = total_pkgs - passed_pkgs
+    covered_pkgs = sum(
+        1 for p in package_telemetry if p["deterministic_constraint_coverage"]
+    )
+    schema_pkgs = sum(1 for p in package_telemetry if p["has_output_schema"])
+
+    pass_rate = (passed_pkgs / total_pkgs) if total_pkgs > 0 else 0.0
+    pass_rate_pct = round(pass_rate * 100.0, 2)
+    constraint_cov = (covered_pkgs / total_pkgs) if total_pkgs > 0 else 0.0
+    constraint_cov_pct = round(constraint_cov * 100.0, 2)
+    schema_cov = (schema_pkgs / total_pkgs) if total_pkgs > 0 else 0.0
+    schema_cov_pct = round(schema_cov * 100.0, 2)
+
+    duration = round(time.perf_counter() - start_time, 4)
+
+    telemetry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "total_packages": total_pkgs,
+        "passed_packages": passed_pkgs,
+        "failed_packages": failed_pkgs,
+        "first_pass_guardrail_pass_rate": round(pass_rate, 4),
+        "first_pass_guardrail_pass_rate_percentage": pass_rate_pct,
+        "deterministic_constraint_coverage": round(constraint_cov, 4),
+        "deterministic_constraint_coverage_percentage": constraint_cov_pct,
+        "output_schema_coverage": round(schema_cov, 4),
+        "output_schema_coverage_percentage": schema_cov_pct,
+        "execution_time_seconds": duration,
+        "packages": package_telemetry,
+    }
+
+    return problems, telemetry
+
+
+def validate(root: Path = ROOT) -> list[str]:
+    errors, _ = validate_with_telemetry(root)
+    return errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--telemetry",
+        nargs="?",
+        const="validation-telemetry.json",
+        default=None,
+        metavar="PATH",
+        help="Export validation telemetry as structured JSON",
+    )
+    parser.add_argument(
+        "--export-telemetry",
+        dest="export_telemetry",
+        default=None,
+        metavar="PATH",
+        help="Export validation telemetry as structured JSON",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=ROOT,
+        help="Root directory of the skill repository",
+    )
+    args = parser.parse_args(argv)
+
+    errors, telemetry = validate_with_telemetry(root=args.root)
+    for error in errors:
+        print(error)
+
+    telemetry_path = args.export_telemetry or args.telemetry
+    if telemetry_path:
+        out_file = Path(telemetry_path)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(json.dumps(telemetry, indent=2), encoding="utf-8")
+        print(f"Exported validation telemetry to {out_file.as_posix()}")
+
+    print("=" * 60)
+    print("Validation Telemetry:")
+    print(f"  Total Packages: {telemetry['total_packages']}")
+    print(f"  Passed Packages: {telemetry['passed_packages']}")
+    print(f"  Failed Packages: {telemetry['failed_packages']}")
+    print(
+        f"  First-pass Guardrail Pass Rate: {telemetry['first_pass_guardrail_pass_rate_percentage']}%"
+    )
+    print(
+        f"  Deterministic Constraint Coverage: {telemetry['deterministic_constraint_coverage_percentage']}%"
+    )
+    print(f"  Execution Time: {telemetry['execution_time_seconds']}s")
+    print("=" * 60)
+
+    if not errors:
+        print("PASS: skill metadata, schemas, and standalone references")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
-    errors = validate()
-    for error in errors:
-        print(error)
-    if not errors:
-        print("PASS: skill metadata, schemas, and standalone references")
-    raise SystemExit(bool(errors))
+    raise SystemExit(main())

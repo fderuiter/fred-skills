@@ -17,7 +17,7 @@ from build_catalog import build
 from package_skills import get_suite_skills
 from skill_tools import build_outputs
 from sync_audit_resources import sync
-from validate_skills import validate_skill
+from validate_skills import validate_skill, validate_with_telemetry
 
 
 class PackageTests(unittest.TestCase):
@@ -28,13 +28,24 @@ class PackageTests(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\nDeliver the audit output.\n'
         )
         assets_dir = self.skill / "assets"
         assets_dir.mkdir(parents=True)
+        self.output_schema = assets_dir / "audit.schema.json"
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                }
+            ),
+            encoding="utf-8",
+        )
         self.prompt = assets_dir / "prompt.md"
         self.prompt.write_text(
-            "Use sample-audit on <repository> at <revision>.\n", encoding="utf-8"
+            "Use sample-audit on <repository> at <revision>. Do not modify application code without authorization.\n",
+            encoding="utf-8",
         )
         self.scenarios_file = self.skill / "references/evaluation-scenarios.json"
         self.scenarios_file.parent.mkdir(parents=True, exist_ok=True)
@@ -567,6 +578,70 @@ class PackageTests(unittest.TestCase):
             )
             errors = validate_skill(package)
             self.assertEqual([], errors, f"{package.name} failed validation: {errors}")
+
+    def test_missing_output_schema_is_rejected(self):
+        self.output_schema.unlink()
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Missing output schema" in error for error in errors),
+            f"Expected missing output schema error, got: {errors}",
+        )
+
+    def test_prompt_lacking_negative_constraints_or_guardrails_is_rejected(self):
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n", encoding="utf-8"
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "prompt template lacks negative constraints or boundary guardrails"
+                in error
+                for error in errors
+            ),
+            f"Expected prompt constraint error, got: {errors}",
+        )
+
+    def test_skill_markdown_lacking_boundary_sections_is_rejected(self):
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract without standard headers.\n'
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("lacks boundary sections" in error for error in errors),
+            f"Expected missing boundary section error, got: {errors}",
+        )
+
+    def test_validation_telemetry_metrics_and_export(self):
+        errors, telemetry = validate_with_telemetry(ROOT)
+        self.assertEqual([], errors)
+        self.assertEqual(51, telemetry["total_packages"])
+        self.assertEqual(51, telemetry["passed_packages"])
+        self.assertEqual(0, telemetry["failed_packages"])
+        self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
+        self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
+        self.assertEqual(1.0, telemetry["deterministic_constraint_coverage"])
+        self.assertEqual(
+            100.0, telemetry["deterministic_constraint_coverage_percentage"]
+        )
+        self.assertEqual(1.0, telemetry["output_schema_coverage"])
+        self.assertEqual(100.0, telemetry["output_schema_coverage_percentage"])
+        self.assertLess(telemetry["execution_time_seconds"], 5.0)
+
+        telemetry_file = self.root / "telemetry.json"
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts/validate_skills.py"),
+            "--telemetry",
+            str(telemetry_file),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        self.assertEqual(0, res.returncode, res.stderr)
+        self.assertIn("Guardrail Pass Rate: 100.0%", res.stdout)
+        self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
+        self.assertTrue(telemetry_file.is_file())
+        exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
+        self.assertEqual(51, exported["total_packages"])
+        self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
 
 
 if __name__ == "__main__":
