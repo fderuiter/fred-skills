@@ -135,16 +135,18 @@ def receipt(state: Path) -> dict:
 
 
 def query_installed(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
 ) -> dict:
     """Read the installation receipt and harness paths for a target destination."""
-    dest = Path(destination).resolve()
-    hosts = read_json(root / "catalog/hosts.json")["hosts"]
     if scope not in {"project", "user"}:
         raise ValueError("Unknown installation scope")
+    if destination is None:
+        destination = Path.home() if scope == "user" else Path.cwd()
+    dest = Path(destination).resolve()
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
 
     if host is not None:
         if host not in hosts:
@@ -188,11 +190,11 @@ def query_installed(
             and "codex" in existing_receipt_hosts
         ):
             raise ValueError(
-                f"Ambiguous host receipts for both codex and antigravity found in destination '{destination}'; please specify --host"
+                f"Ambiguous host receipts for both codex and antigravity found in destination '{dest}'; please specify --host"
             )
         hosts_str = ", ".join(sorted(existing_receipt_hosts))
         raise ValueError(
-            f"Multiple host receipts found ({hosts_str}) in destination '{destination}'; please specify --host"
+            f"Multiple host receipts found ({hosts_str}) in destination '{dest}'; please specify --host"
         )
 
     if len(existing_receipt_hosts) == 1:
@@ -236,7 +238,7 @@ def query_installed(
                 "host": None,
                 "scope": scope,
                 "skills": {},
-                "message": f"No installation receipt found at destination '{destination}'",
+                "message": f"No installation receipt found at destination '{dest}'",
             }
         raise
 

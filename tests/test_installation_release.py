@@ -102,6 +102,55 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual("claude-code", res["host"])
         self.assertIn("sample", res["skills"])
 
+    def test_query_installed_default_destination_none_project_scope(self):
+        self.install()
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        with patch("pathlib.Path.cwd", return_value=self.destination):
+            res = installation.query_installed(
+                destination=None, host="codex", scope="project", root=self.source
+            )
+            self.assertEqual(str(self.destination.resolve()), res["destination"])
+            self.assertEqual("codex", res["host"])
+            self.assertEqual("project", res["scope"])
+            self.assertEqual(str(target), res["target"])
+            self.assertEqual(str(state), res["state"])
+            self.assertIn("sample", res["skills"])
+
+            # Auto-detects host when destination=None
+            res_auto = installation.query_installed(root=self.source)
+            self.assertEqual("codex", res_auto["host"])
+            self.assertIn("sample", res_auto["skills"])
+
+    def test_query_installed_default_destination_none_outside_project_returns_empty_skills(
+        self,
+    ):
+        empty_dir = self.root / "empty-outside-project"
+        empty_dir.mkdir(parents=True)
+        with patch("pathlib.Path.cwd", return_value=empty_dir):
+            res = installation.query_installed(destination=None, root=self.source)
+            self.assertEqual(str(empty_dir.resolve()), res["destination"])
+            self.assertIsNone(res["host"])
+            self.assertEqual({}, res["skills"])
+            self.assertIn("message", res)
+            self.assertIn("No installation receipt found", res["message"])
+
+    def test_query_installed_default_destination_none_user_scope(self):
+        user_home = self.root / "mock-user-home"
+        user_home.mkdir(parents=True)
+        installation.install(
+            user_home, "claude-code", scope="user", pack="starter", root=self.source
+        )
+        with patch("pathlib.Path.home", return_value=user_home):
+            res = installation.query_installed(
+                destination=None, scope="user", root=self.source
+            )
+            self.assertEqual(str(user_home.resolve()), res["destination"])
+            self.assertEqual("claude-code", res["host"])
+            self.assertEqual("user", res["scope"])
+            self.assertIn("sample", res["skills"])
+
     def test_query_installed_ambiguous_hosts_raises_error(self):
         dest = self.root / "conflicting_installed_project"
         (dest / ".agents").mkdir(parents=True)

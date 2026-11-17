@@ -194,7 +194,7 @@ Use repo-audit-behavioral-contracts to inspect API request and response validati
    ```
 2. Check the installation receipt:
    ```sh
-   cat /path/to/project/.fred-skills/gemini-cli-project/receipt.json
+   python scripts/fred.py installed --destination /path/to/project --host gemini-cli
    ```
 
 ---

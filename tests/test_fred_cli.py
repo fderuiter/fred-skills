@@ -19,7 +19,11 @@ FRED_PY = ROOT / "scripts/fred.py"
 
 class FredCLITests(unittest.TestCase):
     def run_cli(
-        self, *args: str, isatty: bool = False, cwd: Path | str | None = None
+        self,
+        *args: str,
+        isatty: bool = False,
+        cwd: Path | str | None = None,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if not isatty:
             return subprocess.run(
@@ -28,6 +32,7 @@ class FredCLITests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 cwd=cwd,
+                env=env,
             )
         if pty is None:
             self.skipTest("pty module is not available on this platform")
@@ -39,6 +44,7 @@ class FredCLITests(unittest.TestCase):
             stderr=slave,
             check=False,
             cwd=cwd,
+            env=env,
         )
         os.close(slave)
         output = b""
@@ -562,6 +568,123 @@ class FredCLITests(unittest.TestCase):
                 "No installation receipt" in proc_tty.stdout
                 or "No entries found." in proc_tty.stdout
             )
+
+    def test_installed_omitting_destination_uses_cwd(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            install_proc = self.run_cli(
+                "install",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "codex",
+                "--pack",
+                "starter",
+            )
+            self.assertEqual(0, install_proc.returncode, install_proc.stderr)
+
+            # Piped JSON omitting --destination
+            proc = self.run_cli(
+                "installed",
+                "--host",
+                "codex",
+                cwd=tmp_dir,
+                isatty=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(str(Path(tmp_dir).resolve()), data["destination"])
+            self.assertEqual("codex", data["host"])
+            self.assertEqual("project", data["scope"])
+            self.assertIn("repo-audit-concurrency", data["skills"])
+
+            # Auto-detected host omitting both --destination and --host
+            proc_auto = self.run_cli(
+                "installed",
+                cwd=tmp_dir,
+                isatty=False,
+            )
+            self.assertEqual(0, proc_auto.returncode, proc_auto.stderr)
+            data_auto = json.loads(proc_auto.stdout)
+            self.assertEqual("codex", data_auto["host"])
+            self.assertIn("repo-audit-concurrency", data_auto["skills"])
+
+            # Interactive terminal omitting --destination
+            proc_tty = self.run_cli(
+                "installed",
+                cwd=tmp_dir,
+                isatty=True,
+            )
+            self.assertEqual(0, proc_tty.returncode, proc_tty.stderr)
+            self.assertIn("repo-audit-concurrency", proc_tty.stdout)
+
+    def test_installed_omitting_destination_empty_directory_returns_empty_skills_with_message(
+        self,
+    ):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Piped JSON
+            proc = self.run_cli(
+                "installed",
+                cwd=tmp_dir,
+                isatty=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual({}, data["skills"])
+            self.assertIn("message", data)
+            self.assertEqual(str(Path(tmp_dir).resolve()), data["destination"])
+
+            # Interactive terminal
+            proc_tty = self.run_cli(
+                "installed",
+                cwd=tmp_dir,
+                isatty=True,
+            )
+            self.assertEqual(0, proc_tty.returncode, proc_tty.stderr)
+            self.assertTrue(
+                "No installation receipt" in proc_tty.stdout
+                or "No entries found." in proc_tty.stdout
+            )
+
+    def test_installed_omitting_destination_user_scope(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as user_home:
+            user_home_resolved = str(Path(user_home).resolve())
+            install_proc = self.run_cli(
+                "install",
+                "--destination",
+                user_home_resolved,
+                "--host",
+                "claude-code",
+                "--scope",
+                "user",
+                "--pack",
+                "starter",
+            )
+            self.assertEqual(0, install_proc.returncode, install_proc.stderr)
+
+            env = dict(
+                os.environ,
+                HOME=user_home_resolved,
+                USERPROFILE=user_home_resolved,
+            )
+            proc = self.run_cli(
+                "installed",
+                "--scope",
+                "user",
+                isatty=False,
+                env=env,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(user_home_resolved, data["destination"])
+            self.assertEqual("user", data["scope"])
+            self.assertEqual("claude-code", data["host"])
+            self.assertIn("repo-audit-concurrency", data["skills"])
 
 
 if __name__ == "__main__":

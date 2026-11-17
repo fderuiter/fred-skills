@@ -316,17 +316,17 @@ The file `receipt.json` located at `<destination>/.fred-skills/<host>-<scope>/re
 2. **Inspect the receipt structure:**
    Check the current recorded skills and hashes:
    ```sh
-   python -c "
-   import json, pathlib
-   p = pathlib.Path('/path/to/project/.fred-skills/<host>-<scope>/receipt.json')
-   if p.exists():
-       data = json.loads(p.read_text())
-       print('Host:', data.get('host'))
-       print('Skills:', list(data.get('skills', {}).keys()))
-       print('History entries:', len(data.get('history', [])))
-   else:
-       print('receipt.json does not exist')
-   "
+   # Inspect installation receipt, recorded skills, and harness paths.
+   # Target project root and host can be explicitly specified:
+   python scripts/fred.py installed --destination /path/to/project --host <host> --scope <scope>
+
+   # Output structured receipt information in machine-readable JSON:
+   python scripts/fred.py installed --destination /path/to/project --host <host> --scope <scope> --json
+
+   # When running directly within the target project root directory,
+   # --destination defaults to the current working directory:
+   python scripts/fred.py installed --host <host> --scope <scope>
+   python scripts/fred.py installed
    ```
 
 3. **Check for local file modifications (hash mismatch):**
