@@ -36,6 +36,8 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Install validation dependencies
         run: python -m pip install -r requirements-dev.txt
+      - name: Run pre-commit validation
+        run: pre-commit run --all-files
       - name: Lint Python sources
         run: ruff check .
       - name: Verify code formatting

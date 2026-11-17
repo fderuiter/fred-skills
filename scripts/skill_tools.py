@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
 
-__all__ = ["ROOT", "extract_relative_links", "read_frontmatter", "suite_members"]
+__all__ = [
+    "ROOT",
+    "build_outputs",
+    "extract_relative_links",
+    "read_frontmatter",
+    "suite_members",
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,3 +83,23 @@ def suite_members(root: Path = ROOT) -> dict[str, dict]:
                     "phase_title": phase["title"],
                 }
     return members
+
+
+def build_outputs(
+    outputs: Mapping[str | Path, str],
+    root: Path = ROOT,
+    check: bool = False,
+    prefix: str = "Stale generated file",
+) -> list[str]:
+    """Materialize generated file outputs, or detect drift when check is True."""
+    problems = []
+    for relative, content in outputs.items():
+        rel_path = Path(relative)
+        path = root / rel_path
+        if check:
+            if not path.is_file() or path.read_bytes() != content.encode("utf-8"):
+                problems.append(f"{prefix}: {rel_path.as_posix()}")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8", newline="\n")
+    return problems

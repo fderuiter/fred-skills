@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fredlib.common import ROOT, read_json
 from fredlib.reports import SCRIPT, STYLE
+from skill_tools import build_outputs
 
 
 def outputs(root: Path = ROOT) -> dict[str, str]:
@@ -52,16 +53,7 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
 
 
 def build(root: Path = ROOT, check: bool = False) -> list[str]:
-    errors = []
-    for name, content in outputs(root).items():
-        path = root / name
-        if check:
-            if not path.exists() or path.read_bytes() != content.encode():
-                errors.append("Stale experience output: " + name)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8", newline="\n")
-    return errors
+    return build_outputs(outputs(root), root=root, check=check)
 
 
 if __name__ == "__main__":
