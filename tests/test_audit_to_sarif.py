@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from sync_audit_resources import sync
+from sync_audit_resources import _safe_relative_path, sync
 
 SCRIPT_PATH = ROOT / "scripts/audit_to_sarif.py"
 SKILL_SCRIPT_PATH = ROOT / "skills/repo-audit-synthesis/scripts/audit_to_sarif.py"
@@ -628,6 +628,88 @@ class AuditToSarifSyncTests(unittest.TestCase):
         self.assertTrue(any("repo-audit-other" in p for p in problems))
         self.assertEqual([], sync(self.temp_root, check=False))
         self.assertFalse(other_script.exists())
+
+    def test_safe_relative_path_valid(self):
+        valid_paths = [
+            "scripts/audit_to_sarif.py",
+            "nested/dir/resource.json",
+            "schemas/v1/schema.json",
+            "simple.txt",
+        ]
+        for p in valid_paths:
+            with self.subTest(path=p):
+                result = _safe_relative_path(p)
+                self.assertIsInstance(result, Path)
+                self.assertEqual(Path(p), result)
+
+    def test_safe_relative_path_rejects_invalid_inputs(self):
+        invalid_paths = [
+            "",
+            "   ",
+            "/absolute/path/file.py",
+            "/etc/passwd",
+            "C:/windows/file.py",
+            "../parent.py",
+            "dir/../../escaped.py",
+            "nested/../escape.py",
+            "scripts/..",
+            r"windows\path\file.py",
+            r"dir\file.py",
+        ]
+        for p in invalid_paths:
+            with self.subTest(path=p):
+                with self.assertRaises(ValueError) as ctx:
+                    _safe_relative_path(p)
+                self.assertIn(f"Invalid shared resource path: {p}", str(ctx.exception))
+
+    def test_sync_manifest_with_invalid_paths_raises_error(self):
+        (self.temp_root / "catalog").mkdir(parents=True)
+        document = {
+            "schema_version": "1.0",
+            "suites": [
+                {
+                    "name": "repository-audits",
+                    "phases": [
+                        {
+                            "id": 4,
+                            "title": "Findings and issue planning",
+                            "skills": ["repo-audit-synthesis"],
+                        }
+                    ],
+                }
+            ],
+        }
+        (self.temp_root / "catalog/suites.json").write_text(json.dumps(document))
+
+        skill_dir = self.temp_root / "skills/repo-audit-synthesis"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: repo-audit-synthesis\ndescription: Test skill\n---\n# Test\n"
+        )
+
+        shared_dir = self.temp_root / "shared/repo-audit"
+        shared_dir.mkdir(parents=True)
+
+        invalid_manifest_cases = [
+            {"files": ["/absolute/path.py"]},
+            {"files": ["../escaped.py"]},
+            {"files": [r"windows\path.py"]},
+            {"files": [""]},
+            {"scripts": {"../outside.py": ["repo-audit-synthesis"]}},
+            {"scripts": ["../outside.py"]},
+            {
+                "scripts": [
+                    {"path": "../outside.py", "skills": ["repo-audit-synthesis"]}
+                ]
+            },
+        ]
+        manifest_file = shared_dir / "manifest.json"
+        for case in invalid_manifest_cases:
+            manifest_file.write_text(json.dumps(case))
+            with self.subTest(case=case):
+                with self.assertRaises(ValueError) as ctx:
+                    sync(self.temp_root, check=True)
+                self.assertIn("Invalid shared resource path:", str(ctx.exception))
 
 
 if __name__ == "__main__":

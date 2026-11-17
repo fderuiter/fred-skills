@@ -27,6 +27,7 @@ def plan(
     exclude: list[str] | None = None,
     config: Path | None = None,
 ) -> tuple[dict, dict]:
+    repo = repo.resolve()
     settings = {}
     if config:
         settings = yaml.safe_load(config.read_text(encoding="utf-8"))
