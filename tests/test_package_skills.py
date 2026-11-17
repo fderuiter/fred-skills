@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import sys
 import tarfile
@@ -13,6 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import package_skills as package_skills_module
+from fredlib.releases import (
+    _collect_skills_entries,
+    _write_tar_entries,
+)
 from package_skills import (
     collect_skill_files,
     get_suite_skills,
@@ -196,6 +202,49 @@ class PackageSkillsTests(unittest.TestCase):
         )
         skills = get_suite_skills(repo_root)
         self.assertEqual(["skill-a", "skill-m", "skill-z"], skills)
+
+    def test_package_skills_does_not_contain_create_tar_gz_bytes(self):
+        self.assertFalse(hasattr(package_skills_module, "create_tar_gz_bytes"))
+
+    def test_write_tar_entries_normalizes_tarinfo_metadata(self):
+        entries = [
+            ("b/file.txt", b"second file"),
+            ("a/file.txt", b"first file"),
+        ]
+        buf = io.BytesIO()
+        with tarfile.open(mode="w", fileobj=buf, format=tarfile.PAX_FORMAT) as tar:
+            _write_tar_entries(tar, entries)
+
+        buf.seek(0)
+        with tarfile.open(mode="r", fileobj=buf) as tar:
+            members = tar.getmembers()
+            self.assertEqual(["a/file.txt", "b/file.txt"], [m.name for m in members])
+            for m in members:
+                self.assertEqual(0o644, m.mode)
+                self.assertEqual(0, m.mtime)
+                self.assertEqual(0, m.uid)
+                self.assertEqual(0, m.gid)
+                self.assertEqual("", m.uname)
+                self.assertEqual("", m.gname)
+            self.assertEqual(b"first file", tar.extractfile(members[0]).read())
+            self.assertEqual(b"second file", tar.extractfile(members[1]).read())
+
+    def test_collect_skills_entries_namespaces_and_sorts_files(self):
+        entries = _collect_skills_entries(["repo-audit-concurrency"], root=ROOT)
+        self.assertGreater(len(entries), 0)
+        paths = [path for path, _ in entries]
+        self.assertIn("repo-audit-concurrency/SKILL.md", paths)
+        for path, data in entries:
+            self.assertTrue(path.startswith("repo-audit-concurrency/"))
+            self.assertGreater(len(data), 0)
+
+        entries_multi = _collect_skills_entries(
+            ["repo-audit-concurrency", "repo-apply-fix"], root=ROOT
+        )
+        prefixes = [p.split("/")[0] for p, _ in entries_multi]
+        first_concurrency_idx = prefixes.index("repo-audit-concurrency")
+        last_apply_fix_idx = len(prefixes) - 1 - prefixes[::-1].index("repo-apply-fix")
+        self.assertLess(last_apply_fix_idx, first_concurrency_idx)
 
 
 if __name__ == "__main__":
