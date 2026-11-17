@@ -45,8 +45,11 @@ def _receipt_identifies_host(
     return False
 
 
-def detect_host(destination: Path, scope: str = "project") -> str:
-    dest = destination.resolve()
+def detect_host(destination: Path | None = None, scope: str = "project") -> str:
+    if destination is None:
+        dest = (Path.home() if scope == "user" else Path.cwd()).resolve()
+    else:
+        dest = destination.resolve()
     marker_map = {
         ".claude": "claude-code",
         ".agents": "codex",
@@ -55,12 +58,12 @@ def detect_host(destination: Path, scope: str = "project") -> str:
     found = [m for m in marker_map if (dest / m).exists()]
     if not found:
         raise ValueError(
-            f"No host markers (.claude, .agents, .gemini) found in destination '{destination}'; please specify --host"
+            f"No host markers (.claude, .agents, .gemini) found in destination '{dest}'; please specify --host"
         )
     if len(found) > 1:
         markers_str = ", ".join(sorted(found))
         raise ValueError(
-            f"Multiple host markers found ({markers_str}) in destination '{destination}'; please specify --host"
+            f"Multiple host markers found ({markers_str}) in destination '{dest}'; please specify --host"
         )
 
     marker = found[0]
@@ -73,7 +76,7 @@ def detect_host(destination: Path, scope: str = "project") -> str:
     has_codex = _receipt_identifies_host(dest, "codex", scope)
     if has_antigravity and has_codex:
         raise ValueError(
-            f"Ambiguous host receipts for both codex and antigravity found in destination '{destination}'; please specify --host"
+            f"Ambiguous host receipts for both codex and antigravity found in destination '{dest}'; please specify --host"
         )
     if has_antigravity:
         return "antigravity"
@@ -81,11 +84,13 @@ def detect_host(destination: Path, scope: str = "project") -> str:
 
 
 def locations(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
 ):
+    if destination is None:
+        destination = Path.home() if scope == "user" else Path.cwd()
     if host is None:
         host = detect_host(destination, scope)
     hosts = read_json(root / "catalog/hosts.json")["hosts"]
@@ -153,7 +158,7 @@ def require_unmodified(path: Path, record: dict | None):
 
 
 def install(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     pack: str | None = None,
@@ -267,7 +272,7 @@ def install(
 
 
 def remove(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     skills: list[str] | None = None,
@@ -319,7 +324,7 @@ def remove(
 
 
 def rollback(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     root: Path = ROOT,
@@ -379,7 +384,7 @@ def rollback(
 
 
 def recover(
-    destination: Path,
+    destination: Path | None = None,
     host: str | None = None,
     scope: str = "project",
     confirm_interrupted: bool = False,

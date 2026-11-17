@@ -348,6 +348,73 @@ class InstallationTests(unittest.TestCase):
             self.assertIsNone(args.host)
             self.assertEqual(self.destination, args.destination)
 
+    def test_cli_parser_makes_destination_optional(self):
+        import fred
+
+        p = fred.parser()
+        for cmd in ["install", "update", "remove", "rollback", "recover-install"]:
+            args = p.parse_args([cmd])
+            self.assertIsNone(args.destination)
+            self.assertIsNone(args.host)
+
+    def test_locations_default_destination_resolution(self):
+        target_proj, state_proj = installation.locations(
+            host="codex", scope="project", root=self.source
+        )
+        self.assertEqual(Path.cwd().resolve() / ".agents/skills", target_proj)
+        self.assertEqual(
+            Path.cwd().resolve() / ".fred-skills/codex-project", state_proj
+        )
+
+        target_user, state_user = installation.locations(
+            host="codex", scope="user", root=self.source
+        )
+        self.assertEqual(Path.home().resolve() / ".agents/skills", target_user)
+        self.assertEqual(Path.home().resolve() / ".fred-skills/codex-user", state_user)
+
+    def test_detect_host_default_destination_and_error_message(self):
+        import os
+
+        empty_dir = self.root / "empty_cwd"
+        empty_dir.mkdir(parents=True)
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(empty_dir)
+            with self.assertRaises(ValueError) as ctx:
+                installation.detect_host(scope="project")
+            self.assertIn(str(empty_dir.resolve()), str(ctx.exception))
+            self.assertIn("--host", str(ctx.exception))
+
+            (empty_dir / ".claude").mkdir()
+            self.assertEqual("claude-code", installation.detect_host(scope="project"))
+        finally:
+            os.chdir(orig_cwd)
+
+        empty_home = self.root / "empty_home"
+        empty_home.mkdir(parents=True)
+        with patch("pathlib.Path.home", return_value=empty_home):
+            with self.assertRaises(ValueError) as ctx:
+                installation.detect_host(scope="user")
+            self.assertIn(str(empty_home.resolve()), str(ctx.exception))
+            self.assertIn("--host", str(ctx.exception))
+
+            (empty_home / ".agents").mkdir()
+            self.assertEqual("codex", installation.detect_host(scope="user"))
+
+    def test_install_without_destination_uses_cwd(self):
+        import os
+
+        proj_dir = self.root / "project_without_dest"
+        (proj_dir / ".claude").mkdir(parents=True)
+        orig_cwd = os.getcwd()
+        try:
+            os.chdir(proj_dir)
+            res = installation.install(pack="starter", root=self.source)
+            self.assertEqual("claude-code", res["host"])
+            self.assertTrue((proj_dir / ".claude/skills/sample/SKILL.md").is_file())
+        finally:
+            os.chdir(orig_cwd)
+
     def test_remove_and_rollback_with_auto_detect_host(self):
         dest = self.root / "auto_remove_rollback"
         (dest / ".claude").mkdir(parents=True)

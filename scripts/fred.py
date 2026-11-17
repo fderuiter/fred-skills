@@ -521,8 +521,9 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument(
             "--destination",
             type=Path,
-            required=True,
-            help="Explicit project root, or home directory with --scope user",
+            required=False,
+            default=None,
+            help="Explicit project root, or home directory with --scope user (defaults to current working directory for project scope, user home directory for user scope)",
         )
         sub.add_argument(
             "--host",

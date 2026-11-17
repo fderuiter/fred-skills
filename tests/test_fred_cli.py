@@ -268,6 +268,24 @@ class FredCLITests(unittest.TestCase):
         for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
             self.assertIn(host, proc.stderr)
 
+        # Also verify without --destination (destination is optional)
+        proc2 = self.run_cli("install", "--host", "invalid")
+        self.assertEqual(2, proc2.returncode)
+        self.assertIn("invalid choice: 'invalid'", proc2.stderr)
+
+    def test_install_without_destination_reports_resolved_directory(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            proc = self.run_cli("install", cwd=tmp_dir)
+            self.assertEqual(1, proc.returncode)
+            self.assertIn(
+                "No host markers (.claude, .agents, .gemini) found in destination",
+                proc.stderr,
+            )
+            self.assertIn(str(Path(tmp_dir).resolve()), proc.stderr)
+            self.assertIn("--host", proc.stderr)
+
     def test_task_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("plan", "/tmp", "--task", "invalid-task")
         self.assertEqual(2, proc.returncode)
