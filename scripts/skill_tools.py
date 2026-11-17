@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import yaml
 
@@ -15,6 +15,7 @@ __all__ = [
     "build_outputs",
     "extract_relative_links",
     "read_frontmatter",
+    "resolve_relative_link_target",
     "suite_members",
 ]
 
@@ -44,6 +45,19 @@ def extract_relative_links(content: str) -> list[str]:
             continue
         relative_paths.append(target)
     return relative_paths
+
+
+def resolve_relative_link_target(target: str, base_dir: Path) -> Path | None:
+    """Resolve a relative markdown link target to an absolute filesystem Path."""
+    target = target.strip().strip("<>\"'")
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        return None
+    raw_path = unquote(parsed.path)
+    clean_path = raw_path.split("#")[0].split("?")[0]
+    if not clean_path:
+        return None
+    return (base_dir / clean_path).resolve()
 
 
 def read_frontmatter(path: Path) -> tuple[dict, str]:
