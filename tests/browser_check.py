@@ -56,6 +56,28 @@ with tempfile.TemporaryDirectory() as temporary:
         ).click()
         assert page.get_by_text("No publication fence", exact=False).count() > 0
         assert not network
+        page.screenshot(path="/tmp/audit_report_with_findings.png")
+        empty_report = Path(temporary) / "empty_report.html"
+        empty_audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        empty_audit["findings"] = []
+        render(empty_audit, empty_report)
+        page_errors = []
+        page.on("pageerror", lambda err: page_errors.append(str(err)))
+        page.goto(empty_report.as_uri())
+        assert not page_errors
+        assert page.locator("article.finding").count() == 0
+        assert page.locator("#query").count() == 0
+        assert page.locator("#status").count() == 0
+        assert page.locator("#empty-state").count() == 0
+        assert page.locator("#reset-filters").count() == 0
+        assert (
+            page.get_by_text(
+                "No findings recorded. Review coverage before drawing conclusions.",
+                exact=True,
+            ).count()
+            == 1
+        )
+        page.screenshot(path="/tmp/empty_audit_report.png")
         page.goto((ROOT / "docs/explorer.html").as_uri())
         count = page.locator("article.finding").count()
         assert count >= 41

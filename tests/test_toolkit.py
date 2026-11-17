@@ -281,6 +281,46 @@ class ReportTests(unittest.TestCase):
             )
             self.assertIn('class="badge badge-critical critical"', page)
 
+    def test_empty_audit_report_omits_filter_controls(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        audit["findings"] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.html"
+            reports.render(audit, path)
+            page = path.read_text()
+            self.assertIn(
+                "<p>No findings recorded. Review coverage before drawing conclusions.</p>",
+                page,
+            )
+            self.assertNotIn('id="query"', page)
+            self.assertNotIn('id="status"', page)
+            self.assertNotIn('id="count"', page)
+            self.assertNotIn('id="empty-state"', page)
+            self.assertNotIn('id="reset-filters"', page)
+            self.assertNotIn("Search findings", page)
+            self.assertNotIn("Evidence status", page)
+            self.assertNotIn('article class="finding"', page)
+
+    def test_audit_report_with_findings_retains_filter_controls(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        self.assertTrue(len(audit["findings"]) > 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "report.html"
+            reports.render(audit, path)
+            page = path.read_text()
+            self.assertIn('id="query"', page)
+            self.assertIn('id="status"', page)
+            self.assertIn('id="count"', page)
+            self.assertIn('id="empty-state"', page)
+            self.assertIn('id="reset-filters"', page)
+            self.assertIn("Search findings", page)
+            self.assertIn("Evidence status", page)
+            self.assertIn('article class="finding"', page)
+            self.assertNotIn(
+                "<p>No findings recorded. Review coverage before drawing conclusions.</p>",
+                page,
+            )
+
     def test_render_output_path_resolution(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
         with tempfile.TemporaryDirectory() as tmp:
