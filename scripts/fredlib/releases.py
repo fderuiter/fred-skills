@@ -6,6 +6,7 @@ import io
 import re
 import tarfile
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 
 from .common import (
@@ -125,18 +126,22 @@ def _write_zip_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> 
             archive.writestr(info, data)
 
 
+def _write_tar_entries(tar: tarfile.TarFile, entries: list[tuple[str, bytes]]) -> None:
+    for name, data in sorted(entries, key=lambda x: x[0]):
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        info.mode = 0o644
+        info.mtime = 0
+        info.uid = 0
+        info.gid = 0
+        info.uname = ""
+        info.gname = ""
+        tar.addfile(info, io.BytesIO(data))
+
+
 def _write_tar_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> None:
     with tarfile.open(archive_path, "w", format=tarfile.PAX_FORMAT) as archive:
-        for name, data in sorted(entries, key=lambda x: x[0]):
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            info.mode = 0o644
-            info.mtime = 0
-            info.uid = 0
-            info.gid = 0
-            info.uname = ""
-            info.gname = ""
-            archive.addfile(info, io.BytesIO(data))
+        _write_tar_entries(archive, entries)
 
 
 def _create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
@@ -145,17 +150,19 @@ def _create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
         gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz,
         tarfile.open(mode="w", fileobj=gz, format=tarfile.PAX_FORMAT) as tar,
     ):
-        for name, data in sorted(entries, key=lambda x: x[0]):
-            info = tarfile.TarInfo(name)
-            info.size = len(data)
-            info.mtime = 0
-            info.mode = 0o644
-            info.uid = 0
-            info.gid = 0
-            info.uname = ""
-            info.gname = ""
-            tar.addfile(info, io.BytesIO(data))
+        _write_tar_entries(tar, entries)
     return buf.getvalue()
+
+
+def _collect_skills_entries(
+    skills: Iterable[str], root: Path = ROOT
+) -> list[tuple[str, bytes]]:
+    entries: list[tuple[str, bytes]] = []
+    for s_name in sorted(skills):
+        pkg = root / "skills" / s_name
+        for rel, data in _collect_skill_files(pkg, root=root):
+            entries.append((f"{s_name}/{rel}", data))
+    return entries
 
 
 def _package_skills(output: Path, root: Path = ROOT) -> dict[str, list[str]]:
@@ -167,9 +174,7 @@ def _package_skills(output: Path, root: Path = ROOT) -> dict[str, list[str]]:
     archive_skills: dict[str, list[str]] = {}
     all_suite_entries: list[tuple[str, bytes]] = []
     for s_name in sorted(suite_skills):
-        pkg = root / "skills" / s_name
-        s_files = _collect_skill_files(pkg, root=root)
-        s_entries = [(f"{s_name}/{rel}", data) for rel, data in s_files]
+        s_entries = _collect_skills_entries([s_name], root=root)
         all_suite_entries.extend(s_entries)
         tar_gz_bytes = _create_tar_gz_bytes(s_entries)
         archive_name = f"{s_name}.tar.gz"
@@ -207,11 +212,7 @@ def build(
             p_skills = choose_skills(root, pack=p)
             packs_map[p] = p_skills
             p_stem = f"fred-skills-{version(root)}-{p}"
-            p_entries = []
-            for s_name in sorted(p_skills):
-                pkg = root / "skills" / s_name
-                for rel, data in _collect_skill_files(pkg, root=root):
-                    p_entries.append((f"{s_name}/{rel}", data))
+            p_entries = _collect_skills_entries(p_skills, root=root)
             zip_name = f"{p_stem}.zip"
             tar_name = f"{p_stem}.tar"
             _write_zip_archive(output / zip_name, p_entries)
@@ -256,11 +257,7 @@ def build(
     if not re.fullmatch(r"[a-z0-9-]+", label):
         raise ValueError("Invalid pack name")
     stem = f"fred-skills-{version(root)}-{label}"
-    entries = []
-    for name in sorted(selected):
-        package = root / "skills" / name
-        for rel, data in _collect_skill_files(package, root=root):
-            entries.append((f"{name}/{rel}", data))
+    entries = _collect_skills_entries(selected, root=root)
     _write_zip_archive(output / (stem + ".zip"), entries)
     _write_tar_archive(output / (stem + ".tar"), entries)
     manifest = {

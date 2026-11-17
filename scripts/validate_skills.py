@@ -5,11 +5,16 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import jsonschema
 import yaml
-from skill_tools import ROOT, extract_relative_links, read_frontmatter, suite_members
+from skill_tools import (
+    ROOT,
+    extract_relative_links,
+    read_frontmatter,
+    resolve_relative_link_target,
+    suite_members,
+)
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 MAX_PROMPT_CHARS = 1200
@@ -149,12 +154,9 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                     jsonschema.Draft202012Validator.check_schema(data)
             if path.suffix == ".md":
                 for target in extract_relative_links(path.read_text(encoding="utf-8")):
-                    parsed = urlsplit(target)
-                    raw_path = unquote(parsed.path)
-                    clean_path = raw_path.split("#")[0].split("?")[0]
-                    if not clean_path:
+                    resolved = resolve_relative_link_target(target, path.parent)
+                    if resolved is None:
                         continue
-                    resolved = (path.parent / clean_path).resolve()
                     if not resolved.is_relative_to(package.resolve()):
                         errors.append(f"Reference escapes standalone package: {target}")
                     elif not resolved.is_file():

@@ -14,7 +14,6 @@ if str(ROOT / "scripts") not in sys.path:
 
 from fredlib.releases import (
     _collect_skill_files,
-    _create_tar_gz_bytes,
     _get_suite_skills,
     _package_skills,
 )
@@ -31,11 +30,6 @@ def collect_skill_files(package_dir: Path) -> list[tuple[str, bytes]]:
     Excludes authoring scripts, tests, root documents, and cache directories.
     """
     return _collect_skill_files(package_dir)
-
-
-def create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
-    """Create a deterministic, reproducible .tar.gz archive from entries: (archive_path, data)."""
-    return _create_tar_gz_bytes(entries)
 
 
 def package_skills(output_dir: Path, root: Path = ROOT) -> dict[str, str]:

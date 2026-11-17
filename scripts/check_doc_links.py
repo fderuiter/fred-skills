@@ -6,9 +6,8 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
-from skill_tools import ROOT, extract_relative_links
+from skill_tools import ROOT, extract_relative_links, resolve_relative_link_target
 
 EXCLUDE_DIRS = {".git", ".venv", "node_modules", "dist", "build", "__pycache__"}
 
@@ -25,14 +24,10 @@ def check_file_links(file_path: Path, root: Path = ROOT) -> list[str]:
     file_dir = file_path.resolve().parent
 
     for target in targets:
-        parsed = urlsplit(target)
-        raw_path = unquote(parsed.path)
-        # Split on fragment or query if any remained
-        clean_path = raw_path.split("#")[0].split("?")[0]
-        if not clean_path:
+        resolved = resolve_relative_link_target(target, file_dir)
+        if resolved is None:
             continue
 
-        resolved = (file_dir / clean_path).resolve()
         if not resolved.exists():
             try:
                 rel_file = file_path.resolve().relative_to(root.resolve())
