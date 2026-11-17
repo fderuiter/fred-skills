@@ -466,6 +466,133 @@ class FredCLITests(unittest.TestCase):
             self.assertTrue(custom_file.is_file())
             self.assertIn("<!doctype html>", custom_file.read_text(encoding="utf-8"))
 
+    def test_report_with_directory_target(self):
+        import shutil
+        import tempfile
+
+        audit_fixture = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "audit_run"
+            run_dir.mkdir()
+            shutil.copyfile(audit_fixture, run_dir / "audit.json")
+            out_file = Path(tmp_dir) / "report.html"
+
+            proc = self.run_cli("report", str(run_dir), "--output", str(out_file))
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertTrue(out_file.is_file())
+            self.assertIn("<!doctype html>", out_file.read_text(encoding="utf-8"))
+
+    def test_report_omitting_audit_argument_uses_cwd(self):
+        import shutil
+        import tempfile
+
+        audit_fixture = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "audit_run"
+            run_dir.mkdir()
+            shutil.copyfile(audit_fixture, run_dir / "audit.json")
+            out_file = Path(tmp_dir) / "report.html"
+
+            proc = self.run_cli("report", "--output", str(out_file), cwd=str(run_dir))
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertTrue(out_file.is_file())
+
+    def test_report_with_directory_missing_audit_fails(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            empty_dir = Path(tmp_dir) / "empty"
+            empty_dir.mkdir()
+            out_file = Path(tmp_dir) / "report.html"
+
+            proc = self.run_cli("report", str(empty_dir), "--output", str(out_file))
+            self.assertEqual(1, proc.returncode)
+            self.assertIn(
+                "Audit ledger 'audit.json' not found in directory", proc.stderr
+            )
+
+    def test_report_omitting_audit_outside_audit_dir_fails(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            empty_dir = Path(tmp_dir) / "empty"
+            empty_dir.mkdir()
+            out_file = Path(tmp_dir) / "report.html"
+
+            proc = self.run_cli("report", "--output", str(out_file), cwd=str(empty_dir))
+            self.assertEqual(1, proc.returncode)
+            self.assertIn(
+                "Audit ledger 'audit.json' not found in directory", proc.stderr
+            )
+
+    def test_issues_with_directory_target_and_omitted_argument(self):
+        import shutil
+        import tempfile
+
+        audit_fixture = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "audit_run"
+            run_dir.mkdir()
+            shutil.copyfile(audit_fixture, run_dir / "audit.json")
+
+            # 1. Pass directory target
+            out_dir1 = Path(tmp_dir) / "issues1"
+            proc1 = self.run_cli("issues", str(run_dir), "--output", str(out_dir1))
+            self.assertEqual(0, proc1.returncode, proc1.stderr)
+            self.assertTrue(out_dir1.is_dir())
+
+            # 2. Omit audit argument in cwd with audit.json
+            out_dir2 = Path(tmp_dir) / "issues2"
+            proc2 = self.run_cli("issues", "--output", str(out_dir2), cwd=str(run_dir))
+            self.assertEqual(0, proc2.returncode, proc2.stderr)
+            self.assertTrue(out_dir2.is_dir())
+
+            # 3. Directory missing audit.json fails
+            empty_dir = Path(tmp_dir) / "empty"
+            empty_dir.mkdir()
+            proc3 = self.run_cli("issues", str(empty_dir), "--output", str(out_dir1))
+            self.assertEqual(1, proc3.returncode)
+            self.assertIn(
+                "Audit ledger 'audit.json' not found in directory", proc3.stderr
+            )
+
+    def test_export_sarif_with_directory_target_and_omitted_argument(self):
+        import shutil
+        import tempfile
+
+        audit_fixture = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_dir = Path(tmp_dir) / "audit_run"
+            run_dir.mkdir()
+            shutil.copyfile(audit_fixture, run_dir / "audit.json")
+
+            # 1. Pass directory target
+            out_file1 = Path(tmp_dir) / "out1.sarif"
+            proc1 = self.run_cli(
+                "export-sarif", str(run_dir), "--output", str(out_file1)
+            )
+            self.assertEqual(0, proc1.returncode, proc1.stderr)
+            self.assertTrue(out_file1.is_file())
+
+            # 2. Omit audit argument in cwd with audit.json
+            out_file2 = Path(tmp_dir) / "out2.sarif"
+            proc2 = self.run_cli(
+                "export-sarif", "--output", str(out_file2), cwd=str(run_dir)
+            )
+            self.assertEqual(0, proc2.returncode, proc2.stderr)
+            self.assertTrue(out_file2.is_file())
+
+            # 3. Directory missing audit.json fails
+            empty_dir = Path(tmp_dir) / "empty"
+            empty_dir.mkdir()
+            proc3 = self.run_cli(
+                "export-sarif", str(empty_dir), "--output", str(out_file1)
+            )
+            self.assertEqual(1, proc3.returncode)
+            self.assertIn(
+                "Audit ledger 'audit.json' not found in directory", proc3.stderr
+            )
+
     def test_installed_table_in_terminal(self):
         import tempfile
 

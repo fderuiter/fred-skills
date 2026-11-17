@@ -13,6 +13,16 @@ def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def resolve_audit_path(path: Path | str | None = None) -> Path:
+    p = Path(path) if path is not None else Path(".")
+    if p.is_dir():
+        audit_file = p / "audit.json"
+        if not audit_file.is_file():
+            raise ValueError(f"Audit ledger 'audit.json' not found in directory: {p}")
+        return audit_file
+    return p
+
+
 def atomic_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".fred-", dir=path.parent)
