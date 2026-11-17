@@ -201,7 +201,13 @@ def parser() -> argparse.ArgumentParser:
         parents=[sub_common],
         help="Inspect repository structure, size, and environment before planning",
     )
-    pre.add_argument("repo", type=Path, help="Path to target repository")
+    pre.add_argument(
+        "repo",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Path to target repository (default: current working directory)",
+    )
     pre.add_argument(
         "--full",
         action="store_true",
@@ -216,7 +222,13 @@ def parser() -> argparse.ArgumentParser:
             else "Initialize an audit run directory with an immutable baseline and task prompt"
         )
         sub = commands.add_parser(command, parents=[sub_common], help=cmd_help)
-        sub.add_argument("repo", type=Path, help="Path to target repository")
+        sub.add_argument(
+            "repo",
+            type=Path,
+            nargs="?",
+            default=Path("."),
+            help="Path to target repository (default: current working directory)",
+        )
         sub.add_argument(
             "--task",
             required=True,
@@ -665,9 +677,10 @@ def dispatch(a: argparse.Namespace) -> Any:
             if query in json.dumps(row, ensure_ascii=False).casefold()
         ]
     if a.command == "preflight":
-        data = repository.preflight(a.repo)
+        data = repository.preflight(a.repo.resolve())
         return data if a.full else concise_environment(data)
     if a.command in {"plan", "init"}:
+        repo = a.repo.resolve()
         options = {
             key: getattr(a, key)
             for key in [
@@ -681,13 +694,13 @@ def dispatch(a: argparse.Namespace) -> Any:
             ]
         }
         if a.command == "plan":
-            plan, preflight = runs.plan(a.repo, **options)
+            plan, preflight = runs.plan(repo, **options)
             return {
                 "plan": plan,
                 "preflight": preflight if a.full else concise_environment(preflight),
             }
         data = runs.initialize(
-            a.repo,
+            repo,
             a.output,
             allow_fixes=a.allow_fixes,
             allow_publication=a.allow_issue_publication,
