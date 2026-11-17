@@ -58,6 +58,42 @@ class ExperienceTests(unittest.TestCase):
         for host in read_json(ROOT / "catalog/hosts.json")["hosts"].values():
             self.assertIn("not-executed", host["behavior_test"])
 
+    def test_domain_specific_task_recipes(self):
+        recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
+        expected_recipes = {
+            "design-architecture": {
+                "skills": [
+                    "arch-decision-record",
+                    "arch-boundary-specification",
+                    "arch-component-decomposition",
+                ],
+                "requires_base": False,
+            },
+            "review-code-changes": {
+                "skills": [
+                    "review-diff-analysis",
+                    "review-invariant-violations",
+                    "review-actionable-feedback",
+                ],
+                "requires_base": True,
+            },
+            "expand-automated-tests": {
+                "skills": [
+                    "test-gap-analysis",
+                    "test-case-generation",
+                    "test-suite-verification",
+                ],
+                "requires_base": False,
+            },
+        }
+        for name, expected in expected_recipes.items():
+            self.assertIn(name, recipes)
+            self.assertEqual(expected["skills"], recipes[name]["skills"])
+            self.assertEqual(expected["requires_base"], recipes[name]["requires_base"])
+            self.assertTrue(recipes[name]["outcome"])
+            self.assertTrue(recipes[name]["workflows"])
+            self.assertTrue(recipes[name]["outputs"])
+
 
 if __name__ == "__main__":
     unittest.main()
