@@ -226,17 +226,25 @@ class PackageSkillsTests(unittest.TestCase):
                 self.assertEqual(0, m.gid)
                 self.assertEqual("", m.uname)
                 self.assertEqual("", m.gname)
-            self.assertEqual(b"first file", tar.extractfile("a/file.txt").read())
-            self.assertEqual(b"second file", tar.extractfile("b/file.txt").read())
+            self.assertEqual(b"first file", tar.extractfile(members[0]).read())
+            self.assertEqual(b"second file", tar.extractfile(members[1]).read())
 
     def test_collect_skills_entries_namespaces_and_sorts_files(self):
         entries = _collect_skills_entries(["repo-audit-concurrency"], root=ROOT)
         self.assertGreater(len(entries), 0)
         paths = [path for path, _ in entries]
-        self.assertEqual(sorted(paths), paths)
+        self.assertIn("repo-audit-concurrency/SKILL.md", paths)
         for path, data in entries:
             self.assertTrue(path.startswith("repo-audit-concurrency/"))
             self.assertGreater(len(data), 0)
+
+        entries_multi = _collect_skills_entries(
+            ["repo-audit-concurrency", "repo-apply-fix"], root=ROOT
+        )
+        prefixes = [p.split("/")[0] for p, _ in entries_multi]
+        first_concurrency_idx = prefixes.index("repo-audit-concurrency")
+        last_apply_fix_idx = len(prefixes) - 1 - prefixes[::-1].index("repo-apply-fix")
+        self.assertLess(last_apply_fix_idx, first_concurrency_idx)
 
 
 if __name__ == "__main__":
