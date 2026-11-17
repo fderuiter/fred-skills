@@ -43,6 +43,7 @@ LIFECYCLE_GROUPS = {
         "triage",
     ],
     "Installation": [
+        "installed",
         "install",
         "update",
         "remove",
@@ -132,6 +133,23 @@ def render_discovery_table(command: str, data: Any) -> str:
                 item.get("description", ""),
             ]
             for item in skills_list
+        ]
+        return format_table(headers, rows)
+    if command == "installed":
+        headers = ["Skill", "Version", "Harness Path"]
+        skills_dict = data.get("skills", {}) if isinstance(data, dict) else {}
+        target = data.get("target", "") if isinstance(data, dict) else ""
+        if not skills_dict:
+            if isinstance(data, dict) and data.get("message"):
+                return data["message"]
+            return "No entries found."
+        rows = [
+            [
+                name,
+                info.get("source_version", "unknown"),
+                str(Path(target) / name) if target else "",
+            ]
+            for name, info in skills_dict.items()
         ]
         return format_table(headers, rows)
     return ""
@@ -496,13 +514,21 @@ def parser() -> argparse.ArgumentParser:
 
     # 4. Installation commands
     install_helps = {
+        "installed": "List installed skills, source versions, and harness paths for a target destination",
         "install": "Install audit skills or packs into an agent host environment",
         "update": "Update previously installed skills to the current version",
         "remove": "Uninstall specific skills from an agent host environment",
         "rollback": "Revert the most recent skill installation or removal operation",
         "recover-install": "Recover from an interrupted skill installation state",
     }
-    for command in ["install", "update", "remove", "rollback", "recover-install"]:
+    for command in [
+        "installed",
+        "install",
+        "update",
+        "remove",
+        "rollback",
+        "recover-install",
+    ]:
         sub = commands.add_parser(
             command, parents=[sub_common], help=install_helps[command]
         )
@@ -525,7 +551,7 @@ def parser() -> argparse.ArgumentParser:
             default="project",
             help="Installation scope: project or user",
         )
-        if command not in {"rollback", "recover-install"}:
+        if command not in {"installed", "rollback", "recover-install"}:
             skill_help = (
                 "Specific skill name to install (can be repeated)"
                 if command in {"install", "update"}
@@ -740,6 +766,8 @@ def dispatch(a: argparse.Namespace) -> Any:
             filter_info=a.filter_info or a.filter_refuted_or_info,
         )
         return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
+    if a.command == "installed":
+        return installation.query_installed(a.destination, a.host, a.scope)
     if a.command in {"install", "update"}:
         return installation.install(
             a.destination,
@@ -821,7 +849,7 @@ def main() -> int:
         print(f"fred-skills: {exc}", file=sys.stderr)
         return 1
     if (
-        args.command in {"tasks", "packs", "hosts", "search"}
+        args.command in {"tasks", "packs", "hosts", "search", "installed"}
         and sys.stdout.isatty()
         and not getattr(args, "as_json", False)
     ):

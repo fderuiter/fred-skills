@@ -59,6 +59,73 @@ class InstallationTests(unittest.TestCase):
                 (target / "sample/SKILL.md").read_bytes(),
             )
 
+    def test_query_installed_returns_installed_skills(self):
+        self.install()
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        res = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertEqual(str(self.destination.resolve()), res["destination"])
+        self.assertEqual("codex", res["host"])
+        self.assertEqual("project", res["scope"])
+        self.assertEqual(str(target), res["target"])
+        self.assertEqual(str(state), res["state"])
+        self.assertIn("sample", res["skills"])
+        self.assertIn("other", res["skills"])
+        self.assertEqual("0.2.0", res["skills"]["sample"]["source_version"])
+        self.assertIn("SKILL.md", res["skills"]["sample"]["files"])
+        self.assertTrue(len(res["skills"]["sample"]["content_hash"]) > 0)
+
+    def test_query_installed_no_receipt_returns_empty_skills_with_message(self):
+        res = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertEqual({}, res["skills"])
+        self.assertIn("message", res)
+        self.assertTrue(len(res["message"]) > 0)
+
+        # Empty destination without specifying host
+        empty_dest = self.root / "empty-project"
+        empty_dest.mkdir(parents=True)
+        res_empty = installation.query_installed(empty_dest, root=self.source)
+        self.assertEqual({}, res_empty["skills"])
+        self.assertIn("message", res_empty)
+
+    def test_query_installed_auto_detects_host(self):
+        claude_dest = self.root / "claude-project"
+        installation.install(
+            claude_dest, "claude-code", pack="starter", root=self.source
+        )
+        res = installation.query_installed(claude_dest, root=self.source)
+        self.assertEqual("claude-code", res["host"])
+        self.assertIn("sample", res["skills"])
+
+    def test_query_installed_ambiguous_hosts_raises_error(self):
+        dest = self.root / "conflicting_installed_project"
+        (dest / ".agents").mkdir(parents=True)
+        state_codex = dest / ".fred-skills/codex-project"
+        state_antigravity = dest / ".fred-skills/antigravity-project"
+        state_codex.mkdir(parents=True)
+        state_antigravity.mkdir(parents=True)
+        atomic_json(
+            state_codex / "receipt.json",
+            {"schema_version": "1.0", "host": "codex", "skills": {}, "history": []},
+        )
+        atomic_json(
+            state_antigravity / "receipt.json",
+            {
+                "schema_version": "1.0",
+                "host": "antigravity",
+                "skills": {},
+                "history": [],
+            },
+        )
+        with self.assertRaises(ValueError) as ctx:
+            installation.query_installed(dest, root=self.source)
+        self.assertIn("Ambiguous host receipts", str(ctx.exception))
+
     def test_update_and_rollback_restore_exact_previous_bytes(self):
         self.install()
         target, _ = installation.locations(
