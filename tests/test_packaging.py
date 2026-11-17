@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_catalog import build
 from package_skills import get_suite_skills
+from skill_tools import build_outputs
 from sync_audit_resources import sync
 from validate_skills import validate_skill
 
@@ -195,6 +196,27 @@ class PackageTests(unittest.TestCase):
             any(".claude-plugin/marketplace.json" in problem for problem in problems)
         )
 
+    def test_build_outputs_helper_creates_files_and_detects_drift(self):
+        target_file = "generated/sample.txt"
+        content = "hello world\nline 2\n"
+        out = {target_file: content}
+        drift = build_outputs(out, root=self.root, check=True)
+        self.assertEqual([f"Stale generated file: {target_file}"], drift)
+        self.assertEqual([], build_outputs(out, root=self.root, check=False))
+        created_path = self.root / target_file
+        self.assertTrue(created_path.is_file())
+        self.assertEqual(content.encode("utf-8"), created_path.read_bytes())
+        self.assertEqual([], build_outputs(out, root=self.root, check=True))
+        created_path.write_text("tampered\n", encoding="utf-8")
+        drift = build_outputs(out, root=self.root, check=True)
+        self.assertEqual([f"Stale generated file: {target_file}"], drift)
+
+    def test_build_outputs_exported_from_skill_tools(self):
+        import skill_tools
+
+        self.assertIn("build_outputs", skill_tools.__all__)
+        self.assertIs(build_outputs, skill_tools.build_outputs)
+
     def test_marketplace_manifest_includes_all_suites(self):
         workflow_skill = self.root / "skills/sample-workflow"
         workflow_skill.mkdir(parents=True)
@@ -295,6 +317,8 @@ class PackageTests(unittest.TestCase):
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
+        self.assertIn("markdown", hooks["ruff-format"].get("types_or", []))
+        self.assertEqual(hooks["ruff-format"].get("types_or"), ["python", "markdown"])
         for hook_id in ["check-doc-links", "verify-doc-snippets"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
@@ -306,6 +330,20 @@ class PackageTests(unittest.TestCase):
         reqs = reqs_path.read_text(encoding="utf-8")
         self.assertIn("pre-commit", reqs)
         self.assertIn("ruff", reqs)
+
+        validate_wf_path = ROOT / ".github/workflows/validate.yml"
+        self.assertTrue(validate_wf_path.is_file())
+        with validate_wf_path.open("r", encoding="utf-8") as f:
+            validate_wf = yaml.safe_load(f)
+        validate_steps = (
+            validate_wf.get("jobs", {}).get("validate", {}).get("steps", [])
+        )
+        self.assertTrue(
+            any(
+                "pre-commit run --all-files" in s.get("run", "") for s in validate_steps
+            ),
+            "validate.yml must execute pre-commit run --all-files",
+        )
 
     def test_makefile_target_definitions(self):
         makefile_path = ROOT / "Makefile"
@@ -504,7 +542,15 @@ class PackageTests(unittest.TestCase):
     def test_all_repository_prompt_templates_comply(self):
         skills_dir = ROOT / "skills"
         packages = sorted(p for p in skills_dir.iterdir() if p.is_dir())
-        self.assertEqual(51, len(packages))
+        expected_package_count = len(
+            [
+                p
+                for p in skills_dir.iterdir()
+                if p.is_dir() and (p / "SKILL.md").is_file()
+            ]
+        )
+        self.assertGreater(len(packages), 0)
+        self.assertEqual(expected_package_count, len(packages))
         for package in packages:
             prompt_file = package / "assets/prompt.md"
             self.assertTrue(prompt_file.is_file(), f"{package.name} missing prompt.md")

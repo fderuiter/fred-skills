@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,7 +19,7 @@ FRED_PY = ROOT / "scripts/fred.py"
 
 class FredCLITests(unittest.TestCase):
     def run_cli(
-        self, *args: str, isatty: bool = False
+        self, *args: str, isatty: bool = False, cwd: Path | str | None = None
     ) -> subprocess.CompletedProcess[str]:
         if not isatty:
             return subprocess.run(
@@ -26,6 +27,7 @@ class FredCLITests(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                cwd=cwd,
             )
         if pty is None:
             self.skipTest("pty module is not available on this platform")
@@ -36,6 +38,7 @@ class FredCLITests(unittest.TestCase):
             stdout=slave,
             stderr=slave,
             check=False,
+            cwd=cwd,
         )
         os.close(slave)
         output = b""
@@ -112,34 +115,135 @@ class FredCLITests(unittest.TestCase):
         self.assertTrue(disc_pos < plan_pos < run_pos < inst_pos < rel_pos)
 
     def test_plan_and_init_parameter_help(self):
-        for cmd in ["plan", "init"]:
+        for cmd in ["preflight", "plan", "init"]:
             proc = self.run_cli(cmd, "--help")
             self.assertEqual(0, proc.returncode, proc.stderr)
             stdout = proc.stdout
 
             self.assertIn("repo", stdout)
-            self.assertIn("--task", stdout)
-            self.assertIn("--mode", stdout)
-            self.assertIn("--budget", stdout)
-            self.assertIn("--base", stdout)
-            self.assertIn("--profile", stdout)
-            self.assertIn("--exclude", stdout)
-            self.assertIn("--config", stdout)
-            self.assertIn("--full", stdout)
+            self.assertIn(
+                "default: current working directory", " ".join(stdout.split())
+            )
+            if cmd in ["plan", "init"]:
+                self.assertIn("--task", stdout)
+                self.assertIn("--mode", stdout)
+                self.assertIn("--budget", stdout)
+                self.assertIn("--base", stdout)
+                self.assertIn("--profile", stdout)
+                self.assertIn("--exclude", stdout)
+                self.assertIn("--config", stdout)
+                self.assertIn("--full", stdout)
 
-            # Check that choices are listed
-            self.assertIn("investigate-bug", stdout)
-            self.assertIn("review-pr", stdout)
-            self.assertIn("explore", stdout)
-            self.assertIn("comprehensive", stdout)
-            self.assertIn("brief", stdout)
-            self.assertIn("balanced", stdout)
-            self.assertIn("deep", stdout)
+                # Check that choices are listed
+                self.assertIn("investigate-bug", stdout)
+                self.assertIn("review-pr", stdout)
+                self.assertIn("explore", stdout)
+                self.assertIn("comprehensive", stdout)
+                self.assertIn("brief", stdout)
+                self.assertIn("balanced", stdout)
+                self.assertIn("deep", stdout)
 
         init_proc = self.run_cli("init", "--help")
         self.assertIn("--output", init_proc.stdout)
         self.assertIn("--allow-fixes", init_proc.stdout)
         self.assertIn("--allow-issue-publication", init_proc.stdout)
+
+    def test_preflight_defaults_to_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            proc = self.run_cli("preflight", "--json", cwd=tmp_path)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(str(tmp_path), data["repository"]["path"])
+            self.assertEqual("unversioned", data["repository"]["revision"])
+
+        proc_root = self.run_cli("preflight", "--json", cwd=ROOT)
+        self.assertEqual(0, proc_root.returncode, proc_root.stderr)
+        data_root = json.loads(proc_root.stdout)
+        self.assertEqual(str(ROOT.resolve()), data_root["repository"]["path"])
+
+    def test_preflight_explicit_path(self):
+        proc = self.run_cli("preflight", str(ROOT), "--json")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertEqual(str(ROOT.resolve()), data["repository"]["path"])
+
+    def test_plan_defaults_to_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            proc = self.run_cli(
+                "plan", "--task", "investigate-bug", "--json", cwd=tmp_path
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertIn("plan", data)
+            self.assertIn("preflight", data)
+            self.assertEqual(str(tmp_path), data["preflight"]["repository"]["path"])
+            self.assertEqual("investigate-bug", data["plan"]["task"])
+
+    def test_plan_explicit_path(self):
+        proc1 = self.run_cli("plan", str(ROOT), "--task", "investigate-bug", "--json")
+        self.assertEqual(0, proc1.returncode, proc1.stderr)
+        data1 = json.loads(proc1.stdout)
+        self.assertEqual(str(ROOT.resolve()), data1["preflight"]["repository"]["path"])
+
+        proc2 = self.run_cli("plan", "--task", "investigate-bug", str(ROOT), "--json")
+        self.assertEqual(0, proc2.returncode, proc2.stderr)
+        data2 = json.loads(proc2.stdout)
+        self.assertEqual(str(ROOT.resolve()), data2["preflight"]["repository"]["path"])
+
+    def test_init_defaults_to_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            run_out = tmp_path / "audit-run"
+            proc = self.run_cli(
+                "init",
+                "--task",
+                "investigate-bug",
+                "--output",
+                str(run_out),
+                "--json",
+                cwd=tmp_path,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(str(run_out), data["output"])
+            self.assertEqual(str(tmp_path), data["run"]["repository"]["path"])
+            self.assertTrue(run_out.is_dir())
+            self.assertTrue((run_out / "run.json").is_file())
+
+    def test_init_explicit_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            run_out = tmp_path / "audit-run-explicit"
+            proc1 = self.run_cli(
+                "init",
+                str(ROOT),
+                "--task",
+                "investigate-bug",
+                "--output",
+                str(run_out),
+                "--json",
+            )
+            self.assertEqual(0, proc1.returncode, proc1.stderr)
+            data1 = json.loads(proc1.stdout)
+            self.assertEqual(str(ROOT.resolve()), data1["run"]["repository"]["path"])
+            self.assertTrue((run_out / "run.json").is_file())
+
+            run_out2 = tmp_path / "audit-run-explicit-2"
+            proc2 = self.run_cli(
+                "init",
+                "--task",
+                "investigate-bug",
+                str(ROOT),
+                "--output",
+                str(run_out2),
+                "--json",
+            )
+            self.assertEqual(0, proc2.returncode, proc2.stderr)
+            data2 = json.loads(proc2.stdout)
+            self.assertEqual(str(ROOT.resolve()), data2["run"]["repository"]["path"])
+            self.assertTrue((run_out2 / "run.json").is_file())
 
     def test_install_parameter_help_and_choices(self):
         proc = self.run_cli("install", "--help")

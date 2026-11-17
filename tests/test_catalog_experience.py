@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -30,6 +31,28 @@ class ExperienceTests(unittest.TestCase):
         page = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
         self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
         self.assertIn('id="reset-filters"', page)
+        self.assertIn(
+            '<a href="#repo-audit-concurrency">repo-audit-concurrency</a>', page
+        )
+        self.assertIn('<article class="finding" id="repo-audit-concurrency"', page)
+        recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
+        for item in recipes.values():
+            for skill in item["skills"]:
+                self.assertIn(f'<a href="#{skill}">{skill}</a>', page)
+                self.assertIn(f'id="{skill}"', page)
+
+    def test_experience_detects_drift(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            catalog_dir = tmp_root / "catalog"
+            catalog_dir.mkdir(parents=True)
+            for file in ["skills.json", "recipes.json", "packs.json", "hosts.json"]:
+                (catalog_dir / file).write_bytes((ROOT / "catalog" / file).read_bytes())
+            self.assertEqual([], build(root=tmp_root))
+            self.assertEqual([], build(root=tmp_root, check=True))
+            (tmp_root / "docs/experience.md").write_text("drift", encoding="utf-8")
+            errors = build(root=tmp_root, check=True)
+            self.assertTrue(any("docs/experience.md" in err for err in errors))
 
     def test_no_host_adapter_claims_behavioral_certification(self):
         for host in read_json(ROOT / "catalog/hosts.json")["hosts"].values():
