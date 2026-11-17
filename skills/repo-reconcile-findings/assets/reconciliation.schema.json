@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remediation Reconciliation Output Format Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "finding_fingerprint_matches",
+    "remediation_state_transitions",
+    "unmapped_records"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finding_fingerprint_matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fingerprint",
+          "finding_id"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "finding_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "match_status": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "ambiguous",
+              "unmatched"
+            ]
+          },
+          "details": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "fingerprint_matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "remediation_state_transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "previous_state",
+          "new_state"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fingerprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "previous_state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in-progress",
+              "fixed-pending-verification",
+              "verified-fixed",
+              "regressed",
+              "accepted-risk",
+              "unknown"
+            ]
+          },
+          "new_state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in-progress",
+              "fixed-pending-verification",
+              "verified-fixed",
+              "regressed",
+              "accepted-risk"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "verification_proof": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "state_transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {
+            "type": "string"
+          },
+          "new_state": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "unmapped_records": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "record_id",
+              "reason"
+            ],
+            "properties": {
+              "record_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fingerprint": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "details": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}
