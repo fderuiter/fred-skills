@@ -12,7 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from check_doc_links import check_docs, check_file_links, extract_relative_links
-from skill_tools import extract_relative_links as skill_tools_extract_relative_links
+from skill_tools import (
+    extract_relative_links as skill_tools_extract_relative_links,
+)
+from skill_tools import (
+    resolve_relative_link_target,
+)
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
     discover_doc_blocks,
@@ -83,6 +88,82 @@ class DocLinkVerificationTests(unittest.TestCase):
         self.assertIn("docs/api.md", links)
         self.assertIn("images/logo.svg", links)
         self.assertIn("docs/reference.md", links)
+
+    def test_resolve_relative_link_target_path_resolution(self):
+        """Relative link targets resolve to absolute Paths against base directories."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir).resolve()
+            self.assertEqual(
+                base_dir / "target.md",
+                resolve_relative_link_target("target.md", base_dir),
+            )
+            self.assertEqual(
+                base_dir / "sub" / "doc.md",
+                resolve_relative_link_target("sub/doc.md", base_dir),
+            )
+            self.assertEqual(
+                base_dir.parent / "sibling.md",
+                resolve_relative_link_target("../sibling.md", base_dir),
+            )
+
+    def test_resolve_relative_link_target_anchor_and_query_stripping(self):
+        """Anchors and queries are stripped from link targets; fragment-only links return None."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir).resolve()
+            self.assertEqual(
+                base_dir / "guide.md",
+                resolve_relative_link_target("guide.md#overview", base_dir),
+            )
+            self.assertEqual(
+                base_dir / "api.md",
+                resolve_relative_link_target("api.md?version=2#endpoint", base_dir),
+            )
+            self.assertIsNone(resolve_relative_link_target("#heading", base_dir))
+            self.assertIsNone(resolve_relative_link_target("", base_dir))
+            self.assertIsNone(resolve_relative_link_target("   ", base_dir))
+
+    def test_resolve_relative_link_target_percent_decoding(self):
+        """Percent-encoded characters in paths are properly unquoted."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir).resolve()
+            self.assertEqual(
+                base_dir / "my document.md",
+                resolve_relative_link_target("my%20document.md", base_dir),
+            )
+            self.assertEqual(
+                base_dir / "folder with spaces" / "doc.md",
+                resolve_relative_link_target(
+                    "folder%20with%20spaces/doc.md#intro", base_dir
+                ),
+            )
+
+    def test_resolve_relative_link_target_ignores_external_schemes(self):
+        """External links with schemes or network locations return None."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir).resolve()
+            self.assertIsNone(
+                resolve_relative_link_target("https://example.com/guide.md", base_dir)
+            )
+            self.assertIsNone(
+                resolve_relative_link_target("http://example.com/page", base_dir)
+            )
+            self.assertIsNone(
+                resolve_relative_link_target("//example.com/path", base_dir)
+            )
+            self.assertIsNone(
+                resolve_relative_link_target("mailto:user@example.com", base_dir)
+            )
+
+    def test_resolve_relative_link_target_exported_from_skill_tools(self):
+        """resolve_relative_link_target is exported from skill_tools and shared."""
+        import check_doc_links
+        import skill_tools
+
+        self.assertIn("resolve_relative_link_target", skill_tools.__all__)
+        self.assertIs(
+            resolve_relative_link_target,
+            check_doc_links.resolve_relative_link_target,
+        )
 
     def test_cli_rejects_removed_check_flag(self):
         """CLI parser for check_doc_links must reject the removed --check flag."""
