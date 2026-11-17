@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from skill_tools import ROOT, suite_members
+
+
+def _safe_relative_path(raw_path: str) -> Path:
+    if not raw_path or not raw_path.strip() or "\\" in raw_path:
+        raise ValueError(f"Invalid shared resource path: {raw_path}")
+    rel = Path(raw_path)
+    if (
+        rel.is_absolute()
+        or raw_path.startswith("/")
+        or PureWindowsPath(raw_path).is_absolute()
+        or ".." in rel.parts
+    ):
+        raise ValueError(f"Invalid shared resource path: {raw_path}")
+    return rel
 
 
 def sync(root: Path = ROOT, check: bool = False) -> list[str]:
@@ -24,9 +38,7 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                 continue
             file_targets: list[tuple[str, Path]] = []
             for relative in manifest.get("files", []):
-                rel = Path(relative)
-                if rel.is_absolute() or ".." in rel.parts or "\\" in relative:
-                    raise ValueError(f"Invalid shared resource path: {relative}")
+                rel = _safe_relative_path(relative)
                 source = shared / "resources" / rel
                 file_targets.append((relative, source))
 
@@ -34,9 +46,7 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
             if isinstance(scripts, dict):
                 for s_path, s_targets in scripts.items():
                     if name in s_targets:
-                        rel = Path(s_path)
-                        if rel.is_absolute() or ".." in rel.parts or "\\" in s_path:
-                            raise ValueError(f"Invalid shared resource path: {s_path}")
+                        rel = _safe_relative_path(s_path)
                         source = shared / "resources" / rel
                         if not source.is_file():
                             source = root / rel
@@ -44,9 +54,7 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
             elif isinstance(scripts, list):
                 for s_item in scripts:
                     if isinstance(s_item, str):
-                        rel = Path(s_item)
-                        if rel.is_absolute() or ".." in rel.parts or "\\" in s_item:
-                            raise ValueError(f"Invalid shared resource path: {s_item}")
+                        rel = _safe_relative_path(s_item)
                         if s_item == "scripts/audit_to_sarif.py":
                             if name == "repo-audit-synthesis":
                                 source = shared / "resources" / rel
@@ -69,15 +77,7 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                         rel_path = s_item.get("path") or s_item.get("file")
                         targets = s_item.get("targets") or s_item.get("skills", [])
                         if rel_path and name in targets:
-                            rel = Path(rel_path)
-                            if (
-                                rel.is_absolute()
-                                or ".." in rel.parts
-                                or "\\" in rel_path
-                            ):
-                                raise ValueError(
-                                    f"Invalid shared resource path: {rel_path}"
-                                )
+                            rel = _safe_relative_path(rel_path)
                             source = shared / "resources" / rel
                             if not source.is_file():
                                 source = root / rel

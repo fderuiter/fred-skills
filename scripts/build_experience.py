@@ -33,13 +33,16 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
     for entry in catalog:
         e = lambda key, entry=entry: escape(str(entry.get(key, "")), quote=True)
         cards.append(
-            f'<article class="finding" data-status="{e("suite")}"><h2><a href="../{e("path")}">{e("title")}</a></h2><p><code>{e("name")}</code></p><p>{e("description")}</p><p>Symptoms: {escape(", ".join(entry.get("symptoms", [])))}</p><p>Maturity: {e("maturity")}</p><details><summary>Inputs and outcomes</summary><p>{escape("; ".join(entry.get("expected_inputs", [])))}</p><p>{escape("; ".join(entry.get("outcomes", [])))}</p><p>{e("behavior_evaluation")}</p></details></article>'
+            f'<article class="finding" id="{e("name")}" data-status="{e("suite")}"><h2><a href="../{e("path")}">{e("title")}</a></h2><p><code>{e("name")}</code></p><p>{e("description")}</p><p>Symptoms: {escape(", ".join(entry.get("symptoms", [])))}</p><p>Maturity: {e("maturity")}</p><details><summary>Inputs and outcomes</summary><p>{escape("; ".join(entry.get("expected_inputs", [])))}</p><p>{escape("; ".join(entry.get("outcomes", [])))}</p><p>{e("behavior_evaluation")}</p></details></article>'
         )
     tasks = "".join(
         f"<details><summary>{escape(name)} — {escape(item['outcome'])}</summary><pre>python scripts/fred.py plan /path/to/repo --task {escape(name)}"
         + (" --mode changes --base main" if item.get("requires_base") else "")
         + "</pre><p>"
-        + escape(", ".join(item["skills"]))
+        + ", ".join(
+            f'<a href="#{escape(skill, quote=True)}">{escape(skill)}</a>'
+            for skill in item["skills"]
+        )
         + "</p></details>"
         for name, item in recipes.items()
     )
