@@ -653,10 +653,11 @@ class FredCLITests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as user_home:
+            user_home_resolved = str(Path(user_home).resolve())
             install_proc = self.run_cli(
                 "install",
                 "--destination",
-                user_home,
+                user_home_resolved,
                 "--host",
                 "claude-code",
                 "--scope",
@@ -666,7 +667,11 @@ class FredCLITests(unittest.TestCase):
             )
             self.assertEqual(0, install_proc.returncode, install_proc.stderr)
 
-            env = dict(os.environ, HOME=user_home)
+            env = dict(
+                os.environ,
+                HOME=user_home_resolved,
+                USERPROFILE=user_home_resolved,
+            )
             proc = self.run_cli(
                 "installed",
                 "--scope",
@@ -676,7 +681,7 @@ class FredCLITests(unittest.TestCase):
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
             data = json.loads(proc.stdout)
-            self.assertEqual(str(Path(user_home).resolve()), data["destination"])
+            self.assertEqual(user_home_resolved, data["destination"])
             self.assertEqual("user", data["scope"])
             self.assertEqual("claude-code", data["host"])
             self.assertIn("repo-audit-concurrency", data["skills"])
