@@ -31,7 +31,7 @@ To automatically format code and apply safe lint fixes with Ruff, repair drift, 
 make fix
 ```
 
-Or run pre-commit hooks:
+Or run pre-commit hooks for Markdown and Python formatting verification (pre-commit validates both Python source code and Markdown documentation):
 
 ```sh
 pre-commit install
