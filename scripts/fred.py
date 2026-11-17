@@ -781,29 +781,36 @@ def dispatch(a: argparse.Namespace) -> Any:
         )
         return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
     if a.command == "installed":
-        return installation.query_installed(a.destination, a.host, a.scope)
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        return installation.query_installed(target)
     if a.command in {"install", "update"}:
-        return installation.install(
-            a.destination,
-            a.host,
-            a.scope,
-            a.pack,
-            a.skill,
-            a.command == "update",
-            a.dry_run,
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.InstallOptions(
+            pack=a.pack,
+            skills=a.skill,
+            update=a.command == "update",
+            dry_run=a.dry_run,
         )
+        return installation.install(target, options)
     if a.command == "remove":
         if not a.skill:
             raise ValueError(
                 "Remove requires at least one --skill; there is no implicit remove-all"
             )
-        return installation.remove(a.destination, a.host, a.scope, a.skill, a.dry_run)
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.RemoveOptions(skills=a.skill, dry_run=a.dry_run)
+        return installation.remove(target, options)
     if a.command == "rollback":
-        return installation.rollback(a.destination, a.host, a.scope)
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.RollbackOptions(target=target)
+        return installation.rollback(target, options)
     if a.command == "recover-install":
-        return installation.recover(
-            a.destination, a.host, a.scope, a.confirm_interrupted
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.RecoverOptions(
+            confirm_interrupted=a.confirm_interrupted,
+            target=target,
         )
+        return installation.recover(target, options)
     if a.command == "evaluate":
         argv = (
             a.adapter_argv
