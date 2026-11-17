@@ -64,6 +64,20 @@ with tempfile.TemporaryDirectory() as temporary:
         page.get_by_label("Task or symptom").fill("")
         page.get_by_label("Family").select_option("repository-workflows")
         assert page.locator("article.finding:visible").count() == 6
+        target_card = page.locator("article#repo-audit-concurrency")
+        assert not target_card.is_visible()
+        page.get_by_label("Family").select_option("")
+        assert page.locator("article.finding:visible").count() == count
+        assert target_card.is_visible()
+        page.get_by_text(
+            "review-pr — Review changed behavior and affected contracts.",
+            exact=True,
+        ).click()
+        skill_link = page.locator('a[href="#repo-audit-concurrency"]').first
+        assert skill_link.is_visible()
+        skill_link.click()
+        assert target_card.is_visible()
+        assert page.url.endswith("#repo-audit-concurrency")
         if args.screenshot:
             args.screenshot.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(args.screenshot))
