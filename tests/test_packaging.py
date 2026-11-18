@@ -682,15 +682,14 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(mypy_cfg.get("namespace_packages"))
         self.assertTrue(mypy_cfg.get("show_error_codes"))
         excludes = mypy_cfg.get("exclude", [])
-        self.assertTrue(
-            any(
-                re.search(
-                    pattern, "skills/repo-audit-synthesis/scripts/audit_to_sarif.py"
-                )
-                for pattern in excludes
-            ),
-            "Synced audit_to_sarif.py copy must be excluded from batch mypy discovery",
-        )
+        for candidate_path in (
+            "skills/repo-audit-synthesis/scripts/audit_to_sarif.py",
+            r"skills\repo-audit-synthesis\scripts\audit_to_sarif.py",
+        ):
+            self.assertTrue(
+                any(re.search(pattern, candidate_path) for pattern in excludes),
+                f"Synced audit_to_sarif.py copy ({candidate_path}) must be excluded from batch mypy discovery",
+            )
         overrides = mypy_cfg.get("overrides", [])
         self.assertEqual(len(overrides), 1)
         self.assertEqual(overrides[0].get("module"), ["playwright", "playwright.*"])
@@ -730,6 +729,27 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(
             any("python -m mypy" in s.get("run", "") for s in win_steps),
             "validate.yml Windows fallback must include python -m mypy",
+        )
+
+        alt_platform = "linux" if sys.platform == "win32" else "win32"
+        cross_check = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "mypy",
+                "--platform",
+                alt_platform,
+                "--no-incremental",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            cross_check.returncode,
+            f"mypy failed for --platform {alt_platform}:\n{cross_check.stdout}\n{cross_check.stderr}",
         )
 
     def test_mypy_cache_excluded_from_gitignore_and_repository_snapshot(self) -> None:
