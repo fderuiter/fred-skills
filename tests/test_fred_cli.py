@@ -817,5 +817,114 @@ class FredCLITests(unittest.TestCase):
             self.assertIn("repo-audit-concurrency", data["skills"])
 
 
+class FredDispatchRegistryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import fred
+
+        cls.fred = fred
+
+    def test_dispatch_cyclomatic_complexity_below_five(self):
+        """Primary dispatch function cyclomatic complexity must be strictly less than 5."""
+        import ast
+
+        def calculate_complexity(node):
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+            return complexity
+
+        tree = ast.parse((ROOT / "scripts/fred.py").read_text(encoding="utf-8"))
+        dispatch_node = None
+        for item in tree.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "dispatch":
+                dispatch_node = item
+                break
+        self.assertIsNotNone(dispatch_node)
+        score = calculate_complexity(dispatch_node)
+        self.assertLess(score, 5, f"dispatch complexity {score} exceeds limit of 5")
+
+    def test_dispatch_nesting_depth_at_most_one(self):
+        """Primary dispatch function maximum control flow nesting depth must not exceed 1."""
+        import ast
+
+        def max_nesting_depth(node, depth=0):
+            max_depth = depth
+            for child in ast.iter_child_nodes(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.Try,
+                        ast.With,
+                        ast.AsyncWith,
+                    ),
+                ):
+                    child_depth = max_nesting_depth(child, depth + 1)
+                else:
+                    child_depth = max_nesting_depth(child, depth)
+                max_depth = max(max_depth, child_depth)
+            return max_depth
+
+        tree = ast.parse((ROOT / "scripts/fred.py").read_text(encoding="utf-8"))
+        dispatch_node = None
+        for item in tree.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "dispatch":
+                dispatch_node = item
+                break
+        self.assertIsNotNone(dispatch_node)
+        depth = max_nesting_depth(dispatch_node)
+        self.assertLessEqual(depth, 1, f"dispatch nesting depth {depth} exceeds 1")
+
+    def test_dispatch_registry_maps_all_twenty_seven_commands(self):
+        """COMMAND_REGISTRY must contain all 27 subcommands across all lifecycle groups."""
+        expected_commands = {
+            cmd for cmds in self.fred.LIFECYCLE_GROUPS.values() for cmd in cmds
+        }
+        self.assertEqual(27, len(expected_commands))
+        self.assertEqual(expected_commands, set(self.fred.COMMAND_REGISTRY.keys()))
+        self.assertEqual(self.fred.COMMAND_REGISTRY, self.fred.DISPATCH_REGISTRY)
+
+    def test_unregistered_command_raises_value_error(self):
+        """Dispatching an unregistered command must raise ValueError."""
+        import argparse
+
+        with self.assertRaises(ValueError):
+            self.fred.dispatch(argparse.Namespace(command="unregistered-subcommand"))
+
+    def test_domain_handlers_callable(self):
+        """All 7 domain handlers must exist and be callable."""
+        handlers = [
+            self.fred.handle_catalog,
+            self.fred.handle_repository,
+            self.fred.handle_runs,
+            self.fred.handle_installation,
+            self.fred.handle_reporting,
+            self.fred.handle_release,
+            self.fred.handle_diagnostics,
+        ]
+        for handler in handlers:
+            self.assertTrue(callable(handler))
+
+
 if __name__ == "__main__":
     unittest.main()

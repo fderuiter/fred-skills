@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -709,7 +710,7 @@ def concise_environment(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def dispatch(a: argparse.Namespace) -> Any:
+def handle_catalog(a: argparse.Namespace) -> Any:
     if a.command in {"tasks", "packs", "hosts"}:
         filename = {"tasks": "recipes", "packs": "packs", "hosts": "hosts"}[a.command]
         return read_json(ROOT / "catalog" / (filename + ".json"))
@@ -721,23 +722,35 @@ def dispatch(a: argparse.Namespace) -> Any:
             for row in rows
             if query in json.dumps(row, ensure_ascii=False).casefold()
         ]
+    raise ValueError(f"Unknown catalog command: {a.command}")
+
+
+def handle_repository(a: argparse.Namespace) -> Any:
     if a.command == "preflight":
         data = repository.preflight(a.repo.resolve())
         return data if a.full else concise_environment(data)
+    raise ValueError(f"Unknown repository command: {a.command}")
+
+
+def _extract_run_options(a: argparse.Namespace) -> dict[str, Any]:
+    return {
+        key: getattr(a, key)
+        for key in [
+            "task",
+            "mode",
+            "budget",
+            "base",
+            "profile",
+            "exclude",
+            "config",
+        ]
+    }
+
+
+def handle_runs(a: argparse.Namespace) -> Any:
     if a.command in {"plan", "init"}:
         repo = a.repo.resolve()
-        options = {
-            key: getattr(a, key)
-            for key in [
-                "task",
-                "mode",
-                "budget",
-                "base",
-                "profile",
-                "exclude",
-                "config",
-            ]
-        }
+        options = _extract_run_options(a)
         if a.command == "plan":
             plan, preflight = runs.plan(repo, **options)
             return {
@@ -768,6 +781,49 @@ def dispatch(a: argparse.Namespace) -> Any:
         data = runs.memory(a.directory)
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
+    if a.command == "compare":
+        return runs.compare(read_json(a.before), read_json(a.after))
+    if a.command == "reconcile":
+        return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
+    if a.command == "import-sarif":
+        data = runs.import_sarif(a.source)
+        atomic_json(a.output, data)
+        return {"observations": len(data["observations"]), "output": str(a.output)}
+    raise ValueError(f"Unknown runs command: {a.command}")
+
+
+def handle_installation(a: argparse.Namespace) -> Any:
+    target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+    if a.command == "installed":
+        return installation.query_installed(target)
+    if a.command in {"install", "update"}:
+        options = installation.InstallOptions(
+            pack=a.pack,
+            skills=a.skill,
+            update=a.command == "update",
+            dry_run=a.dry_run,
+        )
+        return installation.install(target, options)
+    if a.command == "remove":
+        if not a.skill:
+            raise ValueError(
+                "Remove requires at least one --skill; there is no implicit remove-all"
+            )
+        options = installation.RemoveOptions(skills=a.skill, dry_run=a.dry_run)
+        return installation.remove(target, options)
+    if a.command == "rollback":
+        options = installation.RollbackOptions(target=target)
+        return installation.rollback(target, options)
+    if a.command == "recover-install":
+        options = installation.RecoverOptions(
+            confirm_interrupted=a.confirm_interrupted,
+            target=target,
+        )
+        return installation.recover(target, options)
+    raise ValueError(f"Unknown installation command: {a.command}")
+
+
+def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
         target = reports.render(
             read_json(resolve_audit_path(a.audit)),
@@ -782,14 +838,6 @@ def dispatch(a: argparse.Namespace) -> Any:
             ),
             "remote_writes": 0,
         }
-    if a.command == "compare":
-        return runs.compare(read_json(a.before), read_json(a.after))
-    if a.command == "reconcile":
-        return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
-    if a.command == "import-sarif":
-        data = runs.import_sarif(a.source)
-        atomic_json(a.output, data)
-        return {"observations": len(data["observations"]), "output": str(a.output)}
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
 
@@ -800,86 +848,117 @@ def dispatch(a: argparse.Namespace) -> Any:
             filter_info=a.filter_info or a.filter_refuted_or_info,
         )
         return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
-    if a.command == "installed":
-        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
-        return installation.query_installed(target)
-    if a.command in {"install", "update"}:
-        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
-        options = installation.InstallOptions(
-            pack=a.pack,
-            skills=a.skill,
-            update=a.command == "update",
-            dry_run=a.dry_run,
-        )
-        return installation.install(target, options)
-    if a.command == "remove":
-        if not a.skill:
-            raise ValueError(
-                "Remove requires at least one --skill; there is no implicit remove-all"
-            )
-        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
-        options = installation.RemoveOptions(skills=a.skill, dry_run=a.dry_run)
-        return installation.remove(target, options)
-    if a.command == "rollback":
-        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
-        options = installation.RollbackOptions(target=target)
-        return installation.rollback(target, options)
-    if a.command == "recover-install":
-        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
-        options = installation.RecoverOptions(
-            confirm_interrupted=a.confirm_interrupted,
-            target=target,
-        )
-        return installation.recover(target, options)
+    raise ValueError(f"Unknown reporting command: {a.command}")
+
+
+def _validate_adapter_argv(adapter_argv: Any) -> list[str]:
+    argv = adapter_argv if isinstance(adapter_argv, list) else json.loads(adapter_argv)
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or any(not isinstance(arg, str) for arg in argv)
+    ):
+        raise ValueError("Adapter argv must be a nonempty JSON array of strings")
+    return argv
+
+
+def handle_release(a: argparse.Namespace) -> Any:
     if a.command == "evaluate":
-        argv = (
-            a.adapter_argv
-            if isinstance(a.adapter_argv, list)
-            else json.loads(a.adapter_argv)
-        )
-        if (
-            not isinstance(argv, list)
-            or not argv
-            or any(not isinstance(arg, str) for arg in argv)
-        ):
-            raise ValueError("Adapter argv must be a nonempty JSON array of strings")
+        argv = _validate_adapter_argv(a.adapter_argv)
         return evaluations.evaluate(a.output, argv, a.case, a.repeats, a.timeout)
     if a.command == "release":
         return releases.build(a.output, a.pack, all_packs=a.all)
     if a.command == "verify-release":
         return releases.verify(a.manifest)
-    if a.command == "triage":
-        workspace = a.workspace or a.workspace_dir
-        output_dir = a.output or a.output_dir
+    raise ValueError(f"Unknown release command: {a.command}")
 
-        import importlib.util
 
-        script_path = ROOT / "skills/repo-audit-diagnostics/scripts/triage.py"
-        if not script_path.is_file():
-            raise ValueError(f"Triage script not found at {script_path}")
-        spec = importlib.util.spec_from_file_location("diagnostics_triage", script_path)
-        triage = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(triage)
+def _load_triage_module() -> Any:
+    import importlib.util
 
-        transcript = a.transcript or a.transcript_opt
-        if not transcript:
-            if workspace and workspace.is_dir():
-                transcript = triage.discover_transcript(workspace)
-                print(f"Discovered transcript: {transcript}", file=sys.stderr)
-            elif workspace:
-                raise ValueError(f"Workspace directory not found: {workspace}")
-            else:
-                raise ValueError("Transcript file path is required")
-        if not transcript.is_file():
-            raise ValueError(f"Transcript file not found: {transcript}")
+    script_path = ROOT / "skills/repo-audit-diagnostics/scripts/triage.py"
+    if not script_path.is_file():
+        raise ValueError(f"Triage script not found at {script_path}")
+    spec = importlib.util.spec_from_file_location("diagnostics_triage", script_path)
+    triage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(triage)
+    return triage
 
-        bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
-        if a.check_schema:
-            triage.validate_bundle(bundle)
-        if output_dir:
-            triage.export_bundle(bundle, output_dir)
-        return bundle
-    raise ValueError("Unknown command")
+
+def handle_diagnostics(a: argparse.Namespace) -> Any:
+    if a.command != "triage":
+        raise ValueError(f"Unknown diagnostics command: {a.command}")
+
+    workspace = a.workspace or a.workspace_dir
+    output_dir = a.output or a.output_dir
+
+    triage = _load_triage_module()
+
+    transcript = a.transcript or a.transcript_opt
+    if not transcript:
+        if workspace and workspace.is_dir():
+            transcript = triage.discover_transcript(workspace)
+            print(f"Discovered transcript: {transcript}", file=sys.stderr)
+        elif workspace:
+            raise ValueError(f"Workspace directory not found: {workspace}")
+        else:
+            raise ValueError("Transcript file path is required")
+    if not transcript.is_file():
+        raise ValueError(f"Transcript file not found: {transcript}")
+
+    bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
+    if a.check_schema:
+        triage.validate_bundle(bundle)
+    if output_dir:
+        triage.export_bundle(bundle, output_dir)
+    return bundle
+
+
+COMMAND_REGISTRY: dict[str, Callable[[argparse.Namespace], Any]] = {
+    # Discovery
+    "tasks": handle_catalog,
+    "packs": handle_catalog,
+    "hosts": handle_catalog,
+    "search": handle_catalog,
+    # Planning
+    "preflight": handle_repository,
+    "plan": handle_runs,
+    "init": handle_runs,
+    # Run Management
+    "validate-run": handle_runs,
+    "resume": handle_runs,
+    "checkpoint": handle_runs,
+    "memory": handle_runs,
+    "compare": handle_runs,
+    "reconcile": handle_runs,
+    "import-sarif": handle_runs,
+    # Installation
+    "installed": handle_installation,
+    "install": handle_installation,
+    "update": handle_installation,
+    "remove": handle_installation,
+    "rollback": handle_installation,
+    "recover-install": handle_installation,
+    # Reporting
+    "report": handle_reporting,
+    "issues": handle_reporting,
+    "export-sarif": handle_reporting,
+    # Release
+    "evaluate": handle_release,
+    "release": handle_release,
+    "verify-release": handle_release,
+    # Diagnostics
+    "triage": handle_diagnostics,
+}
+
+DISPATCH_REGISTRY: dict[str, Callable[[argparse.Namespace], Any]] = COMMAND_REGISTRY
+
+
+def dispatch(a: argparse.Namespace) -> Any:
+    handler = COMMAND_REGISTRY.get(getattr(a, "command", None))
+    if handler is None:
+        raise ValueError("Unknown command")
+    return handler(a)
 
 
 def main() -> int:
