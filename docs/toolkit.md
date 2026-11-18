@@ -48,31 +48,36 @@ are prioritization hypotheses; they contain no claims about today's repositories
 
 ```sh
 python scripts/fred.py installed --destination /path/to/project --host claude-code
-python scripts/fred.py installed --destination /path/to/project
+python scripts/fred.py installed --destination /path/to/project --check
 python scripts/fred.py install --destination /path/to/project --host claude-code --pack starter --dry-run
 python scripts/fred.py install --destination /path/to/project --host claude-code --pack starter
+python scripts/fred.py install --destination /path/to/project --host claude-code --pack starter --force
 python scripts/fred.py update --destination /path/to/project --host claude-code --pack starter --dry-run
 python scripts/fred.py update --destination /path/to/project --host claude-code --pack starter
+python scripts/fred.py update --destination /path/to/project --host claude-code --pack starter --force
 python scripts/fred.py remove --destination /path/to/project --host claude-code --skill repo-audit-concurrency --dry-run
 python scripts/fred.py remove --destination /path/to/project --host claude-code --skill repo-audit-concurrency
+python scripts/fred.py remove --destination /path/to/project --host claude-code --skill repo-audit-concurrency --force
 python scripts/fred.py rollback --destination /path/to/project --host claude-code
 ```
 
 `--destination` is optional and defaults to the current working directory for
-project scope or user home for `--scope user`. An explicit project root or home
-directory can also be provided. Preview the resolved target with `--dry-run`. Host
-paths and primary documentation sources are listed in
-[catalog/hosts.json](../catalog/hosts.json). The installer copies packages; host loading,
-auto-activation, context precedence, and model behavior still need real host checks.
+project scope or user home for `--scope user`. `installed` hashes managed packages on disk
+to report `tracked`, `modified`, `missing`, and local `untracked` skills; `--check` exits `1`
+when drift or `operation.lock` is present. Preview targets with `--dry-run`. Host paths and
+primary documentation sources are listed in [catalog/hosts.json](../catalog/hosts.json).
+The installer copies packages; host loading, auto-activation, context precedence, and model
+behavior still need real host checks.
 
 Choose a pack or repeat `--skill`. There is no implicit remove-all. Updates use the
-checked-out toolkit version; nothing is fetched automatically. Review its diff first.
-Unmanaged directories, changed managed content, source symlinks, and escaping targets
-are refused. Receipts and backups live under `.fred-skills/<host>-<scope>/` at the
-explicit destination. Dry runs make no writes. Rollback restores the latest managed
-operation only, after checking current content and backups. Preserve state/backups if
-you need recovery. Do not run different host installers concurrently against the same
-physical target: some hosts share `.agents/skills`.
+checked-out toolkit version; nothing is fetched automatically. Unmanaged directories,
+source symlinks, and escaping targets are always refused. Changed or missing managed skills
+are refused unless `--force` is passed on `install`, `update`, or `remove`, which archives
+modified managed folders under `.fred-skills/<host>-<scope>/backups/` before updating
+`receipt.json` (never touching `untracked` skills). Dry runs make no writes. Rollback
+restores the latest managed operation only, after checking current content and backups.
+Do not run different host installers concurrently against the same physical target: some
+hosts share `.agents/skills`.
 
 An interrupted install/update can leave `operation.lock` and a prepared journal. Inspect
 `operation.json`, verify the previous writer has stopped, and then explicitly run:
