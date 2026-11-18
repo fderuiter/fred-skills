@@ -291,7 +291,7 @@ class PackageTests(unittest.TestCase):
             (self.root / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
         )
         names = [plugin["name"] for plugin in manifest["plugins"]]
-        self.assertEqual(names, ["sample-audit", "sample-workflow"])
+        self.assertEqual(names, ["fred-skills", "sample-audit", "sample-workflow"])
 
     def test_marketplace_manifest_emits_inline_pack_bundles_and_rejects_invalid_packs(
         self,
@@ -316,6 +316,13 @@ class PackageTests(unittest.TestCase):
             manifest["plugins"],
             [
                 {
+                    "name": "fred-skills",
+                    "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
+                    "source": "./",
+                    "strict": False,
+                    "skills": ["./skills/sample-audit"],
+                },
+                {
                     "name": "starter",
                     "description": "Starter bundle.",
                     "source": "./",
@@ -326,6 +333,7 @@ class PackageTests(unittest.TestCase):
                     "name": "sample-audit",
                     "description": "Audit synthetic contracts when explicitly requested.",
                     "source": "./skills/sample-audit",
+                    "skills": ["."],
                 },
             ],
         )
@@ -360,14 +368,23 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(data["name"], "fred-skills")
             self.assertEqual(data["owner"]["name"], "fderuiter")
             plugins = data["plugins"]
-            self.assertEqual(len(plugins), len(suite_skills) + len(packs))
+            self.assertEqual(len(plugins), 1 + len(packs) + len(suite_skills))
             plugin_names = [plugin["name"] for plugin in plugins]
             self.assertEqual(len(plugin_names), len(set(plugin_names)))
             skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
-            pack_plugins = [p for p in plugins if p["source"] == "./"]
-            self.assertEqual(len(skill_plugins) + len(pack_plugins), len(plugins))
+            bundle_plugins = [p for p in plugins if p["source"] == "./"]
+            self.assertEqual(len(skill_plugins) + len(bundle_plugins), len(plugins))
             self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
-            self.assertEqual({p["name"] for p in pack_plugins}, set(packs))
+            self.assertEqual(
+                {p["name"] for p in bundle_plugins}, {"fred-skills", *packs}
+            )
+            suite_plugin = bundle_plugins[0]
+            self.assertEqual(suite_plugin["name"], "fred-skills")
+            self.assertIs(suite_plugin["strict"], False)
+            self.assertEqual(
+                suite_plugin["skills"],
+                [f"./skills/{member}" for member in sorted(suite_skills)],
+            )
             for workflow_skill in get_suite_skills(
                 ROOT, suite_name="repository-workflows"
             ):
@@ -375,9 +392,11 @@ class PackageTests(unittest.TestCase):
             for plugin in skill_plugins:
                 self.assertIn("description", plugin)
                 self.assertNotIn("strict", plugin)
-                entry_file = ROOT / plugin["source"] / "SKILL.md"
-                self.assertTrue(entry_file.is_file())
-            for plugin in pack_plugins:
+                self.assertEqual(plugin["skills"], ["."])
+                for rel_skill in plugin["skills"]:
+                    entry_file = ROOT / plugin["source"] / rel_skill / "SKILL.md"
+                    self.assertTrue(entry_file.is_file())
+            for plugin in bundle_plugins[1:]:
                 expected_pack = packs[plugin["name"]]
                 self.assertEqual(plugin["description"], expected_pack["description"])
                 self.assertIs(plugin["strict"], False)
@@ -385,9 +404,12 @@ class PackageTests(unittest.TestCase):
                     plugin["skills"],
                     [f"./skills/{member}" for member in expected_pack["skills"]],
                 )
+            for plugin in bundle_plugins:
                 for member_source in plugin["skills"]:
                     self.assertTrue(member_source.startswith("./skills/"))
-                    self.assertTrue((ROOT / member_source / "SKILL.md").is_file())
+                    self.assertTrue(
+                        (ROOT / plugin["source"] / member_source / "SKILL.md").is_file()
+                    )
 
         gemini_ext_path = ROOT / "gemini-extension.json"
         self.assertTrue(gemini_ext_path.is_file())
@@ -806,20 +828,33 @@ class PackageTests(unittest.TestCase):
         self.assertIn("complete 51-package pack", usage_text)
         self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
         self.assertIn(
-            "Register the marketplace catalog and install a curated pack (such as `complete` for all 51 packages or `starter`)",
+            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`)",
             usage_text,
         )
+        self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
+        self.assertIn("/plugin install fred-skills@fred-skills", usage_text)
         self.assertIn("/plugin install complete@fred-skills", usage_text)
-        self.assertIn("codex plugin add starter@fred-skills", usage_text)
+        self.assertIn("$skill-installer", usage_text)
+        self.assertIn(".agents/skills/", usage_text)
+        self.assertNotIn("codex plugin", usage_text)
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills)",
             readme_text,
         )
+        self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
+        self.assertIn("/plugin install fred-skills@fred-skills", readme_text)
         self.assertIn("/plugin install complete@fred-skills", readme_text)
-        self.assertIn("codex plugin add starter@fred-skills", readme_text)
+        self.assertIn("$skill-installer", readme_text)
+        self.assertIn(".agents/skills/", readme_text)
+        self.assertNotIn("codex plugin", readme_text)
         self.assertNotIn("single marketplace command", readme_text)
+
+        integration_text = (ROOT / "docs/integration.md").read_text(encoding="utf-8")
+        self.assertIn("/plugin install fred-skills@fred-skills", integration_text)
+        self.assertIn("$skill-installer", integration_text)
+        self.assertNotIn("codex plugin", integration_text)
 
         for doc_name in [
             "docs/architecture.md",

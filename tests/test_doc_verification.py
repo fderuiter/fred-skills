@@ -480,15 +480,13 @@ class DocSnippetVerificationTests(unittest.TestCase):
 
     def test_marketplace_plugin_install_validation(self):
         """Marketplace registration and plugin install commands validate against .claude-plugin/marketplace.json."""
+        self.assertNotIn(("codex", "plugin"), TOOL_DISPATCHERS)
         valid_cmds = [
             "/plugin marketplace add fderuiter/fred-skills",
+            "/plugin install fred-skills@fred-skills",
             "/plugin install complete@fred-skills",
             "/plugin install starter@fred-skills",
             "/plugin install repo-audit-concurrency@fred-skills",
-            "codex plugin marketplace add fderuiter/fred-skills",
-            "codex plugin add starter@fred-skills",
-            "codex plugin add complete@fred-skills",
-            "codex plugin add repo-audit-concurrency@fred-skills",
         ]
         for cmd in valid_cmds:
             ok, msg = execute_snippet_command(cmd, root=ROOT)
@@ -496,19 +494,10 @@ class DocSnippetVerificationTests(unittest.TestCase):
 
         invalid_cmds = [
             ("/plugin install unknown-pack@fred-skills", "Unknown marketplace plugin"),
-            (
-                "codex plugin add unknown-skill@fred-skills",
-                "Unknown marketplace plugin",
-            ),
             ("/plugin install complete@other-market", "Unexpected marketplace"),
             ("/plugin install complete", "requires '<name>@fred-skills'"),
-            ("codex plugin add starter", "requires '<name>@fred-skills'"),
             ("/plugin marketplace add other/repo", "Unexpected plugin id"),
             ("/plugin remove complete@fred-skills", "Unsupported marketplace plugin"),
-            (
-                "codex plugin install starter@fred-skills",
-                "Unsupported marketplace plugin",
-            ),
         ]
         for cmd, expected_err in invalid_cmds:
             ok, msg = execute_snippet_command(cmd, root=ROOT)
@@ -518,7 +507,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertIn(expected_err, msg)
 
     def test_incomplete_marketplace_add_blocks_rejected(self):
-        """Marketplace add blocks in README.md, docs/usage.md, and docs/integration.md must include an install step."""
+        """Marketplace add blocks in README.md, docs/usage.md, and docs/integration.md must include an install step and reject codex plugin."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_root = Path(tmp_dir)
             (tmp_root / ".claude-plugin").mkdir(parents=True)
@@ -532,7 +521,6 @@ class DocSnippetVerificationTests(unittest.TestCase):
                     line
                     for line in content.splitlines()
                     if "/plugin install " not in line
-                    and "codex plugin add " not in line
                 )
                 (tmp_root / rel_path).write_text(stripped + "\n", encoding="utf-8")
 
@@ -542,10 +530,16 @@ class DocSnippetVerificationTests(unittest.TestCase):
                     any("missing '/plugin install" in err for err in errors),
                     f"Expected missing Claude install error for {rel_path}, got: {errors}",
                 )
-                self.assertTrue(
-                    any("missing 'codex plugin add" in err for err in errors),
-                    f"Expected missing Codex install error for {rel_path}, got: {errors}",
-                )
+
+            (tmp_root / "README.md").write_text(
+                "```sh\ncodex plugin marketplace add fderuiter/fred-skills\ncodex plugin add starter@fred-skills\n```\n",
+                encoding="utf-8",
+            )
+            codex_errors = verify_all_snippets(root=tmp_root, files=["README.md"])
+            self.assertTrue(
+                any("Unsupported 'codex plugin'" in err for err in codex_errors),
+                f"Expected codex plugin rejection, got: {codex_errors}",
+            )
 
     def test_line_range_filtering(self):
         """Blocks outside the specified range are ignored."""
@@ -914,8 +908,10 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "curl -LO --invalid-flag https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS",
             "gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills --invalid-flag",
             "/plugin marketplace add fderuiter/fred-skills --invalid-flag",
+            "/plugin install fred-skills@fred-skills --invalid-flag",
             "/plugin install complete@fred-skills --invalid-flag",
-            "codex plugin add starter@fred-skills --invalid-flag",
+            "mkdir -p /path/to/project/.agent/skills/",
+            "ls -la /path/to/project/.agent/skills/repo-audit-concurrency/SKILL.md",
         ]
         for probe in invalid_probes:
             ok, _ = execute_snippet_command(probe, root=ROOT)

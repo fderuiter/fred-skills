@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -530,20 +530,118 @@ def _query_detected_host(dest: Path, scope: str, root: Path) -> dict[str, Any]:
         raise
 
 
+def _dedupe_hosts_by_target(
+    dest: Path, scope: str, hosts: dict[str, Any], candidates: list[str]
+) -> list[str]:
+    seen_targets: set[Path] = set()
+    unique_hosts: list[str] = []
+    for host_name in candidates:
+        rel = relative_path(hosts[host_name][f"{scope}_path"])
+        target = (dest / rel).resolve()
+        if target not in seen_targets:
+            seen_targets.add(target)
+            unique_hosts.append(host_name)
+    return unique_hosts
+
+
+def _marker_preferred_hosts(dest: Path, scope: str, candidates: list[str]) -> list[str]:
+    with_receipt = [h for h in candidates if _receipt_identifies_host(dest, h, scope)]
+    return with_receipt if with_receipt else [candidates[0]]
+
+
+def _collect_marker_candidates(
+    dest: Path,
+    scope: str,
+    active: dict[str, list[str]],
+    receipt_hosts: list[str],
+) -> set[str]:
+    chosen: set[str] = set(receipt_hosts)
+    for candidates in active.values():
+        chosen.update(_marker_preferred_hosts(dest, scope, candidates))
+    return chosen
+
+
+def _detect_workspace_hosts(dest: Path, scope: str, root: Path) -> list[str]:
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    entries = _host_marker_entries(hosts, scope)
+    active = _select_active_markers(dest, scope, hosts, entries)
+    receipt_hosts = _find_receipt_hosts(dest, scope, hosts)
+    if not active and not receipt_hosts:
+        return []
+    chosen = _collect_marker_candidates(dest, scope, active, receipt_hosts)
+    ordered = [h for h in hosts if h in chosen]
+    return _dedupe_hosts_by_target(dest, scope, hosts, ordered)
+
+
+def _check_shared_target_receipts(
+    dest: Path, scope: str, hosts: dict[str, Any], receipt_hosts: list[str]
+) -> None:
+    by_target: dict[Path, list[str]] = {}
+    for host_name in receipt_hosts:
+        rel = relative_path(hosts[host_name][f"{scope}_path"])
+        by_target.setdefault((dest / rel).resolve(), []).append(host_name)
+    for shared in by_target.values():
+        if len(shared) > 1:
+            label = " and ".join(shared)
+            raise ValueError(
+                f"Ambiguous host receipts for both {label} found in destination '{dest}'; please specify --host"
+            )
+
+
+def _merge_multi_host_skills(
+    per_host: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    merged_skills: dict[str, dict[str, Any]] = {}
+    untracked_set: set[str] = set()
+    for host_name, h_res in per_host.items():
+        for s_name, s_info in h_res["skills"].items():
+            agg = merged_skills.setdefault(s_name, {**s_info, "hosts": []})
+            agg["hosts"].append(host_name)
+            if s_info["status"] != "tracked":
+                agg["status"] = s_info["status"]
+        untracked_set.update(h_res["untracked"])
+    return merged_skills, sorted(untracked_set)
+
+
+def _aggregate_multi_host_queries(
+    dest: Path, scope: str, per_host: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    merged_skills, untracked = _merge_multi_host_skills(per_host)
+    locked = any(h_res["locked"] for h_res in per_host.values())
+    healthy = not locked and all(h_res["healthy"] for h_res in per_host.values())
+    res: dict[str, Any] = {
+        "destination": str(dest),
+        "target": None,
+        "state": None,
+        "host": None,
+        "hosts": list(per_host.values()),
+        "targets": {h: h_res["target"] for h, h_res in per_host.items()},
+        "states": {h: h_res["state"] for h, h_res in per_host.items()},
+        "scope": scope,
+        "skills": merged_skills,
+        "untracked": untracked,
+        "locked": locked,
+        "healthy": healthy,
+    }
+    if not merged_skills and not untracked:
+        res["message"] = f"No installation receipt found at destination '{dest}'"
+    return res
+
+
 def _resolve_lifecycle_host(
     dest: Path | None, host: str | None, scope: str, root: Path
 ) -> str:
     if host is not None:
         return host
+    resolved_dest = _coalesce(dest, _default_destination(scope)).resolve()
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    receipt_hosts = _find_receipt_hosts(resolved_dest, scope, hosts)
+    _validate_receipt_hosts(receipt_hosts, resolved_dest)
     try:
         return _resolve_target_host(dest, None, scope, root)
     except ValueError as exc:
         if "No host markers" not in str(exc):
             raise
-        resolved_dest = _coalesce(dest, _default_destination(scope)).resolve()
-        hosts = read_json(root / "catalog/hosts.json")["hosts"]
-        receipt_hosts = _find_receipt_hosts(resolved_dest, scope, hosts)
-        _validate_receipt_hosts(receipt_hosts, resolved_dest)
         if len(receipt_hosts) == 1:
             return receipt_hosts[0]
         raise
@@ -569,10 +667,16 @@ def query_installed(
     if env.host is not None:
         return _query_for_explicit_host(dest, env.host, env.scope, env.root)
     receipt_hosts = _find_receipt_hosts(dest, env.scope, hosts)
-    _validate_receipt_hosts(receipt_hosts, dest)
-    if len(receipt_hosts) == 1:
-        return _query_for_explicit_host(dest, receipt_hosts[0], env.scope, env.root)
-    return _query_detected_host(dest, env.scope, env.root)
+    _check_shared_target_receipts(dest, env.scope, hosts, receipt_hosts)
+    detected = _detect_workspace_hosts(dest, env.scope, env.root)
+    if not detected:
+        return _query_detected_host(dest, env.scope, env.root)
+    if len(detected) == 1:
+        return _query_for_explicit_host(dest, detected[0], env.scope, env.root)
+    per_host = {
+        h: _query_for_explicit_host(dest, h, env.scope, env.root) for h in detected
+    }
+    return _aggregate_multi_host_queries(dest, env.scope, per_host)
 
 
 def checked_target(target: Path, name: str) -> Path:
@@ -806,6 +910,120 @@ def _normalize_install_args(
     return tgt, opt
 
 
+def _resolve_install_hosts(env: TargetEnvironment, update: bool) -> list[str]:
+    if env.scope not in {"project", "user"}:
+        raise ValueError("Unknown installation scope")
+    if env.host is not None:
+        return [env.host]
+    dest = _coalesce(env.destination, _default_destination(env.scope)).resolve()
+    detected = _detect_workspace_hosts(dest, env.scope, env.root)
+    if detected:
+        return detected
+    if not update:
+        return ["codex"]
+    _check_host_markers(dest, env.scope, env.root)
+    return []
+
+
+def _select_install_skills(
+    env: TargetEnvironment, opt: InstallOptions, resolved_hosts: list[str]
+) -> list[str]:
+    if opt.pack or opt.skills:
+        return choose_skills(env.root, opt.pack, opt.skills)
+    if opt.update:
+        managed: list[str] = []
+        for host_name in resolved_hosts:
+            _, state_path = locations(env.destination, host_name, env.scope, env.root)
+            managed.extend(receipt(state_path)["skills"].keys())
+        if managed:
+            return choose_skills(env.root, None, list(dict.fromkeys(managed)))
+    return choose_skills(env.root, "starter", None)
+
+
+def _prepare_host_plan(
+    env: TargetEnvironment,
+    opt: InstallOptions,
+    host_name: str,
+    selected: list[str],
+) -> tuple[Path, Path, dict[str, Any]]:
+    target_path, state_path = locations(env.destination, host_name, env.scope, env.root)
+    current = receipt(state_path)
+    flags = (opt.update, opt.force)
+    for name in selected:
+        _check_install_candidate(
+            target_path, name, current["skills"].get(name), (env.root, opt.force)
+        )
+    _validate_install_target_skills(target_path, selected, current, flags)
+    preview = {
+        "action": "update" if opt.update else "install",
+        "skills": selected,
+        "host": host_name,
+        "scope": env.scope,
+        "target": str(target_path),
+        "dry_run": opt.dry_run,
+        "source_version": version(env.root),
+        "runtime_behavior_verified": False,
+    }
+    return target_path, state_path, preview
+
+
+def _rollback_committed_hosts(committed: list[tuple[Path, Path]]) -> None:
+    for target_path, state_path in reversed(committed):
+        current = receipt(state_path)
+        action, backups = _validate_rollback_state(state_path, target_path, current)
+        _execute_rollback_operation(state_path, target_path, current, (action, backups))
+
+
+def _commit_host_plans(
+    plans: list[tuple[str, Path, Path, dict[str, Any]]],
+    selected: list[str],
+    flags: tuple[bool, bool],
+    root: Path,
+) -> None:
+    committed: list[tuple[Path, Path]] = []
+    with ExitStack() as stack:
+        for _, _, state_path, _ in plans:
+            stack.enter_context(lock(state_path))
+        for _, target_path, state_path, _ in plans:
+            _validate_install_under_lock(
+                target_path, selected, receipt(state_path), flags
+            )
+        try:
+            for host_name, target_path, state_path, preview in plans:
+                _execute_install(
+                    target_path,
+                    state_path,
+                    selected,
+                    (flags, root, host_name, preview),
+                )
+                committed.append((target_path, state_path))
+        except BaseException:
+            _rollback_committed_hosts(committed)
+            raise
+
+
+def _format_install_result(
+    plans: list[tuple[str, Path, Path, dict[str, Any]]],
+    selected: list[str],
+    env: TargetEnvironment,
+    opt: InstallOptions,
+) -> dict[str, Any]:
+    if len(plans) == 1:
+        return plans[0][3]
+    return {
+        "action": "update" if opt.update else "install",
+        "skills": selected,
+        "host": None,
+        "target": None,
+        "hosts": [p for _, _, _, p in plans],
+        "targets": {h: str(t) for h, t, _, _ in plans},
+        "scope": env.scope,
+        "dry_run": opt.dry_run,
+        "source_version": version(env.root),
+        "runtime_behavior_verified": False,
+    }
+
+
 def install(
     target: TargetEnvironment | Path | str | InstallOptions | None = None,
     options: InstallOptions | None = None,
@@ -834,40 +1052,14 @@ def install(
         force=force,
         root=root,
     )
-    resolved_host = _resolve_lifecycle_host(
-        env.destination, env.host, env.scope, env.root
-    )
-    selected = choose_skills(env.root, opt.pack, opt.skills)
-    target_path, state_path = locations(
-        env.destination, resolved_host, env.scope, env.root
-    )
-    current = receipt(state_path)
-    flags = (opt.update, opt.force)
-    for name in selected:
-        _check_install_candidate(
-            target_path, name, current["skills"].get(name), (env.root, opt.force)
-        )
-    _validate_install_target_skills(target_path, selected, current, flags)
-    preview = {
-        "action": "update" if opt.update else "install",
-        "skills": selected,
-        "host": resolved_host,
-        "scope": env.scope,
-        "target": str(target_path),
-        "dry_run": opt.dry_run,
-        "source_version": version(env.root),
-        "runtime_behavior_verified": False,
-    }
+    resolved_hosts = _resolve_install_hosts(env, opt.update)
+    selected = _select_install_skills(env, opt, resolved_hosts)
+    plans = [(h, *_prepare_host_plan(env, opt, h, selected)) for h in resolved_hosts]
+    result = _format_install_result(plans, selected, env, opt)
     if opt.dry_run:
-        return preview
-    with lock(state_path):
-        _execute_install(
-            target_path,
-            state_path,
-            selected,
-            (flags, env.root, resolved_host, preview),
-        )
-    return preview
+        return result
+    _commit_host_plans(plans, selected, (opt.update, opt.force), env.root)
+    return result
 
 
 def _validate_remove_skills(
@@ -1163,7 +1355,9 @@ def rollback(
         scope=scope,
         root=root,
     )
-    resolved_host = _resolve_target_host(env.destination, env.host, env.scope, env.root)
+    resolved_host = _resolve_lifecycle_host(
+        env.destination, env.host, env.scope, env.root
+    )
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )
@@ -1351,7 +1545,9 @@ def recover(
         raise ValueError(
             "Recovery requires --confirm-interrupted after verifying the previous writer has stopped"
         )
-    resolved_host = _resolve_target_host(env.destination, env.host, env.scope, env.root)
+    resolved_host = _resolve_lifecycle_host(
+        env.destination, env.host, env.scope, env.root
+    )
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )
