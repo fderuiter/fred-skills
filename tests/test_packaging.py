@@ -346,6 +346,21 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(validate_wf_path.is_file())
         with validate_wf_path.open("r", encoding="utf-8") as f:
             validate_wf = yaml.safe_load(f)
+        concurrency = validate_wf.get("concurrency", {})
+        self.assertIsInstance(concurrency, dict)
+        group_expr = concurrency.get("group", "")
+        self.assertTrue(
+            group_expr.startswith("skills-${{ github.workflow }}-"),
+            "validate.yml concurrency group must preserve workflow prefix",
+        )
+        self.assertIn("github.sha", group_expr)
+        self.assertIn("github.ref", group_expr)
+        self.assertIn("github.event_name == 'push'", group_expr)
+        self.assertIn("github.ref == 'refs/heads/main'", group_expr)
+        self.assertEqual(
+            concurrency.get("cancel-in-progress"),
+            "${{ github.ref != 'refs/heads/main' }}",
+        )
         validate_steps = (
             validate_wf.get("jobs", {}).get("validate", {}).get("steps", [])
         )
@@ -354,6 +369,83 @@ class PackageTests(unittest.TestCase):
                 "pre-commit run --all-files" in s.get("run", "") for s in validate_steps
             ),
             "validate.yml must execute pre-commit run --all-files",
+        )
+
+    def test_validate_workflow_concurrency_isolates_main_pushes(self):
+        import re
+        from types import SimpleNamespace
+
+        def eval_gha_template(template, github_ctx):
+            expr_pattern = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+
+            def eval_expr(expr):
+                py_expr = expr.replace("&&", " and ").replace("||", " or ")
+                return eval(
+                    py_expr,
+                    {"__builtins__": {}},
+                    {"github": SimpleNamespace(**github_ctx)},
+                )
+
+            full_match = expr_pattern.fullmatch(template.strip())
+            if full_match:
+                return eval_expr(full_match.group(1))
+            return expr_pattern.sub(lambda m: str(eval_expr(m.group(1))), template)
+
+        validate_wf = yaml.safe_load(
+            (ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")
+        )
+        concurrency = validate_wf["concurrency"]
+        group_tpl = concurrency["group"]
+        cancel_tpl = concurrency["cancel-in-progress"]
+
+        push_ctx_a = {
+            "workflow": "Validate skill packages",
+            "event_name": "push",
+            "ref": "refs/heads/main",
+            "sha": "b5a3509600000000000000000000000000000001",
+        }
+        push_ctx_b = {
+            **push_ctx_a,
+            "sha": "c6b4610700000000000000000000000000000002",
+        }
+        pr_ctx_1 = {
+            "workflow": "Validate skill packages",
+            "event_name": "pull_request",
+            "ref": "refs/pull/42/merge",
+            "sha": "b5a3509600000000000000000000000000000001",
+        }
+        pr_ctx_2 = {
+            **pr_ctx_1,
+            "sha": "d7c5721800000000000000000000000000000003",
+        }
+
+        group_push_a = eval_gha_template(group_tpl, push_ctx_a)
+        group_push_b = eval_gha_template(group_tpl, push_ctx_b)
+        self.assertNotEqual(group_push_a, group_push_b)
+        self.assertIn(push_ctx_a["sha"], group_push_a)
+        self.assertIn(push_ctx_b["sha"], group_push_b)
+        self.assertEqual(group_push_a, eval_gha_template(group_tpl, push_ctx_a))
+        self.assertIs(eval_gha_template(cancel_tpl, push_ctx_a), False)
+        self.assertIs(eval_gha_template(cancel_tpl, push_ctx_b), False)
+
+        group_pr_1 = eval_gha_template(group_tpl, pr_ctx_1)
+        group_pr_2 = eval_gha_template(group_tpl, pr_ctx_2)
+        self.assertEqual(
+            group_pr_1, "skills-Validate skill packages-refs/pull/42/merge"
+        )
+        self.assertEqual(group_pr_1, group_pr_2)
+        self.assertNotEqual(group_push_a, group_pr_1)
+        self.assertIs(eval_gha_template(cancel_tpl, pr_ctx_1), True)
+
+        release_wf = yaml.safe_load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            release_wf["concurrency"],
+            {
+                "group": "skills-${{ github.workflow }}-${{ github.ref }}",
+                "cancel-in-progress": False,
+            },
         )
 
     def test_makefile_target_definitions(self):
