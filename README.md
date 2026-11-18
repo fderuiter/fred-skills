@@ -80,7 +80,7 @@ remains supported; Python is unnecessary for instruction-only use.
 
 ## Release archives and supply chain verification
 
-Official releases provide standalone tarball archives for each of the 36 audit skills
+Official releases provide standalone tarball archives for each of the 51 skills
 (e.g., `repo-audit-concurrency.tar.gz`), as well as a consolidated suite archive
 (`fred-skills-suite.tar.gz`). Every published archive is accompanied by a SHA-256
 checksum manifest (`checksums.sha256`) and cryptographically signed SLSA provenance
@@ -117,11 +117,13 @@ gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
 Extract the verified tarball directly into your agent's skills directory:
 
 ```sh
-# Extract single specialist (creates repo-audit-concurrency/ directory)
-tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/
+mkdir -p /path/to/project/.agents/skills/
 
-# Extract complete suite (creates all 36 repo-audit-*/ directories)
-tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agent/skills/
+# Extract single specialist (creates repo-audit-concurrency/ directory)
+tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/
+
+# Extract complete suite (creates all 51 skill directories)
+tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agents/skills/
 ```
 
 See the [CLI guide](docs/toolkit.md) for resuming work, source freshness, reports,
