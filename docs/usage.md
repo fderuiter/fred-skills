@@ -17,18 +17,20 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 51 packages directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
+Register the marketplace catalog and install a curated pack (such as `complete` for all 51 packages or `starter`) or an individual skill, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
 
 ### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
+/plugin install complete@fred-skills
 ```
 
 ### Codex
 
 ```sh
 codex plugin marketplace add fderuiter/fred-skills
+codex plugin add starter@fred-skills
 ```
 
 ### Antigravity and Gemini CLI
