@@ -2,4 +2,5 @@ Use review-actionable-feedback to synthesize review findings for <repository> at
 Consolidate individual review observations and deduplicate overlapping findings.
 Assign accurate severity classifications and draft constructive remediation advice.
 Provide concrete code diffs or implementation patterns to guide developers.
+Do not approve breaking contract changes without concrete remediation guardrails.
 Format review feedback adhering to the review template and schema.

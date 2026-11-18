@@ -6,3 +6,5 @@ __pycache__/
 audit-output/
 dist/
 .fred-skills/
+validation-telemetry.json
+*.telemetry.json
