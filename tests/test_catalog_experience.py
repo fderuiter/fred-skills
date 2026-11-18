@@ -40,6 +40,12 @@ class ExperienceTests(unittest.TestCase):
             for skill in item["skills"]:
                 self.assertIn(f'<a href="#{skill}">{skill}</a>', page)
                 self.assertIn(f'id="{skill}"', page)
+        suites = read_json(ROOT / "catalog/suites.json")["suites"]
+        select_start = page.find('<select id="status">')
+        select_end = page.find("</select>", select_start)
+        select_html = page[select_start:select_end]
+        for suite in suites:
+            self.assertIn(f'<option value="{suite["name"]}">', select_html)
 
     def test_experience_detects_drift(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
