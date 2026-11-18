@@ -298,7 +298,7 @@ jobs:
           name: release-artifacts
           path: dist/release
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@c074443f1a5fb4aeeae8296ba60daec12367e163 # v2.2.3
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
           subject-path: 'dist/release/*'
       - name: Publish GitHub Release
