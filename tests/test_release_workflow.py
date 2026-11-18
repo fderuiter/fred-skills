@@ -19,14 +19,16 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import check_workflow_pins
 import verify_workflow_actions
 from fredlib import releases
 
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
 VALIDATE_WORKFLOW = ROOT / ".github/workflows/validate.yml"
+ACTION_PINS_LOCKFILE = ROOT / ".github/action-pins.json"
 RELEASING_DOC = ROOT / "docs/releasing.md"
 CHECKOUT_SHA = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
-ATTEST_SHA = "actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2"
+ATTEST_SHA = "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8"
 
 _PASSTHROUGH_ENV_KEYS = (
     "PATH",
@@ -401,8 +403,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(checksum_idx, attest_idx)
         self.assertLess(attest_idx, publish_idx)
 
-    def test_attest_provenance_step_pins_valid_v2_2_3_sha_and_permissions(self) -> None:
-        """The release job must pin actions/attest-build-provenance to v2.2.3 SHA and retain SLSA permissions."""
+    def test_attest_provenance_step_pins_valid_v4_2_2_sha_and_permissions(self) -> None:
+        """The release job must pin actions/attest-build-provenance to v4.2.2 SHA and retain SLSA permissions."""
         release_job = self.workflow_data["jobs"]["release"]
         self.assertEqual(
             release_job.get("permissions"),
@@ -418,6 +420,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             if s.get("name") == "Attest build provenance"
         )
         self.assertEqual(attest_step.get("uses"), ATTEST_SHA)
+        self.assertIn(
+            f"{ATTEST_SHA} # v4.2.2",
+            self.workflow_text,
+        )
         self.assertEqual(
             attest_step.get("with", {}).get("subject-path"),
             "dist/release/*",
@@ -1378,7 +1384,7 @@ class WorkflowActionPinVerificationTests(unittest.TestCase):
         online_steps = [
             s
             for s in steps
-            if "verify_workflow_actions.py --online" in s.get("run", "")
+            if "check_workflow_pins.py --verify-remote" in s.get("run", "")
         ]
         self.assertEqual(1, len(online_steps))
         condition = online_steps[0].get("if", "")
@@ -1613,6 +1619,305 @@ jobs:
                 )
             self.assertEqual(1, len(errors))
             self.assertIn("timed out", errors[0])
+
+    def test_action_pins_lockfile_records_all_six_repository_actions_and_passes_offline(
+        self,
+    ) -> None:
+        """The committed .github/action-pins.json lockfile must record all six actions and pass check_workflow_pins.py."""
+        self.assertTrue(ACTION_PINS_LOCKFILE.is_file())
+        locked, lock_errors = check_workflow_pins.load_lockfile(
+            ACTION_PINS_LOCKFILE, root=ROOT
+        )
+        self.assertEqual([], lock_errors)
+        self.assertEqual(
+            {
+                "actions/attest-build-provenance": (
+                    "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                    "v4.2.2",
+                ),
+                "actions/cache": (
+                    "0057852bfaa89a56745cba8c7296529d2fc39830",
+                    "v4",
+                ),
+                "actions/checkout": (
+                    "d23441a48e516b6c34aea4fa41551a30e30af803",
+                    "v6",
+                ),
+                "actions/download-artifact": (
+                    "cc203385981b70ca67e1cc392babf9cc229d5806",
+                    "v4",
+                ),
+                "actions/setup-python": (
+                    "ece7cb06caefa5fff74198d8649806c4678c61a1",
+                    "v6",
+                ),
+                "actions/upload-artifact": (
+                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
+                    "v4",
+                ),
+            },
+            {repo: (pin.sha, pin.version) for repo, pin in locked.items()},
+        )
+
+        self.assertEqual([], check_workflow_pins.check_pins(root=ROOT))
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check_workflow_pins.py")],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("PASS", proc.stdout)
+
+    def test_lockfile_parity_rejects_missing_malformed_drift_and_unused_entries(
+        self,
+    ) -> None:
+        """Offline lockfile check rejects missing/malformed lockfiles, SHA/version drift, unrecorded actions, and stale entries."""
+        valid_workflow = """\
+name: CI
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "ci.yml").write_text(valid_workflow, encoding="utf-8")
+            lock_path = tmp_root / ".github/action-pins.json"
+
+            # 1. Missing lockfile fails by default.
+            missing_errors = check_workflow_pins.check_pins(root=tmp_root)
+            self.assertTrue(
+                any("does not exist" in err for err in missing_errors),
+                missing_errors,
+            )
+
+            # 2. Malformed JSON lockfile fails cleanly.
+            lock_path.write_text("{not-valid-json", encoding="utf-8")
+            malformed_errors = check_workflow_pins.check_pins(root=tmp_root)
+            self.assertTrue(
+                any("Invalid JSON" in err for err in malformed_errors),
+                malformed_errors,
+            )
+
+            # 3. SHA mismatch, version mismatch, missing action, and unused lockfile entry are all reported.
+            drifted_lockfile = {
+                "schema_version": 1,
+                "actions": {
+                    "actions/checkout": {
+                        "sha": "0" * 40,
+                        "version": "v5",
+                    },
+                    "actions/stale-unused": {
+                        "sha": "1" * 40,
+                        "version": "v1",
+                    },
+                },
+            }
+            lock_path.write_text(json.dumps(drifted_lockfile), encoding="utf-8")
+            drift_errors = check_workflow_pins.check_pins(root=tmp_root)
+            self.assertEqual(4, len(drift_errors), drift_errors)
+            self.assertTrue(
+                any("SHA" in err and "does not match" in err for err in drift_errors)
+            )
+            self.assertTrue(
+                any(
+                    "version comment '# v6' does not match" in err
+                    for err in drift_errors
+                )
+            )
+            self.assertTrue(
+                any(
+                    "Action 'actions/attest-build-provenance' is missing from .github/action-pins.json"
+                    in err
+                    for err in drift_errors
+                )
+            )
+            self.assertTrue(
+                any(
+                    "Unused lockfile entry 'actions/stale-unused'" in err
+                    for err in drift_errors
+                )
+            )
+
+            # 4. Matching lockfile passes with zero errors.
+            matching_lockfile = {
+                "schema_version": 1,
+                "actions": {
+                    "actions/attest-build-provenance": {
+                        "sha": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                        "version": "v4.2.2",
+                    },
+                    "actions/checkout": {
+                        "sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+                        "version": "v6",
+                    },
+                },
+            }
+            lock_path.write_text(json.dumps(matching_lockfile), encoding="utf-8")
+            self.assertEqual([], check_workflow_pins.check_pins(root=tmp_root))
+
+    def test_check_pins_skips_local_and_docker_steps_and_rejects_malformed_pins(
+        self,
+    ) -> None:
+        """check_workflow_pins skips './' and 'docker://' steps while rejecting unpinned tags, short SHAs, and missing comments."""
+        workflow_yaml = """\
+name: MixedSteps
+on: [push]
+jobs:
+  local_reusable:
+    uses: ./.github/workflows/reusable.yml
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./scripts/local-step
+      - uses: docker://alpine:3.20
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+"""
+        invalid_workflow_yaml = """\
+name: InvalidPins
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6 # v6
+      - uses: actions/setup-python@ece7cb06 # v6
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+"""
+        lockfile = {
+            "schema_version": 1,
+            "actions": {
+                "actions/checkout": {
+                    "sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+                    "version": "v6",
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "mixed.yml").write_text(workflow_yaml, encoding="utf-8")
+            (tmp_root / ".github/action-pins.json").write_text(
+                json.dumps(lockfile), encoding="utf-8"
+            )
+            self.assertEqual([], check_workflow_pins.check_pins(root=tmp_root))
+
+            bad_wf = tmp_root / "invalid.yml"
+            bad_wf.write_text(invalid_workflow_yaml, encoding="utf-8")
+            bad_errors = check_workflow_pins.check_pins(
+                root=tmp_root, workflow_files=[bad_wf]
+            )
+            self.assertEqual(3, len(bad_errors), bad_errors)
+            self.assertTrue(any("got 'v6'" in err for err in bad_errors))
+            self.assertTrue(any("got 'ece7cb06'" in err for err in bad_errors))
+            self.assertTrue(
+                any("missing a trailing version comment" in err for err in bad_errors)
+            )
+
+    def test_verify_remote_dereferences_annotated_v4_tag_and_retries_transient_errors(
+        self,
+    ) -> None:
+        """--verify-remote dereferences refs/tags/v4^{} and retries transient git ls-remote errors."""
+        workflow_yaml = """\
+name: ReleaseAttest
+on: [push]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+"""
+        lockfile = {
+            "schema_version": 1,
+            "actions": {
+                "actions/attest-build-provenance": {
+                    "sha": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                    "version": "v4",
+                }
+            },
+        }
+        ls_remote_stdout = (
+            "8beda2b7ed98355c0e97c0a63bec38ae472e66c4\trefs/tags/v4\n"
+            "4d101475d8b20a2381f78447822ac1eab6504dd8\trefs/tags/v4^{}\n"
+            "4d101475d8b20a2381f78447822ac1eab6504dd8\trefs/tags/v4.2.2\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "release.yml").write_text(workflow_yaml, encoding="utf-8")
+            (tmp_root / ".github/action-pins.json").write_text(
+                json.dumps(lockfile), encoding="utf-8"
+            )
+
+            slept: list[float] = []
+            attempts: list[subprocess.CompletedProcess[str] | BaseException] = [
+                subprocess.CompletedProcess(
+                    args=["git", "ls-remote"],
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: unable to access: The requested URL returned error: 502",
+                ),
+                subprocess.TimeoutExpired(cmd=["git", "ls-remote"], timeout=10.0),
+                subprocess.CompletedProcess(
+                    args=["git", "ls-remote"],
+                    returncode=0,
+                    stdout=ls_remote_stdout,
+                    stderr="",
+                ),
+            ]
+            call_idx = 0
+
+            def fake_run(
+                *_args: Any, **_kwargs: Any
+            ) -> subprocess.CompletedProcess[str]:
+                nonlocal call_idx
+                item = attempts[call_idx]
+                call_idx += 1
+                if isinstance(item, BaseException):
+                    raise item
+                return item
+
+            errors = check_workflow_pins.check_pins(
+                root=tmp_root,
+                verify_remote=True,
+                timeout=10.0,
+                retries=2,
+                retry_backoff=0.5,
+                run_fn=fake_run,
+                sleep_fn=slept.append,
+            )
+            self.assertEqual([], errors)
+            self.assertEqual(3, call_idx)
+            self.assertEqual([0.5, 1.0], slept)
+
+            # Exhausting retries surfaces the final remote error cleanly.
+            always_fail_slept: list[float] = []
+            fail_errors = check_workflow_pins.check_pins(
+                root=tmp_root,
+                verify_remote=True,
+                timeout=10.0,
+                retries=1,
+                retry_backoff=0.25,
+                run_fn=lambda *_a, **_k: subprocess.CompletedProcess(
+                    args=["git", "ls-remote"],
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: unable to access: Connection reset by peer",
+                ),
+                sleep_fn=always_fail_slept.append,
+            )
+            self.assertEqual(1, len(fail_errors), fail_errors)
+            self.assertIn("Connection reset by peer", fail_errors[0])
+            self.assertEqual([0.25], always_fail_slept)
 
 
 if __name__ == "__main__":
