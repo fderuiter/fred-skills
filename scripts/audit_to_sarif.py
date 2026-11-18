@@ -18,172 +18,320 @@ SEVERITY_TO_SARIF_LEVEL = {
 }
 
 
-def audit_to_sarif(
-    data: dict[str, Any],
-    *,
-    filter_refuted: bool = False,
-    filter_info: bool = False,
-) -> dict[str, Any]:
-    """Convert audit data conforming to audit.schema.json into SARIF v2.1.0."""
-    if not isinstance(data, dict):
-        raise TypeError("Audit data must be a JSON object")
+class PhysicalLocationResult(dict):
+    """Container for SARIF physicalLocation with dual physical/location compatibility."""
 
-    evidence_map: dict[str, dict[str, Any]] = {}
-    for ev in data.get("evidence", []):
-        if isinstance(ev, dict) and "id" in ev:
-            evidence_map[ev["id"]] = ev
+    def __init__(self, data: dict[str, Any], ev: dict[str, Any] | None = None) -> None:
+        super().__init__(data)
+        self._ev = ev or {}
 
-    rules: list[dict[str, Any]] = []
-    results: list[dict[str, Any]] = []
-    rule_indices: dict[str, int] = {}
+    def __getitem__(self, key: str) -> Any:
+        if key == "physicalLocation":
+            return self
+        if key == "logicalLocations" and self._ev.get("symbol"):
+            return [{"name": self._ev["symbol"]}]
+        if key == "message" and self._ev.get("context"):
+            return {"text": self._ev["context"]}
+        return super().__getitem__(key)
 
-    for finding in data.get("findings", []):
-        if not isinstance(finding, dict):
-            continue
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
-        status = finding.get("status", "")
-        severity = finding.get("severity", "medium")
+    def __contains__(self, key: object) -> bool:
+        if key == "physicalLocation":
+            return True
+        if key == "logicalLocations" and self._ev.get("symbol"):
+            return True
+        if key == "message" and self._ev.get("context"):
+            return True
+        return super().__contains__(key)
 
-        if filter_refuted and status == "refuted":
-            continue
-        if filter_info and severity == "info":
-            continue
 
-        finding_id = finding.get("id") or f"FINDING-{len(results) + 1}"
-        title = finding.get("title") or finding_id
-        topic = finding.get("topic") or "audit"
-        sarif_level = SEVERITY_TO_SARIF_LEVEL.get(severity, "warning")
-        remedy = finding.get("remedy", "")
-        impact = finding.get("impact", "")
-        root_cause = finding.get("root_cause", "")
-        actual = finding.get("actual", "")
+def _extract_region(line_start: Any, line_end: Any) -> dict[str, int] | None:
+    """Normalize start and end line numbers into a SARIF region descriptor."""
+    if not isinstance(line_start, int) or line_start < 1:
+        return None
+    end = (
+        line_end if isinstance(line_end, int) and line_end >= line_start else line_start
+    )
+    return {"startLine": line_start, "endLine": end}
 
-        # Build rule descriptor if not already added
-        if finding_id not in rule_indices:
-            tags = [t for t in finding.get("tags", []) if isinstance(t, str)]
-            if topic and topic not in tags:
-                tags.append(topic)
 
-            help_lines: list[str] = []
-            if topic:
-                help_lines.append(f"Topic: {topic}")
-            if title:
-                help_lines.append(f"Title: {title}")
-            if impact:
-                help_lines.append(f"Impact: {impact}")
-            if root_cause:
-                help_lines.append(f"Root Cause: {root_cause}")
-            if remedy:
-                help_lines.append(f"Remedy: {remedy}")
-            help_text = "\n".join(help_lines)
+def _resolve_evidence_fields(
+    evidence_or_path: dict[str, Any] | str,
+    line_start: int | None,
+    line_end: int | None,
+) -> tuple[dict[str, Any], Any, Any, Any]:
+    """Resolve raw evidence dict or path into standardized fields."""
+    if isinstance(evidence_or_path, dict):
+        ev = evidence_or_path
+        l_start = ev.get("line_start") if line_start is None else line_start
+        l_end = ev.get("line_end", l_start) if line_end is None else line_end
+        return ev, ev.get("path"), l_start, l_end
+    return {}, evidence_or_path, line_start, line_end
 
-            markdown_lines: list[str] = [f"### {title}"]
-            if topic:
-                markdown_lines.append(f"**Topic:** {topic}")
-            if impact:
-                markdown_lines.append(f"**Impact:** {impact}")
-            if root_cause:
-                markdown_lines.append(f"**Root Cause:** {root_cause}")
-            if remedy:
-                markdown_lines.append(f"\n#### Suggested Remedy\n{remedy}")
-            help_markdown = "\n".join(markdown_lines)
 
-            rule: dict[str, Any] = {
-                "id": finding_id,
-                "name": topic or finding_id,
-                "shortDescription": {"text": title},
-                "defaultConfiguration": {"level": sarif_level},
-                "help": {
-                    "text": help_text,
-                    "markdown": help_markdown,
-                },
-                "properties": {
-                    "id": finding_id,
-                    "topic": topic,
-                    "severity": severity,
-                    "status": status,
-                    "confidence": finding.get("confidence", "unknown"),
-                    "tags": tags,
-                },
-            }
-            if remedy:
-                rule["properties"]["remedy"] = remedy
-            if impact:
-                rule["fullDescription"] = {"text": impact}
-            elif actual:
-                rule["fullDescription"] = {"text": actual}
+def _extract_physical_location(
+    evidence_or_path: dict[str, Any] | str,
+    line_start: int | None = None,
+    line_end: int | None = None,
+) -> PhysicalLocationResult | None:
+    """Extract and normalize physical location and region from evidence or path."""
+    ev, path_str, l_start, l_end = _resolve_evidence_fields(
+        evidence_or_path, line_start, line_end
+    )
+    if not isinstance(path_str, str) or not path_str:
+        return None
 
-            rule_indices[finding_id] = len(rules)
-            rules.append(rule)
-
-        rule_index = rule_indices[finding_id]
-
-        # Map locations from evidence
-        locations: list[dict[str, Any]] = []
-        for eid in finding.get("evidence_ids", []):
-            ev = evidence_map.get(eid)
-            if not ev or not isinstance(ev, dict):
-                continue
-            path_str = ev.get("path")
-            if not path_str or not isinstance(path_str, str):
-                continue
-
-            clean_uri = path_str.replace("\\", "/").lstrip("/")
-            physical_loc: dict[str, Any] = {
-                "artifactLocation": {
-                    "uri": clean_uri,
-                    "uriBaseId": "%SRCROOT%",
-                }
-            }
-
-            line_start = ev.get("line_start")
-            line_end = ev.get("line_end", line_start)
-            if isinstance(line_start, int) and line_start >= 1:
-                region: dict[str, Any] = {"startLine": line_start}
-                if isinstance(line_end, int) and line_end >= line_start:
-                    region["endLine"] = line_end
-                else:
-                    region["endLine"] = line_start
-                physical_loc["region"] = region
-
-            loc: dict[str, Any] = {"physicalLocation": physical_loc}
-            if ev.get("symbol"):
-                loc["logicalLocations"] = [{"name": ev["symbol"]}]
-            if ev.get("context"):
-                loc["message"] = {"text": ev["context"]}
-
-            locations.append(loc)
-
-        # Build result message
-        message_parts: list[str] = [title]
-        if impact:
-            message_parts.append(impact)
-        elif actual:
-            message_parts.append(actual)
-        if remedy:
-            message_parts.append(f"Remedy: {remedy}")
-
-        msg_text = " - ".join(message_parts) if len(message_parts) > 1 else title
-
-        result: dict[str, Any] = {
-            "ruleId": finding_id,
-            "ruleIndex": rule_index,
-            "level": sarif_level,
-            "message": {"text": msg_text},
-            "locations": locations,
-            "properties": {
-                "findingId": finding_id,
-                "topic": topic,
-                "status": status,
-                "severity": severity,
-                "confidence": finding.get("confidence", "unknown"),
-            },
+    clean_uri = path_str.replace("\\", "/").lstrip("/")
+    physical_loc: dict[str, Any] = {
+        "artifactLocation": {
+            "uri": clean_uri,
+            "uriBaseId": "%SRCROOT%",
         }
-        if remedy:
-            result["properties"]["remedy"] = remedy
+    }
+    region = _extract_region(l_start, l_end)
+    if region:
+        physical_loc["region"] = region
+    return PhysicalLocationResult(physical_loc, ev=ev)
 
-        results.append(result)
 
+def _extract_evidence_location(ev: Any) -> dict[str, Any] | None:
+    """Map a single evidence record to a SARIF location object."""
+    if not isinstance(ev, dict):
+        return None
+    phys = _extract_physical_location(ev)
+    if not phys:
+        return None
+
+    loc: dict[str, Any] = {"physicalLocation": phys}
+    if ev.get("symbol"):
+        loc["logicalLocations"] = [{"name": ev["symbol"]}]
+    if ev.get("context"):
+        loc["message"] = {"text": ev["context"]}
+    return loc
+
+
+def _collect_finding_locations(
+    finding: dict[str, Any],
+    evidence_map: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve evidence IDs for a finding into formatted SARIF location dictionaries."""
+    locations: list[dict[str, Any]] = []
+    for eid in finding.get("evidence_ids", []):
+        loc = _extract_evidence_location(evidence_map.get(eid))
+        if loc:
+            locations.append(loc)
+    return locations
+
+
+def _extract_dict_help_args(d: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """Extract help parameter tuple from a finding dictionary."""
+    t = d.get("title")
+    title = t if t else d.get("id", "")
+    return (
+        title,
+        d.get("topic", "audit"),
+        d.get("impact", ""),
+        d.get("root_cause", ""),
+        d.get("remedy", ""),
+    )
+
+
+def _format_help_markdown(
+    title: Any,
+    topic: str = "",
+    impact: str = "",
+    root_cause: str = "",
+    remedy: str = "",
+) -> dict[str, str]:
+    """Format plain text and markdown strings for rule help content."""
+    if isinstance(title, dict):
+        title, topic, impact, root_cause, remedy = _extract_dict_help_args(title)
+
+    plain = [
+        f"{lbl}: {val}"
+        for lbl, val in (
+            ("Topic", topic),
+            ("Title", title),
+            ("Impact", impact),
+            ("Root Cause", root_cause),
+            ("Remedy", remedy),
+        )
+        if val
+    ]
+    md = [f"### {title}"]
+    for lbl, val in (("Topic", topic), ("Impact", impact), ("Root Cause", root_cause)):
+        if val:
+            md.append(f"**{lbl}:** {val}")
+    if remedy:
+        md.append(f"\n#### Suggested Remedy\n{remedy}")
+
+    return {"text": "\n".join(plain), "markdown": "\n".join(md)}
+
+
+def _build_rule_tags(tags_raw: Any, topic: str) -> list[str]:
+    """Compile tags list ensuring the topic identifier is included."""
+    tags = (
+        [t for t in tags_raw if isinstance(t, str)]
+        if isinstance(tags_raw, list)
+        else []
+    )
+    if topic and topic not in tags:
+        tags.append(topic)
+    return tags
+
+
+def _rule_description(impact: str, actual: str) -> dict[str, str] | None:
+    """Construct fullDescription text prioritizing impact over actual."""
+    if impact:
+        return {"text": impact}
+    if actual:
+        return {"text": actual}
+    return None
+
+
+def _resolve_meta(
+    finding: dict[str, Any],
+    finding_id: str | None,
+    sarif_level: str | None,
+) -> tuple[str, str, str, str, str]:
+    """Resolve normalized identifiers and metadata fields for rules and results."""
+    fid = finding_id or finding.get("id") or "FINDING-1"
+    sev = finding.get("severity", "medium")
+    level = sarif_level or SEVERITY_TO_SARIF_LEVEL.get(sev, "warning")
+    title = finding.get("title") or fid
+    topic = finding.get("topic") or "audit"
+    return fid, level, title, topic, sev
+
+
+def _build_sarif_rule(
+    finding: dict[str, Any],
+    finding_id: str | None = None,
+    sarif_level: str | None = None,
+) -> dict[str, Any]:
+    """Generate a SARIF rule definition dictionary with formatted help and properties."""
+    fid, level, title, topic, sev = _resolve_meta(finding, finding_id, sarif_level)
+    remedy = finding.get("remedy", "")
+    props: dict[str, Any] = {
+        "id": fid,
+        "topic": topic,
+        "severity": sev,
+        "status": finding.get("status", ""),
+        "confidence": finding.get("confidence", "unknown"),
+        "tags": _build_rule_tags(finding.get("tags"), topic),
+    }
+    if remedy:
+        props["remedy"] = remedy
+
+    rule: dict[str, Any] = {
+        "id": fid,
+        "name": topic or fid,
+        "shortDescription": {"text": title},
+        "defaultConfiguration": {"level": level},
+        "help": _format_help_markdown(
+            title,
+            topic=topic,
+            impact=finding.get("impact", ""),
+            root_cause=finding.get("root_cause", ""),
+            remedy=remedy,
+        ),
+        "properties": props,
+    }
+    desc = _rule_description(finding.get("impact", ""), finding.get("actual", ""))
+    if desc:
+        rule["fullDescription"] = desc
+    return rule
+
+
+def _format_result_message(title: str, impact: str, actual: str, remedy: str) -> str:
+    """Assemble result message string from finding details."""
+    parts = [title]
+    if impact:
+        parts.append(impact)
+    elif actual:
+        parts.append(actual)
+    if remedy:
+        parts.append(f"Remedy: {remedy}")
+    return " - ".join(parts) if len(parts) > 1 else title
+
+
+def _build_sarif_result(
+    finding: dict[str, Any],
+    rule_index: int = 0,
+    locations: list[dict[str, Any]] | None = None,
+    finding_id: str | None = None,
+    sarif_level: str | None = None,
+) -> dict[str, Any]:
+    """Construct a SARIF result item formatted with message and locations."""
+    fid, level, title, topic, sev = _resolve_meta(finding, finding_id, sarif_level)
+    remedy = finding.get("remedy", "")
+    msg = _format_result_message(
+        title, finding.get("impact", ""), finding.get("actual", ""), remedy
+    )
+
+    props: dict[str, Any] = {
+        "findingId": fid,
+        "topic": topic,
+        "status": finding.get("status", ""),
+        "severity": sev,
+        "confidence": finding.get("confidence", "unknown"),
+    }
+    if remedy:
+        props["remedy"] = remedy
+
+    return {
+        "ruleId": fid,
+        "ruleIndex": rule_index,
+        "level": level,
+        "message": {"text": msg},
+        "locations": [] if locations is None else locations,
+        "properties": props,
+    }
+
+
+def _build_evidence_map(evidence_list: Any) -> dict[str, dict[str, Any]]:
+    """Index evidence items by their identifier."""
+    if not isinstance(evidence_list, list):
+        return {}
+    return {ev["id"]: ev for ev in evidence_list if isinstance(ev, dict) and "id" in ev}
+
+
+def _should_skip_finding(
+    finding: Any,
+    filter_refuted: bool,
+    filter_info: bool,
+) -> bool:
+    """Evaluate whether a finding should be excluded based on filtering flags."""
+    if not isinstance(finding, dict):
+        return True
+    if filter_refuted and finding.get("status") == "refuted":
+        return True
+    return bool(filter_info and finding.get("severity") == "info")
+
+
+def _ensure_rule(
+    finding: dict[str, Any],
+    finding_id: str,
+    rules: list[dict[str, Any]],
+    rule_indices: dict[str, int],
+) -> int:
+    """Register rule descriptor if not yet recorded, returning its index."""
+    if finding_id not in rule_indices:
+        rule_indices[finding_id] = len(rules)
+        rules.append(_build_sarif_rule(finding, finding_id=finding_id))
+    return rule_indices[finding_id]
+
+
+def _build_sarif_run(
+    rules: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    repository: Any = None,
+) -> dict[str, Any]:
+    """Construct the SARIF run structure containing tool driver rules and results."""
     run: dict[str, Any] = {
         "tool": {
             "driver": {
@@ -195,15 +343,73 @@ def audit_to_sarif(
         },
         "results": results,
     }
+    if isinstance(repository, dict):
+        run["properties"] = {"repository": repository}
+    return run
 
-    if "repository" in data and isinstance(data["repository"], dict):
-        run["properties"] = {"repository": data["repository"]}
+
+def audit_to_sarif(
+    data: dict[str, Any],
+    *,
+    filter_refuted: bool = False,
+    filter_info: bool = False,
+) -> dict[str, Any]:
+    """Convert audit data conforming to audit.schema.json into SARIF v2.1.0."""
+    if not isinstance(data, dict):
+        raise TypeError("Audit data must be a JSON object")
+
+    evidence_map = _build_evidence_map(data.get("evidence", []))
+    rules: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    rule_indices: dict[str, int] = {}
+
+    for finding in data.get("findings", []):
+        if _should_skip_finding(finding, filter_refuted, filter_info):
+            continue
+
+        finding_id = finding.get("id") or f"FINDING-{len(results) + 1}"
+        rule_index = _ensure_rule(finding, finding_id, rules, rule_indices)
+        locations = _collect_finding_locations(finding, evidence_map)
+        results.append(
+            _build_sarif_result(
+                finding,
+                rule_index=rule_index,
+                locations=locations,
+                finding_id=finding_id,
+            )
+        )
 
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
-        "runs": [run],
+        "runs": [_build_sarif_run(rules, results, data.get("repository"))],
     }
+
+
+def _load_audit_file(input_path: Path) -> dict[str, Any]:
+    """Read and parse audit.json from a file or directory path."""
+    target = Path(input_path)
+    if target.is_dir():
+        ledger_path = target / "audit.json"
+        if not ledger_path.is_file():
+            raise ValueError(
+                f"Audit ledger 'audit.json' not found in directory: {input_path}"
+            )
+        target = ledger_path
+
+    try:
+        content = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"Cannot read input file '{input_path}': {exc}") from exc
+
+    try:
+        data = json.loads(content)
+    except ValueError as exc:
+        raise ValueError(f"Invalid JSON in '{input_path}': {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise TypeError(f"Input file '{input_path}' must contain a JSON object")
+    return data
 
 
 def convert_file(
@@ -215,28 +421,7 @@ def convert_file(
     indent: int = 2,
 ) -> dict[str, Any]:
     """Read audit.json from input_path, convert to SARIF, and optionally write to output_path."""
-    input_path = Path(input_path)
-    if input_path.is_dir():
-        ledger_path = input_path / "audit.json"
-        if not ledger_path.is_file():
-            raise ValueError(
-                f"Audit ledger 'audit.json' not found in directory: {input_path}"
-            )
-        input_path = ledger_path
-
-    try:
-        content = input_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError(f"Cannot read input file '{input_path}': {exc}") from exc
-
-    try:
-        data = json.loads(content)
-    except ValueError as exc:
-        raise ValueError(f"Invalid JSON in '{input_path}': {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise TypeError(f"Input file '{input_path}' must contain a JSON object")
-
+    data = _load_audit_file(input_path)
     sarif = audit_to_sarif(
         data,
         filter_refuted=filter_refuted,
