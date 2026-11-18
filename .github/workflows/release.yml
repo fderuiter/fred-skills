@@ -2,6 +2,7 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -22,7 +23,73 @@ env:
   PYTHONIOENCODING: utf-8
 
 jobs:
+  detect_release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      should_publish: ${{ steps.detect.outputs.should_publish }}
+      tag: ${{ steps.detect.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check live GitHub Release state
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          EXPECTED_TAG="v$(cat VERSION | tr -d '[:space:]')"
+          if [ "$EXPECTED_TAG" = "v" ]; then
+            echo "Error: VERSION file is missing or empty" >&2
+            exit 1
+          fi
+
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            if [ "$REF_TYPE" = "tag" ]; then
+              TAG="$REF_NAME"
+            else
+              TAG="$EXPECTED_TAG"
+            fi
+          fi
+
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "Error: Release tag '$TAG' does not match expected tag '$EXPECTED_TAG' based on VERSION" >&2
+            exit 1
+          fi
+
+          if VIEW_OUT="$(gh release view "$EXPECTED_TAG" --json isDraft 2>&1)"; then
+            if printf '%s\n' "$VIEW_OUT" | grep -Eq '"isDraft"[[:space:]]*:[[:space:]]*true'; then
+              echo "Draft release $EXPECTED_TAG found; scheduling publication."
+              SHOULD_PUBLISH="true"
+            else
+              echo "Release $EXPECTED_TAG is already published; skipping build and release."
+              SHOULD_PUBLISH="false"
+            fi
+          else
+            if [ -z "$VIEW_OUT" ] || printf '%s\n' "$VIEW_OUT" | grep -Eqi 'not found|404'; then
+              echo "Release $EXPECTED_TAG is unpublished; scheduling build and release."
+              SHOULD_PUBLISH="true"
+            else
+              echo "Error querying GitHub release '$EXPECTED_TAG': $VIEW_OUT" >&2
+              exit 1
+            fi
+          fi
+
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then
+            echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+            echo "tag=$EXPECTED_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: detect_release
+    if: needs.detect_release.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -56,8 +123,8 @@ jobs:
           retention-days: 7
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [detect_release, build]
+    if: needs.detect_release.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -109,15 +176,66 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
         run: |
+          VERSION="$(cat VERSION | tr -d '[:space:]')"
           TAG="$INPUT_TAG"
           if [ -z "$TAG" ]; then
             if [ "$REF_TYPE" = "tag" ]; then
               TAG="$REF_NAME"
             else
-              TAG="v$(cat VERSION | tr -d '[:space:]')"
+              TAG="v${VERSION}"
             fi
           fi
-          gh release create "$TAG" dist/release/* \
-            --title "$TAG" \
-            --draft \
-            --generate-notes
+
+          if [ "$REF_TYPE" = "branch" ] && [ "$REF_NAME" = "main" ]; then
+            if [ -n "${GH_TOKEN:-}" ]; then
+              AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+              export GIT_CONFIG_COUNT=1
+              export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+              export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
+            fi
+
+            LS_EXIT=0
+            git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
+            if [ "$LS_EXIT" -eq 2 ]; then
+              if [ -z "$(git tag -l "$TAG")" ]; then
+                git tag "$TAG" HEAD
+              fi
+              git push origin "refs/tags/$TAG"
+            elif [ "$LS_EXIT" -ne 0 ]; then
+              echo "Error: Failed to check remote tags on origin (exit $LS_EXIT)" >&2
+              exit "$LS_EXIT"
+            fi
+          fi
+
+          NOTES_FILE="docs/release-notes-${VERSION}.md"
+          if VIEW_OUT="$(gh release view "$TAG" --json isDraft,apiUrl 2>&1)"; then
+            if printf '%s\n' "$VIEW_OUT" | grep -Eq '"isDraft"[[:space:]]*:[[:space:]]*true'; then
+              gh release upload "$TAG" dist/release/* --clobber
+              RELEASE_API_URL="$(printf '%s\n' "$VIEW_OUT" | sed -n 's/.*"apiUrl"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+              if [ -z "$RELEASE_API_URL" ]; then
+                RELEASE_API_URL="repos/${GH_REPO}/releases/tags/${TAG}"
+              fi
+              if [ -f "$NOTES_FILE" ]; then
+                gh api --method PATCH "$RELEASE_API_URL" -F draft=false -f name="$TAG" -F "body=@${NOTES_FILE}"
+              else
+                gh api --method PATCH "$RELEASE_API_URL" -F draft=false -f name="$TAG"
+              fi
+            else
+              echo "Release $TAG is already published; skipping duplicate publication."
+            fi
+          else
+            if [ -z "$VIEW_OUT" ] || printf '%s\n' "$VIEW_OUT" | grep -Eqi 'not found|404'; then
+              if [ -f "$NOTES_FILE" ]; then
+                gh release create "$TAG" dist/release/* \
+                  --title "$TAG" \
+                  --notes-file "docs/release-notes-${VERSION}.md"
+              else
+                gh release create "$TAG" dist/release/* \
+                  --title "$TAG" \
+                  --generate-notes
+              fi
+            else
+              echo "Error querying GitHub release '$TAG': $VIEW_OUT" >&2
+              exit 1
+            fi
+          fi
