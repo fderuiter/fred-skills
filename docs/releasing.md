@@ -9,11 +9,15 @@ Before publication, review the selected diff, run all checks in CONTRIBUTING.md,
 the generated explorer, execute the synthetic walkthrough, build and verify the intended
 pack, and review the recorded behavioral limits. Choose a public LICENSE as owner.
 
-The release workflow can be run manually to build a pack as a workflow artifact. Its
-optional publication input creates a **draft** GitHub release only for an existing
-`v<VERSION>` tag and a nonempty LICENSE. A `v*` tag also prepares the draft when its
-version matches. Publishing that draft remains a separate maintainer action. Ordinary
-pull requests have no contents-write job and never invoke live model adapters.
+The release workflow can be run manually (`workflow_dispatch`) with `inputs.publish`
+(`false` by default) to build a pack and upload `release-artifacts` with read-only
+permissions without requiring `LICENSE` or running the privileged release job. Setting
+`inputs.publish` to `true` (with optional `inputs.tag`, defaulting to `v<VERSION>`) runs
+preflight checks and creates or updates a **draft** GitHub release only when
+`refs/tags/<tag>` already exists on `origin`, `LICENSE` is nonempty at that tag's commit,
+and the tag matches `v<VERSION>`. Pushing a `v*` tag prepares or updates the draft under
+the same checks. Publishing that draft remains a separate maintainer action. Ordinary pull
+requests have no contents-write job and never invoke live model adapters.
 
 ZIP and TAR archives contain standalone skill directories; the repository source is
 still needed for root CLI tooling. Archive content uses fixed paths/order/timestamps and
