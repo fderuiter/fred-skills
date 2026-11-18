@@ -868,26 +868,51 @@ def handle_installation(a: argparse.Namespace) -> Any:
     raise ValueError(f"Unknown installation command: {a.command}")
 
 
+def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
+    resolved = resolve_audit_path(target)
+    if target.is_dir():
+        runs._require_audit_directory(target, command_name)
+    if (
+        resolved.name != "audit.json"
+        and resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+    ):
+        raise ValueError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported"
+        )
+    return resolved
+
+
 def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
+        prior_data = None
+        if a.prior:
+            audit_path = _resolve_audit_only_input(a.audit, "report --prior")
+            prior_path = _resolve_audit_only_input(a.prior, "report --prior")
+            prior_data = runs._require_audit_ledger(
+                read_json(prior_path), "report --prior"
+            )
+        else:
+            audit_path = resolve_audit_path(a.audit)
         target = reports.render(
-            read_json(resolve_audit_path(a.audit)),
+            read_json(audit_path),
             a.output,
-            read_json(resolve_audit_path(a.prior)) if a.prior else None,
+            prior_data,
         )
         return {"output": str(target)}
     if a.command == "issues":
+        audit_path = _resolve_audit_only_input(a.audit, "issues")
         return {
             "drafts": reports.issue_drafts(
-                read_json(resolve_audit_path(a.audit)), a.output, format=a.format
+                read_json(audit_path), a.output, format=a.format
             ),
             "remote_writes": 0,
         }
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
 
+        audit_path = _resolve_audit_only_input(a.audit, "export-sarif")
         data = convert_file(
-            resolve_audit_path(a.audit),
+            audit_path,
             a.output,
             filter_refuted=a.filter_refuted or a.filter_refuted_or_info,
             filter_info=a.filter_info or a.filter_refuted_or_info,

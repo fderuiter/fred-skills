@@ -75,10 +75,45 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
     return metadata, "".join(lines[end + 1 :])
 
 
+def _validate_suite_artifact(suite: dict, root: Path) -> None:
+    artifact = suite.get("artifact")
+    if artifact is None:
+        return
+    if not isinstance(artifact, dict):
+        raise TypeError(f"Suite '{suite.get('name')}' artifact must be an object")
+    filename = artifact.get("filename")
+    schema = artifact.get("schema")
+    starter = artifact.get("starter")
+    if (
+        not isinstance(filename, str)
+        or not filename.endswith(".json")
+        or Path(filename).name != filename
+        or "\\" in filename
+    ):
+        raise ValueError(
+            f"Suite '{suite.get('name')}' artifact filename must be a JSON basename"
+        )
+    if not isinstance(schema, str) or not schema.endswith(".schema.json"):
+        raise ValueError(
+            f"Suite '{suite.get('name')}' artifact schema must name a .schema.json path"
+        )
+    if (root / "skills").is_dir() and (root / "shared").is_dir():
+        schema_file = root / schema
+        if schema_file.is_symlink() or not schema_file.is_file():
+            raise ValueError(
+                f"Suite '{suite.get('name')}' missing artifact schema: {schema}"
+            )
+    if not isinstance(starter, dict) or not starter:
+        raise ValueError(
+            f"Suite '{suite.get('name')}' artifact starter must be a nonempty mapping"
+        )
+
+
 def suite_members(root: Path = ROOT) -> dict[str, dict]:
     document = json.loads((root / "catalog/suites.json").read_text(encoding="utf-8"))
     members = {}
     for suite in document["suites"]:
+        _validate_suite_artifact(suite, root)
         for phase in suite["phases"]:
             for name in phase["skills"]:
                 if name in members:

@@ -161,7 +161,7 @@ def initialize(
 ) -> dict
 ```
 
-Initializes a new audit run workspace directory with `run.json`, `audit.json`, and `prompt.md`.
+Initializes a new run workspace directory with `run.json`, `prompt.md`, and the active suite's primary artifact (`audit.json`, `architecture.json`, `review.json`, or `testing.json` declared in `catalog/suites.json`).
 
 - **Parameters:**
   - `repo` (`Path`): Path to the target Git repository.
@@ -212,10 +212,10 @@ Validates an audit ledger against `schemas/audit.schema.json` and suite structur
 def validate_run(directory: Path) -> list[str]
 ```
 
-Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, `audit.json` against the audit schema, snapshot hash integrity, matching run IDs, and snapshot consistency.
+Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, or `testing.json`) against its declarative suite schema (plus matching run IDs and snapshot consistency for `audit.json`).
 
 - **Parameters:**
-  - `directory` (`Path`): Path to the run directory containing `run.json` and `audit.json`.
+  - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
 - **Returns:** `list[str]` — List of validation failure messages (empty list if valid).
 - **Exceptions:**
   - `OSError` / `FileNotFoundError`: Raised if run files cannot be read.
@@ -246,12 +246,13 @@ Appends a timestamped checkpoint record to `run.json` and updates the overall ru
 def revalidate(directory: Path) -> dict
 ```
 
-Compares the current repository state against the run's recorded snapshot, identifying changed files and stale audit findings.
+Compares the current repository state against the run's recorded snapshot, validating the active suite deliverable (`audit.json`, `architecture.json`, `review.json`, or `testing.json`) and identifying changed files and stale or impacted records.
 
 - **Parameters:**
-  - `directory` (`Path`): Path to the run directory containing `run.json` and `audit.json`.
+  - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
 - **Returns:** `dict` — Revalidation record written to `revalidation.json`, containing `"old_snapshot"`, `"new_snapshot"`, `"changed_files"`, `"stale_finding_ids"`, `"unreviewed_changed_files"`, `"needs_impact_review"`, `"reusable_evidence_is_not_proof_of_unchanged_behavior"`, `"complete"`, and `"next_action"`.
-- **Exceptions:** None.
+- **Exceptions:**
+  - `ValueError`: Raised if the suite deliverable is missing or fails schema validation.
 
 ---
 

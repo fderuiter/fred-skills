@@ -212,8 +212,10 @@ TIMEOUT_PATTERNS = [
 SCHEMA_PATTERNS = [
     re.compile(r"\bjsonschema(?:\.exceptions)?\.ValidationError\b"),
     re.compile(
-        r"'(?:schema_version|contracts|evidence|findings|issues)' is a required property"
+        r"'(?:schema_version|contracts|evidence|findings|issues|title|status|verdict|summary|component|framework|test_cases|decision|oracle_type|severity|file|description|name|id|type)' is a required property"
     ),
+    re.compile(r"Additional properties are not allowed \([^\n)]*was unexpected\)"),
+    re.compile(r"(?i)\bInvalid (?:architecture|review|testing)(?:\.json| artifact)\b"),
     re.compile(r"(?i)\bschema mismatch\b"),
     re.compile(r"(?i)\bschema validation (?:failed|error)\b"),
     re.compile(r"(?i)is not valid under any of the given schemas"),
@@ -242,45 +244,117 @@ GENERAL_ERROR_RE = re.compile(
     r"(?i)(?<![a-zA-Z0-9_-])(?:fatal|traceback|error|exception)(?![a-zA-Z0-9_-])"
 )
 
-KNOWN_SPECIALISTS = [
-    "repo-audit-behavioral-contracts",
-    "repo-audit-invariants",
-    "repo-audit-state-machines",
-    "repo-audit-concurrency",
-    "repo-audit-lifecycle",
-    "repo-audit-temporal-coupling",
-    "repo-audit-domain-models",
-    "repo-audit-failure-modes",
-    "repo-audit-trust-boundaries",
-    "repo-audit-transactions",
-    "repo-audit-idempotency",
-    "repo-audit-error-semantics",
-    "repo-audit-capacity",
-    "repo-audit-cancellation",
-    "repo-audit-cache-coherence",
-    "repo-audit-data-integrity",
-    "repo-audit-boundary-conditions",
-    "repo-audit-protocol-drift",
-    "repo-audit-configuration",
-    "repo-audit-compatibility",
-    "repo-audit-complexity",
-    "repo-audit-canonicalization",
-    "repo-audit-side-effects",
-    "repo-audit-sources-of-truth",
-    "repo-audit-architecture",
-    "repo-audit-test-contracts",
-    "repo-audit-cohesion",
-    "repo-audit-observability",
-    "repo-audit-nondeterminism",
-    "repo-audit-test-oracles",
-    "repo-audit-api-consistency",
-    "repo-audit-accessibility-state",
-    "repo-audit-dead-code",
-    "repo-audit-synthesis",
-    "repo-audit-program",
+_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
+    "repository-audits": (
+        "repo-audit-program",
+        "repo-audit-diagnostics",
+        "repo-audit-behavioral-contracts",
+        "repo-audit-invariants",
+        "repo-audit-state-machines",
+        "repo-audit-concurrency",
+        "repo-audit-lifecycle",
+        "repo-audit-temporal-coupling",
+        "repo-audit-domain-models",
+        "repo-audit-failure-modes",
+        "repo-audit-trust-boundaries",
+        "repo-audit-transactions",
+        "repo-audit-idempotency",
+        "repo-audit-error-semantics",
+        "repo-audit-capacity",
+        "repo-audit-cancellation",
+        "repo-audit-cache-coherence",
+        "repo-audit-data-integrity",
+        "repo-audit-boundary-conditions",
+        "repo-audit-protocol-drift",
+        "repo-audit-configuration",
+        "repo-audit-compatibility",
+        "repo-audit-complexity",
+        "repo-audit-canonicalization",
+        "repo-audit-side-effects",
+        "repo-audit-sources-of-truth",
+        "repo-audit-architecture",
+        "repo-audit-test-contracts",
+        "repo-audit-cohesion",
+        "repo-audit-observability",
+        "repo-audit-nondeterminism",
+        "repo-audit-test-oracles",
+        "repo-audit-api-consistency",
+        "repo-audit-accessibility-state",
+        "repo-audit-dead-code",
+        "repo-audit-synthesis",
+    ),
+    "repository-workflows": (
+        "repo-verify-finding",
+        "repo-specify-regression",
+        "repo-plan-fix",
+        "repo-apply-fix",
+        "repo-verify-fix",
+        "repo-reconcile-findings",
+    ),
+    "software-architecture": (
+        "arch-decision-record",
+        "arch-boundary-specification",
+        "arch-component-decomposition",
+    ),
+    "code-review": (
+        "review-diff-analysis",
+        "review-invariant-violations",
+        "review-actionable-feedback",
+    ),
+    "automated-testing": (
+        "test-gap-analysis",
+        "test-case-generation",
+        "test-suite-verification",
+    ),
+}
+
+KNOWN_SPECIALISTS: list[str] = [
+    skill for skills in _SUITE_SKILLS.values() for skill in skills
 ]
 
+_SKILL_TO_SUITE: dict[str, str] = {
+    skill: suite_name
+    for suite_name, skills in _SUITE_SKILLS.items()
+    for skill in skills
+}
+
+_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
+    "repository-audits": (
+        "audit.json",
+        "shared/repo-audit/resources/assets/audit.schema.json",
+    ),
+    "repository-workflows": (
+        "audit.json",
+        "shared/repo-audit/resources/assets/audit.schema.json",
+    ),
+    "software-architecture": (
+        "architecture.json",
+        "skills/arch-decision-record/assets/architecture.schema.json",
+    ),
+    "code-review": (
+        "review.json",
+        "skills/review-diff-analysis/assets/review.schema.json",
+    ),
+    "automated-testing": (
+        "testing.json",
+        "skills/test-case-generation/assets/testing.schema.json",
+    ),
+}
+
+_DOMAIN_ARTIFACTS: dict[str, tuple[str, str]] = {
+    fname: (suite_name, schema_rel)
+    for suite_name, (fname, schema_rel) in _SUITE_ARTIFACTS.items()
+    if fname != "audit.json"
+}
+
 _COORDINATOR_SKILLS = frozenset({"repo-audit-program", "repo-audit-diagnostics"})
+
+_SPECIALIST_PATTERNS: dict[str, re.Pattern[str]] = {
+    specialist: re.compile(
+        rf"(?<![a-zA-Z0-9_-]){re.escape(specialist)}(?![a-zA-Z0-9_-])"
+    )
+    for specialist in KNOWN_SPECIALISTS
+}
 
 
 class ParsedTurn:
@@ -1265,14 +1339,22 @@ def detect_failures(transcript_text: str) -> dict[str, Any]:
     }
 
 
+def _topic_for_specialist(specialist: str) -> str:
+    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-"):
+        if specialist.startswith(prefix):
+            return specialist[len(prefix) :]
+    return specialist
+
+
 def _find_specialist_in_segment(text: str, *, prefer_first: bool = False) -> str | None:
     """Find a specialist skill mentioned in a single turn/line segment."""
     domain_matches: list[tuple[int, str]] = []
     coord_matches: list[tuple[int, str]] = []
 
-    for specialist in KNOWN_SPECIALISTS:
-        pos = text.find(specialist) if prefer_first else text.rfind(specialist)
-        if pos != -1:
+    for specialist, pattern in _SPECIALIST_PATTERNS.items():
+        found = list(pattern.finditer(text))
+        if found:
+            pos = found[0].start() if prefer_first else found[-1].start()
             if specialist in _COORDINATOR_SKILLS:
                 coord_matches.append((pos, specialist))
             else:
@@ -1288,11 +1370,13 @@ def _find_specialist_in_segment(text: str, *, prefer_first: bool = False) -> str
 def _find_topic_keyword_in_segment(text: str) -> tuple[str, str] | None:
     lowered = text.lower()
     matches: list[tuple[int, str, str]] = []
-    for specialist in KNOWN_SPECIALISTS:
+    for specialist in _SUITE_SKILLS["repository-audits"]:
         if specialist in _COORDINATOR_SKILLS:
             continue
-        keyword = specialist.replace("repo-audit-", "")
-        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])")
+        keyword = specialist.removeprefix("repo-audit-")
+        pattern = re.compile(
+            rf"(?<![a-z0-9_-]){re.escape(keyword)}(?![a-z0-9_-])(?!\.(?:json|schema|md)|-template)"
+        )
         found = list(pattern.finditer(lowered))
         if found:
             matches.append((found[-1].start(), specialist, keyword))
@@ -1300,6 +1384,74 @@ def _find_topic_keyword_in_segment(text: str) -> tuple[str, str] | None:
         return None
     matches.sort(key=lambda item: item[0], reverse=True)
     return matches[0][1], matches[0][2]
+
+
+def _detect_artifact_suite(audit_data: dict[str, Any] | None) -> str | None:
+    if not isinstance(audit_data, dict) or "run_id" in audit_data:
+        return None
+    if "verdict" in audit_data or (
+        "summary" in audit_data and "findings" in audit_data
+    ):
+        return "code-review"
+    if "test_cases" in audit_data or (
+        "component" in audit_data and "framework" in audit_data
+    ):
+        return "automated-testing"
+    if (
+        "boundaries" in audit_data
+        or "decisions" in audit_data
+        or (
+            "title" in audit_data
+            and "status" in audit_data
+            and "findings" not in audit_data
+        )
+    ):
+        return "software-architecture"
+    return None
+
+
+def _extract_artifact_references(
+    transcript_text: str, audit_data: dict[str, Any] | None
+) -> list[str]:
+    id_pattern = re.compile(r"\b((?:ADR|REV|TC|GAP|[FEICRT])-\d+|E-[a-z0-9_-]+)\b")
+    if not audit_data:
+        return sorted(set(id_pattern.findall(transcript_text)))
+
+    ledger_refs: list[str] = []
+    has_candidates = False
+    for section in (
+        "findings",
+        "evidence",
+        "contracts",
+        "issues",
+        "decisions",
+        "test_cases",
+    ):
+        items = audit_data.get(section)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str) and item_id:
+                has_candidates = True
+                if item_id in transcript_text:
+                    ledger_refs.append(f"{section}:{item_id}")
+    boundaries = audit_data.get("boundaries")
+    if isinstance(boundaries, list):
+        for boundary in boundaries:
+            if not isinstance(boundary, dict):
+                continue
+            bname = boundary.get("name")
+            if isinstance(bname, str) and bname:
+                has_candidates = True
+                if bname in transcript_text:
+                    ledger_refs.append(f"boundaries:{bname}")
+
+    if not ledger_refs and not has_candidates:
+        return sorted(set(id_pattern.findall(transcript_text)))
+    return ledger_refs
 
 
 def correlate_audit_domain(
@@ -1315,6 +1467,7 @@ def correlate_audit_domain(
 
     specialist_found: str | None = None
     topic_found: str | None = None
+    artifact_suite = _detect_artifact_suite(audit_data)
 
     turns, is_structured = parse_transcript_turns(transcript_text)
     if is_structured and turns:
@@ -1350,8 +1503,8 @@ def correlate_audit_domain(
                     specialist_found = cand
                     break
 
-        # 4. Topic keyword fallback (backward from failure_line)
-        if not specialist_found:
+        # 4. Topic keyword fallback (backward from failure_line, audit runs only)
+        if not specialist_found and artifact_suite is None:
             for turn in reversed(before_turns):
                 if turn.role != "user":
                     kw_match = _find_topic_keyword_in_segment(turn.text)
@@ -1379,7 +1532,7 @@ def correlate_audit_domain(
                     specialist_found = cand
                     break
 
-        if not specialist_found:
+        if not specialist_found and artifact_suite is None:
             for idx in range(cutoff, 0, -1):
                 kw_match = _find_topic_keyword_in_segment(lines[idx - 1])
                 if kw_match:
@@ -1387,18 +1540,15 @@ def correlate_audit_domain(
                     break
 
     if specialist_found and not topic_found:
-        topic_found = specialist_found.replace("repo-audit-", "")
+        topic_found = _topic_for_specialist(specialist_found)
+    elif not topic_found and artifact_suite is not None:
+        topic_found = (
+            "architecture"
+            if artifact_suite == "software-architecture"
+            else artifact_suite
+        )
 
-    ledger_refs: list[str] = []
-    if audit_data:
-        for section in ("findings", "evidence", "contracts", "issues"):
-            for item in audit_data.get(section, []):
-                item_id = item.get("id")
-                if item_id and item_id in transcript_text:
-                    ledger_refs.append(f"{section}:{item_id}")
-    else:
-        id_pattern = re.compile(r"\b([FEIC]-\d+|E-[a-z0-9_-]+)\b")
-        ledger_refs = sorted(set(id_pattern.findall(transcript_text)))
+    ledger_refs = _extract_artifact_references(transcript_text, audit_data)
 
     return {
         "specialist_skill": specialist_found,
@@ -1407,16 +1557,67 @@ def correlate_audit_domain(
     }
 
 
+def _resolve_recovery_suite(
+    run_data: dict[str, Any] | None,
+    workspace_dir: Path | None,
+    specialist_skill: str | None,
+) -> tuple[str, str, str]:
+    if isinstance(run_data, dict):
+        plan_data = run_data.get("plan")
+        if isinstance(plan_data, dict):
+            outputs = plan_data.get("expected_outputs")
+            if isinstance(outputs, list):
+                for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
+                    if fname in outputs:
+                        return sname, fname, schema_rel
+            skills = plan_data.get("skills")
+            if isinstance(skills, list):
+                suites = [
+                    _SKILL_TO_SUITE[s]
+                    for s in skills
+                    if isinstance(s, str) and s in _SKILL_TO_SUITE
+                ]
+                if "repository-audits" in suites:
+                    fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
+                    return "repository-audits", fname, schema_rel
+                if suites:
+                    fname, schema_rel = _SUITE_ARTIFACTS[suites[0]]
+                    return suites[0], fname, schema_rel
+    if (
+        workspace_dir
+        and workspace_dir.is_dir()
+        and not (workspace_dir / "audit.json").is_file()
+    ):
+        for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
+            if (workspace_dir / fname).is_file():
+                return sname, fname, schema_rel
+    if specialist_skill and specialist_skill in _SKILL_TO_SUITE:
+        sname = _SKILL_TO_SUITE[specialist_skill]
+        fname, schema_rel = _SUITE_ARTIFACTS[sname]
+        return sname, fname, schema_rel
+    fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
+    return "repository-audits", fname, schema_rel
+
+
 def formulate_recovery_instructions(
     failure: dict[str, Any],
     run_data: dict[str, Any] | None = None,
     workspace_dir: Path | None = None,
+    specialist_skill: str | None = None,
 ) -> dict[str, Any]:
-    """Generate concrete recovery steps to resume audit from the last valid checkpoint."""
+    """Generate concrete recovery steps to resume a run from the last valid checkpoint."""
     last_checkpoint = None
     instructions = []
 
-    dir_str = str(workspace_dir) if workspace_dir else "<audit-run-dir>"
+    suite_name, deliverable, schema_rel = _resolve_recovery_suite(
+        run_data, workspace_dir, specialist_skill
+    )
+    is_domain_suite = deliverable != "audit.json"
+    dir_str = (
+        str(workspace_dir)
+        if workspace_dir
+        else ("<run-dir>" if is_domain_suite else "<audit-run-dir>")
+    )
 
     if run_data and run_data.get("checkpoints"):
         last_ckpt = run_data["checkpoints"][-1]
@@ -1435,23 +1636,39 @@ def formulate_recovery_instructions(
         instructions.append(
             f"3. Mark current state paused: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Paused after tool timeout triage'."
         )
-        instructions.append(
-            f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}"
-        )
+        if is_domain_suite:
+            instructions.append(
+                f"4. Validate {deliverable} and resume {suite_name} workflow: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+            )
+        else:
+            instructions.append(
+                f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}"
+            )
 
     elif ftype == "schema_validation_error":
         instructions.append(
             f"1. Inspect the schema validation error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
         )
-        instructions.append(
-            f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {dir_str}/audit.json"
-        )
-        instructions.append(
-            "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json."
-        )
-        instructions.append(
-            f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}"
-        )
+        if is_domain_suite:
+            instructions.append(
+                f"2. Validate {deliverable} against {schema_rel}: python scripts/fred.py validate-run {dir_str}"
+            )
+            instructions.append(
+                f"3. Correct missing required properties or remove undeclared keys in {dir_str}/{deliverable} (additionalProperties is false)."
+            )
+            instructions.append(
+                f"4. Re-verify {deliverable} conformance, then resume {suite_name} run: python scripts/fred.py resume {dir_str}"
+            )
+        else:
+            instructions.append(
+                f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {dir_str}/audit.json"
+            )
+            instructions.append(
+                "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json."
+            )
+            instructions.append(
+                f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}"
+            )
 
     elif ftype == "context_limit":
         instructions.append(
@@ -1460,9 +1677,14 @@ def formulate_recovery_instructions(
         instructions.append(
             f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Context limit reached; clearing context'."
         )
-        instructions.append(
-            "3. Split the specialist analysis into smaller bounded workflow slices."
-        )
+        if is_domain_suite:
+            instructions.append(
+                f"3. Persist completed entries in {dir_str}/{deliverable} and split remaining {suite_name} phases into smaller slices."
+            )
+        else:
+            instructions.append(
+                "3. Split the specialist analysis into smaller bounded workflow slices."
+            )
         instructions.append(
             f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {dir_str}"
         )
@@ -1471,11 +1693,31 @@ def formulate_recovery_instructions(
         instructions.append(
             f"1. Review the unclassified error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
         )
+        if is_domain_suite:
+            instructions.append(
+                f"2. Inspect {dir_str}/run.json and {dir_str}/{deliverable} (schema: {schema_rel}) for partial progress."
+            )
+            if suite_name == "automated-testing":
+                instructions.append(
+                    f"3. Confirm `--allow-fixes` authority in {dir_str}/run.json if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                )
+            else:
+                instructions.append(
+                    f"3. Validate {deliverable} and resume {suite_name} run from the last valid checkpoint: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                )
+        else:
+            instructions.append(
+                f"2. Inspect {dir_str}/run.json and {dir_str}/audit.json for partial progress."
+            )
+            instructions.append(
+                f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
+            )
+
+    if suite_name == "automated-testing" and not any(
+        "--allow-fixes" in step for step in instructions
+    ):
         instructions.append(
-            f"2. Inspect {dir_str}/run.json and {dir_str}/audit.json for partial progress."
-        )
-        instructions.append(
-            f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
+            f"{len(instructions) + 1}. Confirm `--allow-fixes` authority in {dir_str}/run.json (`application_changes: true`) before writing runnable test files to the repository."
         )
 
     return {
@@ -1528,11 +1770,25 @@ def generate_diagnostic_bundle(
         run_file = workspace_dir / "run.json"
         if run_file.is_file():
             with contextlib.suppress(OSError, ValueError):
-                run_data = json.loads(run_file.read_text(encoding="utf-8"))
-        audit_file = workspace_dir / "audit.json"
-        if audit_file.is_file():
-            with contextlib.suppress(OSError, ValueError):
-                audit_data = json.loads(audit_file.read_text(encoding="utf-8"))
+                loaded_run = json.loads(run_file.read_text(encoding="utf-8"))
+                if isinstance(loaded_run, dict):
+                    run_data = loaded_run
+        _, expected_artifact, _ = _resolve_recovery_suite(run_data, workspace_dir, None)
+        candidate_files = [expected_artifact] + [
+            name
+            for name in ("audit.json", *_DOMAIN_ARTIFACTS)
+            if name != expected_artifact
+        ]
+        for fname in candidate_files:
+            artifact_file = workspace_dir / fname
+            if artifact_file.is_file():
+                with contextlib.suppress(OSError, ValueError):
+                    loaded_artifact = json.loads(
+                        artifact_file.read_text(encoding="utf-8")
+                    )
+                    if isinstance(loaded_artifact, dict):
+                        audit_data = loaded_artifact
+                        break
 
     resolved_session_id = (
         session_id
@@ -1553,7 +1809,12 @@ def generate_diagnostic_bundle(
     failure["summary"] = scrub_credentials(failure.get("summary", ""))
 
     # Generate actionable recovery steps
-    recovery = formulate_recovery_instructions(failure, run_data, workspace_dir)
+    recovery = formulate_recovery_instructions(
+        failure,
+        run_data,
+        workspace_dir,
+        specialist_skill=correlated.get("specialist_skill"),
+    )
     recovery["instructions"] = [
         scrub_credentials(inst) for inst in recovery.get("instructions", [])
     ]
