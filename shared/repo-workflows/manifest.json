@@ -3,7 +3,6 @@
   "suite": "repository-workflows",
   "files": [
     "references/workflow-protocol.md",
-    "assets/handoff.md",
-    "assets/workflow.schema.json"
+    "assets/handoff.md"
   ]
 }

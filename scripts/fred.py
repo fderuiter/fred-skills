@@ -11,7 +11,7 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 from fredlib import evaluations, installation, releases, reports, repository, runs
-from fredlib.common import ROOT, atomic_json, read_json
+from fredlib.common import ROOT, atomic_json, read_json, resolve_audit_path
 
 HOST_CHOICES = sorted(read_json(ROOT / "catalog/hosts.json")["hosts"].keys())
 TASK_CHOICES = sorted(read_json(ROOT / "catalog/recipes.json")["recipes"].keys())
@@ -358,7 +358,13 @@ def parser() -> argparse.ArgumentParser:
         parents=[sub_common],
         help="Render human-readable HTML report from an audit",
     )
-    sub_rep.add_argument("audit", type=Path, help="Path to audit.json file")
+    sub_rep.add_argument(
+        "audit",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Path to audit.json file or audit run directory (default: current working directory)",
+    )
     sub_rep.add_argument(
         "--output",
         type=Path,
@@ -376,7 +382,13 @@ def parser() -> argparse.ArgumentParser:
         parents=[sub_common],
         help="Generate local issue drafts for confirmed findings without remote writes",
     )
-    sub_iss.add_argument("audit", type=Path, help="Path to audit.json file")
+    sub_iss.add_argument(
+        "audit",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Path to audit.json file or audit run directory (default: current working directory)",
+    )
     sub_iss.add_argument(
         "--output",
         type=Path,
@@ -449,7 +461,13 @@ def parser() -> argparse.ArgumentParser:
         parents=[sub_common],
         help="Export audit findings to a standard SARIF 2.1.0 report",
     )
-    sub_exp.add_argument("audit", type=Path, help="Path to audit.json file")
+    sub_exp.add_argument(
+        "audit",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Path to audit.json file or audit run directory (default: current working directory)",
+    )
     sub_exp.add_argument(
         "--output",
         type=Path,
@@ -752,13 +770,15 @@ def dispatch(a: argparse.Namespace) -> Any:
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "report":
         target = reports.render(
-            read_json(a.audit), a.output, read_json(a.prior) if a.prior else None
+            read_json(resolve_audit_path(a.audit)),
+            a.output,
+            read_json(resolve_audit_path(a.prior)) if a.prior else None,
         )
         return {"output": str(target)}
     if a.command == "issues":
         return {
             "drafts": reports.issue_drafts(
-                read_json(a.audit), a.output, format=a.format
+                read_json(resolve_audit_path(a.audit)), a.output, format=a.format
             ),
             "remote_writes": 0,
         }
@@ -774,36 +794,43 @@ def dispatch(a: argparse.Namespace) -> Any:
         from audit_to_sarif import convert_file
 
         data = convert_file(
-            a.audit,
+            resolve_audit_path(a.audit),
             a.output,
             filter_refuted=a.filter_refuted or a.filter_refuted_or_info,
             filter_info=a.filter_info or a.filter_refuted_or_info,
         )
         return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
     if a.command == "installed":
-        return installation.query_installed(a.destination, a.host, a.scope)
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        return installation.query_installed(target)
     if a.command in {"install", "update"}:
-        return installation.install(
-            a.destination,
-            a.host,
-            a.scope,
-            a.pack,
-            a.skill,
-            a.command == "update",
-            a.dry_run,
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.InstallOptions(
+            pack=a.pack,
+            skills=a.skill,
+            update=a.command == "update",
+            dry_run=a.dry_run,
         )
+        return installation.install(target, options)
     if a.command == "remove":
         if not a.skill:
             raise ValueError(
                 "Remove requires at least one --skill; there is no implicit remove-all"
             )
-        return installation.remove(a.destination, a.host, a.scope, a.skill, a.dry_run)
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.RemoveOptions(skills=a.skill, dry_run=a.dry_run)
+        return installation.remove(target, options)
     if a.command == "rollback":
-        return installation.rollback(a.destination, a.host, a.scope)
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.RollbackOptions(target=target)
+        return installation.rollback(target, options)
     if a.command == "recover-install":
-        return installation.recover(
-            a.destination, a.host, a.scope, a.confirm_interrupted
+        target = installation.TargetEnvironment(a.destination, a.host, a.scope)
+        options = installation.RecoverOptions(
+            confirm_interrupted=a.confirm_interrupted,
+            target=target,
         )
+        return installation.recover(target, options)
     if a.command == "evaluate":
         argv = (
             a.adapter_argv

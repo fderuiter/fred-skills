@@ -643,6 +643,27 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(51, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
 
+    def test_all_skills_have_output_format_schemas(self):
+        skills_dir = ROOT / "skills"
+        packages = sorted(
+            p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
+        )
+        self.assertEqual(len(packages), 51)
+        for package in packages:
+            schemas = sorted(package.glob("assets/*.schema.json"))
+            self.assertGreater(
+                len(schemas),
+                0,
+                f"{package.name} missing output format schema in assets/",
+            )
+            for schema_path in schemas:
+                schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    schema_data.get("$schema"),
+                    "https://json-schema.org/draft/2020-12/schema",
+                    f"{schema_path} does not use draft 2020-12",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

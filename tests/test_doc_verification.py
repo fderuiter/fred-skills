@@ -20,10 +20,13 @@ from skill_tools import (
 )
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
+    TOOL_DISPATCHERS,
     discover_doc_blocks,
     execute_snippet_command,
     extract_blocks_from_file,
+    find_tool_dispatcher,
     get_registered_fred_subcommands,
+    register_tool_dispatcher,
     verify_all_snippets,
     verify_toolkit_subcommands,
 )
@@ -447,6 +450,124 @@ class DocSnippetVerificationTests(unittest.TestCase):
             root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
         )
         self.assertEqual([], errors, f"Full-file verification failed: {errors}")
+
+    def test_unknown_shell_command_passes_without_false_positive(self):
+        """Unknown shell commands pass without false positive failures when no tool matches."""
+        ok, msg = execute_snippet_command("echo 'hello world'", root=ROOT)
+        self.assertTrue(ok)
+        self.assertEqual("", msg)
+
+        ok2, msg2 = execute_snippet_command("ls -la /tmp", root=ROOT)
+        self.assertTrue(ok2)
+        self.assertEqual("", msg2)
+
+    def test_custom_tool_dispatcher_registration_and_dispatch(self):
+        """Developers can register custom tool validation handlers via prefix matching."""
+        invoked_commands = []
+
+        def custom_handler(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+            invoked_commands.append(cmd)
+            if "--fail" in parts:
+                return False, "custom failure"
+            return True, ""
+
+        saved_dispatchers = dict(TOOL_DISPATCHERS)
+        try:
+            register_tool_dispatcher("custom-tool", custom_handler)
+            self.assertIsNotNone(find_tool_dispatcher(["custom-tool", "run"]))
+
+            ok, msg = execute_snippet_command("custom-tool run --fast", root=ROOT)
+            self.assertTrue(ok)
+            self.assertEqual("", msg)
+            self.assertEqual(invoked_commands, ["custom-tool run --fast"])
+
+            ok_fail, msg_fail = execute_snippet_command(
+                "custom-tool run --fail", root=ROOT
+            )
+            self.assertFalse(ok_fail)
+            self.assertEqual("custom failure", msg_fail)
+        finally:
+            TOOL_DISPATCHERS.clear()
+            TOOL_DISPATCHERS.update(saved_dispatchers)
+
+    def test_cyclomatic_complexity_below_threshold(self):
+        """All verifier functions maintain cyclomatic complexity strictly below 10."""
+        import ast
+
+        def _cyclomatic_complexity(node: ast.AST) -> int:
+            count = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                    ),
+                ):
+                    count += 1
+                elif isinstance(child, ast.BoolOp):
+                    count += len(child.values) - 1
+                elif isinstance(child, (ast.IfExp, ast.Assert)):
+                    count += 1
+            return count
+
+        src_path = ROOT / "scripts/verify_doc_snippets.py"
+        tree = ast.parse(src_path.read_text(encoding="utf-8"))
+        for item in tree.body:
+            if isinstance(item, ast.FunctionDef):
+                complexity = _cyclomatic_complexity(item)
+                self.assertLess(
+                    complexity,
+                    10,
+                    f"Function '{item.name}' cyclomatic complexity {complexity} exceeds limit of 10",
+                )
+
+    def test_markdown_parsing_nesting_depth(self):
+        """Markdown parsing functions maintain nesting depth of 3 or fewer levels."""
+        import ast
+
+        def _max_nesting_depth(node: ast.AST, current_depth: int = 0) -> int:
+            depths = [current_depth]
+            for child in ast.iter_child_nodes(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.Try,
+                    ),
+                ):
+                    depths.append(_max_nesting_depth(child, current_depth + 1))
+                else:
+                    depths.append(_max_nesting_depth(child, current_depth))
+            return max(depths)
+
+        src_path = ROOT / "scripts/verify_doc_snippets.py"
+        tree = ast.parse(src_path.read_text(encoding="utf-8"))
+        parsing_functions = {
+            "_is_block_in_range",
+            "_merge_command_lines",
+            "_extract_commands_from_block",
+            "_parse_fenced_blocks",
+            "extract_blocks_from_file",
+        }
+        for item in tree.body:
+            if isinstance(item, ast.FunctionDef) and item.name in parsing_functions:
+                depth = _max_nesting_depth(item)
+                self.assertLessEqual(
+                    depth,
+                    3,
+                    f"Function '{item.name}' nesting depth {depth} exceeds limit of 3",
+                )
 
 
 if __name__ == "__main__":

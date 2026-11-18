@@ -543,6 +543,159 @@ class InstallationTests(unittest.TestCase):
         installation.rollback(dest, root=self.source)
         self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
 
+    def test_lifecycle_functions_accept_typed_dataclasses(self):
+        dest = self.root / "typed_dataclass_project"
+        target_env = installation.TargetEnvironment(
+            destination=dest, host="codex", scope="project", root=self.source
+        )
+        install_opts = installation.InstallOptions(skills=["sample"])
+        res_install = installation.install(target_env, install_opts)
+        self.assertEqual("install", res_install["action"])
+        self.assertEqual(["sample"], res_install["skills"])
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+
+        res_query = installation.query_installed(target_env)
+        self.assertIn("sample", res_query["skills"])
+
+        remove_opts = installation.RemoveOptions(skills=["sample"])
+        res_remove = installation.remove(target_env, remove_opts)
+        self.assertEqual("remove", res_remove["action"])
+        self.assertFalse((dest / ".agents/skills/sample").exists())
+
+        rollback_opts = installation.RollbackOptions(target=target_env)
+        res_rollback = installation.rollback(target_env, rollback_opts)
+        self.assertEqual("rollback", res_rollback["action"])
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+
+    def test_single_dataclass_invocation_with_embedded_target(self):
+        dest = self.root / "single_dataclass_project"
+        target_env = installation.TargetEnvironment(
+            destination=dest, host="codex", scope="project", root=self.source
+        )
+        install_opts = installation.InstallOptions(
+            pack="starter", skills=["sample"], target=target_env
+        )
+        res_install = installation.install(install_opts)
+        self.assertEqual("install", res_install["action"])
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+
+        remove_opts = installation.RemoveOptions(skills=["sample"], target=target_env)
+        res_remove = installation.remove(remove_opts)
+        self.assertEqual("remove", res_remove["action"])
+        self.assertFalse((dest / ".agents/skills/sample").exists())
+
+    def test_recover_accepts_typed_dataclass(self):
+        import os
+
+        from fredlib.common import digest, package_files
+
+        dest = self.root / "recover_typed_project"
+        target_env = installation.TargetEnvironment(
+            destination=dest, host="codex", scope="project", root=self.source
+        )
+        installation.install(target_env, installation.InstallOptions(pack="starter"))
+        target, state = installation.locations(target_env)
+        before = installation.receipt(state)
+        backups = state / "backups/crash-fixture-typed"
+        backups.mkdir(parents=True)
+        expected_before = (target / "sample/SKILL.md").read_bytes()
+        os.replace(target / "sample", backups / "sample")
+        (target / "sample").mkdir()
+        (target / "sample/SKILL.md").write_text("Interrupted typed package")
+        atomic_json(
+            state / "operation.json",
+            {
+                "id": "crash-fixture-typed",
+                "phase": "prepared",
+                "skills": ["sample"],
+                "before": before["skills"],
+                "backups": str(backups),
+                "after_hashes": {"sample": digest(package_files(target / "sample"))},
+            },
+        )
+        (state / "operation.lock").write_text("interrupted")
+
+        rec_opts_unconfirmed = installation.RecoverOptions(
+            confirm_interrupted=False, target=target_env
+        )
+        with self.assertRaises(ValueError):
+            installation.recover(target_env, rec_opts_unconfirmed)
+
+        rec_opts_confirmed = installation.RecoverOptions(
+            confirm_interrupted=True, target=target_env
+        )
+        result = installation.recover(target_env, rec_opts_confirmed)
+        self.assertEqual("restored-before-state", result["recovery"])
+        self.assertEqual(expected_before, (target / "sample/SKILL.md").read_bytes())
+        self.assertFalse((state / "operation.lock").exists())
+
+    def test_installation_cyclomatic_complexity_under_ten(self):
+        import ast
+
+        def calculate_complexity(node):
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+            return complexity
+
+        install_py = ROOT / "scripts/fredlib/installation.py"
+        tree = ast.parse(install_py.read_text(encoding="utf-8"))
+        complexities = {}
+        for item in tree.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                complexities[item.name] = calculate_complexity(item)
+            elif isinstance(item, ast.ClassDef):
+                for method in item.body:
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        complexities[f"{item.name}.{method.name}"] = (
+                            calculate_complexity(method)
+                        )
+
+        for name, score in complexities.items():
+            self.assertLessEqual(
+                score,
+                10,
+                f"Function {name} exceeds cyclomatic complexity limit of 10 (score: {score})",
+            )
+
+    def test_installation_functions_have_at_most_four_positional_parameters(self):
+        import ast
+
+        install_py = ROOT / "scripts/fredlib/installation.py"
+        tree = ast.parse(install_py.read_text(encoding="utf-8"))
+        for item in tree.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                pos_count = len(item.args.posonlyargs) + len(item.args.args)
+                self.assertLessEqual(
+                    pos_count,
+                    4,
+                    f"Function {item.name} has {pos_count} positional parameters (limit is 4)",
+                )
+            elif isinstance(item, ast.ClassDef):
+                for method in item.body:
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        pos_count = len(method.args.posonlyargs) + len(method.args.args)
+                        self.assertLessEqual(
+                            pos_count,
+                            4,
+                            f"Method {item.name}.{method.name} has {pos_count} positional parameters (limit is 4)",
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()
