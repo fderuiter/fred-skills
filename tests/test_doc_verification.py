@@ -301,8 +301,8 @@ class DocSnippetVerificationTests(unittest.TestCase):
 
     def test_extract_and_execute_snippets_from_readme_and_contributing(self):
         """The test suite must extract and execute shell command snippets from README.md, CONTRIBUTING.md, and docs/usage.md."""
-        self.assertEqual((27, None), DOCUMENTED_RANGES["README.md"])
-        self.assertEqual((24, None), DOCUMENTED_RANGES["docs/usage.md"])
+        self.assertEqual((1, None), DOCUMENTED_RANGES["README.md"])
+        self.assertEqual((1, None), DOCUMENTED_RANGES["docs/usage.md"])
         usage_blocks = discover_doc_blocks(root=ROOT)["docs/usage.md"]
         usage_cmds = [cmd for block in usage_blocks for _, cmd in block.commands]
         self.assertTrue(
@@ -788,6 +788,184 @@ class DocSnippetVerificationTests(unittest.TestCase):
                     3,
                     f"Function '{item.name}' nesting depth {depth} exceeds limit of 3",
                 )
+
+    def test_documented_ranges_cover_all_seven_guides_completely(self) -> None:
+        """All 7 registered guides use full-file (1, None) bounds."""
+        expected_guides = {
+            "README.md",
+            "CONTRIBUTING.md",
+            "AGENTS.md",
+            "docs/toolkit.md",
+            "docs/usage.md",
+            "docs/runbooks.md",
+            "docs/integration.md",
+        }
+        self.assertEqual(expected_guides, set(DOCUMENTED_RANGES.keys()))
+        for guide, bounds in DOCUMENTED_RANGES.items():
+            self.assertEqual(
+                (1, None),
+                bounds,
+                f"Expected full-file (1, None) bounds for {guide}, got {bounds}",
+            )
+
+    def test_default_verify_all_snippets_executes_all_seven_guides(self) -> None:
+        """Default verify_all_snippets executes commands in AGENTS.md, docs/toolkit.md, and docs/usage.md."""
+        executed_targets: list[str] = []
+        orig_tar = TOOL_DISPATCHERS[("tar",)]
+        orig_py = TOOL_DISPATCHERS[("python",)]
+
+        def spy_tar(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+            executed_targets.append(cmd)
+            return orig_tar(parts, root, cmd)
+
+        def spy_py(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+            executed_targets.append(cmd)
+            return orig_py(parts, root, cmd)
+
+        TOOL_DISPATCHERS[("tar",)] = spy_tar
+        TOOL_DISPATCHERS[("python",)] = spy_py
+        try:
+            errors = verify_all_snippets(root=ROOT)
+            self.assertEqual([], errors)
+        finally:
+            TOOL_DISPATCHERS[("tar",)] = orig_tar
+            TOOL_DISPATCHERS[("python",)] = orig_py
+
+        # AGENTS.md has package_skills.py --output /tmp/release-verify
+        self.assertTrue(
+            any("package_skills.py" in cmd for cmd in executed_targets),
+            "Expected AGENTS.md snippets to execute on default run",
+        )
+        # docs/toolkit.md has audit_to_sarif.py
+        self.assertTrue(
+            any("audit_to_sarif.py" in cmd for cmd in executed_targets),
+            "Expected docs/toolkit.md snippets to execute on default run",
+        )
+        # docs/usage.md has tar -xf fred-skills-0.2.0-starter.tar / complete.tar
+        self.assertTrue(
+            any("fred-skills-0.2.0-starter.tar" in cmd for cmd in executed_targets),
+            "Expected docs/usage.md starter.tar snippet to execute on default run",
+        )
+        self.assertTrue(
+            any("fred-skills-0.2.0-complete.tar" in cmd for cmd in executed_targets),
+            "Expected docs/usage.md complete.tar snippet to execute on default run",
+        )
+
+    def test_tar_validation_enforces_compression_and_rejects_unknown_flags(
+        self,
+    ) -> None:
+        """_validate_tar accepts -xf/-tf on .tar and -xzf/-ztf on .tar.gz, rejecting mismatches and unknown flags."""
+        valid_cmds = [
+            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/",
+            "tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agents/skills/",
+            "tar -tf fred-skills-0.2.0-starter.tar",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/",
+            "tar -ztf repo-audit-concurrency.tar.gz",
+        ]
+        for cmd in valid_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(ok, f"Expected valid tar command to pass: {cmd} -> {msg}")
+
+        invalid_cmds = [
+            "tar -xzf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/",
+            "tar -ztf fred-skills-0.2.0-complete.tar",
+            "tar -xf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/",
+            "tar -tf fred-skills-suite.tar.gz",
+            "tar -xzf repo-audit-concurrency.tar.gz --invalid-flag",
+            "tar -xf fred-skills-0.2.0-starter.tar --unknown-option",
+            "tar -czf out.tar.gz skills/",
+        ]
+        for cmd in invalid_cmds:
+            ok, _ = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(ok, f"Expected invalid tar command to fail: {cmd}")
+
+    def test_invalid_cli_flag_probes_fail_across_all_dispatchers(self) -> None:
+        """Invalid CLI flags across make, python, ruff, pre-commit, sha256sum, git, curl, gh, and marketplace must fail."""
+        invalid_probes = [
+            "make check --invalid-flag",
+            "make --nonexistent-option",
+            "python --invalid-flag scripts/validate_skills.py",
+            "python -m venv .venv --invalid-flag",
+            "python -m pip install -r requirements-dev.txt --invalid-flag",
+            "python -m unittest discover -s tests -v --invalid-flag",
+            "python -m json.tool receipt.json --invalid-flag",
+            "python -m mypy --invalid-flag",
+            "python scripts/sync_audit_resources.py --check --invalid-flag",
+            "python scripts/sync_audit_resources.py --invalid-flag",
+            "python scripts/validate_skills.py --invalid-flag",
+            "python scripts/package_skills.py --output /tmp/release-verify --invalid-flag",
+            "python scripts/run_checks.py --invalid-flag",
+            "python scripts/check_doc_links.py --check",
+            "python scripts/check_doc_links.py --invalid-flag",
+            "python scripts/verify_doc_snippets.py --invalid-flag",
+            "python scripts/verify_workflow_actions.py --invalid-flag",
+            "python scripts/audit_to_sarif.py audit.json --output out.sarif --invalid-flag",
+            "python examples/walkthrough/run_demo.py --output audit-output/demo --invalid-flag",
+            "python skills/repo-audit-program/scripts/validate_audit.py audit.json --invalid-flag",
+            "ruff format . --invalid-flag",
+            "ruff check . --invalid-flag",
+            "pre-commit run --all-files --invalid-flag",
+            "pre-commit install --invalid-flag",
+            "sha256sum --ignore-missing -c checksums.sha256 --invalid-flag",
+            "git status --invalid-flag",
+            "git -C /path/to/repository rev-parse --invalid-flag",
+            "git -C /path/to/repository fetch --invalid-flag",
+            "git --invalid-flag status",
+            "curl -LO --invalid-flag https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS",
+            "gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills --invalid-flag",
+            "/plugin marketplace add fderuiter/fred-skills --invalid-flag",
+            "/plugin install complete@fred-skills --invalid-flag",
+            "codex plugin add starter@fred-skills --invalid-flag",
+        ]
+        for probe in invalid_probes:
+            ok, _ = execute_snippet_command(probe, root=ROOT)
+            self.assertFalse(ok, f"Invalid-flag probe unexpectedly passed: {probe}")
+
+    def test_shell_operators_pipes_and_redirections_split_before_dispatch(
+        self,
+    ) -> None:
+        """Logical operators, pipes, and redirections split cleanly while preserving quotes and placeholders."""
+        valid_compound = [
+            'python -m json.tool /path/to/project/.fred-skills/<host>-<scope>/receipt.json > /dev/null && echo "Valid"',
+            "lsof /path/to/project/.fred-skills/<host>-<scope>/operation.lock 2>/dev/null || true",
+            "which git && git --version",
+            "git -C /path/to/repository fetch --unshallow || git -C /path/to/repository fetch --deepen=100 origin main",
+            'grep -E "(foo|bar)" file.txt || echo "done"',
+        ]
+        for cmd in valid_compound:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(ok, f"Valid compound command failed: {cmd} -> {msg}")
+
+        invalid_compound = [
+            "which git && git --invalid-flag",
+            "python -m json.tool receipt.json > /dev/null && make check --invalid-flag",
+            "echo start | python scripts/fred.py search --invalid-flag",
+        ]
+        for cmd in invalid_compound:
+            ok, _ = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(ok, f"Invalid compound command unexpectedly passed: {cmd}")
+
+    def test_make_dispatcher_fallback_without_gnu_make(self) -> None:
+        """_validate_make validates both flags and Makefile targets when GNU make is unavailable."""
+        from unittest.mock import patch
+
+        with patch("verify_doc_snippets.shutil.which", return_value=None):
+            ok_valid, msg_valid = execute_snippet_command("make check", root=ROOT)
+            self.assertTrue(ok_valid, msg_valid)
+
+            ok_bad_flag, _ = execute_snippet_command(
+                "make check --invalid-flag", root=ROOT
+            )
+            self.assertFalse(ok_bad_flag)
+
+            ok_bad_target, _ = execute_snippet_command("make bogus_target", root=ROOT)
+            self.assertFalse(ok_bad_target)
+
+    def test_agents_md_includes_doc_verification_scripts(self) -> None:
+        """AGENTS.md fallback command block includes check_doc_links.py and verify_doc_snippets.py."""
+        agents_text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("python scripts/check_doc_links.py", agents_text)
+        self.assertIn("python scripts/verify_doc_snippets.py", agents_text)
 
 
 if __name__ == "__main__":

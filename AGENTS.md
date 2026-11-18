@@ -48,6 +48,8 @@ python scripts/run_checks.py --phase typecheck
 python scripts/run_checks.py --phase packages
 python scripts/run_checks.py --phase docs
 python scripts/run_checks.py --phase tests
+python scripts/check_doc_links.py
+python scripts/verify_doc_snippets.py
 python scripts/verify_workflow_actions.py --check
 python scripts/package_skills.py --output /tmp/release-verify
 ```
