@@ -664,6 +664,91 @@ class PackageTests(unittest.TestCase):
                     f"{schema_path} does not use draft 2020-12",
                 )
 
+    def test_mypy_static_type_enforcement_contracts(self) -> None:
+        import re
+        import tomllib
+
+        pyproject_path = ROOT / "pyproject.toml"
+        self.assertTrue(pyproject_path.is_file(), "Root pyproject.toml must exist")
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        mypy_cfg = pyproject.get("tool", {}).get("mypy", {})
+        self.assertEqual(mypy_cfg.get("python_version"), "3.12")
+        self.assertEqual(mypy_cfg.get("mypy_path"), [".", "scripts"])
+        self.assertEqual(
+            mypy_cfg.get("files"),
+            ["scripts", "tests", "evals", "examples", "skills"],
+        )
+        self.assertTrue(mypy_cfg.get("explicit_package_bases"))
+        self.assertTrue(mypy_cfg.get("namespace_packages"))
+        self.assertTrue(mypy_cfg.get("show_error_codes"))
+        excludes = mypy_cfg.get("exclude", [])
+        self.assertTrue(
+            any(
+                re.search(
+                    pattern, "skills/repo-audit-synthesis/scripts/audit_to_sarif.py"
+                )
+                for pattern in excludes
+            ),
+            "Synced audit_to_sarif.py copy must be excluded from batch mypy discovery",
+        )
+        overrides = mypy_cfg.get("overrides", [])
+        self.assertEqual(len(overrides), 1)
+        self.assertEqual(overrides[0].get("module"), ["playwright", "playwright.*"])
+        self.assertTrue(overrides[0].get("ignore_missing_imports"))
+
+        reqs = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+        self.assertIn("mypy==2.4.0", reqs)
+        self.assertIn("types-PyYAML==6.0.12.20261113", reqs)
+        self.assertIn("types-jsonschema==4.26.0.20261006", reqs)
+
+        pre_commit_cfg = yaml.safe_load(
+            (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        )
+        hooks = {h["id"]: h for h in pre_commit_cfg["repos"][0]["hooks"]}
+        self.assertEqual(len(hooks), 10)
+        self.assertIn("mypy", hooks)
+        self.assertEqual(hooks["mypy"].get("entry"), "python -m mypy")
+        self.assertEqual(hooks["mypy"].get("language"), "system")
+        self.assertFalse(hooks["mypy"].get("pass_filenames", True))
+        self.assertTrue(hooks["mypy"].get("always_run", False))
+
+        makefile_text = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("$(PYTHON) -m mypy", makefile_text)
+
+        validate_wf = yaml.safe_load(
+            (ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")
+        )
+        steps = validate_wf["jobs"]["validate"]["steps"]
+        self.assertTrue(
+            any(
+                s.get("run", "").strip() == "python -m mypy" and "if" not in s
+                for s in steps
+            ),
+            "validate.yml must run python -m mypy across matrix OS jobs",
+        )
+        win_steps = [s for s in steps if s.get("if") == "runner.os == 'Windows'"]
+        self.assertTrue(
+            any("python -m mypy" in s.get("run", "") for s in win_steps),
+            "validate.yml Windows fallback must include python -m mypy",
+        )
+
+    def test_mypy_cache_excluded_from_gitignore_and_repository_snapshot(self) -> None:
+        from fredlib import repository
+
+        gitignore_lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(
+            any(line.strip().rstrip("/") == ".mypy_cache" for line in gitignore_lines),
+            ".gitignore must ignore .mypy_cache",
+        )
+        self.assertIn(".mypy_cache", repository.IGNORED)
+
+        repo_dir = self.root / "unversioned-repo"
+        (repo_dir / ".mypy_cache").mkdir(parents=True)
+        (repo_dir / ".mypy_cache/cache.json").write_text("{}", encoding="utf-8")
+        (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
+        snap = repository.snapshot(repo_dir)
+        self.assertEqual(list(snap["files"].keys()), ["app.py"])
+
 
 if __name__ == "__main__":
     unittest.main()

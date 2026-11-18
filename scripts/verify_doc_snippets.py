@@ -13,25 +13,29 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
 
+fred: ModuleType | None
 try:
-    import fred
+    import fred as _fred_module
+
+    fred = _fred_module
 except ImportError:
     fred = None
 
 # Line ranges for acceptance criteria verification
 DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = {
     "README.md": (27, 122),
-    "CONTRIBUTING.md": (22, 73),
-    "AGENTS.md": (24, 52),
+    "CONTRIBUTING.md": (22, 76),
+    "AGENTS.md": (24, 53),
     "docs/toolkit.md": (10, 195),
     "docs/usage.md": (24, 127),
     "docs/runbooks.md": (1, None),
@@ -231,9 +235,7 @@ def extract_blocks_from_file(
 
 def discover_doc_blocks(
     root: Path = ROOT,
-    ranges: dict[str, tuple[int, int]]
-    | dict[str, tuple[int | None, int | None]]
-    | None = None,
+    ranges: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> dict[str, list[CommandBlock]]:
     """Discover all command blocks in the target documentation files."""
     if ranges is None:
@@ -274,8 +276,9 @@ def _parse_lifecycle_groups_fallback(content: str) -> dict[str, list[str]]:
 
 def get_registered_fred_subcommands(root: Path = ROOT) -> dict[str, list[str]]:
     """Get the registered lifecycle groups and subcommands from scripts/fred.py."""
-    if fred and hasattr(fred, "LIFECYCLE_GROUPS"):
-        return fred.LIFECYCLE_GROUPS  # type: ignore[no-any-return]
+    if fred is not None and hasattr(fred, "LIFECYCLE_GROUPS"):
+        groups: dict[str, list[str]] = fred.LIFECYCLE_GROUPS
+        return groups
 
     fred_py = root / "scripts/fred.py"
     if not fred_py.is_file():
@@ -756,7 +759,7 @@ def verify_all_snippets(
         errors.extend(subcmd_errors)
 
     if target_rel_paths is not None:
-        ranges_to_check: dict[str, tuple[int, int] | tuple[None, None]] = {
+        ranges_to_check: dict[str, tuple[int | None, int | None]] = {
             rel_path: DOCUMENTED_RANGES.get(rel_path, (None, None))
             for rel_path in target_rel_paths
         }
