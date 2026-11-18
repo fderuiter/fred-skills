@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from fredlib import runs as fred_runs
 from sync_audit_resources import _safe_relative_path, sync
 
 SCRIPT_PATH = ROOT / "scripts/audit_to_sarif.py"
@@ -23,6 +24,8 @@ FIXTURE_PATH = ROOT / "tests/fixtures/audit-valid.json"
 SARIF_SCHEMA_PATH = ROOT / "tests/fixtures/sarif-schema-2.1.0.json"
 
 spec = importlib.util.spec_from_file_location("audit_to_sarif", SCRIPT_PATH)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Unable to load {SCRIPT_PATH}")
 audit_to_sarif_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit_to_sarif_mod)
 audit_to_sarif = audit_to_sarif_mod.audit_to_sarif
@@ -50,9 +53,16 @@ class AuditToSarifTests(unittest.TestCase):
         self.assertEqual(1, len(run["tool"]["driver"]["rules"]))
 
         result = run["results"][0]
-        self.assertEqual("F-1", result["ruleId"])
+        expected_fp = fred_runs.fingerprint(
+            self.base_audit["findings"][0], self.base_audit
+        )
+        expected_rule_id = f"fred/concurrency/{expected_fp[:12]}"
+        self.assertEqual(expected_rule_id, result["ruleId"])
+        self.assertEqual("F-1", result["properties"]["findingId"])
         self.assertEqual(0, result["ruleIndex"])
         self.assertEqual("warning", result["level"])
+        self.assertEqual({"fred-skills/v1": expected_fp}, result["partialFingerprints"])
+        self.assertEqual({"fred-skills/v1": expected_fp}, result["fingerprints"])
         self.assertIn("Old result publishes", result["message"]["text"])
         self.assertIn("Fence publication", result["message"]["text"])
 
@@ -83,6 +93,7 @@ class AuditToSarifTests(unittest.TestCase):
             f = copy.deepcopy(self.base_audit["findings"][0])
             f["id"] = f"F-{i + 1}"
             f["severity"] = sev
+            f["root_cause"] = f"No publication fence ({sev})"
             audit["findings"].append(f)
 
         sarif = audit_to_sarif(audit)
@@ -209,14 +220,18 @@ class AuditToSarifTests(unittest.TestCase):
         """Requirement 4: Rule metadata such as finding identifiers, titles, topics, and remedies."""
         sarif = audit_to_sarif(self.base_audit)
         rule = sarif["runs"][0]["tool"]["driver"]["rules"][0]
+        expected_fp = fred_runs.fingerprint(
+            self.base_audit["findings"][0], self.base_audit
+        )
+        expected_rule_id = f"fred/concurrency/{expected_fp[:12]}"
 
-        self.assertEqual("F-1", rule["id"])
+        self.assertEqual(expected_rule_id, rule["id"])
         self.assertEqual("concurrency", rule["name"])
         self.assertEqual("Old result publishes", rule["shortDescription"]["text"])
         self.assertIn("Fence publication", rule["help"]["text"])
         self.assertIn("Fence publication", rule["help"]["markdown"])
         self.assertIn("concurrency", rule["help"]["text"])
-        self.assertEqual("F-1", rule["properties"]["id"])
+        self.assertEqual(expected_rule_id, rule["properties"]["id"])
         self.assertEqual("concurrency", rule["properties"]["topic"])
         self.assertEqual("Fence publication", rule["properties"]["remedy"])
         self.assertIn("cancellation", rule["properties"]["tags"])
@@ -239,7 +254,8 @@ class AuditToSarifTests(unittest.TestCase):
         sarif_filtered = audit_to_sarif(audit, filter_refuted=True)
         results = sarif_filtered["runs"][0]["results"]
         self.assertEqual(1, len(results))
-        self.assertEqual("F-1", results[0]["ruleId"])
+        self.assertEqual("F-1", results[0]["properties"]["findingId"])
+        self.assertTrue(results[0]["ruleId"].startswith("fred/concurrency/"))
 
     def test_filter_info_flag(self):
         """Requirement 5: Filter out info findings."""
@@ -258,7 +274,8 @@ class AuditToSarifTests(unittest.TestCase):
         sarif_filtered = audit_to_sarif(audit, filter_info=True)
         results = sarif_filtered["runs"][0]["results"]
         self.assertEqual(1, len(results))
-        self.assertEqual("F-1", results[0]["ruleId"])
+        self.assertEqual("F-1", results[0]["properties"]["findingId"])
+        self.assertTrue(results[0]["ruleId"].startswith("fred/concurrency/"))
 
     def test_filter_refuted_or_info_flag(self):
         audit = copy.deepcopy(self.base_audit)
@@ -277,7 +294,8 @@ class AuditToSarifTests(unittest.TestCase):
         sarif = audit_to_sarif(audit, filter_refuted=True, filter_info=True)
         results = sarif["runs"][0]["results"]
         self.assertEqual(1, len(results))
-        self.assertEqual("F-1", results[0]["ruleId"])
+        self.assertEqual("F-1", results[0]["properties"]["findingId"])
+        self.assertTrue(results[0]["ruleId"].startswith("fred/concurrency/"))
 
     def test_input_file_is_not_modified(self):
         """Constraint: The script must not modify the input audit.json file."""
@@ -532,7 +550,8 @@ class AuditToSarifTests(unittest.TestCase):
         data = json.loads(proc.stdout)
         results = data["runs"][0]["results"]
         self.assertEqual(1, len(results))
-        self.assertEqual("F-1", results[0]["ruleId"])
+        self.assertEqual("F-1", results[0]["properties"]["findingId"])
+        self.assertTrue(results[0]["ruleId"].startswith("fred/concurrency/"))
 
         # Test --filter-refuted-or-info
         proc = subprocess.run(
@@ -632,6 +651,174 @@ class AuditToSarifTests(unittest.TestCase):
         )
         self.assertEqual(500, len(sarif["runs"][0]["results"]))
         self.assertEqual(500, len(sarif["runs"][0]["tool"]["driver"]["rules"]))
+
+    def test_id_shift_from_f1_to_f2_preserves_rule_id_and_fingerprints(self):
+        sarif_before = audit_to_sarif(self.base_audit)
+        res_before = sarif_before["runs"][0]["results"][0]
+        expected_fp = fred_runs.fingerprint(
+            self.base_audit["findings"][0], self.base_audit
+        )
+
+        shifted_audit = copy.deepcopy(self.base_audit)
+        shifted_finding = copy.deepcopy(shifted_audit["findings"][0])
+        shifted_finding["id"] = "F-2"
+        shifted_finding["evidence_ids"] = ["E-9"]
+        shifted_audit["evidence"][0]["id"] = "E-9"
+        shifted_audit["evidence"][0]["line_start"] = 80
+        shifted_audit["evidence"][0]["line_end"] = 92
+
+        new_first = copy.deepcopy(self.base_audit["findings"][0])
+        new_first["id"] = "F-1"
+        new_first["topic"] = "security"
+        new_first["title"] = "Unvalidated redirect target"
+        new_first["root_cause"] = "Missing allowlist check on redirect URL"
+        new_first["evidence_ids"] = ["E-new"]
+        shifted_audit["evidence"].insert(
+            0,
+            {
+                "id": "E-new",
+                "path": "router.mjs",
+                "line_start": 10,
+                "line_end": 12,
+                "symbol": "Router.redirect",
+                "context": "Redirect handler",
+            },
+        )
+        shifted_audit["findings"] = [new_first, shifted_finding]
+
+        sarif_after = audit_to_sarif(shifted_audit)
+        res_after = sarif_after["runs"][0]["results"][1]
+
+        self.assertEqual(res_before["ruleId"], res_after["ruleId"])
+        self.assertEqual(
+            res_before["partialFingerprints"], res_after["partialFingerprints"]
+        )
+        self.assertEqual(res_before["fingerprints"], res_after["fingerprints"])
+        self.assertEqual(
+            {"fred-skills/v1": expected_fp}, res_after["partialFingerprints"]
+        )
+        self.assertEqual({"fred-skills/v1": expected_fp}, res_after["fingerprints"])
+        self.assertEqual("F-1", res_before["properties"]["findingId"])
+        self.assertEqual("F-2", res_after["properties"]["findingId"])
+
+    def test_deduplicates_rule_descriptors_per_deterministic_rule_id(self):
+        audit = copy.deepcopy(self.base_audit)
+        duplicate = copy.deepcopy(audit["findings"][0])
+        duplicate["id"] = "F-2"
+        audit["findings"].append(duplicate)
+
+        sarif = audit_to_sarif(audit)
+        run = sarif["runs"][0]
+        self.assertEqual(1, len(run["tool"]["driver"]["rules"]))
+        self.assertEqual(2, len(run["results"]))
+        self.assertEqual(0, run["results"][0]["ruleIndex"])
+        self.assertEqual(0, run["results"][1]["ruleIndex"])
+        self.assertEqual(run["results"][0]["ruleId"], run["results"][1]["ruleId"])
+        self.assertEqual("F-1", run["results"][0]["properties"]["findingId"])
+        self.assertEqual("F-2", run["results"][1]["properties"]["findingId"])
+
+        if SARIF_SCHEMA_PATH.exists():
+            import jsonschema
+
+            schema = json.loads(SARIF_SCHEMA_PATH.read_text(encoding="utf-8"))
+            errors = list(jsonschema.Draft202012Validator(schema).iter_errors(sarif))
+            self.assertEqual([], errors, [e.message for e in errors])
+
+    def test_standalone_packaging_has_no_fredlib_dependency(self):
+        import ast
+        import os
+
+        for script in [SCRIPT_PATH, SKILL_SCRIPT_PATH]:
+            tree = ast.parse(script.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        self.assertFalse(alias.name.startswith("fredlib"))
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    self.assertFalse(node.module.startswith("fredlib"))
+
+        isolated_dir = self.temp_path / "isolated_skill"
+        isolated_dir.mkdir()
+        isolated_script = isolated_dir / "audit_to_sarif.py"
+        isolated_script.write_bytes(SKILL_SCRIPT_PATH.read_bytes())
+        audit_file = isolated_dir / "audit.json"
+        audit_file.write_text(json.dumps(self.base_audit), encoding="utf-8")
+
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        proc = subprocess.run(
+            [sys.executable, str(isolated_script), str(audit_file)],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(isolated_dir),
+            env=env,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        exported = json.loads(proc.stdout)
+        self.assertIn("partialFingerprints", exported["runs"][0]["results"][0])
+
+    def test_sarif_roundtrip_export_then_import(self):
+        audit = copy.deepcopy(self.base_audit)
+        audit["findings"][0]["severity"] = "critical"
+        sarif_path = self.temp_path / "roundtrip.sarif"
+        convert_file(FIXTURE_PATH, sarif_path)
+
+        sarif_data = audit_to_sarif(audit)
+        sarif_path.write_text(json.dumps(sarif_data), encoding="utf-8")
+        imported = fred_runs.import_sarif(sarif_path)
+        obs = imported["observations"][0]
+
+        expected_fp = fred_runs.fingerprint(audit["findings"][0], audit)
+        self.assertEqual(f"fred/concurrency/{expected_fp[:12]}", obs["rule"])
+        self.assertEqual("error", obs["reported_level"])
+        self.assertEqual(
+            [
+                {
+                    "path": "session.mjs",
+                    "line": 4,
+                    "end_line": 8,
+                    "symbol": "Session.start",
+                }
+            ],
+            obs["locations"],
+        )
+        self.assertEqual({"fred-skills/v1": expected_fp}, obs["partial_fingerprints"])
+        self.assertEqual({"fred-skills/v1": expected_fp}, obs["fingerprints"])
+
+    def test_domain_artifacts_rejected_with_clear_audit_guidance(self):
+        payloads = {
+            "architecture.json": {
+                "schema_version": "1.0",
+                "title": "System Architecture",
+                "status": "draft",
+            },
+            "review.json": {
+                "schema_version": "1.0",
+                "verdict": "comment",
+                "summary": "Review summary",
+                "findings": [],
+            },
+            "testing.json": {
+                "schema_version": "1.0",
+                "component": "core",
+                "framework": "unittest",
+                "test_cases": [],
+            },
+        }
+        for filename, payload in payloads.items():
+            with self.subTest(artifact=filename):
+                with self.assertRaises(ValueError) as ctx:
+                    audit_to_sarif(payload)
+                self.assertIn("audit.json", str(ctx.exception))
+                self.assertIn(filename, str(ctx.exception))
+
+                dom_dir = self.temp_path / f"dom_{filename}"
+                dom_dir.mkdir()
+                (dom_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaises(ValueError) as dir_ctx:
+                    convert_file(dom_dir)
+                self.assertIn("audit.json", str(dir_ctx.exception))
+                self.assertIn(filename, str(dir_ctx.exception))
 
 
 class AuditToSarifSyncTests(unittest.TestCase):

@@ -5,19 +5,28 @@ schema 1.0 and original skill names remain compatible in 0.2.0. New run and veri
 records have their own versioned contracts. Breaking a persisted schema requires migration
 instructions and tests rather than quietly reinterpreting old evidence.
 
-Before publication, review the selected diff, run all checks in CONTRIBUTING.md, inspect
-the generated explorer, execute the synthetic walkthrough, build and verify the intended
-pack, and review the recorded behavioral limits. Choose a public LICENSE as owner.
+Before bumping `VERSION`, review the selected diff, run all checks in
+[CONTRIBUTING.md](../CONTRIBUTING.md), inspect the generated explorer, execute the
+synthetic walkthrough, build and verify the intended pack, review the recorded behavioral
+limits, and ensure [LICENSE](../LICENSE) remains present and nonempty.
 
-The release workflow can be run manually (`workflow_dispatch`) with `inputs.publish`
-(`false` by default) to build a pack and upload `release-artifacts` with read-only
-permissions without requiring `LICENSE` or running the privileged release job. Setting
-`inputs.publish` to `true` (with optional `inputs.tag`, defaulting to `v<VERSION>`) runs
-preflight checks and creates or updates a **draft** GitHub release only when
-`refs/tags/<tag>` already exists on `origin`, `LICENSE` is nonempty at that tag's commit,
-and the tag matches `v<VERSION>`. Pushing a `v*` tag prepares or updates the draft under
-the same checks. Publishing that draft remains a separate maintainer action. Ordinary pull
-requests have no contents-write job and never invoke live model adapters.
+Pushes to `main` run a read-only `preflight` gate that validates `v<VERSION>`, resolves
+an immutable `target_sha`, verifies `LICENSE` and `VERSION` at `target_sha`, and checks
+live GitHub Releases. When `v<VERSION>` is unpublished (or exists only as a draft), the
+release workflow checks out `target_sha`, runs `make check`, packages and verifies all
+release archives and SHA-256 manifests, attests SLSA build provenance, pushes tag
+`v<VERSION>` if missing on `origin`, and publishes (or promotes) the GitHub Release using
+`docs/release-notes-<VERSION>.md` when present (or generated notes otherwise). Subsequent
+`main` pushes with an already published `VERSION` skip packaging and publication cleanly.
+
+Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
+`workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)
+builds and uploads `release-artifacts` with read-only permissions while skipping the
+privileged `release` job entirely. Setting `inputs.publish` to `true` (with optional
+`inputs.tag`, defaulting to `v<VERSION>`) runs full preflight verification — requiring
+`refs/tags/<tag>` on `origin` for non-`main` refs or historical tags — and performs an
+idempotent recovery publication or draft promotion at `target_sha`. Ordinary pull requests
+have no `contents: write` job and never invoke live model adapters.
 
 ZIP and TAR archives contain standalone skill directories; the repository source is
 still needed for root CLI tooling. Archive content uses fixed paths/order/timestamps and
@@ -28,5 +37,5 @@ honestly report license state and never certify host behavior.
 
 Do not commit generated archives, personal installation receipts, real audits, or local
 benchmark outputs. Keep release notes concrete: task outcome, compatibility, validation
-actually executed, known gaps, and rollback/update guidance. This PR creates no tag or
-public release.
+actually executed, known gaps, and rollback/update guidance. Pull requests create no tag
+or public release; publication runs only after changes merge to `main`.

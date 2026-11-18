@@ -6,7 +6,7 @@ All workflows follow the audit-only default policy defined in [AGENTS.md](../AGE
 
 ## Supported Agent Hosts
 
-The toolkit catalogs four agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files.
+The toolkit catalogs eight agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json), and [gemini-extension.json](../gemini-extension.json).
 
 | Host | Project Path | User Path | Invocation Syntax | Marker File | Behavioral Test Status |
 | --- | --- | --- | --- | --- | --- |
@@ -14,6 +14,10 @@ The toolkit catalogs four agent hosts in [catalog/hosts.json](../catalog/hosts.j
 | Claude Code (`claude-code`) | `.claude/skills` | `.claude/skills` | `/skill-name` or natural language | `.claude` | not-executed |
 | Antigravity (`antigravity`) | `.agents/skills` | `.gemini/antigravity/skills` | Natural language invocation | `.agents` | not-executed |
 | Gemini CLI (`gemini-cli`) | `.gemini/skills` | `.gemini/skills` | Natural language invocation | `.gemini` | not-executed |
+| Cursor (`cursor`) | `.cursor/skills` | `.cursor/skills` | `/skill-name` or natural language | `.cursor` | not-executed |
+| GitHub Copilot (`copilot`) | `.github/skills` | `.copilot/skills` | `/skill-name` or natural language | `.github/skills` (primary), `.github` (fallback) | not-executed |
+| OpenCode (`opencode`) | `.opencode/skills` | `.config/opencode/skills` | `/skill-name` or natural language | `.opencode` (project), `.config/opencode` (user) | not-executed |
+| Windsurf (`windsurf`) | `.windsurf/skills` | `.config/devin/skills` | `@skill-name` or natural language | `.windsurf`, `.devin` (project), `.config/devin` (user) | not-executed |
 
 > Note: Host adapter filesystem checks verify directory layout. They do not certify host runtime behavior or model performance.
 
@@ -211,24 +215,18 @@ Use repo-audit-behavioral-contracts to inspect API request and response validati
 
 ## Host Discovery Mechanics and Marker Files
 
-The function `detect_host()` in `scripts/fredlib/installation.py` identifies target hosts automatically from directory markers.
+The function `detect_host()` in `scripts/fredlib/installation.py` identifies target hosts automatically from declarative `project_markers` and `user_markers` rules in `catalog/hosts.json`.
 
 ### Marker Resolution Rules
-1. **Single Marker Detection**:
-   - Directory `.claude` resolves to `claude-code`.
-   - Directory `.gemini` resolves to `gemini-cli`.
-   - Directory `.agents` checks `.fred-skills/` receipts:
-     - If an `antigravity` receipt exists, it resolves to `antigravity`.
-     - If a `codex` receipt exists, it resolves to `codex`.
-     - If no receipt exists, it defaults to `codex`.
+1. **Tiered Marker Detection**:
+   - **Primary project markers**: `.claude` (`claude-code`), `.cursor` (`cursor`), `.gemini` (`gemini-cli`), `.opencode` (`opencode`), `.windsurf` or `.devin` (`windsurf`), `.github/skills` (`copilot`), and `.agents` (`codex` by default, or `antigravity` when an `antigravity` receipt exists).
+   - **Fallback project marker**: Bare `.github` resolves to `copilot` only when no primary marker or conflicting host receipt exists.
+   - **User-scope markers** (`--scope user`): `.claude`, `.cursor`, `.agents`, `.gemini`, `.copilot`, `.config/opencode`, and `.config/devin`.
 
 2. **Ambiguous Markers**:
-   - If no markers exist in the destination, detection raises an error:
-     `No host markers (.claude, .agents, .gemini) found in destination ...; please specify --host`
-   - If multiple markers exist (for example, both `.claude` and `.gemini`), detection raises an error:
-     `Multiple host markers found ...; please specify --host`
-   - If ambiguous receipts exist for both `codex` and `antigravity`, detection raises an error:
-     `Ambiguous host receipts for both codex and antigravity found ...; please specify --host`
+   - If no configured markers exist in the destination, detection raises `ValueError` asking to specify `--host`.
+   - If markers from multiple distinct hosts exist (for example, `.claude` alongside `.cursor` or `.github/skills`), detection raises `ValueError`.
+   - If conflicting receipts exist alongside shared or fallback markers, detection raises `ValueError`.
 
 3. **Explicit Override**:
    Always pass `--host <name>` in automated scripts to avoid ambiguity.

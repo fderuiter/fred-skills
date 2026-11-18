@@ -19,7 +19,7 @@ it is not an audit of this repository or proof about any consuming application.
 - Do not add private installation IDs, absolute workspace paths, credentials, or real
   application audit data. Use synthetic fixtures for repeatable validation.
 
-Run from the repository root before proposing a change (executes Ruff linting, formatting checks, script validations, and tests):
+Run from the repository root before proposing a change (`make check` delegates to `scripts/run_checks.py` to execute Ruff linting, formatting checks, mypy static type checks, package validations, and tests):
 
 ```sh
 make check
@@ -31,30 +31,30 @@ To automatically format code and apply safe lint fixes with Ruff, repair drift, 
 make fix
 ```
 
-Or run pre-commit hooks for Markdown and Python formatting verification (pre-commit validates both Python source code and Markdown documentation):
+Or run pre-commit hooks for fast static, type, and Markdown/Python formatting verification (`git commit` runs fast static and `mypy` checks, while `pre-push` runs `unit-tests`):
 
 ```sh
 pre-commit install
 pre-commit run --all-files
+pre-commit run --hook-stage pre-push --all-files
 ```
 
-`make check` and `make fix` run Ruff automatically. For environments without `make`, execute verification checks directly:
+`make check` and `make fix` run Ruff automatically (`make check` also runs `mypy`). For environments without `make` (including Windows), execute the cross-platform check runner or individual phases directly:
 
 ```sh
-ruff check .
-ruff format --check .
-python scripts/sync_audit_resources.py --check
-python scripts/build_catalog.py --check
-python scripts/build_experience.py --check
-python scripts/validate_skills.py
+python scripts/run_checks.py
+python scripts/run_checks.py --phase lint
+python scripts/run_checks.py --phase typecheck
+python scripts/run_checks.py --phase packages
+python scripts/run_checks.py --phase docs
+python scripts/run_checks.py --phase tests
 python scripts/verify_workflow_actions.py --check
 python scripts/package_skills.py --output /tmp/release-verify
-python -m unittest discover -s tests -v
 ```
 
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically. When network access is available, run `python scripts/verify_workflow_actions.py --online` to resolve workflow action SHAs and version tags against upstream repositories.
 
-Once installed, hooks run automatically on `git commit`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
+Once installed, fast static hooks run on `git commit` and `unit-tests` runs on `git push`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
 
 Do not add an agent runtime, mandatory analyzers, or third-party skill implementations
 without a concrete need. These checks validate packaging and selected mechanisms;

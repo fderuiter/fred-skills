@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+FINGERPRINT_KEY = "fred-skills/v1"
 
 SEVERITY_TO_SARIF_LEVEL = {
     "critical": "error",
@@ -194,16 +198,89 @@ def _rule_description(impact: str, actual: str) -> dict[str, str] | None:
     return None
 
 
+def _digest(data: Any) -> str:
+    """Compute canonical SHA-256 hex digest matching fredlib.common.digest."""
+    return hashlib.sha256(
+        json.dumps(
+            data, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _locations_from_sarif_items(
+    locations: list[dict[str, Any]] | None,
+) -> list[tuple[str, str]]:
+    """Extract sorted unique (path, symbol) pairs from formatted SARIF locations."""
+    pairs: set[tuple[str, str]] = set()
+    for loc in locations or []:
+        if not isinstance(loc, dict):
+            continue
+        phys = loc.get("physicalLocation")
+        ev = getattr(phys, "_ev", None)
+        if isinstance(ev, dict) and ("path" in ev or "symbol" in ev):
+            pairs.add((str(ev.get("path", "")), str(ev.get("symbol", ""))))
+            continue
+        uri = ""
+        if isinstance(phys, dict):
+            art = phys.get("artifactLocation")
+            if isinstance(art, dict):
+                uri = str(art.get("uri", ""))
+        sym = ""
+        logical = loc.get("logicalLocations")
+        if isinstance(logical, list) and logical and isinstance(logical[0], dict):
+            sym = str(logical[0].get("name", ""))
+        if uri or sym:
+            pairs.add((uri, sym))
+    return sorted(pairs)
+
+
+def _finding_fingerprint(
+    finding: dict[str, Any],
+    evidence_map: dict[str, dict[str, Any]] | None = None,
+    locations: list[dict[str, Any]] | None = None,
+) -> str:
+    """Compute deterministic SHA-256 fingerprint matching fredlib.runs.fingerprint."""
+    if evidence_map is not None:
+        raw_ids = finding.get("evidence_ids")
+        loc_pairs = sorted(
+            {
+                (
+                    str(evidence_map[eid].get("path", "")),
+                    str(evidence_map[eid].get("symbol", "")),
+                )
+                for eid in (raw_ids if isinstance(raw_ids, list) else [])
+                if isinstance(eid, str) and eid in evidence_map
+            }
+        )
+    else:
+        loc_pairs = _locations_from_sarif_items(locations)
+    return _digest(
+        {
+            "topic": str(finding.get("topic", "")),
+            "root_cause": str(finding.get("root_cause", "")),
+            "locations": loc_pairs,
+        }
+    )
+
+
+def _derive_rule_id(finding: dict[str, Any], finding_fingerprint: str) -> str:
+    """Derive a deterministic SARIF rule identifier from topic and content fingerprint."""
+    raw_topic = str(finding.get("topic") or "audit").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", raw_topic).strip("-") or "audit"
+    return f"fred/{slug}/{finding_fingerprint[:12]}"
+
+
 def _resolve_meta(
     finding: dict[str, Any],
     finding_id: str | None,
     sarif_level: str | None,
+    fallback_title: str | None = None,
 ) -> tuple[str, str, str, str, str]:
     """Resolve normalized identifiers and metadata fields for rules and results."""
     fid = finding_id or finding.get("id") or "FINDING-1"
     sev = finding.get("severity", "medium")
     level = sarif_level or SEVERITY_TO_SARIF_LEVEL.get(sev, "warning")
-    title = finding.get("title") or fid
+    title = finding.get("title") or fallback_title or fid
     topic = finding.get("topic") or "audit"
     return fid, level, title, topic, sev
 
@@ -212,12 +289,19 @@ def _build_sarif_rule(
     finding: dict[str, Any],
     finding_id: str | None = None,
     sarif_level: str | None = None,
+    *,
+    rule_id: str | None = None,
+    finding_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Generate a SARIF rule definition dictionary with formatted help and properties."""
-    fid, level, title, topic, sev = _resolve_meta(finding, finding_id, sarif_level)
+    fp = finding_fingerprint or _finding_fingerprint(finding)
+    resolved_rule_id = rule_id or _derive_rule_id(finding, fp)
+    _fid, level, title, topic, sev = _resolve_meta(
+        finding, finding_id, sarif_level, fallback_title=resolved_rule_id
+    )
     remedy = finding.get("remedy", "")
     props: dict[str, Any] = {
-        "id": fid,
+        "id": resolved_rule_id,
         "topic": topic,
         "severity": sev,
         "status": finding.get("status", ""),
@@ -228,8 +312,8 @@ def _build_sarif_rule(
         props["remedy"] = remedy
 
     rule: dict[str, Any] = {
-        "id": fid,
-        "name": topic or fid,
+        "id": resolved_rule_id,
+        "name": topic or resolved_rule_id,
         "shortDescription": {"text": title},
         "defaultConfiguration": {"level": level},
         "help": _format_help_markdown(
@@ -265,9 +349,16 @@ def _build_sarif_result(
     locations: list[dict[str, Any]] | None = None,
     finding_id: str | None = None,
     sarif_level: str | None = None,
+    *,
+    rule_id: str | None = None,
+    finding_fingerprint: str | None = None,
 ) -> dict[str, Any]:
-    """Construct a SARIF result item formatted with message and locations."""
-    fid, level, title, topic, sev = _resolve_meta(finding, finding_id, sarif_level)
+    """Construct a SARIF result item formatted with message, fingerprints, and locations."""
+    fp = finding_fingerprint or _finding_fingerprint(finding, locations=locations)
+    resolved_rule_id = rule_id or _derive_rule_id(finding, fp)
+    fid, level, title, topic, sev = _resolve_meta(
+        finding, finding_id, sarif_level, fallback_title=resolved_rule_id
+    )
     remedy = finding.get("remedy", "")
     msg = _format_result_message(
         title, finding.get("impact", ""), finding.get("actual", ""), remedy
@@ -284,11 +375,13 @@ def _build_sarif_result(
         props["remedy"] = remedy
 
     return {
-        "ruleId": fid,
+        "ruleId": resolved_rule_id,
         "ruleIndex": rule_index,
         "level": level,
         "message": {"text": msg},
         "locations": [] if locations is None else locations,
+        "partialFingerprints": {FINGERPRINT_KEY: fp},
+        "fingerprints": {FINGERPRINT_KEY: fp},
         "properties": props,
     }
 
@@ -315,15 +408,25 @@ def _should_skip_finding(
 
 def _ensure_rule(
     finding: dict[str, Any],
-    finding_id: str,
+    rule_id: str,
     rules: list[dict[str, Any]],
     rule_indices: dict[str, int],
+    *,
+    finding_id: str | None = None,
+    finding_fingerprint: str | None = None,
 ) -> int:
-    """Register rule descriptor if not yet recorded, returning its index."""
-    if finding_id not in rule_indices:
-        rule_indices[finding_id] = len(rules)
-        rules.append(_build_sarif_rule(finding, finding_id=finding_id))
-    return rule_indices[finding_id]
+    """Register rule descriptor per deterministic rule ID if not yet recorded."""
+    if rule_id not in rule_indices:
+        rule_indices[rule_id] = len(rules)
+        rules.append(
+            _build_sarif_rule(
+                finding,
+                finding_id=finding_id,
+                rule_id=rule_id,
+                finding_fingerprint=finding_fingerprint,
+            )
+        )
+    return rule_indices[rule_id]
 
 
 def _build_sarif_run(
@@ -348,6 +451,23 @@ def _build_sarif_run(
     return run
 
 
+def _detect_domain_artifact(data: dict[str, Any]) -> str | None:
+    """Identify non-audit domain payloads so SARIF export fails with clear guidance."""
+    if "run_id" in data:
+        return None
+    if "verdict" in data or ("summary" in data and "findings" in data):
+        return "review.json"
+    if "test_cases" in data or ("component" in data and "framework" in data):
+        return "testing.json"
+    if (
+        "boundaries" in data
+        or "decisions" in data
+        or ("title" in data and "status" in data and "findings" not in data)
+    ):
+        return "architecture.json"
+    return None
+
+
 def audit_to_sarif(
     data: dict[str, Any],
     *,
@@ -357,6 +477,11 @@ def audit_to_sarif(
     """Convert audit data conforming to audit.schema.json into SARIF v2.1.0."""
     if not isinstance(data, dict):
         raise TypeError("Audit data must be a JSON object")
+    domain_artifact = _detect_domain_artifact(data)
+    if domain_artifact is not None:
+        raise ValueError(
+            f"SARIF export ('export-sarif') requires an 'audit.json' ledger; domain artifact '{domain_artifact}' is not supported"
+        )
 
     evidence_map = _build_evidence_map(data.get("evidence", []))
     rules: list[dict[str, Any]] = []
@@ -368,7 +493,16 @@ def audit_to_sarif(
             continue
 
         finding_id = finding.get("id") or f"FINDING-{len(results) + 1}"
-        rule_index = _ensure_rule(finding, finding_id, rules, rule_indices)
+        fp = _finding_fingerprint(finding, evidence_map)
+        rule_id = _derive_rule_id(finding, fp)
+        rule_index = _ensure_rule(
+            finding,
+            rule_id,
+            rules,
+            rule_indices,
+            finding_id=finding_id,
+            finding_fingerprint=fp,
+        )
         locations = _collect_finding_locations(finding, evidence_map)
         results.append(
             _build_sarif_result(
@@ -376,6 +510,8 @@ def audit_to_sarif(
                 rule_index=rule_index,
                 locations=locations,
                 finding_id=finding_id,
+                rule_id=rule_id,
+                finding_fingerprint=fp,
             )
         )
 
@@ -392,6 +528,11 @@ def _load_audit_file(input_path: Path) -> dict[str, Any]:
     if target.is_dir():
         ledger_path = target / "audit.json"
         if not ledger_path.is_file():
+            for domain_name in ("architecture.json", "review.json", "testing.json"):
+                if (target / domain_name).is_file():
+                    raise ValueError(
+                        f"Audit ledger 'audit.json' not found in directory: {input_path}; SARIF export ('export-sarif') requires 'audit.json' and does not support domain artifact '{domain_name}'"
+                    )
             raise ValueError(
                 f"Audit ledger 'audit.json' not found in directory: {input_path}"
             )

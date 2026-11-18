@@ -8,6 +8,7 @@ import tarfile
 import zipfile
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from .common import (
     ROOT,
@@ -18,7 +19,15 @@ from .common import (
     version,
 )
 
-DOCUMENTED_PACKS = ("starter", "full-audit", "complete")
+
+def _load_documented_packs(root: Path = ROOT) -> tuple[str, ...]:
+    packs_path = root / "catalog/packs.json"
+    if not packs_path.is_file():
+        return ()
+    return tuple(read_json(packs_path).get("packs", {}).keys())
+
+
+DOCUMENTED_PACKS: tuple[str, ...] = _load_documented_packs()
 
 _EXCLUDED_DIR_NAMES = {
     "__pycache__",
@@ -201,7 +210,7 @@ def build(
 
     if all_packs or pack == "all":
         packs_doc = read_json(root / "catalog/packs.json").get("packs", {})
-        available_packs = [p for p in DOCUMENTED_PACKS if p in packs_doc]
+        available_packs = list(packs_doc.keys())
         if not available_packs:
             raise ValueError("No documented packs found in catalog/packs.json")
 
@@ -223,7 +232,18 @@ def build(
         archive_skills.update(_package_skills(output, root=root))
 
         all_skills = sorted(set().union(*archive_skills.values()))
-        manifest = {
+        all_archives: list[dict[str, Any]] = [
+            {
+                "file": path.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "bytes": path.stat().st_size,
+                "skills": archive_skills.get(path.name, []),
+            }
+            for path in sorted(output.iterdir())
+            if path.is_file()
+            and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
+        ]
+        manifest: dict[str, Any] = {
             "schema_version": "1.0",
             "version": version(root),
             "pack": "all",
@@ -232,21 +252,11 @@ def build(
             "licensing": "Owner license selection not yet declared"
             if not (root / "LICENSE").exists()
             else "See repository LICENSE",
-            "archives": [
-                {
-                    "file": path.name,
-                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "bytes": path.stat().st_size,
-                    "skills": archive_skills.get(path.name, []),
-                }
-                for path in sorted(output.iterdir())
-                if path.is_file()
-                and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
-            ],
+            "archives": all_archives,
         }
         atomic_json(output / "manifest.json", manifest)
         checksum_lines = "".join(
-            f"{item['sha256']}  {item['file']}\n" for item in manifest["archives"]
+            f"{item['sha256']}  {item['file']}\n" for item in all_archives
         )
         (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
         (output / "checksums.sha256").write_text(checksum_lines, encoding="utf-8")
@@ -260,6 +270,16 @@ def build(
     entries = _collect_skills_entries(selected, root=root)
     _write_zip_archive(output / (stem + ".zip"), entries)
     _write_tar_archive(output / (stem + ".tar"), entries)
+    pack_archives: list[dict[str, Any]] = [
+        {
+            "file": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": path.stat().st_size,
+        }
+        for path in sorted(output.iterdir())
+        if path.is_file()
+        and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
+    ]
     manifest = {
         "schema_version": "1.0",
         "version": version(root),
@@ -268,20 +288,11 @@ def build(
         "licensing": "Owner license selection not yet declared"
         if not (root / "LICENSE").exists()
         else "See repository LICENSE",
-        "archives": [
-            {
-                "file": path.name,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "bytes": path.stat().st_size,
-            }
-            for path in sorted(output.iterdir())
-            if path.is_file()
-            and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
-        ],
+        "archives": pack_archives,
     }
     atomic_json(output / "manifest.json", manifest)
     checksum_lines = "".join(
-        f"{item['sha256']}  {item['file']}\n" for item in manifest["archives"]
+        f"{item['sha256']}  {item['file']}\n" for item in pack_archives
     )
     (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
     (output / "checksums.sha256").write_text(checksum_lines, encoding="utf-8")

@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from unittest.mock import patch
+
 from check_doc_links import check_docs, check_file_links, extract_relative_links
 from skill_tools import (
     extract_relative_links as skill_tools_extract_relative_links,
@@ -21,6 +23,7 @@ from skill_tools import (
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
     TOOL_DISPATCHERS,
+    clear_subprocess_cache,
     discover_doc_blocks,
     execute_snippet_command,
     extract_blocks_from_file,
@@ -230,7 +233,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover all 32 code blocks in docs/integration.md",
         )
 
-    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self):
+    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self) -> None:
         """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
         errors = verify_toolkit_subcommands(root=ROOT)
         self.assertEqual(
@@ -297,11 +300,116 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_extract_and_execute_snippets_from_readme_and_contributing(self):
-        """The test suite must extract and execute shell command snippets from README.md and CONTRIBUTING.md."""
+        """The test suite must extract and execute shell command snippets from README.md, CONTRIBUTING.md, and docs/usage.md."""
+        self.assertEqual((27, None), DOCUMENTED_RANGES["README.md"])
+        self.assertEqual((24, None), DOCUMENTED_RANGES["docs/usage.md"])
+        usage_blocks = discover_doc_blocks(root=ROOT)["docs/usage.md"]
+        usage_cmds = [cmd for block in usage_blocks for _, cmd in block.commands]
+        self.assertTrue(
+            any("tar -xf" in cmd and ".agents/skills/" in cmd for cmd in usage_cmds),
+            f"Expected tar -xf .agents/skills/ snippet in docs/usage.md, got: {usage_cmds}",
+        )
         errors = verify_all_snippets(root=ROOT)
         self.assertEqual(
             [], errors, f"Documentation snippet verification failed: {errors}"
         )
+
+    def test_usage_doc_executed_by_default_and_rejects_singular_agent_path(self):
+        """verify_all_snippets executes docs/usage.md by default and rejects .agent/skills/ tar paths."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            for rel in (
+                "README.md",
+                "CONTRIBUTING.md",
+                "AGENTS.md",
+                "Makefile",
+                "requirements-dev.txt",
+                ".pre-commit-config.yaml",
+                ".claude-plugin/marketplace.json",
+                "catalog/hosts.json",
+                "docs/toolkit.md",
+                "docs/runbooks.md",
+                "docs/integration.md",
+            ):
+                src = ROOT / rel
+                dst = tmp_root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(src.read_bytes())
+            # Symlink scripts and examples so dry-run checks resolve without copying everything
+            (tmp_root / "scripts").symlink_to(
+                ROOT / "scripts", target_is_directory=True
+            )
+            (tmp_root / "skills").symlink_to(ROOT / "skills", target_is_directory=True)
+            (tmp_root / "examples").symlink_to(
+                ROOT / "examples", target_is_directory=True
+            )
+
+            broken_usage = (
+                (ROOT / "docs/usage.md")
+                .read_text(encoding="utf-8")
+                .replace(
+                    "/path/to/project/.agents/skills/",
+                    "/path/to/project/.agent/skills/",
+                )
+            )
+            (tmp_root / "docs/usage.md").write_text(broken_usage, encoding="utf-8")
+
+            errors = verify_all_snippets(root=tmp_root)
+            self.assertTrue(
+                any(
+                    "docs/usage.md:" in err and ".agent/skills/" in err
+                    for err in errors
+                ),
+                f"Expected docs/usage.md .agent/skills/ failure in default run, got: {errors}",
+            )
+
+    def test_tar_flags_and_host_path_validation(self):
+        """tar validator accepts -xf/-tf/-xzf/-ztf and valid/custom paths while rejecting .agent/skills/."""
+        valid_cmds = [
+            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/",
+            "tar -tf fred-skills-0.2.0-starter.tar",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/",
+            "tar -ztf repo-audit-concurrency.tar.gz",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.claude/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.gemini/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C ~/.gemini/antigravity/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/harness/skills/",
+        ]
+        for cmd in valid_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(ok, f"Expected tar command to pass: {cmd} -> {msg}")
+
+        invalid_cmds = [
+            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agent/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C .agent/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C ~/.agent/skills/",
+            "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/skills/",
+            "tar -cf archive.tar skills/",
+            "tar -xf fred-skills-0.2.0-starter.tar -C",
+        ]
+        for cmd in invalid_cmds:
+            ok, _ = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(ok, f"Expected tar command to fail: {cmd}")
+
+        # Custom root with custom catalog/hosts.json
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            custom_root = Path(tmp_dir)
+            (custom_root / "catalog").mkdir(parents=True)
+            (custom_root / "catalog/hosts.json").write_text(
+                '{"schema_version": "1.0", "hosts": {"custom": {"project_path": ".custom-agent/skills", "user_path": ".custom-agent/skills"}}}',
+                encoding="utf-8",
+            )
+            ok_custom, msg_custom = execute_snippet_command(
+                "tar -xf pack.tar -C /path/to/project/.custom-agent/skills/",
+                root=custom_root,
+            )
+            self.assertTrue(ok_custom, msg_custom)
+            ok_unconfigured, _ = execute_snippet_command(
+                "tar -xf pack.tar -C /path/to/project/.agent/skills/",
+                root=custom_root,
+            )
+            self.assertFalse(ok_unconfigured)
 
     def test_broken_command_detection(self):
         """Broken commands in snippets must be caught and reported."""
@@ -326,6 +434,49 @@ class DocSnippetVerificationTests(unittest.TestCase):
             root=ROOT,
         )
         self.assertFalse(ok)
+
+        # Invalid run_checks.py phase
+        ok, msg = execute_snippet_command(
+            "python scripts/run_checks.py --phase nonexistent_phase",
+            root=ROOT,
+        )
+        self.assertFalse(ok)
+        self.assertIn("run_checks.py failed", msg)
+
+    def test_repeated_readonly_subprocess_checks_are_cached(self) -> None:
+        """Repeated read-only subprocess checks in verify_doc_snippets execute once and hit cache."""
+        clear_subprocess_cache()
+        real_run = subprocess.run
+        spawned: list[list[str]] = []
+
+        def counting_run(
+            cmd: list[str], *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            spawned.append(list(cmd))
+            return real_run(cmd, *args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+        commands = [
+            "ruff check .",
+            "ruff format --check .",
+            "python -m mypy",
+            "python scripts/sync_audit_resources.py --check",
+            "python scripts/validate_skills.py",
+            "python scripts/run_checks.py --phase lint",
+            "python scripts/run_checks.py --phase typecheck",
+        ]
+        try:
+            with patch("verify_doc_snippets.subprocess.run", side_effect=counting_run):
+                for _ in range(2):
+                    for cmd in commands:
+                        ok, msg = execute_snippet_command(cmd, root=ROOT)
+                        self.assertTrue(ok, f"{cmd} failed: {msg}")
+            self.assertEqual(
+                len(commands),
+                len(spawned),
+                f"Expected {len(commands)} unique subprocess spawns across 2 passes, got {len(spawned)}",
+            )
+        finally:
+            clear_subprocess_cache()
 
     def test_marketplace_plugin_install_validation(self):
         """Marketplace registration and plugin install commands validate against .claude-plugin/marketplace.json."""

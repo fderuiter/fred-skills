@@ -2,6 +2,7 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -10,7 +11,7 @@ on:
         type: string
         required: false
       publish:
-        description: 'Create or update a draft GitHub release for an existing v<VERSION> tag'
+        description: 'Publish or promote the GitHub Release (false builds read-only workflow artifacts only)'
         type: boolean
         required: false
         default: false
@@ -33,7 +34,8 @@ jobs:
     permissions:
       contents: read
     outputs:
-      publish_enabled: ${{ steps.gate.outputs.publish_enabled }}
+      should_build: ${{ steps.gate.outputs.should_build }}
+      should_publish: ${{ steps.gate.outputs.should_publish }}
       release_tag: ${{ steps.gate.outputs.release_tag }}
       target_sha: ${{ steps.gate.outputs.target_sha }}
     steps:
@@ -43,6 +45,8 @@ jobs:
       - name: Evaluate release preflight gate
         id: gate
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_SHA: ${{ github.sha }}
           INPUT_PUBLISH: ${{ inputs.publish }}
@@ -52,17 +56,37 @@ jobs:
         run: |
           set -eu
 
+          validate_tag_syntax() {
+            CANDIDATE_TAG="$1"
+            case "$CANDIDATE_TAG" in
+              ""|*[!0-9A-Za-z._+-]*|v)
+                echo "Error: Invalid release tag syntax '$CANDIDATE_TAG' (expected v<VERSION>)" >&2
+                exit 1
+                ;;
+              v[0-9]*)
+                ;;
+              *)
+                echo "Error: Invalid release tag syntax '$CANDIDATE_TAG' (expected v<VERSION>)" >&2
+                exit 1
+                ;;
+            esac
+            if ! printf '%s' "$CANDIDATE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z._-]+)?(\+[0-9A-Za-z._-]+)?$' || ! git check-ref-format "refs/tags/$CANDIDATE_TAG"; then
+              echo "Error: Invalid release tag syntax '$CANDIDATE_TAG' (expected v<VERSION>)" >&2
+              exit 1
+            fi
+          }
+
           EVENT="${EVENT_NAME:-}"
           PUBLISH_INPUT="${INPUT_PUBLISH:-}"
-          PUBLISH_ENABLED="false"
+          PUBLISH_REQUESTED="false"
 
           if [ "$EVENT" = "workflow_dispatch" ]; then
             case "$PUBLISH_INPUT" in
               true|TRUE|True)
-                PUBLISH_ENABLED="true"
+                PUBLISH_REQUESTED="true"
                 ;;
               false|FALSE|False|"")
-                PUBLISH_ENABLED="false"
+                PUBLISH_REQUESTED="false"
                 ;;
               *)
                 echo "Error: Invalid publish input '$PUBLISH_INPUT' (expected true or false)" >&2
@@ -70,18 +94,18 @@ jobs:
                 ;;
             esac
           elif [ "$EVENT" = "push" ]; then
-            PUBLISH_ENABLED="true"
+            PUBLISH_REQUESTED="true"
           else
             case "$PUBLISH_INPUT" in
               true|TRUE|True)
-                PUBLISH_ENABLED="true"
+                PUBLISH_REQUESTED="true"
                 ;;
               false|FALSE|False)
-                PUBLISH_ENABLED="false"
+                PUBLISH_REQUESTED="false"
                 ;;
               "")
-                if [ "${REF_TYPE:-}" = "tag" ]; then
-                  PUBLISH_ENABLED="true"
+                if [ "${REF_TYPE:-}" = "tag" ] || { [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; }; then
+                  PUBLISH_REQUESTED="true"
                 fi
                 ;;
               *)
@@ -91,15 +115,34 @@ jobs:
             esac
           fi
 
-          if [ "$PUBLISH_ENABLED" = "false" ]; then
-            TARGET_SHA="${WORKFLOW_SHA:-${GITHUB_SHA:-}}"
-            if [ -z "$TARGET_SHA" ]; then
-              TARGET_SHA="$(git rev-parse --verify HEAD)"
+          if [ "$PUBLISH_REQUESTED" = "false" ]; then
+            DISPATCH_TAG="${INPUT_TAG:-}"
+            if [ -n "$DISPATCH_TAG" ]; then
+              validate_tag_syntax "$DISPATCH_TAG"
+              if ! git ls-remote --exit-code --refs origin "refs/tags/$DISPATCH_TAG" >/dev/null 2>&1; then
+                echo "Error: Remote tag 'refs/tags/$DISPATCH_TAG' does not exist on origin" >&2
+                exit 1
+              fi
+              git fetch --force --depth=1 origin "refs/tags/$DISPATCH_TAG:refs/tags/$DISPATCH_TAG" >/dev/null 2>&1 || \
+                git fetch --force origin "refs/tags/$DISPATCH_TAG:refs/tags/$DISPATCH_TAG" >/dev/null 2>&1
+              TARGET_SHA="$(git rev-parse --verify "refs/tags/$DISPATCH_TAG^{commit}")"
+            else
+              TARGET_SHA="${WORKFLOW_SHA:-${GITHUB_SHA:-}}"
+              if [ -z "$TARGET_SHA" ]; then
+                TARGET_SHA="$(git rev-parse --verify HEAD)"
+              fi
             fi
+
+            if ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "Error: Resolved target_sha '$TARGET_SHA' is not a valid 40-character commit SHA" >&2
+              exit 1
+            fi
+
             if [ -n "${GITHUB_OUTPUT:-}" ]; then
               {
-                echo "publish_enabled=false"
-                echo "release_tag="
+                echo "should_build=true"
+                echo "should_publish=false"
+                echo "release_tag=$DISPATCH_TAG"
                 echo "target_sha=$TARGET_SHA"
               } >> "$GITHUB_OUTPUT"
             fi
@@ -108,7 +151,7 @@ jobs:
 
           TAG="${INPUT_TAG:-}"
           if [ -z "$TAG" ]; then
-            if [ "${REF_TYPE:-}" = "tag" ] || [ "$EVENT" = "push" ]; then
+            if [ "${REF_TYPE:-}" = "tag" ]; then
               TAG="${REF_NAME:-}"
             else
               if [ ! -s VERSION ] || [ -z "$(tr -d '[:space:]' < VERSION)" ]; then
@@ -119,31 +162,40 @@ jobs:
             fi
           fi
 
-          case "$TAG" in
-            ""|*[!0-9A-Za-z._+-]*|v)
-              echo "Error: Invalid release tag syntax '$TAG' (expected v<VERSION>)" >&2
-              exit 1
-              ;;
-            v[0-9]*)
-              ;;
-            *)
-              echo "Error: Invalid release tag syntax '$TAG' (expected v<VERSION>)" >&2
-              exit 1
-              ;;
-          esac
-          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z._-]+)?(\+[0-9A-Za-z._-]+)?$' || ! git check-ref-format "refs/tags/$TAG"; then
-            echo "Error: Invalid release tag syntax '$TAG' (expected v<VERSION>)" >&2
-            exit 1
-          fi
+          validate_tag_syntax "$TAG"
 
-          if ! git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1; then
+          LS_EXIT=0
+          git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
+          if [ "$LS_EXIT" -eq 0 ]; then
+            git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
+              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            TARGET_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          elif [ "$LS_EXIT" -eq 2 ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
+            if [ ! -s VERSION ] || [ -z "$(tr -d '[:space:]' < VERSION)" ]; then
+              echo "Error: VERSION file is missing or empty on main" >&2
+              exit 1
+            fi
+            MAIN_EXPECTED_TAG="v$(tr -d '[:space:]' < VERSION)"
+            if [ "$TAG" != "$MAIN_EXPECTED_TAG" ]; then
+              echo "Error: Remote tag 'refs/tags/$TAG' does not exist on origin and does not match main VERSION '$MAIN_EXPECTED_TAG'" >&2
+              exit 1
+            fi
+            TARGET_SHA="${WORKFLOW_SHA:-${GITHUB_SHA:-}}"
+            if [ -z "$TARGET_SHA" ]; then
+              TARGET_SHA="$(git rev-parse --verify HEAD)"
+            fi
+          elif [ "$LS_EXIT" -eq 2 ]; then
             echo "Error: Remote tag 'refs/tags/$TAG' does not exist on origin" >&2
             exit 1
+          else
+            echo "Error: Failed to query remote tag 'refs/tags/$TAG' on origin (exit $LS_EXIT)" >&2
+            exit "$LS_EXIT"
           fi
 
-          git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
-            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
-          TARGET_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          if ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Error: Resolved target_sha '$TARGET_SHA' is not a valid 40-character commit SHA" >&2
+            exit 1
+          fi
 
           if [ "$(git cat-file -t "$TARGET_SHA:LICENSE" 2>/dev/null || true)" != "blob" ]; then
             echo "Error: LICENSE file is missing at target commit $TARGET_SHA" >&2
@@ -170,9 +222,43 @@ jobs:
             exit 1
           fi
 
+          VIEW_ERR_FILE="$(mktemp)"
+          trap 'rm -f "$VIEW_ERR_FILE"' EXIT
+          SHOULD_BUILD="false"
+          SHOULD_PUBLISH="false"
+          if VIEW_OUT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
+            NORMALIZED_VIEW="$(printf '%s' "$VIEW_OUT" | tr -d '[:space:]')"
+            case "$NORMALIZED_VIEW" in
+              true|*'{"isDraft":true}'*)
+                echo "Draft release $TAG found; scheduling build and publication."
+                SHOULD_BUILD="true"
+                SHOULD_PUBLISH="true"
+                ;;
+              false|*'{"isDraft":false}'*)
+                echo "Release $TAG is already published; skipping duplicate build and publication."
+                SHOULD_BUILD="false"
+                SHOULD_PUBLISH="false"
+                ;;
+              *)
+                echo "Error: Unexpected gh release view output for '$TAG': $VIEW_OUT" >&2
+                exit 1
+                ;;
+            esac
+          else
+            if grep -Eqi 'release not found|not found|404' "$VIEW_ERR_FILE"; then
+              echo "Release $TAG is unpublished; scheduling build and publication."
+              SHOULD_BUILD="true"
+              SHOULD_PUBLISH="true"
+            else
+              cat "$VIEW_ERR_FILE" >&2
+              exit 1
+            fi
+          fi
+
           if [ -n "${GITHUB_OUTPUT:-}" ]; then
             {
-              echo "publish_enabled=true"
+              echo "should_build=$SHOULD_BUILD"
+              echo "should_publish=$SHOULD_PUBLISH"
               echo "release_tag=$TAG"
               echo "target_sha=$TARGET_SHA"
             } >> "$GITHUB_OUTPUT"
@@ -180,6 +266,7 @@ jobs:
 
   build:
     needs: preflight
+    if: needs.preflight.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -215,7 +302,7 @@ jobs:
 
   release:
     needs: [preflight, build]
-    if: needs.preflight.outputs.publish_enabled == 'true'
+    if: needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -277,14 +364,18 @@ jobs:
               exit 1
               ;;
           esac
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z._-]+)?(\+[0-9A-Za-z._-]+)?$' || ! git check-ref-format "refs/tags/$TAG"; then
+            echo "Error: Invalid release tag syntax '$TAG' (expected v<VERSION>)" >&2
+            exit 1
+          fi
 
           if [ "$TAG" != "$EXPECTED_TAG" ]; then
             echo "Error: Release tag '$TAG' does not match expected tag '$EXPECTED_TAG' based on VERSION" >&2
             exit 1
           fi
 
-          if [ -z "${TARGET_SHA:-}" ]; then
-            echo "Error: Verified TARGET_SHA is missing" >&2
+          if [ -z "${TARGET_SHA:-}" ] || ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Error: Verified 40-character TARGET_SHA is missing or invalid" >&2
             exit 1
           fi
 
@@ -297,6 +388,16 @@ jobs:
         with:
           name: release-artifacts
           path: dist/release
+      - name: Verify downloaded artifact checksums
+        run: |
+          set -eu
+          if [ ! -s dist/release/SHA256SUMS ] || [ ! -s dist/release/checksums.sha256 ]; then
+            echo "Error: Downloaded release checksum manifests are missing or empty" >&2
+            exit 1
+          fi
+          cd dist/release
+          sha256sum -c SHA256SUMS
+          sha256sum -c checksums.sha256
       - name: Attest build provenance
         uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
@@ -313,6 +414,13 @@ jobs:
         run: |
           set -eu
 
+          if [ ! -s VERSION ] || [ -z "$(tr -d '[:space:]' < VERSION)" ]; then
+            echo "Error: VERSION file is missing or empty in repository root" >&2
+            exit 1
+          fi
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          EXPECTED_TAG="v${VERSION}"
+
           TAG="${RELEASE_TAG:-}"
           if [ -z "$TAG" ]; then
             TAG="${INPUT_TAG:-}"
@@ -321,12 +429,23 @@ jobs:
             if [ "${REF_TYPE:-}" = "tag" ]; then
               TAG="${REF_NAME:-}"
             else
-              TAG="v$(tr -d '[:space:]' < VERSION)"
+              TAG="$EXPECTED_TAG"
             fi
           fi
 
-          if [ -z "${TARGET_SHA:-}" ]; then
-            echo "Error: TARGET_SHA is required to publish a release" >&2
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "Error: Release tag '$TAG' does not match expected tag '$EXPECTED_TAG' based on VERSION" >&2
+            exit 1
+          fi
+
+          if [ -z "${TARGET_SHA:-}" ] || ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Error: Valid 40-character TARGET_SHA is required to publish a release" >&2
+            exit 1
+          fi
+
+          HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+          if [ "$HEAD_SHA" != "$TARGET_SHA" ]; then
+            echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified target_sha '$TARGET_SHA'" >&2
             exit 1
           fi
 
@@ -336,23 +455,78 @@ jobs:
             exit 1
           fi
 
-          VIEW_ERR_FILE="$(mktemp)"
-          trap 'rm -f "$VIEW_ERR_FILE"' EXIT
-          if IS_DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
-            if [ "$IS_DRAFT" = "true" ]; then
-              gh release upload "$TAG" dist/release/* --clobber
-            else
-              echo "Error: Release '$TAG' is already published and cannot be overwritten" >&2
+          if [ -n "${GH_TOKEN:-}" ]; then
+            AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
+          fi
+
+          LS_EXIT=0
+          git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
+          if [ "$LS_EXIT" -eq 0 ]; then
+            git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
+              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            if [ "$REMOTE_TAG_SHA" != "$TARGET_SHA" ]; then
+              echo "Error: Remote tag 'refs/tags/$TAG' points to '$REMOTE_TAG_SHA', expected '$TARGET_SHA'" >&2
               exit 1
             fi
+          elif [ "$LS_EXIT" -eq 2 ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
+            git tag -f "$TAG" "$TARGET_SHA"
+            git push origin "refs/tags/$TAG"
+          elif [ "$LS_EXIT" -eq 2 ]; then
+            echo "Error: Remote tag 'refs/tags/$TAG' does not exist on origin" >&2
+            exit 1
           else
-            if grep -qi "release not found" "$VIEW_ERR_FILE"; then
-              gh release create "$TAG" dist/release/* \
-                --title "$TAG" \
-                --draft \
-                --verify-tag \
-                --target "$TARGET_SHA" \
-                --generate-notes
+            echo "Error: Failed to check remote tags on origin (exit $LS_EXIT)" >&2
+            exit "$LS_EXIT"
+          fi
+
+          NOTES_FILE="docs/release-notes-${VERSION}.md"
+          VIEW_ERR_FILE="$(mktemp)"
+          trap 'rm -f "$VIEW_ERR_FILE"' EXIT
+          if VIEW_OUT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
+            NORMALIZED_VIEW="$(printf '%s' "$VIEW_OUT" | tr -d '[:space:]')"
+            case "$NORMALIZED_VIEW" in
+              true|*'{"isDraft":true}'*)
+                gh release upload "$TAG" dist/release/* --clobber
+                if [ -f "$NOTES_FILE" ]; then
+                  gh release edit "$TAG" \
+                    --draft=false \
+                    --title "$TAG" \
+                    --target "$TARGET_SHA" \
+                    --notes-file "$NOTES_FILE"
+                else
+                  gh release edit "$TAG" \
+                    --draft=false \
+                    --title "$TAG" \
+                    --target "$TARGET_SHA"
+                fi
+                ;;
+              false|*'{"isDraft":false}'*)
+                echo "Release $TAG is already published; skipping duplicate publication."
+                ;;
+              *)
+                echo "Error: Unexpected gh release view output for '$TAG': $VIEW_OUT" >&2
+                exit 1
+                ;;
+            esac
+          else
+            if grep -Eqi 'release not found|not found|404' "$VIEW_ERR_FILE"; then
+              if [ -f "$NOTES_FILE" ]; then
+                gh release create "$TAG" dist/release/* \
+                  --title "$TAG" \
+                  --verify-tag \
+                  --target "$TARGET_SHA" \
+                  --notes-file "$NOTES_FILE"
+              else
+                gh release create "$TAG" dist/release/* \
+                  --title "$TAG" \
+                  --verify-tag \
+                  --target "$TARGET_SHA" \
+                  --generate-notes
+              fi
             else
               cat "$VIEW_ERR_FILE" >&2
               exit 1

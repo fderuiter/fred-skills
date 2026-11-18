@@ -1,9 +1,9 @@
 # Licensing decision
 
-A public license has not yet been selected by the repository owner. This change does
-not grant a new license, label the repository MIT/Apache, or assume public visibility
-authorizes redistribution. The owner should choose and commit a LICENSE before publicly
-publishing release bundles. This document is a decision record, not a substitute license.
+This repository is distributed under the permissive MIT License committed at
+[LICENSE](../LICENSE). That root [LICENSE](../LICENSE) file is the authoritative public
+license governing use, modification, and redistribution of this repository and its
+published skill archives; this document records licensing context and scope boundaries.
 
 Authoring research links provide attribution and method context. Third-party skill
 implementations are not bundled. Before incorporating any upstream code/content,
@@ -12,7 +12,8 @@ GitHub Actions retain their own upstream licenses; they are dependencies, not re
 by this repository. Run `python -m pip show PyYAML jsonschema playwright` for installed
 package metadata; verify upstream terms before redistributing dependency bundles.
 
-Local pack manifests explicitly report the missing owner license. The publication
-workflow refuses public release creation until a nonempty LICENSE exists. Contributors
-should resolve ownership and intended license with the maintainer before assuming their
-work can be redistributed under a particular permissive license.
+Local pack and release manifests report `"See repository LICENSE"` when
+[LICENSE](../LICENSE) is present, and the publication workflow verifies that a nonempty
+root `LICENSE` exists before publishing any GitHub Release. Contributions to this
+repository are provided under the MIT terms in [LICENSE](../LICENSE) unless explicitly
+stated otherwise.

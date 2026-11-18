@@ -17,8 +17,8 @@ actual validation. There is no claim of being the world's best skill repository.
 | Analyzer interoperability | SARIF observations with safe locations, no auto-confirmation | Additional scanner formats can be added when justified by actual users |
 | Evaluations | 15 executable cases, paired configurations, trace/usage/timeout/failure records | Deterministic adapter is a harness check; broad multi-model quality remains unmeasured |
 | Runnable onboarding | Exact synthetic original/corrected behavior, controls, reports/drafts/proof | Generalize only after real bounded application runs |
-| Versioned distribution | Deterministic pack archives, manifest/checksums, CI validation | Owner license selection and tag/manual release approval; no release published by this change |
-| Maintenance and trust | Canonical resources, generated discovery, Linux/Windows CI, browser checks, contributor/security/release guidance | Private-report channel and public license are owner decisions |
+| Versioned distribution | Deterministic pack archives, manifest/checksums, CI validation, automated `main` GitHub Release publishing under MIT [LICENSE](../LICENSE) | Downstream consumers should verify SHA-256 checksums and SLSA provenance attestations |
+| Maintenance and trust | Canonical resources, generated discovery, Linux/Windows CI, browser checks, MIT [LICENSE](../LICENSE), contributor/security/release guidance | Dedicated private-report channel remains an owner decision |
 
 Prioritize future work using observed failures: time to a useful first result, incorrect
 activation, missed known defects, unsupported confirmed claims, repeated findings, and

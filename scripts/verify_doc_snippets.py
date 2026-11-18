@@ -14,27 +14,31 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
 
+fred: ModuleType | None
 try:
-    import fred
+    import fred as _fred_module
+
+    fred = _fred_module
 except ImportError:
     fred = None
 
 # Line ranges for acceptance criteria verification
 DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = {
-    "README.md": (27, 125),
-    "CONTRIBUTING.md": (22, 73),
-    "AGENTS.md": (24, 52),
+    "README.md": (27, None),
+    "CONTRIBUTING.md": (22, 86),
+    "AGENTS.md": (24, 54),
     "docs/toolkit.md": (10, 195),
-    "docs/usage.md": (24, 129),
+    "docs/usage.md": (24, None),
     "docs/runbooks.md": (1, None),
     "docs/integration.md": (1, None),
 }
@@ -236,9 +240,7 @@ def extract_blocks_from_file(
 
 def discover_doc_blocks(
     root: Path = ROOT,
-    ranges: dict[str, tuple[int, int]]
-    | dict[str, tuple[int | None, int | None]]
-    | None = None,
+    ranges: Mapping[str, tuple[int | None, int | None]] | None = None,
 ) -> dict[str, list[CommandBlock]]:
     """Discover all command blocks in the target documentation files."""
     if ranges is None:
@@ -279,8 +281,9 @@ def _parse_lifecycle_groups_fallback(content: str) -> dict[str, list[str]]:
 
 def get_registered_fred_subcommands(root: Path = ROOT) -> dict[str, list[str]]:
     """Get the registered lifecycle groups and subcommands from scripts/fred.py."""
-    if fred and hasattr(fred, "LIFECYCLE_GROUPS"):
-        return fred.LIFECYCLE_GROUPS  # type: ignore[no-any-return]
+    if fred is not None and hasattr(fred, "LIFECYCLE_GROUPS"):
+        groups: dict[str, list[str]] = fred.LIFECYCLE_GROUPS
+        return groups
 
     fred_py = root / "scripts/fred.py"
     if not fred_py.is_file():
@@ -395,6 +398,49 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
 
 ToolHandler = Callable[[list[str], Path, str], tuple[bool, str]]
 
+_SUBPROCESS_CACHE: dict[
+    tuple[tuple[str, ...], str], subprocess.CompletedProcess[str]
+] = {}
+
+
+def clear_subprocess_cache() -> None:
+    """Clear cached read-only subprocess check results."""
+    _SUBPROCESS_CACHE.clear()
+
+
+def _run_cached_subprocess(
+    cmd: list[str],
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a read-only subprocess check once per (argv, cwd) and cache it."""
+    cwd_key = str(cwd.resolve()) if cwd is not None else ""
+    key = (tuple(cmd), cwd_key)
+    cached = _SUBPROCESS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _SUBPROCESS_CACHE[key] = proc
+    return proc
+
+
+def _run_readonly_check(
+    cmd: list[str],
+    cwd: Path | None,
+    label: str,
+) -> tuple[bool, str]:
+    """Run a cached read-only subprocess command and format failure messages."""
+    proc = _run_cached_subprocess(cmd, cwd=cwd)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip()
+        return False, f"{label} failed: {detail}"
+    return True, ""
+
 
 def _load_marketplace_plugins(root: Path) -> tuple[str | None, set[str], str]:
     """Load marketplace name and registered plugin names from marketplace.json."""
@@ -457,16 +503,7 @@ def _validate_make(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     """Validate make commands in dry-run mode (-n) or against Makefile targets."""
     target_args = [p for p in parts[1:] if not p.startswith("-")]
     if shutil.which("make"):
-        proc = subprocess.run(
-            ["make", "-n", *target_args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return False, f"make dry-run failed: {proc.stderr.strip()}"
-        return True, ""
+        return _run_readonly_check(["make", "-n", *target_args], root, "make dry-run")
 
     makefile = root / "Makefile"
     if not makefile.is_file():
@@ -501,31 +538,30 @@ def _validate_pip_install(parts: list[str], root: Path) -> tuple[bool, str]:
 
 
 def _validate_python_module(parts: list[str], root: Path) -> tuple[bool, str]:
-    """Validate python -m commands (venv, pip, unittest)."""
+    """Validate python -m commands (venv, pip, unittest, mypy)."""
     if len(parts) < 3:
         return False, "Incomplete python -m command"
     mod = parts[2]
     if mod == "venv":
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, "-m", "venv", "--help"],
-            capture_output=True,
-            text=True,
-            check=False,
+            None,
+            "python -m venv check",
         )
-        if proc.returncode != 0:
-            return False, f"python -m venv check failed: {proc.stderr.strip()}"
-        return True, ""
     if mod == "pip":
         return _validate_pip_install(parts, root)
     if mod == "unittest":
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, "-m", "unittest", "--help"],
-            capture_output=True,
-            text=True,
-            check=False,
+            None,
+            "unittest runner",
         )
-        if proc.returncode != 0:
-            return False, f"unittest runner unavailable: {proc.stderr.strip()}"
+    if mod == "mypy":
+        return _run_readonly_check(
+            [sys.executable, "-m", "mypy", "--version"],
+            None,
+            "mypy type checker",
+        )
     return True, ""
 
 
@@ -552,29 +588,37 @@ def _validate_python_fred(
 
     if len(parts) >= 3 and parts[2] == "search":
         search_args = [normalize_cli_token(arg) for arg in parts[2:]]
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path), *search_args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            "scripts/fred.py search",
         )
-        if proc.returncode != 0:
-            return False, f"scripts/fred.py search failed: {proc.stderr.strip()}"
     return True, ""
 
 
 def _run_script_help_check(script_path: Path, script_arg: str) -> tuple[bool, str]:
     """Run script with --help to verify CLI arguments without side effects."""
-    proc = subprocess.run(
+    return _run_readonly_check(
         [sys.executable, str(script_path), "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
+        None,
+        f"{script_arg} --help",
     )
-    if proc.returncode != 0:
-        return False, f"{script_arg} --help failed: {proc.stderr.strip()}"
-    return True, ""
+
+
+def _validate_run_checks_script(
+    parts: list[str],
+    script_path: Path,
+    root: Path,
+) -> tuple[bool, str]:
+    """Validate scripts/run_checks.py invocations in dry-run mode."""
+    extra_args = [
+        normalize_cli_token(arg) for arg in parts[2:] if arg not in ("-n", "--dry-run")
+    ]
+    return _run_readonly_check(
+        [sys.executable, str(script_path), "--dry-run", *extra_args],
+        root,
+        "run_checks.py",
+    )
 
 
 def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
@@ -587,29 +631,22 @@ def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
     if script_arg.endswith("fred.py"):
         return _validate_python_fred(parts, script_path, root)
 
+    if script_arg.endswith("run_checks.py"):
+        return _validate_run_checks_script(parts, script_path, root)
+
     if "--check" in parts:
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path), "--check"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            f"{script_arg} --check",
         )
-        if proc.returncode != 0:
-            return False, f"{script_arg} --check failed: {proc.stderr.strip()}"
-        return True, ""
 
     if script_arg.endswith("validate_skills.py"):
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            "validate_skills.py",
         )
-        if proc.returncode != 0:
-            return False, f"validate_skills.py failed: {proc.stderr.strip()}"
-        return True, ""
 
     if "--output" in parts or script_arg.endswith(("package_skills.py", "run_demo.py")):
         return _run_script_help_check(script_path, script_arg)
@@ -633,15 +670,7 @@ def _validate_ruff(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     if not shutil.which("ruff"):
         return True, ""
     if "check" in parts or "--check" in parts:
-        proc = subprocess.run(
-            parts,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return False, f"ruff check failed: {proc.stderr.strip()}"
+        return _run_readonly_check(parts, root, "ruff check")
     return True, ""
 
 
@@ -649,16 +678,11 @@ def _validate_pre_commit(parts: list[str], root: Path, _cmd: str) -> tuple[bool,
     """Validate pre-commit configuration file."""
     if not shutil.which("pre-commit"):
         return True, ""
-    proc = subprocess.run(
+    return _run_readonly_check(
         ["pre-commit", "validate-config", str(root / ".pre-commit-config.yaml")],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
+        root,
+        "pre-commit validate-config",
     )
-    if proc.returncode != 0:
-        return False, f"pre-commit validate-config failed: {proc.stderr.strip()}"
-    return True, ""
 
 
 def _validate_curl(parts: list[str], _root: Path, _cmd: str) -> tuple[bool, str]:
@@ -682,10 +706,66 @@ def _validate_attestation_or_checksum(
     return True, ""
 
 
-def _validate_tar(parts: list[str], _root: Path, cmd: str) -> tuple[bool, str]:
-    """Validate tar command flags without performing destructive file extraction."""
-    if "-xzf" not in parts and "-ztf" not in parts:
+_VALID_TAR_FLAGS = frozenset({"-xzf", "-ztf", "-xf", "-tf", "-zxf", "-tzf"})
+
+
+def _extract_tar_target_dir(parts: list[str]) -> tuple[bool, str | None]:
+    """Return (ok, target_dir) for a tar command's -C or --directory option."""
+    for idx, token in enumerate(parts):
+        if token in ("-C", "--directory"):
+            if idx + 1 >= len(parts):
+                return False, None
+            target = parts[idx + 1].strip()
+            return (True, target) if target else (False, None)
+        if token.startswith("--directory="):
+            target = token.split("=", 1)[1].strip()
+            return (True, target) if target else (False, None)
+    return True, None
+
+
+def _get_configured_host_paths(root: Path) -> set[str]:
+    """Load valid project and user skill paths from catalog/hosts.json."""
+    hosts_file = root / "catalog/hosts.json"
+    if not hosts_file.is_file():
+        hosts_file = ROOT / "catalog/hosts.json"
+    if not hosts_file.is_file():
+        return set()
+    data = json.loads(hosts_file.read_text(encoding="utf-8"))
+    paths: set[str] = set()
+    for host_cfg in data.get("hosts", {}).values():
+        for key in ("project_path", "user_path"):
+            val = str(host_cfg.get(key, "")).strip("/")
+            if val:
+                paths.add(val)
+    return paths
+
+
+def _extract_host_subpath(target: str) -> str | None:
+    """Extract host-relative path if target uses project placeholder or dot-prefixed host dir."""
+    normalized = target.replace("\\", "/").rstrip("/")
+    if normalized == "/path/to/project" or normalized.startswith("/path/to/project/"):
+        return normalized.removeprefix("/path/to/project").strip("/")
+    segments = [s for s in normalized.split("/") if s not in {"", ".", ".."}]
+    for idx, seg in enumerate(segments):
+        if seg.startswith("."):
+            return "/".join(segments[idx:])
+    return None
+
+
+def _validate_tar(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+    """Validate tar command flags and host destination paths without performing file extraction."""
+    if not (_VALID_TAR_FLAGS & set(parts)):
         return False, f"tar command must specify extract or test flags: {cmd}"
+    ok, target = _extract_tar_target_dir(parts)
+    if not ok:
+        return False, f"tar command missing directory argument for -C: {cmd}"
+    host_subpath = _extract_host_subpath(target) if target is not None else None
+    valid_paths = _get_configured_host_paths(root)
+    if host_subpath is not None and host_subpath not in valid_paths:
+        return (
+            False,
+            f"tar -C destination '{target}' does not match configured host paths {sorted(valid_paths)}",
+        )
     return True, ""
 
 
@@ -844,7 +924,7 @@ def verify_all_snippets(
         errors.extend(subcmd_errors)
 
     if target_rel_paths is not None:
-        ranges_to_check: dict[str, tuple[int, int] | tuple[None, None]] = {
+        ranges_to_check: dict[str, tuple[int | None, int | None]] = {
             rel_path: DOCUMENTED_RANGES.get(rel_path, (None, None))
             for rel_path in target_rel_paths
         }
@@ -856,6 +936,7 @@ def verify_all_snippets(
         should_execute = target_rel_paths is not None or rel_path in (
             "README.md",
             "CONTRIBUTING.md",
+            "AGENTS.md",
             "docs/usage.md",
             "docs/runbooks.md",
             "docs/integration.md",

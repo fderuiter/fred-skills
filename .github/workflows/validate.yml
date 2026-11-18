@@ -36,26 +36,21 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Install validation dependencies
         run: python -m pip install -r requirements-dev.txt
-      - name: Run pre-commit validation
+      - name: Verify Python and Markdown formatting
+        env:
+          SKIP: ruff-lint,mypy,sync-audit-resources,build-catalog,build-experience,validate-skills,check-doc-links,verify-doc-snippets,verify-workflow-actions,unit-tests
         run: pre-commit run --all-files
       - name: Lint Python sources
-        run: ruff check .
-      - name: Verify code formatting
-        run: ruff format --check .
-      - name: Check skill packages and test suites
+        run: python scripts/run_checks.py --phase lint
+      - name: Check Python static types
+        run: python scripts/run_checks.py --phase typecheck
+      - name: Validate skill packages and catalogs
+        run: python scripts/run_checks.py --phase packages
+      - name: Verify Makefile syntax
         if: runner.os != 'Windows'
-        run: make check
-      - name: Check skill packages and test suites (Windows fallback)
-        if: runner.os == 'Windows'
-        run: |
-          python scripts/sync_audit_resources.py --check
-          python scripts/build_catalog.py --check
-          python scripts/build_experience.py --check
-          python scripts/validate_skills.py --telemetry validation-telemetry.json
-          python scripts/check_doc_links.py
-          python scripts/verify_doc_snippets.py
-          python scripts/verify_workflow_actions.py --check
-          python -m unittest discover -s tests -v
+        run: make -n check
+      - name: Run unit and documentation test suites
+        run: python scripts/run_checks.py --phase tests
       - name: Verify workflow action pins upstream
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: python scripts/verify_workflow_actions.py --online

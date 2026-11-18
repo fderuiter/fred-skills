@@ -230,8 +230,8 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
 
 def validate_with_telemetry(root: Path = ROOT) -> tuple[list[str], dict]:
     start_time = time.perf_counter()
-    problems = []
-    descriptions = {}
+    problems: list[str] = []
+    descriptions: dict[str, str] = {}
     scenario_schema = None
     schema_path = root / "schemas/evaluation-scenarios.schema.json"
     if not schema_path.is_file():

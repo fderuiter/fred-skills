@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import unquote, urlsplit
 
 import yaml
@@ -99,8 +100,11 @@ def suite_members(root: Path = ROOT) -> dict[str, dict]:
     return members
 
 
+_PathKey = TypeVar("_PathKey", bound=str | Path)
+
+
 def build_outputs(
-    outputs: Mapping[str | Path, str],
+    outputs: Mapping[_PathKey, str],
     root: Path = ROOT,
     check: bool = False,
     prefix: str = "Stale generated file",
