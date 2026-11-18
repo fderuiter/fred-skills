@@ -78,6 +78,132 @@ with tempfile.TemporaryDirectory() as temporary:
             == 1
         )
         page.screenshot(path="/tmp/empty_audit_report.png")
+
+        arch_report = Path(temporary) / "architecture_report.html"
+        render(
+            {
+                "schema_version": "1.0",
+                "title": "Order Fulfillment Architecture",
+                "status": "accepted",
+                "boundaries": [
+                    {
+                        "name": "Ingress API Gateway",
+                        "type": "trust",
+                        "description": "Terminates external TLS and validates session tokens",
+                        "invariants": [
+                            "Authenticated principal required before downstream dispatch",
+                            '<img src="https://example.invalid/arch" onerror="window.injected=true">',
+                        ],
+                    },
+                    {
+                        "name": "Ledger Store",
+                        "type": "storage",
+                        "description": "Append-only settlement journal",
+                        "invariants": ["Idempotent write keys enforced per tenant"],
+                    },
+                ],
+                "decisions": [
+                    {
+                        "id": "ADR-001",
+                        "title": "Adopt transactional outbox for settlement events",
+                        "context": "Dual writes risked lost downstream notifications on crash",
+                        "decision": "Persist outbox entries in the same storage transaction",
+                        "consequences": [
+                            "At-least-once event delivery requires idempotent consumers"
+                        ],
+                    }
+                ],
+            },
+            arch_report,
+        )
+        page.goto(arch_report.as_uri())
+        assert not page_errors
+        assert page.locator("img").count() == 0
+        assert page.evaluate("window.injected === undefined")
+        assert page.locator("article.finding").count() == 1
+        page.get_by_label("Search decisions").fill("nonexistent")
+        assert page.locator("article.finding:visible").count() == 0
+        page.get_by_role("button", name="Reset filters").click()
+        assert page.locator("article.finding:visible").count() == 1
+        page.get_by_text("Consequences and trade-offs", exact=True).click()
+        page.screenshot(path="/tmp/architecture_report.png")
+
+        review_report = Path(temporary) / "review_report.html"
+        render(
+            {
+                "schema_version": "1.0",
+                "verdict": "request_changes",
+                "summary": "Differential review identified a missing lock guard and an advisory cleanup.",
+                "findings": [
+                    {
+                        "id": "REV-01",
+                        "title": "Missing lock around shared token cache refresh",
+                        "severity": "high",
+                        "file": "src/auth/cache.py",
+                        "line": 84,
+                        "description": 'Concurrent callers can overwrite fresh credentials <img src="https://example.invalid/rev" onerror="window.injected=true">',
+                        "recommendation": "Acquire the refresh mutex before updating cache entries.",
+                    },
+                    {
+                        "id": "REV-02",
+                        "title": "Document retry backoff ceiling constant",
+                        "severity": "advisory",
+                        "file": "src/auth/client.py",
+                        "line": 19,
+                        "description": "Timeout ceiling unit is milliseconds rather than seconds.",
+                        "recommendation": "Rename constant with _MS suffix for clarity.",
+                    },
+                ],
+            },
+            review_report,
+        )
+        page.goto(review_report.as_uri())
+        assert not page_errors
+        assert page.locator("img").count() == 0
+        assert page.evaluate("window.injected === undefined")
+        assert page.locator("article.finding").count() == 2
+        page.get_by_label("Severity").select_option("advisory")
+        assert page.locator("article.finding:visible").count() == 1
+        page.get_by_label("Severity").select_option("")
+        assert page.locator("article.finding:visible").count() == 2
+        page.screenshot(path="/tmp/review_report.png")
+
+        testing_report = Path(temporary) / "testing_report.html"
+        render(
+            {
+                "schema_version": "1.0",
+                "component": "settlement.outbox",
+                "framework": "pytest",
+                "test_cases": [
+                    {
+                        "id": "TC-01",
+                        "name": "test_duplicate_idempotency_key_preserves_single_entry",
+                        "description": "Replaying an identical settlement request commits exactly one journal row.",
+                        "oracle_type": "state",
+                        "verified": True,
+                    },
+                    {
+                        "id": "TC-02",
+                        "name": "test_zero_byte_payload_raises_validation_error",
+                        "description": 'Empty batch boundary raises ValueError before opening a transaction <img src="https://example.invalid/tst" onerror="window.injected=true">',
+                        "oracle_type": "exception",
+                        "verified": True,
+                    },
+                ],
+            },
+            testing_report,
+        )
+        page.goto(testing_report.as_uri())
+        assert not page_errors
+        assert page.locator("img").count() == 0
+        assert page.evaluate("window.injected === undefined")
+        assert page.locator("article.finding").count() == 2
+        page.get_by_label("Oracle type").select_option("exception")
+        assert page.locator("article.finding:visible").count() == 1
+        page.get_by_label("Oracle type").select_option("")
+        assert page.locator("article.finding:visible").count() == 2
+        page.screenshot(path="/tmp/testing_report.png")
+
         page.goto((ROOT / "docs/explorer.html").as_uri())
         count = page.locator("article.finding").count()
         assert count >= 41
