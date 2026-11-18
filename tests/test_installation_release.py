@@ -341,14 +341,19 @@ class InstallationTests(unittest.TestCase):
         ver_result = releases.verify(manifest_path)
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
-        # Check documented packs (tar and zip)
-        for pack in ["starter", "full-audit", "complete"]:
-            self.assertTrue(
-                (one / f"fred-skills-{first['version']}-{pack}.tar").is_file()
-            )
-            self.assertTrue(
-                (one / f"fred-skills-{first['version']}-{pack}.zip").is_file()
-            )
+        # Check all 12 documented catalog packs (tar and zip)
+        catalog_packs = list(read_json(ROOT / "catalog/packs.json")["packs"].keys())
+        self.assertEqual(12, len(catalog_packs))
+        self.assertEqual(tuple(catalog_packs), releases.DOCUMENTED_PACKS)
+        self.assertEqual(catalog_packs, list(first["packs"].keys()))
+        archive_files = {item["file"] for item in first["archives"]}
+        for pack in catalog_packs:
+            tar_name = f"fred-skills-{first['version']}-{pack}.tar"
+            zip_name = f"fred-skills-{first['version']}-{pack}.zip"
+            self.assertTrue((one / tar_name).is_file(), f"Missing {tar_name}")
+            self.assertTrue((one / zip_name).is_file(), f"Missing {zip_name}")
+            self.assertIn(tar_name, archive_files)
+            self.assertIn(zip_name, archive_files)
 
         # Check consolidated suite and standalone skills
         self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
@@ -359,6 +364,23 @@ class InstallationTests(unittest.TestCase):
         corrupt_target.write_bytes(corrupt_target.read_bytes() + b"tampered")
         with self.assertRaises(ValueError):
             releases.verify(manifest_path)
+
+    def test_unified_release_supports_custom_root_packs(self):
+        atomic_json(
+            self.source / "catalog/packs.json",
+            {
+                "packs": {
+                    "starter": {"skills": ["sample"]},
+                    "custom-domain": {"skills": ["sample", "other"]},
+                }
+            },
+        )
+        out = self.root / "custom_unified"
+        manifest = releases.build(out, all_packs=True, root=self.source)
+        self.assertEqual(["starter", "custom-domain"], list(manifest["packs"].keys()))
+        for pack in ["starter", "custom-domain"]:
+            self.assertTrue((out / f"fred-skills-0.2.0-{pack}.tar").is_file())
+            self.assertTrue((out / f"fred-skills-0.2.0-{pack}.zip").is_file())
 
     def test_recovery_restores_a_partially_swapped_install(self):
         import os

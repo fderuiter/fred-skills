@@ -142,10 +142,12 @@ python scripts/fred.py verify-release manifest.json
 Unpack verified archives into your agent host skills destination:
 
 ```sh
+mkdir -p /path/to/project/.agents/skills/
+
 # Deploy starter pack
-tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agent/skills/
+tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/
 
 # Deploy complete pack (creates all 51 skill directories)
-tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agent/skills/
+tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agents/skills/
 ```
 
