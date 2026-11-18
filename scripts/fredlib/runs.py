@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 import jsonschema
 import yaml
@@ -519,40 +521,676 @@ def memory(directory: Path) -> dict:
     }
 
 
-def import_sarif(path: Path) -> dict:
+_ROOT_BASE_ID_KEYS = (
+    "%SRCROOT%",
+    "SRCROOT",
+    "%ROOTPATH%",
+    "ROOTPATH",
+    "%PROJECTROOT%",
+    "PROJECTROOT",
+    "PROJECT_ROOT",
+    "%WORKSPACE%",
+    "WORKSPACE",
+    "REPOROOT",
+    "REPO_ROOT",
+)
+
+
+def _canonicalize_abs_posix(raw_path: str) -> str | None:
+    if (
+        len(raw_path) >= 3
+        and raw_path[0] == "/"
+        and raw_path[1].isalpha()
+        and raw_path[2] == ":"
+    ):
+        raw_path = raw_path[1].upper() + raw_path[2:]
+    elif len(raw_path) >= 2 and raw_path[0].isalpha() and raw_path[1] == ":":
+        raw_path = raw_path[0].upper() + raw_path[1:]
+
+    is_win_drive = len(raw_path) >= 2 and raw_path[0].isalpha() and raw_path[1] == ":"
+    if is_win_drive:
+        drive = raw_path[:2]
+        rest = raw_path[2:]
+        if rest and not rest.startswith("/"):
+            return None
+        parts = [seg for seg in rest.split("/") if seg and seg != "."]
+        return f"{drive}/{'/'.join(parts)}" if parts else f"{drive}/"
+
+    if not raw_path.startswith("/"):
+        return None
+    parts = [seg for seg in raw_path.split("/") if seg and seg != "."]
+    return "/" + "/".join(parts) if parts else "/"
+
+
+def _parse_sarif_uri(
+    raw_uri: object, *, allow_empty_rel: bool = False
+) -> tuple[str, str] | None:
+    if not isinstance(raw_uri, str) or "\x00" in raw_uri or "\\" in raw_uri:
+        return None
+    if not raw_uri:
+        return ("rel", "") if allow_empty_rel else None
+
+    if len(raw_uri) >= 2 and raw_uri[0].isalpha() and raw_uri[1] == ":":
+        segments = raw_uri[2:].split("/")
+        if ".." in segments or ".git" in segments:
+            return None
+        canon = _canonicalize_abs_posix(raw_uri)
+        return ("abs", canon) if canon else None
+
+    parsed = urlsplit(raw_uri)
+    if parsed.query or parsed.fragment:
+        return None
+
+    if parsed.scheme:
+        if parsed.scheme.lower() != "file":
+            return None
+        if parsed.netloc.lower() not in {"", "localhost"}:
+            return None
+        decoded = unquote(parsed.path)
+        if not decoded or "\x00" in decoded or "\\" in decoded:
+            return None
+        segments = decoded.split("/")
+        if ".." in segments or ".git" in segments:
+            return None
+        canon = _canonicalize_abs_posix(decoded)
+        return ("abs", canon) if canon else None
+
+    if parsed.netloc:
+        return None
+
+    decoded = unquote(parsed.path)
+    if "\x00" in decoded or "\\" in decoded:
+        return None
+    segments = decoded.split("/")
+    if ".." in segments or ".git" in segments:
+        return None
+    if decoded.startswith("/"):
+        canon = _canonicalize_abs_posix(decoded)
+        return ("abs", canon) if canon else None
+
+    pure = PurePosixPath(decoded)
+    if not pure.parts or pure.parts == (".",):
+        return ("rel", "") if allow_empty_rel else None
+    try:
+        checked = relative_path(decoded)
+    except ValueError:
+        return None
+    return ("rel", checked.as_posix())
+
+
+def _normalize_fs_roots(root: Path) -> list[str]:
+    expanded = Path(root).expanduser()
+    candidates = [
+        Path(os.path.abspath(os.fspath(expanded))).as_posix(),
+        expanded.resolve().as_posix(),
+    ]
+    normalized: list[str] = []
+    for item in candidates:
+        canon = _canonicalize_abs_posix(item)
+        if canon and canon not in normalized:
+            normalized.append(canon)
+    return normalized
+
+
+def _is_usable_abs_root(path_str: str) -> bool:
+    if not path_str or path_str == "/":
+        return False
+    return not (len(path_str) == 3 and path_str[1:] == ":/")
+
+
+def _resolve_base_map(original_base_ids: object) -> dict[str, tuple[str, str] | None]:
+    if not isinstance(original_base_ids, dict):
+        return {}
+    resolved: dict[str, tuple[str, str] | None] = {}
+    visiting: set[str] = set()
+
+    def _resolve_one(key: str) -> tuple[str, str] | None:
+        if key in resolved:
+            return resolved[key]
+        if key in visiting:
+            return None
+        entry = original_base_ids.get(key)
+        if not isinstance(entry, dict):
+            resolved[key] = None
+            return None
+        visiting.add(key)
+        try:
+            raw_uri = entry.get("uri")
+            parent_id = entry.get("uriBaseId")
+            if raw_uri is None or raw_uri == "":
+                if isinstance(parent_id, str) and parent_id in original_base_ids:
+                    res = _resolve_one(parent_id)
+                else:
+                    res = ("root_marker", "")
+                resolved[key] = res
+                return res
+
+            parsed = _parse_sarif_uri(raw_uri, allow_empty_rel=True)
+            if parsed is None:
+                resolved[key] = None
+                return None
+            kind, val = parsed
+            if kind == "abs":
+                res = ("abs", val) if _is_usable_abs_root(val) else None
+                resolved[key] = res
+                return res
+
+            if isinstance(parent_id, str) and parent_id:
+                if parent_id not in original_base_ids:
+                    res = ("rel", val)
+                    resolved[key] = res
+                    return res
+                parent = _resolve_one(parent_id)
+                if parent is None:
+                    resolved[key] = None
+                    return None
+                p_kind, p_val = parent
+                if p_kind == "abs":
+                    joined = f"{p_val.rstrip('/')}/{val}" if val else p_val
+                    canon = _canonicalize_abs_posix(joined)
+                    res = (
+                        ("abs", canon) if canon and _is_usable_abs_root(canon) else None
+                    )
+                elif p_kind == "rel":
+                    joined = (
+                        f"{p_val}/{val}".strip("/") if p_val and val else (p_val or val)
+                    )
+                    res = ("rel", joined)
+                else:
+                    res = ("rel", val)
+                resolved[key] = res
+                return res
+
+            resolved[key] = ("rel", val)
+            return resolved[key]
+        finally:
+            visiting.discard(key)
+
+    for base_key in original_base_ids:
+        if isinstance(base_key, str):
+            _resolve_one(base_key)
+    return resolved
+
+
+def _extract_location_abs_dir(
+    loc_obj: object, base_map: dict[str, tuple[str, str] | None]
+) -> str | None:
+    if not isinstance(loc_obj, dict):
+        return None
+    raw_uri = loc_obj.get("uri")
+    base_id = loc_obj.get("uriBaseId")
+    if not raw_uri and isinstance(base_id, str) and base_id in base_map:
+        mapped = base_map[base_id]
+        if mapped and mapped[0] == "abs" and _is_usable_abs_root(mapped[1]):
+            return mapped[1]
+        return None
+    parsed = _parse_sarif_uri(raw_uri, allow_empty_rel=True)
+    if parsed is None:
+        return None
+    kind, val = parsed
+    if kind == "abs":
+        return val if _is_usable_abs_root(val) else None
+    if isinstance(base_id, str) and base_id in base_map:
+        mapped = base_map[base_id]
+        if mapped and mapped[0] == "abs":
+            joined = f"{mapped[1].rstrip('/')}/{val}" if val else mapped[1]
+            canon = _canonicalize_abs_posix(joined)
+            if canon and _is_usable_abs_root(canon):
+                return canon
+    return None
+
+
+def _collect_sarif_roots(
+    run: dict,
+    base_map: dict[str, tuple[str, str] | None],
+    invocation_index: object = None,
+) -> list[str]:
+    roots: list[str] = []
+
+    def _add(candidate: str | None) -> None:
+        if candidate and _is_usable_abs_root(candidate) and candidate not in roots:
+            roots.append(candidate)
+
+    upper_to_key = {k.upper(): k for k in base_map}
+    for well_known in _ROOT_BASE_ID_KEYS:
+        matched_key = upper_to_key.get(well_known)
+        if matched_key is not None:
+            entry = base_map[matched_key]
+            if entry and entry[0] == "abs":
+                _add(entry[1])
+
+    vc_list = run.get("versionControlProvenance")
+    if isinstance(vc_list, list):
+        for vc in vc_list:
+            if isinstance(vc, dict):
+                _add(_extract_location_abs_dir(vc.get("mappedTo"), base_map))
+
+    invocations = run.get("invocations")
+    if isinstance(invocations, list):
+        if isinstance(invocation_index, int) and 0 <= invocation_index < len(
+            invocations
+        ):
+            inv = invocations[invocation_index]
+            if isinstance(inv, dict):
+                _add(_extract_location_abs_dir(inv.get("workingDirectory"), base_map))
+        for inv in invocations:
+            if isinstance(inv, dict):
+                _add(_extract_location_abs_dir(inv.get("workingDirectory"), base_map))
+
+    special = run.get("specialLocations")
+    if isinstance(special, dict):
+        _add(_extract_location_abs_dir(special.get("displayBase"), base_map))
+
+    if not roots:
+        raw_bases = run.get("originalUriBaseIds")
+        if isinstance(raw_bases, dict):
+            for key, entry in base_map.items():
+                raw_entry = raw_bases.get(key)
+                if (
+                    isinstance(raw_entry, dict)
+                    and not raw_entry.get("uriBaseId")
+                    and entry
+                    and entry[0] == "abs"
+                ):
+                    _add(entry[1])
+    return roots
+
+
+def _relativize_against_roots(
+    target_abs: str, candidate_roots: list[str]
+) -> str | None:
+    for base_abs in candidate_roots:
+        if not _is_usable_abs_root(base_abs):
+            continue
+        prefix = base_abs.rstrip("/") + "/"
+        if target_abs.startswith(prefix):
+            rel = target_abs[len(prefix) :]
+            try:
+                checked = relative_path(rel)
+            except ValueError:
+                return None
+            if checked.parts:
+                return checked.as_posix()
+    return None
+
+
+def _resolve_artifact_location_dict(artifact_loc: object, run: dict) -> dict | None:
+    if not isinstance(artifact_loc, dict):
+        return None
+    if artifact_loc.get("uri"):
+        return artifact_loc
+    idx = artifact_loc.get("index")
+    artifacts = run.get("artifacts")
+    if (
+        isinstance(idx, int)
+        and isinstance(artifacts, list)
+        and 0 <= idx < len(artifacts)
+    ):
+        art = artifacts[idx]
+        if isinstance(art, dict) and isinstance(art.get("location"), dict):
+            return art["location"]
+    return artifact_loc
+
+
+def _normalize_sarif_artifact_path(
+    artifact_loc: object,
+    run: dict,
+    base_map: dict[str, tuple[str, str] | None],
+    explicit_roots: list[str] | None,
+    sarif_roots: list[str],
+) -> str | None:
+    resolved_loc = _resolve_artifact_location_dict(artifact_loc, run)
+    if not isinstance(resolved_loc, dict):
+        return None
+    parsed = _parse_sarif_uri(resolved_loc.get("uri"))
+    if parsed is None:
+        return None
+    kind, val = parsed
+    if kind == "abs":
+        allowed_roots = explicit_roots if explicit_roots is not None else sarif_roots
+        return _relativize_against_roots(val, allowed_roots)
+
+    base_id = resolved_loc.get("uriBaseId")
+    if isinstance(base_id, str) and base_id:
+        raw_bases = run.get("originalUriBaseIds")
+        if isinstance(raw_bases, dict) and base_id in raw_bases:
+            mapped = base_map.get(base_id)
+            if mapped is None:
+                return None
+            b_kind, b_val = mapped
+            if b_kind == "abs":
+                joined = f"{b_val.rstrip('/')}/{val}"
+                canon = _canonicalize_abs_posix(joined)
+                if not canon:
+                    return None
+                candidate_roots = list(explicit_roots or [])
+                for r in sarif_roots:
+                    if r not in candidate_roots:
+                        candidate_roots.append(r)
+                return _relativize_against_roots(canon, candidate_roots)
+            if b_kind == "rel" and b_val:
+                val = f"{b_val.rstrip('/')}/{val}"
+
+    try:
+        checked = relative_path(val)
+    except ValueError:
+        return None
+    return checked.as_posix() if checked.parts else None
+
+
+def _select_tool_component(
+    tc_ref: object, driver: dict, extensions: list[dict]
+) -> dict | None:
+    if not isinstance(tc_ref, dict):
+        return None
+    idx = tc_ref.get("index")
+    if isinstance(idx, int) and 0 <= idx < len(extensions):
+        return extensions[idx]
+    guid = tc_ref.get("guid")
+    if isinstance(guid, str) and guid:
+        if driver.get("guid") == guid:
+            return driver
+        for ext in extensions:
+            if ext.get("guid") == guid:
+                return ext
+    name = tc_ref.get("name")
+    if isinstance(name, str) and name:
+        if driver.get("name") == name:
+            return driver
+        for ext in extensions:
+            if ext.get("name") == name:
+                return ext
+    return None
+
+
+def _lookup_rule_in_component(
+    component: dict,
+    rule_id: str | None,
+    rule_guid: str | None,
+    rule_index: int | None,
+) -> dict | None:
+    rules = component.get("rules")
+    if not isinstance(rules, list):
+        return None
+    if isinstance(rule_index, int) and 0 <= rule_index < len(rules):
+        candidate = rules[rule_index]
+        if isinstance(candidate, dict) and (
+            not rule_id or not candidate.get("id") or candidate.get("id") == rule_id
+        ):
+            return candidate
+    if rule_guid:
+        for item in rules:
+            if isinstance(item, dict) and item.get("guid") == rule_guid:
+                return item
+    if rule_id:
+        for item in rules:
+            if isinstance(item, dict) and item.get("id") == rule_id:
+                return item
+    return None
+
+
+def _find_sarif_rule(result: dict, driver: dict, extensions: list[dict]) -> dict | None:
+    rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
+    raw_rule_id = result.get("ruleId") or rule_ref.get("id")
+    rule_id = raw_rule_id if isinstance(raw_rule_id, str) and raw_rule_id else None
+    raw_guid = rule_ref.get("guid")
+    rule_guid = raw_guid if isinstance(raw_guid, str) and raw_guid else None
+
+    ref_idx = rule_ref.get("index")
+    res_idx = result.get("ruleIndex")
+    idx = (
+        ref_idx
+        if isinstance(ref_idx, int) and ref_idx >= 0
+        else (res_idx if isinstance(res_idx, int) and res_idx >= 0 else None)
+    )
+
+    target_comp = _select_tool_component(
+        rule_ref.get("toolComponent"), driver, extensions
+    )
+    if target_comp is not None:
+        matched = _lookup_rule_in_component(target_comp, rule_id, rule_guid, idx)
+        if matched is not None:
+            return matched
+
+    matched = _lookup_rule_in_component(
+        driver, rule_id, rule_guid, idx if target_comp is None else None
+    )
+    if matched is not None:
+        return matched
+
+    for ext in extensions:
+        matched = _lookup_rule_in_component(ext, rule_id, rule_guid, None)
+        if matched is not None:
+            return matched
+    return None
+
+
+def _find_override_level(result: dict, run: dict, rule_id: str | None) -> str | None:
+    invocations = run.get("invocations")
+    if not isinstance(invocations, list):
+        return None
+    inv_idx = result.get("invocationIndex")
+    ordered = (
+        [invocations[inv_idx]]
+        if isinstance(inv_idx, int) and 0 <= inv_idx < len(invocations)
+        else invocations
+    )
+    rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
+    res_idx = (
+        rule_ref.get("index")
+        if isinstance(rule_ref.get("index"), int)
+        else result.get("ruleIndex")
+    )
+
+    for inv in ordered:
+        if not isinstance(inv, dict):
+            continue
+        overrides = inv.get("ruleConfigurationOverrides")
+        if not isinstance(overrides, list):
+            continue
+        for ov in overrides:
+            if not isinstance(ov, dict):
+                continue
+            desc = ov.get("descriptor")
+            cfg = ov.get("configuration")
+            if not isinstance(desc, dict) or not isinstance(cfg, dict):
+                continue
+            level = cfg.get("level")
+            if not isinstance(level, str) or not level:
+                continue
+            if (rule_id and desc.get("id") == rule_id) or (
+                isinstance(res_idx, int)
+                and res_idx >= 0
+                and desc.get("index") == res_idx
+                and not desc.get("id")
+            ):
+                return level
+    return None
+
+
+def _resolve_sarif_level(
+    result: dict, matched_rule: dict | None, run: dict, rule_id: str | None
+) -> str:
+    explicit = result.get("level")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    kind = result.get("kind")
+    if isinstance(kind, str) and kind in {
+        "pass",
+        "open",
+        "review",
+        "notApplicable",
+        "informational",
+    }:
+        return "none"
+    override_level = _find_override_level(result, run, rule_id)
+    if override_level:
+        return override_level
+    if isinstance(matched_rule, dict):
+        default_cfg = matched_rule.get("defaultConfiguration")
+        if isinstance(default_cfg, dict):
+            rule_level = default_cfg.get("level")
+            if isinstance(rule_level, str) and rule_level:
+                return rule_level
+    return "warning"
+
+
+def _extract_logical_symbol(location_item: dict, run: dict) -> str | None:
+    logical_list = location_item.get("logicalLocations")
+    if not isinstance(logical_list, list):
+        return None
+    run_logical = run.get("logicalLocations")
+    for entry in logical_list:
+        if not isinstance(entry, dict):
+            continue
+        for field in ("name", "fullyQualifiedName", "decoratedName"):
+            val = entry.get(field)
+            if isinstance(val, str) and val:
+                return val
+        idx = entry.get("index")
+        if (
+            isinstance(idx, int)
+            and isinstance(run_logical, list)
+            and 0 <= idx < len(run_logical)
+            and isinstance(run_logical[idx], dict)
+        ):
+            target = run_logical[idx]
+            for field in ("name", "fullyQualifiedName", "decoratedName"):
+                val = target.get(field)
+                if isinstance(val, str) and val:
+                    return val
+    return None
+
+
+def _extract_security_severity(
+    result: dict, matched_rule: dict | None
+) -> str | float | int | None:
+    for obj in (result, matched_rule):
+        if isinstance(obj, dict):
+            props = obj.get("properties")
+            if isinstance(props, dict):
+                sec_sev = props.get("security-severity")
+                if (
+                    isinstance(sec_sev, (str, int, float))
+                    and not isinstance(sec_sev, bool)
+                    and sec_sev != ""
+                ):
+                    return sec_sev
+    return None
+
+
+def _clean_fingerprint_map(raw_map: object) -> dict[str, str] | None:
+    if not isinstance(raw_map, dict):
+        return None
+    cleaned = {
+        k: v
+        for k, v in raw_map.items()
+        if isinstance(k, str) and k and isinstance(v, str) and v
+    }
+    return cleaned or None
+
+
+def import_sarif(path: Path, root: Path | None = None) -> dict:
     document, observations = read_json(path), []
+    explicit_roots = _normalize_fs_roots(Path(root)) if root is not None else None
     for run in document.get("runs", []):
-        tool = run.get("tool", {}).get("driver", {})
+        if not isinstance(run, dict):
+            continue
+        tool_obj = run.get("tool") if isinstance(run.get("tool"), dict) else {}
+        driver = (
+            tool_obj.get("driver") if isinstance(tool_obj.get("driver"), dict) else {}
+        )
+        raw_exts = tool_obj.get("extensions")
+        extensions = (
+            [ext for ext in raw_exts if isinstance(ext, dict)]
+            if isinstance(raw_exts, list)
+            else []
+        )
+        base_map = _resolve_base_map(run.get("originalUriBaseIds"))
+        default_sarif_roots = _collect_sarif_roots(run, base_map)
+
         for result in run.get("results", []):
+            if not isinstance(result, dict):
+                continue
+            inv_idx = result.get("invocationIndex")
+            sarif_roots = (
+                _collect_sarif_roots(run, base_map, inv_idx)
+                if isinstance(inv_idx, int) and inv_idx >= 0
+                else default_sarif_roots
+            )
+            matched_rule = _find_sarif_rule(result, driver, extensions)
+            rule_ref = (
+                result.get("rule") if isinstance(result.get("rule"), dict) else {}
+            )
+            rule_id = (
+                result.get("ruleId")
+                or rule_ref.get("id")
+                or (matched_rule.get("id") if isinstance(matched_rule, dict) else None)
+                or "unknown"
+            )
+            reported_level = _resolve_sarif_level(
+                result, matched_rule, run, rule_id if rule_id != "unknown" else None
+            )
+
             locations = []
             for item in result.get("locations", []):
-                physical = item.get("physicalLocation", {})
-                uri = physical.get("artifactLocation", {}).get("uri", "")
-                from urllib.parse import unquote, urlsplit
-
-                if not uri or urlsplit(uri).scheme:
+                if not isinstance(item, dict):
                     continue
-                try:
-                    relative_path(unquote(uri))
-                except ValueError:
-                    continue
-                locations.append(
-                    {
-                        "path": unquote(uri),
-                        "line": physical.get("region", {}).get("startLine"),
-                    }
+                physical = (
+                    item.get("physicalLocation")
+                    if isinstance(item.get("physicalLocation"), dict)
+                    else {}
                 )
-            observations.append(
-                {
-                    "tool": tool.get("name", "unknown"),
-                    "tool_version": tool.get("version", "unknown"),
-                    "rule": result.get("ruleId", "unknown"),
-                    "reported_level": result.get("level", "warning"),
-                    "message": result.get("message", {}).get("text", "No text message"),
-                    "locations": locations,
-                    "evidence_state": "scanner-reported; agent verification not performed",
+                norm_path = _normalize_sarif_artifact_path(
+                    physical.get("artifactLocation"),
+                    run,
+                    base_map,
+                    explicit_roots,
+                    sarif_roots,
+                )
+                if not norm_path:
+                    continue
+                region = (
+                    physical.get("region")
+                    if isinstance(physical.get("region"), dict)
+                    else {}
+                )
+                loc_record: dict = {
+                    "path": norm_path,
+                    "line": region.get("startLine"),
                 }
+                if region.get("endLine") is not None:
+                    loc_record["end_line"] = region.get("endLine")
+                symbol = _extract_logical_symbol(item, run)
+                if symbol:
+                    loc_record["symbol"] = symbol
+                locations.append(loc_record)
+
+            msg_obj = (
+                result.get("message") if isinstance(result.get("message"), dict) else {}
             )
+            observation: dict = {
+                "tool": driver.get("name", "unknown"),
+                "tool_version": driver.get("version")
+                or driver.get("semanticVersion")
+                or "unknown",
+                "rule": rule_id,
+                "reported_level": reported_level,
+                "message": msg_obj.get("text", "No text message"),
+                "locations": locations,
+                "evidence_state": "scanner-reported; agent verification not performed",
+            }
+            sec_severity = _extract_security_severity(result, matched_rule)
+            if sec_severity is not None:
+                observation["security_severity"] = sec_severity
+            fps = _clean_fingerprint_map(result.get("fingerprints"))
+            if fps:
+                observation["fingerprints"] = fps
+            partial_fps = _clean_fingerprint_map(result.get("partialFingerprints"))
+            if partial_fps:
+                observation["partial_fingerprints"] = partial_fps
+            observations.append(observation)
+
     return {
         "schema_version": "1.0",
         "observations": observations,
