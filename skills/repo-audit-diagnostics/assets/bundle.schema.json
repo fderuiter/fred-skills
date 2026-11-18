@@ -111,6 +111,88 @@
     },
     "scrubbed_transcript": {
       "type": "string"
+    },
+    "redaction": {
+      "type": "object",
+      "required": [
+        "tier",
+        "credentials_redacted",
+        "tool_outputs_omitted",
+        "total_redactions"
+      ],
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": [
+            "skeleton",
+            "evidence",
+            "full"
+          ]
+        },
+        "credentials_redacted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_outputs_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_redactions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_category": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "transcript_discovery": {
+      "type": "object",
+      "required": [
+        "source",
+        "selected_transcript",
+        "selection_reason",
+        "rejected_candidates"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "explicit",
+            "workspace",
+            "claude-code",
+            "codex"
+          ]
+        },
+        "selected_transcript": {
+          "type": "string"
+        },
+        "selection_reason": {
+          "type": "string"
+        },
+        "rejected_candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

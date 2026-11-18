@@ -538,6 +538,12 @@ def parser() -> argparse.ArgumentParser:
         "--session-id", default=None, help="Explicit session or run ID"
     )
     sub_tri.add_argument(
+        "--redaction-tier",
+        choices=["skeleton", "evidence", "full"],
+        default="full",
+        help="Transcript redaction tier: skeleton, evidence, or full (default: full)",
+    )
+    sub_tri.add_argument(
         "--check-schema",
         action="store_true",
         help="Validate generated bundle against bundle.schema.json",
@@ -895,18 +901,35 @@ def handle_diagnostics(a: argparse.Namespace) -> Any:
     triage = _load_triage_module()
 
     transcript = a.transcript or a.transcript_opt
+    discovery_meta = None
     if not transcript:
         if workspace and workspace.is_dir():
-            transcript = triage.discover_transcript(workspace)
+            discovery_meta = triage.discover_transcript_details(
+                workspace, session_id=a.session_id
+            )
+            transcript = Path(discovery_meta["selected_transcript"])
             print(f"Discovered transcript: {transcript}", file=sys.stderr)
         elif workspace:
             raise ValueError(f"Workspace directory not found: {workspace}")
+        elif a.session_id:
+            discovery_meta = triage.discover_transcript_details(
+                None, session_id=a.session_id
+            )
+            transcript = Path(discovery_meta["selected_transcript"])
+            print(f"Discovered transcript: {transcript}", file=sys.stderr)
         else:
             raise ValueError("Transcript file path is required")
     if not transcript.is_file():
         raise ValueError(f"Transcript file not found: {transcript}")
 
-    bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
+    redaction_tier = getattr(a, "redaction_tier", "full") or "full"
+    bundle = triage.generate_diagnostic_bundle(
+        transcript,
+        workspace,
+        a.session_id,
+        redaction_tier=redaction_tier,
+        discovery_metadata=discovery_meta,
+    )
     if a.check_schema:
         triage.validate_bundle(bundle)
     if output_dir:
