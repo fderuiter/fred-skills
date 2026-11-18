@@ -333,8 +333,9 @@ class PackageTests(unittest.TestCase):
         for hook_id in ["check-doc-links", "verify-doc-snippets"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
-            self.assertEqual(hooks[hook_id].get("files"), r"\.md$")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
+            self.assertTrue(hooks[hook_id].get("always_run", False))
+            self.assertNotIn("files", hooks[hook_id])
 
         reqs_path = ROOT / "requirements-dev.txt"
         self.assertTrue(reqs_path.is_file())
