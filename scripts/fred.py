@@ -472,6 +472,12 @@ def parser() -> argparse.ArgumentParser:
         required=True,
         help="Output JSON file path for imported observations",
     )
+    sub_imp.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Optional repository root path for resolving file:// URIs",
+    )
 
     sub_exp = commands.add_parser(
         "export-sarif",
@@ -822,7 +828,7 @@ def handle_runs(a: argparse.Namespace) -> Any:
     if a.command == "reconcile":
         return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
     if a.command == "import-sarif":
-        data = runs.import_sarif(a.source)
+        data = runs.import_sarif(a.source, root=getattr(a, "root", None))
         atomic_json(a.output, data)
         return {"observations": len(data["observations"]), "output": str(a.output)}
     raise ValueError(f"Unknown runs command: {a.command}")
