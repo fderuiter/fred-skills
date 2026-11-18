@@ -10,14 +10,23 @@ Before bumping `VERSION`, review the selected diff, run all checks in
 synthetic walkthrough, build and verify the intended pack, review the recorded behavioral
 limits, and ensure [LICENSE](../LICENSE) remains present and nonempty.
 
-Pushes to `main` automatically check live GitHub Releases for `v<VERSION>`. When
-`v<VERSION>` is not yet published (or exists only as a draft), the release workflow runs
-`make check`, builds and verifies all release archives and checksums, pushes tag
-`v<VERSION>` if missing on `origin`, and publishes the GitHub Release directly using
+Pushes to `main` run a read-only `preflight` gate that validates `v<VERSION>`, resolves
+an immutable `target_sha`, verifies `LICENSE` and `VERSION` at `target_sha`, and checks
+live GitHub Releases. When `v<VERSION>` is unpublished (or exists only as a draft), the
+release workflow checks out `target_sha`, runs `make check`, packages and verifies all
+release archives and SHA-256 manifests, attests SLSA build provenance, pushes tag
+`v<VERSION>` if missing on `origin`, and publishes (or promotes) the GitHub Release using
 `docs/release-notes-<VERSION>.md` when present (or generated notes otherwise). Subsequent
 `main` pushes with an already published `VERSION` skip packaging and publication cleanly.
-Matching `v*` tags and `workflow_dispatch` remain supported for idempotent recovery runs.
-Ordinary pull requests have no `contents: write` job and never invoke live model adapters.
+
+Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
+`workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)
+builds and uploads `release-artifacts` with read-only permissions while skipping the
+privileged `release` job entirely. Setting `inputs.publish` to `true` (with optional
+`inputs.tag`, defaulting to `v<VERSION>`) runs full preflight verification — requiring
+`refs/tags/<tag>` on `origin` for non-`main` refs or historical tags — and performs an
+idempotent recovery publication or draft promotion at `target_sha`. Ordinary pull requests
+have no `contents: write` job and never invoke live model adapters.
 
 ZIP and TAR archives contain standalone skill directories; the repository source is
 still needed for root CLI tooling. Archive content uses fixed paths/order/timestamps and
