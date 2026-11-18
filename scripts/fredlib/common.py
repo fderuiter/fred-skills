@@ -1,41 +1,78 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-SUITE_DELIVERABLES: dict[str, tuple[str, str]] = {
-    "repository-audits": (
-        "audit.json",
-        "shared/repo-audit/resources/assets/audit.schema.json",
-    ),
-    "repository-workflows": (
-        "audit.json",
-        "shared/repo-audit/resources/assets/audit.schema.json",
-    ),
-    "software-architecture": (
-        "architecture.json",
-        "skills/arch-decision-record/assets/architecture.schema.json",
-    ),
-    "code-review": (
-        "review.json",
-        "skills/review-diff-analysis/assets/review.schema.json",
-    ),
-    "automated-testing": (
-        "testing.json",
-        "skills/test-gap-analysis/assets/testing.schema.json",
-    ),
-}
-
-DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
-    "architecture.json": "skills/arch-decision-record/assets/architecture.schema.json",
-    "review.json": "skills/review-diff-analysis/assets/review.schema.json",
-    "testing.json": "skills/test-gap-analysis/assets/testing.schema.json",
+_DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "repository-audits": {
+        "filename": "audit.json",
+        "schema": "shared/repo-audit/resources/assets/audit.schema.json",
+        "starter": {
+            "schema_version": "1.0",
+            "contracts": [],
+            "evidence": [],
+            "findings": [],
+            "issues": [],
+            "limitations": [
+                "Initialized workspace only; no application tests or agent audit executed."
+            ],
+            "checks": [],
+        },
+    },
+    "repository-workflows": {
+        "filename": "audit.json",
+        "schema": "shared/repo-audit/resources/assets/audit.schema.json",
+        "starter": {
+            "schema_version": "1.0",
+            "contracts": [],
+            "evidence": [],
+            "findings": [],
+            "issues": [],
+            "limitations": [
+                "Initialized workspace only; no application tests or agent audit executed."
+            ],
+            "checks": [],
+        },
+    },
+    "software-architecture": {
+        "filename": "architecture.json",
+        "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+        "starter": {
+            "schema_version": "1.0",
+            "title": "Architecture specification",
+            "status": "draft",
+            "boundaries": [],
+            "decisions": [],
+        },
+    },
+    "code-review": {
+        "filename": "review.json",
+        "schema": "skills/review-diff-analysis/assets/review.schema.json",
+        "starter": {
+            "schema_version": "1.0",
+            "verdict": "comment",
+            "summary": "Initialized workspace only; agent code review has not run.",
+            "findings": [],
+        },
+    },
+    "automated-testing": {
+        "filename": "testing.json",
+        "schema": "skills/test-case-generation/assets/testing.schema.json",
+        "starter": {
+            "schema_version": "1.0",
+            "component": "repository",
+            "framework": "unspecified",
+            "test_cases": [],
+        },
+    },
 }
 
 
@@ -43,12 +80,66 @@ def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_suite_contracts(root: Path = ROOT) -> dict[str, dict[str, Any]]:
+    contracts = copy.deepcopy(_DEFAULT_SUITE_CONTRACTS)
+    suites_path = root / "catalog/suites.json"
+    if suites_path.is_file():
+        try:
+            suites_doc = read_json(suites_path)
+            for suite in suites_doc.get("suites", []):
+                name = suite.get("name")
+                artifact = suite.get("artifact")
+                if (
+                    isinstance(name, str)
+                    and isinstance(artifact, dict)
+                    and isinstance(artifact.get("filename"), str)
+                    and isinstance(artifact.get("schema"), str)
+                    and isinstance(artifact.get("starter"), dict)
+                ):
+                    contracts[name] = {
+                        "filename": artifact["filename"],
+                        "schema": artifact["schema"],
+                        "starter": copy.deepcopy(artifact["starter"]),
+                    }
+        except (OSError, ValueError, TypeError):
+            pass
+    return contracts
+
+
+SUITE_DELIVERABLES: dict[str, tuple[str, str]] = {
+    name: (contract["filename"], contract["schema"])
+    for name, contract in _load_suite_contracts(ROOT).items()
+}
+
+DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
+    contract["filename"]: contract["schema"]
+    for contract in _load_suite_contracts(ROOT).values()
+    if contract["filename"] != "audit.json"
+}
+
+
 def _suite_for_skills(skills: list[str], root: Path = ROOT) -> str:
-    skill_to_suite = {
-        row["name"]: row["suite"]
-        for row in read_json(root / "catalog/skills.json")["skills"]
-        if row.get("suite")
-    }
+    skill_to_suite: dict[str, str] = {}
+    suites_path = root / "catalog/suites.json"
+    if suites_path.is_file():
+        try:
+            for suite in read_json(suites_path).get("suites", []):
+                suite_name = suite.get("name")
+                if isinstance(suite_name, str):
+                    for phase in suite.get("phases", []):
+                        for member in phase.get("skills", []):
+                            if isinstance(member, str):
+                                skill_to_suite[member] = suite_name
+        except (OSError, ValueError, TypeError):
+            skill_to_suite.clear()
+    if not skill_to_suite:
+        skills_path = root / "catalog/skills.json"
+        if skills_path.is_file():
+            skill_to_suite = {
+                row["name"]: row["suite"]
+                for row in read_json(skills_path)["skills"]
+                if row.get("suite")
+            }
     suites = list(
         dict.fromkeys(skill_to_suite[s] for s in skills if s in skill_to_suite)
     )
@@ -57,26 +148,47 @@ def _suite_for_skills(skills: list[str], root: Path = ROOT) -> str:
     return suites[0] if suites else "repository-audits"
 
 
-def _deliverable_for_run(run: dict, root: Path = ROOT) -> str:
+def _suite_for_run(run: dict, root: Path = ROOT) -> str:
+    plan_data = run.get("plan", {}) if isinstance(run, dict) else {}
+    outputs = plan_data.get("expected_outputs", [])
+    contracts = _load_suite_contracts(root)
+    if isinstance(outputs, list):
+        for suite_name, contract in contracts.items():
+            filename = contract["filename"]
+            if filename != "audit.json" and filename in outputs:
+                return suite_name
+    skills = plan_data.get("skills", [])
+    if isinstance(skills, list) and skills:
+        return _suite_for_skills(skills, root=root)
+    task = plan_data.get("task")
+    if isinstance(task, str):
+        recipes_path = root / "catalog/recipes.json"
+        if recipes_path.is_file():
+            recipes = read_json(recipes_path).get("recipes", {})
+            if task in recipes:
+                return _suite_for_skills(recipes[task]["skills"], root=root)
+    return "repository-audits"
+
+
+def _artifact_contract_for_run(run: dict, root: Path = ROOT) -> dict[str, Any]:
+    contracts = _load_suite_contracts(root)
+    suite_name = _suite_for_run(run, root=root)
     plan_data = run.get("plan", {}) if isinstance(run, dict) else {}
     outputs = plan_data.get("expected_outputs", [])
     if isinstance(outputs, list):
-        for name in DOMAIN_DELIVERABLE_SCHEMAS:
-            if name in outputs:
-                return name
-        if "audit.json" in outputs:
-            return "audit.json"
-    skills = plan_data.get("skills", [])
-    if isinstance(skills, list) and skills:
-        suite = _suite_for_skills(skills, root=root)
-        return SUITE_DELIVERABLES.get(suite, ("audit.json", ""))[0]
-    task = plan_data.get("task")
-    if isinstance(task, str):
-        recipes = read_json(root / "catalog/recipes.json")["recipes"]
-        if task in recipes:
-            suite = _suite_for_skills(recipes[task]["skills"], root=root)
-            return SUITE_DELIVERABLES.get(suite, ("audit.json", ""))[0]
-    return "audit.json"
+        for candidate in contracts.values():
+            fname = candidate["filename"]
+            if fname != "audit.json" and fname in outputs:
+                return copy.deepcopy(candidate)
+        if "audit.json" in outputs and suite_name in contracts:
+            if contracts[suite_name]["filename"] == "audit.json":
+                return copy.deepcopy(contracts[suite_name])
+            return copy.deepcopy(contracts["repository-audits"])
+    return copy.deepcopy(contracts.get(suite_name, contracts["repository-audits"]))
+
+
+def _deliverable_for_run(run: dict, root: Path = ROOT) -> str:
+    return str(_artifact_contract_for_run(run, root=root)["filename"])
 
 
 def _detect_domain_kind(data: object) -> str | None:

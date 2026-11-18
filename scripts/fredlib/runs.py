@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import os
 import sys
@@ -15,8 +16,10 @@ import yaml
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
+    _artifact_contract_for_run,
     _deliverable_for_run,
     _detect_domain_kind,
+    _load_suite_contracts,
     _suite_for_skills,
     atomic_json,
     digest,
@@ -96,20 +99,16 @@ def plan(
     ]
     if mode == "comprehensive":
         suite_name = _suite_for_skills(recipe["skills"])
-        selected = [
-            row["name"]
-            for row in read_json(ROOT / "catalog/skills.json")["skills"]
-            if row["suite"] == suite_name
-        ]
         suite = next(
             item
             for item in read_json(ROOT / "catalog/suites.json")["suites"]
             if item["name"] == suite_name
         )
-        ordered = [name for phase in suite["phases"] for name in phase["skills"]]
-        selected.sort(
-            key=lambda name: ordered.index(name) if name in ordered else len(ordered)
-        )
+        selected = [
+            name
+            for phase in sorted(suite["phases"], key=lambda p: p["id"])
+            for name in phase["skills"]
+        ]
         if suite_name == "repository-audits":
             # The coordinator is an entry point, not a second pass over every specialist.
             # Standard comprehensive plans exclude diagnostics, but recovery planning allows explicit selection.
@@ -173,8 +172,9 @@ def plan(
 
 
 def empty_audit(run: dict) -> dict:
+    starter = copy.deepcopy(_load_suite_contracts(ROOT)["repository-audits"]["starter"])
     return {
-        "schema_version": "1.0",
+        "schema_version": starter.get("schema_version", "1.0"),
         "run_id": run["run_id"],
         "repository": {
             "identity": run["repository"]["path"],
@@ -194,71 +194,92 @@ def empty_audit(run: dict) -> dict:
             }
             for name in run["plan"]["skills"]
         ],
-        "contracts": [],
-        "evidence": [],
-        "findings": [],
-        "issues": [],
-        "limitations": [
-            "Initialized workspace only; no application tests or agent audit executed."
-        ],
-        "checks": [],
+        "contracts": starter.get("contracts", []),
+        "evidence": starter.get("evidence", []),
+        "findings": starter.get("findings", []),
+        "issues": starter.get("issues", []),
+        "limitations": starter.get(
+            "limitations",
+            [
+                "Initialized workspace only; no application tests or agent audit executed."
+            ],
+        ),
+        "checks": starter.get("checks", []),
     }
 
 
-def _empty_deliverable(run: dict, deliverable: str) -> dict:
+def _empty_deliverable(
+    run: dict, deliverable: str, starter: dict[str, Any] | None = None
+) -> dict:
+    contracts = _load_suite_contracts(ROOT)
+    by_filename = {c["filename"]: c["starter"] for c in contracts.values()}
+    seeded = copy.deepcopy(
+        starter if isinstance(starter, dict) else by_filename.get(deliverable, {})
+    )
     if deliverable == "architecture.json":
-        return {
-            "schema_version": "1.0",
-            "title": f"Architecture specification for {run['plan']['task']}",
-            "status": "draft",
-            "boundaries": [],
-            "decisions": [],
-        }
+        task_name = run.get("plan", {}).get("task", "repository")
+        base_title = seeded.get("title", "Architecture specification")
+        if base_title == "Architecture specification" and task_name:
+            seeded["title"] = f"Architecture specification for {task_name}"
+        return seeded
     if deliverable == "review.json":
-        return {
-            "schema_version": "1.0",
-            "verdict": "comment",
-            "summary": "Initialized workspace only; agent code review has not run.",
-            "findings": [],
-        }
+        return seeded
     if deliverable == "testing.json":
         repo_name = Path(run["repository"]["path"]).name or "repository"
-        return {
-            "schema_version": "1.0",
-            "component": repo_name,
-            "framework": "unspecified",
-            "test_cases": [],
-        }
+        if seeded.get("component") in {None, "", "repository"}:
+            seeded["component"] = repo_name
+        return seeded
     return empty_audit(run)
 
 
-def _deliverable_prompt_rules(deliverable: str) -> str:
+def _deliverable_prompt_rules(
+    deliverable: str, schema_rel: str, run: dict | None = None
+) -> str:
     if deliverable == "architecture.json":
-        return """Work in bounded slices. Update architecture.json using assets/architecture-template.md
-for narrative records and verify conformance against assets/architecture.schema.json
+        return f"""Work in bounded slices. Update architecture.json using assets/architecture-template.md
+for narrative records and verify conformance against {schema_rel}
 (schema_version, title, status, boundaries, and decisions; additionalProperties is false).
 Report architectural decisions and system boundaries with concrete source locations,
 rationale, and consequences. Stop with a precise checkpoint when the selected work
 cannot be completed. Empty boundaries or decisions lists are valid starter states."""
     if deliverable == "review.json":
-        return """Work in bounded slices. Update review.json using assets/review-template.md to structure
-change findings and validate findings format against assets/review.schema.json
+        return f"""Work in bounded slices. Update review.json using assets/review-template.md to structure
+change findings and validate findings format against {schema_rel}
 (schema_version, verdict, summary, and findings; additionalProperties is false).
 Report change impact surfaces and invariant checks with precise file paths, line
 ranges, and actionable recommendations. Stop with a precise checkpoint when the
 selected work cannot be completed. An empty findings list is valid."""
     if deliverable == "testing.json":
-        return """Work in bounded slices. Update testing.json using assets/testing-template.md to document
-uncovered gaps and ensure test gap specifications conform to assets/testing.schema.json
+        allow_fixes = bool(
+            isinstance(run, dict)
+            and isinstance(run.get("authority"), dict)
+            and run["authority"].get("application_changes")
+        )
+        if allow_fixes:
+            fixes_guidance = (
+                "\nRepository write authority (`--allow-fixes` / application_changes=True) is enabled: "
+                "you may write runnable test files in the repository and record verified coverage in "
+                "testing.json, while keeping production application source unchanged unless explicitly authorized."
+            )
+        else:
+            fixes_guidance = (
+                "\nWriting runnable test files into the repository requires `--allow-fixes` "
+                "(application_changes=True). Because `--allow-fixes` was not supplied, record test "
+                "gap and test case specifications in testing.json only without modifying repository "
+                "files, or ask the operator to re-initialize with `--allow-fixes`."
+            )
+        return f"""Work in bounded slices. Update testing.json using assets/testing-template.md to document
+uncovered gaps and ensure test gap specifications conform to {schema_rel}
 (schema_version, component, framework, and test_cases; additionalProperties is false).
 Provide prioritized test scenarios with deterministic, independent assertion oracles
 (state, exception, output, or boundary). Stop with a precise checkpoint when the
-selected work cannot be completed. An empty test_cases list is valid."""
-    return """Work in bounded slices. Maintain the existing audit schema and IDs, evidence, coverage,
-counterevidence, uncertainty, and independent acceptance criteria. Keep remediation
-state in remediation.json, distinct from evidence certainty. A missing finding on a
-later run is not proof of resolution. Preserve unrelated records and stop with a precise
-checkpoint when the selected work cannot be completed. An empty findings list is valid."""
+selected work cannot be completed. An empty test_cases list is valid.{fixes_guidance}"""
+    return f"""Work in bounded slices. Validate the ledger against {schema_rel} and maintain the existing
+audit schema and IDs, evidence, coverage, counterevidence, uncertainty, and independent
+acceptance criteria. Keep remediation state in remediation.json, distinct from evidence
+certainty. A missing finding on a later run is not proof of resolution. Preserve unrelated
+records and stop with a precise checkpoint when the selected work cannot be completed.
+An empty findings list is valid."""
 
 
 def initialize(
@@ -295,18 +316,24 @@ def initialize(
         "checkpoints": [],
         "limitations": environment["limitations"],
     }
-    deliverable = _deliverable_for_run(run)
+    contract = _artifact_contract_for_run(run)
+    deliverable = str(contract["filename"])
     output.mkdir(parents=True, exist_ok=True)
     atomic_json(output / "run.json", run)
-    atomic_json(output / deliverable, _empty_deliverable(run, deliverable))
+    atomic_json(
+        output / deliverable,
+        _empty_deliverable(run, deliverable, starter=contract.get("starter")),
+    )
     (output / "prompt.md").write_text(prompt(run), encoding="utf-8")
     return run
 
 
 def prompt(run: dict) -> str:
     authority = run["authority"]
-    deliverable = _deliverable_for_run(run)
-    rules = _deliverable_prompt_rules(deliverable)
+    contract = _artifact_contract_for_run(run)
+    deliverable = str(contract["filename"])
+    schema_rel = str(contract["schema"])
+    rules = _deliverable_prompt_rules(deliverable, schema_rel, run=run)
     return f"""# Engineering task: {run["plan"]["task"]}
 
 Repository: {run["repository"]["path"]}
@@ -399,7 +426,9 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
 
 def validate_run(directory: Path) -> list[str]:
     run = read_json(directory / "run.json")
-    expected_name = _deliverable_for_run(run)
+    contract = _artifact_contract_for_run(run)
+    expected_name = str(contract["filename"])
+    schema_rel = str(contract["schema"])
     deliverable_path = (
         resolve_audit_path(directory)
         if (directory / expected_name).is_file()
@@ -413,10 +442,8 @@ def validate_run(directory: Path) -> list[str]:
         errors.append(
             "Snapshot content identity does not match its recorded file inventory"
         )
-    if expected_name in DOMAIN_DELIVERABLE_SCHEMAS:
-        errors.extend(
-            _schema_errors(deliverable, DOMAIN_DELIVERABLE_SCHEMAS[expected_name])
-        )
+    if expected_name != "audit.json":
+        errors.extend(_schema_errors(deliverable, schema_rel))
     else:
         errors.extend(audit_errors(deliverable))
         if run["run_id"] != deliverable.get("run_id"):
@@ -441,13 +468,38 @@ def checkpoint(directory: Path, state: str, note: str) -> dict:
     return run
 
 
+def _revalidate_domain_records(
+    deliverable: dict[str, Any],
+    expected_name: str,
+    changed: list[str],
+    skipped: dict[str, Any],
+    complete: bool,
+) -> tuple[list[str], list[str]]:
+    stale: list[str] = []
+    if expected_name == "review.json":
+        findings = deliverable.get("findings", [])
+        for finding in findings:
+            fpath = finding.get("file")
+            if fpath in changed or fpath in skipped or not complete:
+                stale.append(finding["id"])
+        impact = [f["id"] for f in findings] if changed else []
+        return stale, impact
+    if expected_name == "architecture.json":
+        decisions = deliverable.get("decisions", [])
+        ids = [d["id"] for d in decisions if isinstance(d, dict) and "id" in d]
+        return (list(ids) if not complete else []), (list(ids) if changed else [])
+    if expected_name == "testing.json":
+        cases = deliverable.get("test_cases", [])
+        ids = [tc["id"] for tc in cases if isinstance(tc, dict) and "id" in tc]
+        return (list(ids) if not complete else []), (list(ids) if changed else [])
+    return [], []
+
+
 def revalidate(directory: Path) -> dict:
     run = read_json(directory / "run.json")
-    if (directory / "audit.json").is_file():
-        audit = read_json(directory / "audit.json")
-    else:
-        resolve_audit_path(directory)
-        audit = {"evidence": [], "findings": []}
+    contract = _artifact_contract_for_run(run)
+    expected_name = str(contract["filename"])
+    schema_rel = str(contract["schema"])
     old = run["snapshot"]
     new = snapshot(
         Path(run["repository"]["path"]),
@@ -460,26 +512,38 @@ def revalidate(directory: Path) -> dict:
         for path in set(old["files"]) | set(new["files"])
         if old["files"].get(path) != new["files"].get(path)
     )
-    evidence = {item["id"]: item for item in audit["evidence"]}
-    stale = []
-    for finding in audit["findings"]:
-        paths = [
-            evidence[eid]["path"] for eid in finding["evidence_ids"] if eid in evidence
-        ]
-        if (
-            any(path in changed or path in new["skipped"] for path in paths)
-            or not new["complete"]
-        ):
-            stale.append(finding["id"])
+    if expected_name != "audit.json":
+        target_path = resolve_audit_path(directory)
+        domain_doc = read_json(target_path)
+        schema_errs = _schema_errors(domain_doc, schema_rel)
+        if schema_errs:
+            raise ValueError(f"Invalid {expected_name}: " + "; ".join(schema_errs[:5]))
+        stale, impact_ids = _revalidate_domain_records(
+            domain_doc, expected_name, changed, new["skipped"], new["complete"]
+        )
+    else:
+        audit = read_json(resolve_audit_path(directory))
+        evidence = {item["id"]: item for item in audit["evidence"]}
+        stale = []
+        for finding in audit["findings"]:
+            paths = [
+                evidence[eid]["path"]
+                for eid in finding["evidence_ids"]
+                if eid in evidence
+            ]
+            if (
+                any(path in changed or path in new["skipped"] for path in paths)
+                or not new["complete"]
+            ):
+                stale.append(finding["id"])
+        impact_ids = [finding["id"] for finding in audit["findings"]] if changed else []
     result = {
         "old_snapshot": old["digest"],
         "new_snapshot": new["digest"],
         "changed_files": changed,
         "stale_finding_ids": stale,
         "unreviewed_changed_files": changed,
-        "needs_impact_review": [finding["id"] for finding in audit["findings"]]
-        if changed
-        else [],
+        "needs_impact_review": impact_ids,
         "reusable_evidence_is_not_proof_of_unchanged_behavior": True,
         "complete": new["complete"],
         "next_action": "Review changed paths and affected callers/configuration; retain the original snapshot until a new run is established.",

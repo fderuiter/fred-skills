@@ -1196,10 +1196,21 @@ class FredCLITests(unittest.TestCase):
                     )
                     self.assertEqual(0, init_proc.returncode, init_proc.stderr)
                     self.assertTrue((ws / deliverable).is_file())
+                    self.assertFalse((ws / "audit.json").exists())
                     self.assertTrue((ws / "prompt.md").is_file())
 
                     val_proc = self.run_cli("validate-run", str(ws))
                     self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+                    # Invalid domain artifact causes validate-run to exit 1
+                    starter_bytes = (ws / deliverable).read_bytes()
+                    (ws / deliverable).write_text(
+                        json.dumps({"schema_version": "1.0", "unexpected": True}),
+                        encoding="utf-8",
+                    )
+                    bad_val_proc = self.run_cli("validate-run", str(ws))
+                    self.assertEqual(1, bad_val_proc.returncode)
+                    (ws / deliverable).write_bytes(starter_bytes)
 
                     # Report on workspace directory and on JSON file directly
                     rep_dir_html = tmp_path / f"report-dir-{task}.html"
@@ -1220,6 +1231,18 @@ class FredCLITests(unittest.TestCase):
                     self.assertTrue(rep_file_html.is_file())
 
                     # Audit-only commands fail with exit code 1 and clear audit.json guidance
+                    prior_proc = self.run_cli(
+                        "report",
+                        str(ws),
+                        "--prior",
+                        str(ws),
+                        "--output",
+                        str(tmp_path / f"report-prior-{task}.html"),
+                    )
+                    self.assertEqual(1, prior_proc.returncode)
+                    self.assertIn("audit.json", prior_proc.stderr)
+                    self.assertIn(deliverable, prior_proc.stderr)
+
                     iss_proc = self.run_cli(
                         "issues", str(ws), "--output", str(tmp_path / f"iss-{task}")
                     )
@@ -1234,6 +1257,36 @@ class FredCLITests(unittest.TestCase):
                     )
                     self.assertEqual(1, sarif_proc.returncode)
                     self.assertIn("audit.json", sarif_proc.stderr)
+
+                    # Even an empty {} domain file still triggers clear domain deliverable guidance
+                    (ws / deliverable).write_text("{}", encoding="utf-8")
+                    for empty_cmd in [
+                        [
+                            "issues",
+                            str(ws),
+                            "--output",
+                            str(tmp_path / f"iss-empty-{task}"),
+                        ],
+                        [
+                            "export-sarif",
+                            str(ws / deliverable),
+                            "--output",
+                            str(tmp_path / f"empty-{task}.sarif"),
+                        ],
+                        [
+                            "report",
+                            str(ws),
+                            "--prior",
+                            str(ws / deliverable),
+                            "--output",
+                            str(tmp_path / f"prior-empty-{task}.html"),
+                        ],
+                    ]:
+                        empty_proc = self.run_cli(*empty_cmd)
+                        self.assertEqual(1, empty_proc.returncode)
+                        self.assertIn("audit.json", empty_proc.stderr)
+                        self.assertIn(deliverable, empty_proc.stderr)
+                    (ws / deliverable).write_bytes(starter_bytes)
 
                     cmp_proc = self.run_cli(
                         "compare", str(ws / deliverable), str(ws / deliverable)

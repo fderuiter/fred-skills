@@ -15,6 +15,9 @@ Start with a task in the [task guide](docs/experience.md), browse the
 | Review a pull request | `review-pr` with an explicit base revision |
 | Investigate a bug | `investigate-bug` and a bounded critical workflow |
 | Understand hidden contracts | `understand-repo` or `repo-audit-program` |
+| Design or document system architecture | `design-architecture` |
+| Run a differential code review | `review-code-changes` with an explicit base revision |
+| Expand automated test coverage | `expand-automated-tests` (add `--allow-fixes` to write test files) |
 | Turn findings into a practical plan | `plan-findings` |
 | Correct and independently verify a defect | `apply-fix`, then `verify-fix` |
 | Prepare a release | `release-ready` |
