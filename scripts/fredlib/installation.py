@@ -44,6 +44,7 @@ class InstallOptions:
     skills: list[str] | None = None
     update: bool = False
     dry_run: bool = False
+    force: bool = False
     target: TargetEnvironment | None = None
 
 
@@ -53,6 +54,7 @@ class RemoveOptions:
 
     skills: list[str] | None = None
     dry_run: bool = False
+    force: bool = False
     target: TargetEnvironment | None = None
 
 
@@ -117,6 +119,7 @@ def _merge_install_options(
     *,
     update: Any = None,
     dry_run: Any = None,
+    force: Any = None,
     target: TargetEnvironment | None = None,
 ) -> InstallOptions:
     return InstallOptions(
@@ -124,6 +127,7 @@ def _merge_install_options(
         skills=_coalesce(skills, base.skills),
         update=_coalesce(update, base.update, False),
         dry_run=_coalesce(dry_run, base.dry_run, False),
+        force=_coalesce(force, base.force, False),
         target=_coalesce(target, base.target),
     )
 
@@ -310,6 +314,63 @@ def _normalize_target_env(
     )
 
 
+def _skill_disk_status(target: Path, name: str, record: dict) -> str:
+    path = checked_target(target, name)
+    if not path.exists():
+        return "missing"
+    if not path.is_dir():
+        return "modified"
+    if digest(package_files(path)) != record.get("content_hash"):
+        return "modified"
+    return "tracked"
+
+
+def _is_untracked_skill_dir(child: Path, managed: set[str]) -> bool:
+    if child.name in managed or child.is_symlink() or not child.is_dir():
+        return False
+    skill_md = child / "SKILL.md"
+    return not skill_md.is_symlink() and skill_md.is_file()
+
+
+def _scan_untracked_skills(target: Path | None, managed: set[str]) -> list[str]:
+    if target is None or target.is_symlink() or not target.is_dir():
+        return []
+    children = sorted(target.iterdir(), key=lambda p: p.name)
+    return [c.name for c in children if _is_untracked_skill_dir(c, managed)]
+
+
+def _is_state_locked(dest: Path, state: Path | None, scope: str) -> bool:
+    if state is not None:
+        return (state / "operation.lock").exists()
+    state_root = dest / ".fred-skills"
+    if not state_root.is_dir():
+        return False
+    return any(state_root.glob(f"*-{scope}/operation.lock"))
+
+
+def _enrich_query_result(
+    dest: Path, target: Path | None, state: Path | None, base: dict
+) -> dict:
+    raw_skills = base.get("skills", {})
+    enriched_skills: dict[str, dict] = {}
+    if target is not None:
+        for name, rec in raw_skills.items():
+            entry = dict(rec)
+            entry["status"] = _skill_disk_status(target, name, rec)
+            enriched_skills[name] = entry
+    untracked = _scan_untracked_skills(target, set(raw_skills))
+    locked = _is_state_locked(dest, state, base["scope"])
+    healthy = not locked and all(
+        item["status"] == "tracked" for item in enriched_skills.values()
+    )
+    res = dict(base)
+    res["skills"] = enriched_skills
+    res["untracked"] = untracked
+    res["locked"] = locked
+    res["healthy"] = healthy
+    return res
+
+
 def _query_for_explicit_host(dest: Path, host: str, scope: str, root: Path) -> dict:
     hosts = read_json(root / "catalog/hosts.json")["hosts"]
     if host not in hosts:
@@ -317,7 +378,7 @@ def _query_for_explicit_host(dest: Path, host: str, scope: str, root: Path) -> d
     target, state = locations(dest, host, scope, root)
     rec_path = state / "receipt.json"
     if not rec_path.is_file():
-        return {
+        base = {
             "destination": str(dest),
             "target": str(target),
             "state": str(state),
@@ -326,8 +387,9 @@ def _query_for_explicit_host(dest: Path, host: str, scope: str, root: Path) -> d
             "skills": {},
             "message": f"No installation receipt found at destination for host '{host}'",
         }
+        return _enrich_query_result(dest, target, state, base)
     skills = receipt(state).get("skills", {})
-    res = {
+    base = {
         "destination": str(dest),
         "target": str(target),
         "state": str(state),
@@ -336,8 +398,8 @@ def _query_for_explicit_host(dest: Path, host: str, scope: str, root: Path) -> d
         "skills": skills,
     }
     if not skills:
-        res["message"] = f"No skills installed at destination for host '{host}'"
-    return res
+        base["message"] = f"No skills installed at destination for host '{host}'"
+    return _enrich_query_result(dest, target, state, base)
 
 
 def _find_receipt_hosts(dest: Path, scope: str, hosts: dict) -> list[str]:
@@ -362,11 +424,11 @@ def _validate_receipt_hosts(existing_receipt_hosts: list[str], dest: Path) -> No
     )
 
 
-def _query_detected_host(dest: Path, scope: str, root: Path) -> dict:
+def _query_detected_host(dest: Path, scope: str, root: Path) -> dict[str, Any]:
     try:
         detected_host = detect_host(dest, scope)
         target, state = locations(dest, detected_host, scope, root)
-        return {
+        base: dict[str, Any] = {
             "destination": str(dest),
             "target": str(target),
             "state": str(state),
@@ -375,9 +437,10 @@ def _query_detected_host(dest: Path, scope: str, root: Path) -> dict:
             "skills": {},
             "message": f"No installation receipt found at destination for host '{detected_host}'",
         }
+        return _enrich_query_result(dest, target, state, base)
     except ValueError as exc:
         if "No host markers" in str(exc):
-            return {
+            base = {
                 "destination": str(dest),
                 "target": None,
                 "state": None,
@@ -386,6 +449,26 @@ def _query_detected_host(dest: Path, scope: str, root: Path) -> dict:
                 "skills": {},
                 "message": f"No installation receipt found at destination '{dest}'",
             }
+            return _enrich_query_result(dest, None, None, base)
+        raise
+
+
+def _resolve_lifecycle_host(
+    dest: Path | None, host: str | None, scope: str, root: Path
+) -> str:
+    if host is not None:
+        return host
+    try:
+        return detect_host(dest, scope)
+    except ValueError as exc:
+        if "No host markers" not in str(exc):
+            raise
+        resolved_dest = _coalesce(dest, _default_destination(scope)).resolve()
+        hosts = read_json(root / "catalog/hosts.json")["hosts"]
+        receipt_hosts = _find_receipt_hosts(resolved_dest, scope, hosts)
+        _validate_receipt_hosts(receipt_hosts, resolved_dest)
+        if len(receipt_hosts) == 1:
+            return receipt_hosts[0]
         raise
 
 
@@ -428,42 +511,53 @@ def require_unmodified(path: Path, record: dict | None):
     if path.exists():
         if not record:
             raise ValueError(f"Refusing to replace unmanaged skill: {path.name}")
-        if digest(package_files(path)) != record["content_hash"]:
+        if not path.is_dir() or digest(package_files(path)) != record["content_hash"]:
             raise ValueError(
-                f"Locally modified skill: {path.name}; preserve or move it before updating/removing"
+                f"Locally modified skill: {path.name}; pass --force for managed recovery or preserve/move it before updating/removing"
             )
     elif record:
         raise ValueError(
-            f"Managed skill is missing: {path.name}; inspect the receipt before proceeding"
+            f"Managed skill is missing: {path.name}; pass --force for managed recovery or inspect the receipt before proceeding"
         )
 
 
+def _validate_managed_target(path: Path, record: dict | None, force: bool) -> None:
+    if path.exists() and not record:
+        raise ValueError(f"Refusing to replace unmanaged skill: {path.name}")
+    if not force:
+        require_unmodified(path, record)
+
+
 def _check_install_candidate(
-    target: Path, name: str, record: dict | None, root: Path
+    target: Path, name: str, record: dict | None, context: tuple[Path, bool]
 ) -> None:
+    root, force = context
     source = root / "skills" / name
     package_files(source)  # reject source symlinks before any writes
     path = checked_target(target, name)
-    require_unmodified(path, record)
+    _validate_managed_target(path, record, force)
 
 
 def _validate_install_target_skills(
-    target: Path, selected: list[str], current: dict, update: bool
+    target: Path, selected: list[str], current: dict, flags: tuple[bool, bool]
 ) -> None:
+    update, force = flags
     for name in selected:
         path = checked_target(target, name)
-        if path.exists() and not update:
+        if path.exists() and not update and not force:
             raise ValueError(
                 f"Already installed: {name}; use update after reviewing the source changes"
             )
 
 
 def _validate_install_under_lock(
-    target: Path, selected: list[str], current: dict, update: bool
+    target: Path, selected: list[str], current: dict, flags: tuple[bool, bool]
 ) -> None:
+    update, force = flags
     for name in selected:
-        require_unmodified(checked_target(target, name), current["skills"].get(name))
-        if (target / name).exists() and not update:
+        path = checked_target(target, name)
+        _validate_managed_target(path, current["skills"].get(name), force)
+        if path.exists() and not update and not force:
             raise ValueError(f"Already installed: {name}; use update")
 
 
@@ -534,11 +628,11 @@ def _execute_install(
     target: Path,
     state: Path,
     selected: list[str],
-    context: tuple[bool, Path, str, dict],
+    context: tuple[tuple[bool, bool], Path, str, dict],
 ) -> None:
-    update, root, host, preview = context
+    flags, root, host, preview = context
     current = receipt(state)
-    _validate_install_under_lock(target, selected, current, update)
+    _validate_install_under_lock(target, selected, current, flags)
     operation = uuid.uuid4().hex
     staged, backups = _stage_skills(state, operation, selected, root)
     before = dict(current["skills"])
@@ -598,6 +692,7 @@ def _normalize_install_args(
     skills: list[str] | None = None,
     update: bool | None = None,
     dry_run: bool | None = None,
+    force: bool | None = None,
     root: Path | None = None,
     **kwargs: Any,
 ) -> tuple[TargetEnvironment, InstallOptions]:
@@ -610,6 +705,7 @@ def _normalize_install_args(
             skills,
             update=update,
             dry_run=dry_run,
+            force=force,
             target=tgt,
         )
         return tgt, opt
@@ -627,6 +723,7 @@ def _normalize_install_args(
         skills=_coalesce(skills, _arg_at(args, 2)),
         update=_coalesce(update, _arg_at(args, 3), False),
         dry_run=_coalesce(dry_run, _arg_at(args, 4), False),
+        force=_coalesce(force, False),
         target=tgt,
     )
     return tgt, opt
@@ -643,6 +740,7 @@ def install(
     skills: list[str] | None = None,
     update: bool | None = None,
     dry_run: bool | None = None,
+    force: bool | None = None,
     root: Path | None = None,
 ) -> dict:
     env, opt = _normalize_install_args(
@@ -656,19 +754,23 @@ def install(
         skills=skills,
         update=update,
         dry_run=dry_run,
+        force=force,
         root=root,
     )
-    resolved_host = env.host or detect_host(env.destination, env.scope)
+    resolved_host = _resolve_lifecycle_host(
+        env.destination, env.host, env.scope, env.root
+    )
     selected = choose_skills(env.root, opt.pack, opt.skills)
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )
     current = receipt(state_path)
+    flags = (opt.update, opt.force)
     for name in selected:
         _check_install_candidate(
-            target_path, name, current["skills"].get(name), env.root
+            target_path, name, current["skills"].get(name), (env.root, opt.force)
         )
-    _validate_install_target_skills(target_path, selected, current, opt.update)
+    _validate_install_target_skills(target_path, selected, current, flags)
     preview = {
         "action": "update" if opt.update else "install",
         "skills": selected,
@@ -686,16 +788,19 @@ def install(
             target_path,
             state_path,
             selected,
-            (opt.update, env.root, resolved_host, preview),
+            (flags, env.root, resolved_host, preview),
         )
     return preview
 
 
-def _validate_remove_skills(target: Path, current: dict, skills: list[str]) -> None:
+def _validate_remove_skills(
+    target: Path, current: dict, skills: list[str], force: bool = False
+) -> None:
     for name in skills:
         if name not in current["skills"]:
             raise ValueError(f"Not managed by this installation: {name}")
-        require_unmodified(checked_target(target, name), current["skills"][name])
+        path = checked_target(target, name)
+        _validate_managed_target(path, current["skills"][name], force)
 
 
 def _execute_remove_operation(
@@ -707,8 +812,10 @@ def _execute_remove_operation(
     moved: list[str] = []
     try:
         for name in skills:
-            os.replace(target / name, backups / name)
-            moved.append(name)
+            path = checked_target(target, name)
+            if path.exists():
+                os.replace(path, backups / name)
+                moved.append(name)
             del current["skills"][name]
         current["history"].append(
             {
@@ -722,6 +829,7 @@ def _execute_remove_operation(
         atomic_json(state / "receipt.json", current)
     except BaseException:
         for name in reversed(moved):
+            target.mkdir(parents=True, exist_ok=True)
             os.replace(backups / name, target / name)
         raise
 
@@ -744,11 +852,14 @@ def _merge_remove_options(
     base: RemoveOptions,
     skills: Any = None,
     dry_run: Any = None,
+    *,
+    force: Any = None,
     target: TargetEnvironment | None = None,
 ) -> RemoveOptions:
     return RemoveOptions(
         skills=_coalesce(skills, base.skills),
         dry_run=_coalesce(dry_run, base.dry_run, False),
+        force=_coalesce(force, base.force, False),
         target=_coalesce(target, base.target),
     )
 
@@ -762,6 +873,7 @@ def _normalize_remove_args(
     scope: str | None = None,
     skills: list[str] | None = None,
     dry_run: bool | None = None,
+    force: bool | None = None,
     root: Path | None = None,
     **kwargs: Any,
 ) -> tuple[TargetEnvironment, RemoveOptions]:
@@ -769,7 +881,11 @@ def _normalize_remove_args(
     if is_structured:
         tgt = _merge_target_env(base_tgt, destination, host, scope=scope, root=root)
         opt = _merge_remove_options(
-            base_opt or RemoveOptions(), skills, dry_run=dry_run, target=tgt
+            base_opt or RemoveOptions(),
+            skills,
+            dry_run=dry_run,
+            force=force,
+            target=tgt,
         )
         return tgt, opt
 
@@ -784,6 +900,7 @@ def _normalize_remove_args(
     opt = RemoveOptions(
         skills=_coalesce(skills, _arg_at(args, 1)),
         dry_run=_coalesce(dry_run, _arg_at(args, 2), False),
+        force=_coalesce(force, False),
         target=tgt,
     )
     return tgt, opt
@@ -798,6 +915,7 @@ def remove(
     scope: str | None = None,
     skills: list[str] | None = None,
     dry_run: bool | None = None,
+    force: bool | None = None,
     root: Path | None = None,
 ) -> dict:
     env, opt = _normalize_remove_args(
@@ -809,19 +927,24 @@ def remove(
         scope=scope,
         skills=skills,
         dry_run=dry_run,
+        force=force,
         root=root,
     )
-    resolved_host = env.host or detect_host(env.destination, env.scope)
+    resolved_host = _resolve_lifecycle_host(
+        env.destination, env.host, env.scope, env.root
+    )
     skills_list = list(dict.fromkeys(opt.skills or []))
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )
     if opt.dry_run:
-        _validate_remove_skills(target_path, receipt(state_path), skills_list)
+        _validate_remove_skills(
+            target_path, receipt(state_path), skills_list, opt.force
+        )
         return {"action": "remove", "skills": skills_list, "dry_run": True}
     with lock(state_path):
         current = receipt(state_path)
-        _validate_remove_skills(target_path, current, skills_list)
+        _validate_remove_skills(target_path, current, skills_list, opt.force)
         _execute_remove_operation(target_path, state_path, current, skills_list)
     return {"action": "remove", "skills": skills_list, "dry_run": opt.dry_run}
 

@@ -7,6 +7,7 @@ import argparse
 import ast
 import contextlib
 import io
+import json
 import re
 import shlex
 import shutil
@@ -33,14 +34,18 @@ except ImportError:
 
 # Line ranges for acceptance criteria verification
 DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = {
-    "README.md": (27, 122),
-    "CONTRIBUTING.md": (22, 76),
-    "AGENTS.md": (24, 53),
+    "README.md": (27, 125),
+    "CONTRIBUTING.md": (22, 77),
+    "AGENTS.md": (24, 54),
     "docs/toolkit.md": (10, 195),
-    "docs/usage.md": (24, 127),
+    "docs/usage.md": (24, 129),
     "docs/runbooks.md": (1, None),
     "docs/integration.md": (1, None),
 }
+
+MARKETPLACE_ONBOARDING_DOCS: frozenset[str] = frozenset(
+    {"README.md", "docs/usage.md", "docs/integration.md"}
+)
 
 PLACEHOLDER_DEFAULTS: dict[str, str] = {
     "host": "codex",
@@ -394,20 +399,61 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
 ToolHandler = Callable[[list[str], Path, str], tuple[bool, str]]
 
 
-def _validate_marketplace(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
-    """Validate marketplace plugin commands."""
-    if "marketplace" not in parts or "add" not in parts:
-        return True, ""
-    idx = parts.index("add")
-    if idx + 1 >= len(parts):
-        return True, ""
-    plugin_id = parts[idx + 1]
-    if plugin_id != "fderuiter/fred-skills":
-        return False, f"Unexpected plugin id: {plugin_id}"
+def _load_marketplace_plugins(root: Path) -> tuple[str | None, set[str], str]:
+    """Load marketplace name and registered plugin names from marketplace.json."""
     marketplace_manifest = root / ".claude-plugin/marketplace.json"
     if not marketplace_manifest.is_file():
-        return False, f"Marketplace manifest missing at {marketplace_manifest}"
+        return None, set(), f"Marketplace manifest missing at {marketplace_manifest}"
+    try:
+        data = json.loads(marketplace_manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, set(), f"Invalid marketplace manifest: {exc}"
+    names = {item["name"] for item in data.get("plugins", []) if "name" in item}
+    return str(data.get("name", "fred-skills")), names, ""
+
+
+def _validate_marketplace_add(repo_args: list[str], root: Path) -> tuple[bool, str]:
+    """Validate marketplace catalog registration commands."""
+    if len(repo_args) != 1:
+        return False, "Marketplace add command requires a single repository argument"
+    if repo_args[0] != "fderuiter/fred-skills":
+        return False, f"Unexpected plugin id: {repo_args[0]}"
+    market_name, _, err = _load_marketplace_plugins(root)
+    if market_name is None:
+        return False, err
     return True, ""
+
+
+def _validate_marketplace_install(
+    target_args: list[str], root: Path
+) -> tuple[bool, str]:
+    """Validate plugin installation target against .claude-plugin/marketplace.json."""
+    if len(target_args) != 1 or "@" not in target_args[0]:
+        return False, "Plugin install command requires '<name>@fred-skills'"
+    plugin_name, market_name = target_args[0].split("@", 1)
+    expected_market, valid_plugins, err = _load_marketplace_plugins(root)
+    if expected_market is None:
+        return False, err
+    if market_name != expected_market:
+        return (
+            False,
+            f"Unexpected marketplace '{market_name}' (expected '{expected_market}')",
+        )
+    if plugin_name not in valid_plugins:
+        return False, f"Unknown marketplace plugin '{plugin_name}'"
+    return True, ""
+
+
+def _validate_marketplace(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+    """Validate Claude Code and Codex marketplace plugin commands."""
+    subparts = parts[1:] if parts[0] == "/plugin" else parts[2:]
+    if subparts[:2] == ["marketplace", "add"]:
+        return _validate_marketplace_add(subparts[2:], root)
+    if parts[0] == "/plugin" and subparts[:1] == ["install"]:
+        return _validate_marketplace_install(subparts[1:], root)
+    if parts[0] == "codex" and subparts[:1] == ["add"]:
+        return _validate_marketplace_install(subparts[1:], root)
+    return False, f"Unsupported marketplace plugin command: {cmd}"
 
 
 def _validate_make(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
@@ -714,6 +760,54 @@ def _normalize_target_path(target: str | Path, root: Path = ROOT) -> str:
         return path_str.lstrip("./")
 
 
+def _block_command_tokens(block: CommandBlock) -> list[tuple[int, list[str]]]:
+    """Tokenize commands in a block, skipping commands with shell syntax errors."""
+    tokenized: list[tuple[int, list[str]]] = []
+    for line_no, cmd in block.commands:
+        try:
+            tokenized.append((line_no, shlex.split(cmd)))
+        except ValueError:
+            continue
+    return tokenized
+
+
+def _verify_marketplace_block(rel_path: str, block: CommandBlock) -> list[str]:
+    """Reject marketplace add blocks in onboarding docs that lack an install command."""
+    if rel_path not in MARKETPLACE_ONBOARDING_DOCS:
+        return []
+    tokenized = _block_command_tokens(block)
+    has_claude_install = any(p[:2] == ["/plugin", "install"] for _, p in tokenized)
+    has_codex_install = any(p[:3] == ["codex", "plugin", "add"] for _, p in tokenized)
+    errors: list[str] = []
+    for line_no, parts in tokenized:
+        if parts[:3] == ["/plugin", "marketplace", "add"] and not has_claude_install:
+            errors.append(
+                f"{rel_path}:L{line_no}: Marketplace block missing '/plugin install <name>@fred-skills'"
+            )
+        if (
+            parts[:4] == ["codex", "plugin", "marketplace", "add"]
+            and not has_codex_install
+        ):
+            errors.append(
+                f"{rel_path}:L{line_no}: Marketplace block missing 'codex plugin add <name>@fred-skills'"
+            )
+    return errors
+
+
+def _verify_shell_block(
+    rel_path: str,
+    block: CommandBlock,
+    root: Path,
+) -> list[str]:
+    """Validate marketplace completeness and dry-run commands in a shell block."""
+    errors = _verify_marketplace_block(rel_path, block)
+    for line_no, cmd in block.commands:
+        ok, msg = execute_snippet_command(cmd, root=root)
+        if not ok:
+            errors.append(f"{rel_path}:L{line_no}: Failed to execute '{cmd}': {msg}")
+    return errors
+
+
 def _verify_file_snippets(
     rel_path: str,
     blocks: list[CommandBlock],
@@ -726,19 +820,13 @@ def _verify_file_snippets(
         return [f"{rel_path}: File does not exist"]
     if not blocks:
         return [f"{rel_path}: No code blocks discovered in specified range"]
+    if not should_execute:
+        return []
 
     errors: list[str] = []
     for block in blocks:
-        if block.language not in ("sh", "bash", "shell"):
-            continue
-        for line_no, cmd in block.commands:
-            if not should_execute:
-                continue
-            ok, msg = execute_snippet_command(cmd, root=root)
-            if not ok:
-                errors.append(
-                    f"{rel_path}:L{line_no}: Failed to execute '{cmd}': {msg}"
-                )
+        if block.language in ("sh", "bash", "shell"):
+            errors.extend(_verify_shell_block(rel_path, block, root))
     return errors
 
 
@@ -771,6 +859,7 @@ def verify_all_snippets(
         should_execute = target_rel_paths is not None or rel_path in (
             "README.md",
             "CONTRIBUTING.md",
+            "docs/usage.md",
             "docs/runbooks.md",
             "docs/integration.md",
         )

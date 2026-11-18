@@ -31,11 +31,18 @@ Guidelines for diagnosing stalled or failed multi-pass audit runs.
 
 ## Credential scrubbing specifications
 
-All exports must redact the following patterns:
+All exports must redact the following patterns across JSON objects, escaped strings, and text:
 1. **Authorization headers:** `Authorization: Bearer <token>`, `Basic <base64>`
 2. **Provider API keys:** `sk-[a-zA-Z0-9_\-]{20,}`, `xoxb-...`, Anthropic/OpenAI keys
 3. **GitHub / Git tokens:** `ghp_[a-zA-Z0-9]{36}`, `gho_...`, `github_pat_...`
 4. **Cloud credentials:** `AKIA[0-9A-Z]{16}`, AWS secret access keys
 5. **Private keys:** `-----BEGIN [A-Z ]*PRIVATE KEY-----...-----END [A-Z ]*PRIVATE KEY-----`
-6. **Key-value secrets:** `password: "..."`, `token = "..."`, `api_key = "..."`
-7. **JSON Web Tokens:** `eyJ[a-zA-Z0-9_\-]+\.eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+`
+6. **JSON & key-value secrets:** `"api_key": "..."`, `\"password\": \"...\"`, `token = "..."`
+7. **URI passwords:** `postgresql://user:password@host/db`, `redis://:password@host`
+8. **JSON Web Tokens:** `eyJ[a-zA-Z0-9_\-]+\.eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+`
+
+## Redaction tiers
+
+- **`skeleton`:** Scrubs all secrets and omits all tool output bodies (`[OMITTED_TOOL_OUTPUT]`).
+- **`evidence`:** Scrubs all secrets and retains tool output bodies only for cited failure or ledger lines.
+- **`full` (default):** Scrubs all secrets while preserving full transcript structure and tool outputs.

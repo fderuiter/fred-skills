@@ -48,11 +48,12 @@ python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check
 python scripts/validate_skills.py
+python scripts/verify_workflow_actions.py --check
 python scripts/package_skills.py --output /tmp/release-verify
 python -m unittest discover -s tests -v
 ```
 
-Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
+Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically. When network access is available, run `python scripts/verify_workflow_actions.py --online` to resolve workflow action SHAs and version tags against upstream repositories.
 
 Once installed, hooks run automatically on `git commit`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
 
