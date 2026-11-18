@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 from fredlib import reports, repository, runs
-from fredlib.common import atomic_json, read_json
+from fredlib.common import atomic_json, read_json, resolve_audit_path
 
 
 class RunTests(unittest.TestCase):
@@ -470,6 +470,27 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(payload["title"], "CLI JSON export test")
             self.assertEqual(payload["labels"], ["audit"])
             self.assertEqual(payload["assignees"], ["tester"])
+
+    def test_resolve_audit_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            file_path = tmp_path / "custom_audit.json"
+            file_path.write_text("{}", encoding="utf-8")
+            self.assertEqual(file_path, resolve_audit_path(file_path))
+
+            # Directory containing audit.json
+            audit_file = tmp_path / "audit.json"
+            audit_file.write_text("{}", encoding="utf-8")
+            self.assertEqual(audit_file, resolve_audit_path(tmp_path))
+
+            # Empty directory lacking audit.json
+            empty_dir = tmp_path / "empty"
+            empty_dir.mkdir()
+            with self.assertRaises(ValueError) as ctx:
+                resolve_audit_path(empty_dir)
+            self.assertIn(
+                "Audit ledger 'audit.json' not found in directory", str(ctx.exception)
+            )
 
 
 if __name__ == "__main__":

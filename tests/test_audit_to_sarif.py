@@ -353,6 +353,109 @@ class AuditToSarifTests(unittest.TestCase):
         data = json.loads(proc.stdout)
         self.assertEqual("2.1.0", data["version"])
 
+    def test_convert_file_with_directory(self):
+        input_path = self.temp_path / "audit.json"
+        input_path.write_text(json.dumps(self.base_audit), encoding="utf-8")
+        output_path = self.temp_path / "from_dir.sarif"
+
+        data = convert_file(self.temp_path, output_path)
+        self.assertEqual("2.1.0", data["version"])
+        self.assertTrue(output_path.is_file())
+
+    def test_convert_file_with_directory_missing_audit_raises_error(self):
+        empty_dir = self.temp_path / "empty_dir"
+        empty_dir.mkdir()
+        with self.assertRaises(ValueError) as ctx:
+            convert_file(empty_dir)
+        self.assertIn(
+            "Audit ledger 'audit.json' not found in directory", str(ctx.exception)
+        )
+
+    def test_cli_execution_with_directory_input(self):
+        input_path = self.temp_path / "audit.json"
+        input_path.write_text(json.dumps(self.base_audit), encoding="utf-8")
+        output_path = self.temp_path / "dir_output.sarif"
+
+        for script in [SCRIPT_PATH, SKILL_SCRIPT_PATH]:
+            with self.subTest(script=script.name):
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(script),
+                        str(self.temp_path),
+                        "-o",
+                        str(output_path),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertTrue(output_path.is_file())
+                data = json.loads(output_path.read_text(encoding="utf-8"))
+                self.assertEqual("2.1.0", data["version"])
+                output_path.unlink()
+
+    def test_cli_execution_omitting_audit_defaults_to_cwd(self):
+        input_path = self.temp_path / "audit.json"
+        input_path.write_text(json.dumps(self.base_audit), encoding="utf-8")
+        output_path = self.temp_path / "cwd_output.sarif"
+
+        for script in [SCRIPT_PATH, SKILL_SCRIPT_PATH]:
+            with self.subTest(script=script.name):
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(script),
+                        "-o",
+                        str(output_path),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(self.temp_path),
+                )
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertTrue(output_path.is_file())
+                data = json.loads(output_path.read_text(encoding="utf-8"))
+                self.assertEqual("2.1.0", data["version"])
+                output_path.unlink()
+
+    def test_cli_error_on_directory_missing_audit(self):
+        empty_dir = self.temp_path / "empty_dir"
+        empty_dir.mkdir()
+
+        for script in [SCRIPT_PATH, SKILL_SCRIPT_PATH]:
+            with self.subTest(script=script.name):
+                proc = subprocess.run(
+                    [sys.executable, str(script), str(empty_dir)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(2, proc.returncode)
+                self.assertIn(
+                    "Audit ledger 'audit.json' not found in directory", proc.stderr
+                )
+
+    def test_cli_error_omitting_audit_outside_audit_dir(self):
+        empty_dir = self.temp_path / "empty_dir"
+        empty_dir.mkdir()
+
+        for script in [SCRIPT_PATH, SKILL_SCRIPT_PATH]:
+            with self.subTest(script=script.name):
+                proc = subprocess.run(
+                    [sys.executable, str(script)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(empty_dir),
+                )
+                self.assertEqual(2, proc.returncode)
+                self.assertIn(
+                    "Audit ledger 'audit.json' not found in directory", proc.stderr
+                )
+
     def test_cli_error_on_missing_input_file(self):
         """Criterion 3: Exit code non-zero with clear errors on invalid input."""
         missing = self.temp_path / "does_not_exist.json"

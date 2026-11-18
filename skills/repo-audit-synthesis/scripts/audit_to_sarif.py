@@ -215,6 +215,15 @@ def convert_file(
     indent: int = 2,
 ) -> dict[str, Any]:
     """Read audit.json from input_path, convert to SARIF, and optionally write to output_path."""
+    input_path = Path(input_path)
+    if input_path.is_dir():
+        ledger_path = input_path / "audit.json"
+        if not ledger_path.is_file():
+            raise ValueError(
+                f"Audit ledger 'audit.json' not found in directory: {input_path}"
+            )
+        input_path = ledger_path
+
     try:
         content = input_path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -253,7 +262,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert repository audit findings (audit.json) to SARIF v2.1.0 format.",
     )
-    parser.add_argument("audit", type=Path, help="Path to input audit.json file")
+    parser.add_argument(
+        "audit",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Path to input audit.json file or audit directory (default: current directory)",
+    )
     parser.add_argument(
         "output_pos",
         nargs="?",
