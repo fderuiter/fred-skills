@@ -24,23 +24,31 @@ Start with a task in the [task guide](docs/experience.md), browse the
 
 ## Installation
 
-Register the marketplace catalog, then install a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills) or any individual skill:
+Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills), or any individual skill:
 
 ### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
+/plugin install fred-skills@fred-skills
+# Or install a curated pack:
+/plugin install starter@fred-skills
 /plugin install complete@fred-skills
 ```
 
 ### Codex
 
-```sh
-codex plugin marketplace add fderuiter/fred-skills
-codex plugin add starter@fred-skills
+Install skills into `.agents/skills/` using OpenAI Codex's built-in `$skill-installer` or the local CLI:
+
+```text
+$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
 ```
 
-Replace `complete` or `starter` with any pack in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Manual directory copying and local installer workflows (`scripts/fred.py install`) remain supported for environments without marketplace access.
+```sh
+python scripts/fred.py install --destination /path/to/project --host codex --pack starter
+```
+
+Replace `fred-skills`, `complete`, or `starter` with any pack in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Running `python scripts/fred.py install` without flags installs the `starter` pack across detected workspace hosts (or bootstraps `.agents/skills/` when no host markers exist).
 
 ## Try the local walkthrough
 

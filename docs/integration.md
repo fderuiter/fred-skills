@@ -34,15 +34,13 @@ OpenAI Codex discovers skills stored in the `.agents/skills` directory.
 - **User Scope**: `<user-home>/.agents/skills/<skill-name>/`
 
 #### Installation Commands
-Register the marketplace catalog and install a curated pack or individual skill, or use the local toolkit CLI:
+Install skills into `.agents/skills` using OpenAI Codex's built-in `$skill-installer` prompt or the local toolkit CLI:
 
-1. **Marketplace install (pack or individual skill)**:
-   ```sh
-   codex plugin marketplace add fderuiter/fred-skills
-   codex plugin add starter@fred-skills
-   # Or install all 51 skills or one specialist:
-   codex plugin add complete@fred-skills
-   codex plugin add repo-audit-concurrency@fred-skills
+1. **Codex `$skill-installer` prompt**:
+   ```text
+   $skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
+   # Or install another specialist into .agents/skills:
+   $skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-trust-boundaries
    ```
 
 2. **Toolkit CLI (Project Scope)**:
@@ -83,13 +81,14 @@ Claude Code discovers skills stored in the `.claude/skills` directory.
 - **User Scope**: `<user-home>/.claude/skills/<skill-name>/`
 
 #### Installation Commands
-Register the marketplace catalog and install a curated pack or individual skill, or use the local toolkit CLI:
+Register the marketplace catalog and install the suite plugin, a curated pack, or an individual skill, or use the local toolkit CLI:
 
-1. **Marketplace install (pack or individual skill)**:
+1. **Marketplace install (suite, pack, or individual skill)**:
    ```sh
    /plugin marketplace add fderuiter/fred-skills
+   /plugin install fred-skills@fred-skills
+   # Or install a curated pack or one specialist:
    /plugin install complete@fred-skills
-   # Or install the starter pack or one specialist:
    /plugin install starter@fred-skills
    /plugin install repo-audit-concurrency@fred-skills
    ```
@@ -223,10 +222,10 @@ The function `detect_host()` in `scripts/fredlib/installation.py` identifies tar
    - **Fallback project marker**: Bare `.github` resolves to `copilot` only when no primary marker or conflicting host receipt exists.
    - **User-scope markers** (`--scope user`): `.claude`, `.cursor`, `.agents`, `.gemini`, `.copilot`, `.config/opencode`, and `.config/devin`.
 
-2. **Ambiguous Markers**:
-   - If no configured markers exist in the destination, detection raises `ValueError` asking to specify `--host`.
-   - If markers from multiple distinct hosts exist (for example, `.claude` alongside `.cursor` or `.github/skills`), detection raises `ValueError`.
-   - If conflicting receipts exist alongside shared or fallback markers, detection raises `ValueError`.
+2. **Multi-Host Fan-Out vs. Single-Host Safeguards**:
+   - When `--host` is omitted, `install` defaults to the `starter` pack, fans out atomically across all detected markers (deduplicating shared `.agents/skills` targets), or bootstraps `.agents/skills` under `codex` when zero markers exist; `update` and `installed` also aggregate across detected hosts.
+   - Direct `detect_host()` calls and destructive commands (`remove`, `rollback`, `recover-install`) raise `ValueError` requiring `--host` when zero markers, multiple host markers, or multiple host receipts exist.
+   - If conflicting receipts exist for a shared target path (such as both `codex` and `antigravity` project receipts), resolution raises `ValueError`.
 
 3. **Explicit Override**:
    Always pass `--host <name>` in automated scripts to avoid ambiguity.

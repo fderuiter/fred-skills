@@ -444,16 +444,16 @@ def query_installed(
 ) -> dict
 ```
 
-Reads the installation receipt and resolves host harness target paths for a target destination.
+Reads installation receipts and resolves host harness target paths for a target destination, aggregating across all detected hosts when `host` is omitted on multi-host workspaces.
 
 - **Parameters:**
   - `destination` (`Path | None`, default: `None`): Target installation root path, or `None` to default to current working directory (project scope) or user home (user scope).
-  - `host` (`str | None`, default: `None`): Agent host identifier, or `None` to auto-detect.
+  - `host` (`str | None`, default: `None`): Agent host identifier, or `None` to auto-detect all configured workspace hosts.
   - `scope` (`str`, default: `"project"`): Target scope (`"project"` or `"user"`).
   - `root` (`Path`, default: repository root): Toolkit root directory.
-- **Returns:** `dict` — Installation status dictionary containing `"destination"`, `"target"`, `"state"`, `"host"`, `"scope"`, `"skills"` (each entry enriched with `"status"` as `"tracked"`, `"modified"`, or `"missing"`), `"untracked"` (`list[str]` of unmanaged `SKILL.md` directories), `"locked"` (`bool`), and `"healthy"` (`bool`).
+- **Returns:** `dict` — Installation status dictionary containing `"destination"`, `"target"`, `"state"`, `"host"`, `"scope"`, `"skills"` (each entry enriched with `"status"` as `"tracked"`, `"modified"`, or `"missing"`), `"untracked"` (`list[str]` of unmanaged `SKILL.md` directories), `"locked"` (`bool`), and `"healthy"` (`bool`), plus `"hosts"` (`list[dict]` of per-host status records) when multiple hosts are detected.
 - **Exceptions:**
-  - `ValueError`: Raised if multiple host receipts or markers exist without an explicit `host` parameter, or if `scope` or `host` is unknown.
+  - `ValueError`: Raised if conflicting receipts claim the same shared target directory without an explicit `host` parameter, or if `scope` or `host` is unknown.
 
 ---
 
@@ -507,21 +507,21 @@ def install(
 ) -> dict
 ```
 
-Installs or updates skills into the destination environment using a two-phase journaled staging and atomic swap workflow.
+Installs or updates skills into the destination environment using a two-phase journaled staging and atomic swap workflow, fanning out atomically across detected workspace hosts when `host` is omitted.
 
 - **Parameters:**
   - `destination` (`Path | None`, default: `None`): Project or user root directory, or `None` to default to current working directory (project scope) or user home (user scope).
-  - `host` (`str | None`, default: `None`): Host identifier (auto-detected if omitted).
+  - `host` (`str | None`, default: `None`): Host identifier (when omitted, fans out across detected workspace hosts with shared `.agents/skills` target deduplication, or bootstraps `codex` when zero markers exist on `install`).
   - `scope` (`str`, default: `"project"`): Installation scope (`"project"` or `"user"`).
-  - `pack` (`str | None`, default: `None`): Named skill pack from `catalog/packs.json`.
+  - `pack` (`str | None`, default: `None`): Named skill pack from `catalog/packs.json` (defaults to `"starter"` when both `pack` and `skills` are omitted on `install`).
   - `skills` (`list[str] | None`, default: `None`): Explicit list of skill names to install.
   - `update` (`bool`, default: `False`): Whether to allow replacing existing managed skills.
   - `dry_run` (`bool`, default: `False`): If `True`, returns planned operations without writing changes.
   - `force` (`bool`, default: `False`): If `True`, archives modified managed folders under `.fred-skills/<host>-<scope>/backups/` and repairs modified or missing managed skills without touching `untracked` user directories.
   - `root` (`Path`, default: repository root): Toolkit root directory.
-- **Returns:** `dict` — Installation outcome summary with `"action"`, `"skills"`, `"host"`, `"scope"`, `"target"`, `"dry_run"`, `"source_version"`, and `"runtime_behavior_verified"`.
+- **Returns:** `dict` — Installation outcome summary with `"action"`, `"skills"`, `"host"`, `"scope"`, `"target"`, `"dry_run"`, `"source_version"`, and `"runtime_behavior_verified"`, plus `"hosts"` (`list[dict]`) when fanning out across multiple detected hosts.
 - **Exceptions:**
-  - `ValueError`: Raised if host cannot be detected; if skills are already installed and both `update=False` and `force=False`; if unmanaged skills are encountered; if locally modified or missing managed skills are encountered with `force=False`; or if lock cannot be acquired.
+  - `ValueError`: Raised if `update=True` finds no detected host markers or receipts; if conflicting receipts claim the same shared target directory; if skills are already installed and both `update=False` and `force=False`; if unmanaged skills are encountered; if locally modified or missing managed skills are encountered with `force=False`; or if lock cannot be acquired.
 
 ---
 
@@ -551,7 +551,7 @@ Removes managed skills from the destination environment, archiving previous pack
   - `root` (`Path`, default: repository root): Toolkit root.
 - **Returns:** `dict` — Removal outcome dictionary with `"action"`, `"skills"`, and `"dry_run"`.
 - **Exceptions:**
-  - `ValueError`: Raised if target skills are not managed by the receipt, or if managed skills were locally modified or missing with `force=False`.
+  - `ValueError`: Raised if multiple host receipts or markers exist without an explicit `host` parameter, if target skills are not managed by the receipt, or if managed skills were locally modified or missing with `force=False`.
 
 ---
 
