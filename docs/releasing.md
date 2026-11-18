@@ -6,9 +6,13 @@ records have their own versioned contracts. Breaking a persisted schema requires
 instructions and tests rather than quietly reinterpreting old evidence.
 
 Before bumping `VERSION`, review the selected diff, run all checks in
-[CONTRIBUTING.md](../CONTRIBUTING.md), inspect the generated explorer, execute the
-synthetic walkthrough, build and verify the intended pack, review the recorded behavioral
-limits, and ensure [LICENSE](../LICENSE) remains present and nonempty.
+[CONTRIBUTING.md](../CONTRIBUTING.md), inspect the generated [offline explorer](explorer.html),
+execute the synthetic walkthrough, build and verify the intended pack, review the recorded
+behavioral limits, and ensure [LICENSE](../LICENSE) remains present and nonempty. Validated
+pushes to `main` automatically publish the hosted explorer and documentation to
+[fderuiter.github.io/fred-skills](https://fderuiter.github.io/fred-skills) via
+`.github/workflows/pages.yml` after `Validate skill packages` succeeds (with `workflow_dispatch`
+on `main` available to retry transient Pages outages without manual deployment steps).
 
 Pushes to `main` run a read-only `preflight` gate that validates SemVer 2.0.0 `v<VERSION>`,
 resolves an immutable `target_sha`, verifies `LICENSE` and `VERSION` at `target_sha`, and

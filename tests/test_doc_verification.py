@@ -898,6 +898,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "python scripts/check_doc_links.py --check",
             "python scripts/check_doc_links.py --invalid-flag",
             "python scripts/verify_doc_snippets.py --invalid-flag",
+            "python scripts/check_workflow_pins.py --invalid-flag",
             "python scripts/verify_workflow_actions.py --invalid-flag",
             "python scripts/audit_to_sarif.py audit.json --output out.sarif --invalid-flag",
             "python examples/walkthrough/run_demo.py --output audit-output/demo --invalid-flag",

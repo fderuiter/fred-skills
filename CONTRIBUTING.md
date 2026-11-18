@@ -75,6 +75,7 @@ python scripts/build_experience.py --check
 python scripts/validate_skills.py
 python scripts/check_doc_links.py
 python scripts/verify_doc_snippets.py
+python scripts/check_workflow_pins.py --check
 python scripts/verify_workflow_actions.py --check
 python -m unittest discover -s tests -v
 
@@ -86,7 +87,7 @@ python scripts/build_experience.py
 
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
-All commands above run without network access once the development dependencies are installed; CI additionally runs `python scripts/verify_workflow_actions.py --online` to confirm upstream commit and tag resolution via `git ls-remote`.
+All commands above run without network access once the development dependencies are installed; CI additionally runs `python scripts/check_workflow_pins.py --verify-remote` to confirm upstream commit and tag resolution via `git ls-remote`.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.
 
 ## Change a skill
