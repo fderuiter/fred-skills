@@ -20,11 +20,24 @@
 - **Domain Topic:** {topic}
 - **Correlated Ledger Entries:** {ledger_references}
 
+## Transcript discovery
+
+- **Source:** {discovery_source}
+- **Selected Transcript:** `{selected_transcript}`
+- **Selection Reason:** {selection_reason}
+- **Rejected Candidates:**
+{rejected_candidates}
+
 ## Actionable recovery instructions
 
 {recovery_instructions}
 
 ## Sanitization status
 
-All private credentials, tokens, authorization headers, and environment secrets
+- **Redaction Tier:** {redaction_tier}
+- **Credentials Redacted:** {credentials_redacted}
+- **Tool Outputs Omitted:** {tool_outputs_omitted}
+- **Total Redactions:** {total_redactions}
+
+All private credentials, tokens, authorization headers, URI passwords, and environment secrets
 have been redacted from this bundle.
