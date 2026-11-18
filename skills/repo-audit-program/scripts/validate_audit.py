@@ -115,8 +115,8 @@ def main():
         )
         return 2
     if errors:
-        for e in errors:
-            print(e, file=sys.stderr)
+        for err in errors:
+            print(err, file=sys.stderr)
         return 1
     print(
         "PASS: structure, references, and dependency graph; semantic claims require review."

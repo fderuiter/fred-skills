@@ -5,15 +5,19 @@ schema 1.0 and original skill names remain compatible in 0.2.0. New run and veri
 records have their own versioned contracts. Breaking a persisted schema requires migration
 instructions and tests rather than quietly reinterpreting old evidence.
 
-Before publication, review the selected diff, run all checks in CONTRIBUTING.md, inspect
-the generated explorer, execute the synthetic walkthrough, build and verify the intended
-pack, and review the recorded behavioral limits. Choose a public LICENSE as owner.
+Before bumping `VERSION`, review the selected diff, run all checks in
+[CONTRIBUTING.md](../CONTRIBUTING.md), inspect the generated explorer, execute the
+synthetic walkthrough, build and verify the intended pack, review the recorded behavioral
+limits, and ensure [LICENSE](../LICENSE) remains present and nonempty.
 
-The release workflow can be run manually to build a pack as a workflow artifact. Its
-optional publication input creates a **draft** GitHub release only for an existing
-`v<VERSION>` tag and a nonempty LICENSE. A `v*` tag also prepares the draft when its
-version matches. Publishing that draft remains a separate maintainer action. Ordinary
-pull requests have no contents-write job and never invoke live model adapters.
+Pushes to `main` automatically check live GitHub Releases for `v<VERSION>`. When
+`v<VERSION>` is not yet published (or exists only as a draft), the release workflow runs
+`make check`, builds and verifies all release archives and checksums, pushes tag
+`v<VERSION>` if missing on `origin`, and publishes the GitHub Release directly using
+`docs/release-notes-<VERSION>.md` when present (or generated notes otherwise). Subsequent
+`main` pushes with an already published `VERSION` skip packaging and publication cleanly.
+Matching `v*` tags and `workflow_dispatch` remain supported for idempotent recovery runs.
+Ordinary pull requests have no `contents: write` job and never invoke live model adapters.
 
 ZIP and TAR archives contain standalone skill directories; the repository source is
 still needed for root CLI tooling. Archive content uses fixed paths/order/timestamps and
@@ -24,5 +28,5 @@ honestly report license state and never certify host behavior.
 
 Do not commit generated archives, personal installation receipts, real audits, or local
 benchmark outputs. Keep release notes concrete: task outcome, compatibility, validation
-actually executed, known gaps, and rollback/update guidance. This PR creates no tag or
-public release.
+actually executed, known gaps, and rollback/update guidance. Pull requests create no tag
+or public release; publication runs only after changes merge to `main`.

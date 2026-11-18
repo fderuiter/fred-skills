@@ -7,9 +7,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 
+pty: ModuleType | None
 try:
-    import pty
+    import pty as _pty
+
+    pty = _pty
 except ImportError:
     pty = None
 
@@ -265,14 +269,32 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("--pack", stdout)
 
         # Check host choices
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
             self.assertIn(host, stdout)
 
     def test_host_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("install", "--host", "invalid", "--destination", "/tmp")
         self.assertEqual(2, proc.returncode)
         self.assertIn("invalid choice: 'invalid'", proc.stderr)
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
             self.assertIn(host, proc.stderr)
 
         # Also verify without --destination (destination is optional)
@@ -286,12 +308,39 @@ class FredCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             proc = self.run_cli("install", cwd=tmp_dir)
             self.assertEqual(1, proc.returncode)
-            self.assertIn(
-                "No host markers (.claude, .agents, .gemini) found in destination",
-                proc.stderr,
-            )
+            self.assertIn("No host markers (", proc.stderr)
+            for marker in [
+                ".claude",
+                ".cursor",
+                ".agents",
+                ".gemini",
+                ".opencode",
+                ".windsurf",
+            ]:
+                self.assertIn(marker, proc.stderr)
             self.assertIn(str(Path(tmp_dir).resolve()), proc.stderr)
             self.assertIn("--host", proc.stderr)
+
+    def test_cli_install_succeeds_for_new_hosts_in_project_and_user_scopes(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            for host in ["cursor", "copilot", "opencode", "windsurf"]:
+                for scope in ["project", "user"]:
+                    dest = base / f"{host}-{scope}"
+                    proc = self.run_cli(
+                        "install",
+                        "--destination",
+                        str(dest),
+                        "--host",
+                        host,
+                        "--scope",
+                        scope,
+                        "--pack",
+                        "starter",
+                    )
+                    self.assertEqual(0, proc.returncode, proc.stderr)
 
     def test_task_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("plan", "/tmp", "--task", "invalid-task")
@@ -340,12 +389,23 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("Invocation", stdout)
 
         # Verify host entries
-        self.assertIn("codex", stdout)
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
+            self.assertIn(host, stdout)
         self.assertIn(".agents/skills", stdout)
-        self.assertIn("claude-code", stdout)
         self.assertIn(".claude/skills", stdout)
-        self.assertIn("antigravity", stdout)
-        self.assertIn("gemini-cli", stdout)
+        self.assertIn(".cursor/skills", stdout)
+        self.assertIn(".github/skills", stdout)
+        self.assertIn(".opencode/skills", stdout)
+        self.assertIn(".windsurf/skills", stdout)
 
     def test_discovery_packs_and_tasks_table_in_terminal(self):
         packs_proc = self.run_cli("packs", isatty=True)
@@ -891,6 +951,187 @@ class FredCLITests(unittest.TestCase):
             self.assertEqual("user", data["scope"])
             self.assertEqual("claude-code", data["host"])
             self.assertIn("repo-audit-concurrency", data["skills"])
+
+    def test_installed_status_column_and_check_flag_exit_codes(self):
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            install_proc = self.run_cli(
+                "install",
+                "--destination",
+                tmp_dir,
+                "--host",
+                "claude-code",
+                "--pack",
+                "starter",
+            )
+            self.assertEqual(0, install_proc.returncode, install_proc.stderr)
+
+            # Healthy workspace with an untracked local skill still passes --check
+            skills_dir = tmp_path / ".claude/skills"
+            (skills_dir / "custom-local").mkdir(parents=True)
+            (skills_dir / "custom-local/SKILL.md").write_text("Custom local skill")
+
+            tty_healthy = self.run_cli(
+                "installed", "--destination", tmp_dir, isatty=True
+            )
+            self.assertEqual(0, tty_healthy.returncode)
+            self.assertIn("Status", tty_healthy.stdout)
+            self.assertIn("tracked", tty_healthy.stdout)
+            self.assertIn("untracked", tty_healthy.stdout)
+            self.assertIn("custom-local", tty_healthy.stdout)
+
+            chk_healthy = self.run_cli("installed", "--destination", tmp_dir, "--check")
+            self.assertEqual(0, chk_healthy.returncode, chk_healthy.stderr)
+
+            # Edit one managed skill and delete another managed skill
+            (skills_dir / "repo-audit-concurrency/SKILL.md").write_text("Edited")
+            managed_names = [
+                name
+                for name in json.loads(chk_healthy.stdout)["skills"]
+                if name != "repo-audit-concurrency"
+            ]
+            shutil.rmtree(skills_dir / managed_names[0])
+
+            tty_drift = self.run_cli("installed", "--destination", tmp_dir, isatty=True)
+            self.assertEqual(0, tty_drift.returncode)
+            self.assertIn("modified", tty_drift.stdout)
+            self.assertIn("missing", tty_drift.stdout)
+            self.assertIn("untracked", tty_drift.stdout)
+
+            chk_drift = self.run_cli("installed", "--destination", tmp_dir, "--check")
+            self.assertEqual(1, chk_drift.returncode)
+            drift_json = json.loads(chk_drift.stdout)
+            self.assertFalse(drift_json["healthy"])
+            self.assertEqual(["custom-local"], drift_json["untracked"])
+            self.assertEqual(
+                "modified",
+                drift_json["skills"]["repo-audit-concurrency"]["status"],
+            )
+            self.assertEqual(
+                "missing", drift_json["skills"][managed_names[0]]["status"]
+            )
+
+            # Active lock file also causes installed --check to exit 1
+            repair_proc = self.run_cli(
+                "update",
+                "--destination",
+                tmp_dir,
+                "--pack",
+                "starter",
+                "--force",
+            )
+            self.assertEqual(0, repair_proc.returncode, repair_proc.stderr)
+            lock_file = tmp_path / ".fred-skills/claude-code-project/operation.lock"
+            lock_file.write_text("locked")
+            chk_locked = self.run_cli("installed", "--destination", tmp_dir, "--check")
+            self.assertEqual(1, chk_locked.returncode)
+            locked_json = json.loads(chk_locked.stdout)
+            self.assertTrue(locked_json["locked"])
+            self.assertFalse(locked_json["healthy"])
+
+    def test_cli_force_repairs_deleted_and_modified_skills(self):
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "install",
+                    "--destination",
+                    tmp_dir,
+                    "--host",
+                    "claude-code",
+                    "--pack",
+                    "starter",
+                ).returncode,
+            )
+            skills_dir = tmp_path / ".claude/skills"
+            state_dir = tmp_path / ".fred-skills/claude-code-project"
+
+            # Edit SKILL.md -> blocked without --force, repaired with install --force
+            (skills_dir / "repo-audit-concurrency/SKILL.md").write_text(
+                "Local CLI edit"
+            )
+            blocked = self.run_cli(
+                "update", "--destination", tmp_dir, "--pack", "starter"
+            )
+            self.assertEqual(1, blocked.returncode)
+            self.assertIn("--force", blocked.stderr)
+
+            repaired_install = self.run_cli(
+                "install",
+                "--destination",
+                tmp_dir,
+                "--pack",
+                "starter",
+                "--force",
+            )
+            self.assertEqual(0, repaired_install.returncode, repaired_install.stderr)
+            backups = list(
+                (state_dir / "backups").glob("*/repo-audit-concurrency/SKILL.md")
+            )
+            self.assertTrue(any(p.read_text() == "Local CLI edit" for p in backups))
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "installed", "--destination", tmp_dir, "--check"
+                ).returncode,
+            )
+
+            # Delete .claude/skills entirely -> repaired with update --force
+            shutil.rmtree(skills_dir)
+            repaired_update = self.run_cli(
+                "update",
+                "--destination",
+                tmp_dir,
+                "--pack",
+                "starter",
+                "--force",
+            )
+            self.assertEqual(0, repaired_update.returncode, repaired_update.stderr)
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "installed", "--destination", tmp_dir, "--check"
+                ).returncode,
+            )
+
+            # Delete single managed skill -> removed from receipt with remove --force
+            shutil.rmtree(skills_dir / "repo-audit-concurrency")
+            rm_blocked = self.run_cli(
+                "remove",
+                "--destination",
+                tmp_dir,
+                "--skill",
+                "repo-audit-concurrency",
+            )
+            self.assertEqual(1, rm_blocked.returncode)
+            self.assertIn("--force", rm_blocked.stderr)
+
+            rm_forced = self.run_cli(
+                "remove",
+                "--destination",
+                tmp_dir,
+                "--skill",
+                "repo-audit-concurrency",
+                "--force",
+            )
+            self.assertEqual(0, rm_forced.returncode, rm_forced.stderr)
+            after_rm = json.loads(
+                self.run_cli("installed", "--destination", tmp_dir).stdout
+            )
+            self.assertNotIn("repo-audit-concurrency", after_rm["skills"])
+            self.assertTrue(after_rm["healthy"])
+
+            # rollback and recover-install do not expose --force
+            for subcmd in ["rollback", "recover-install"]:
+                bad = self.run_cli(subcmd, "--force")
+                self.assertEqual(2, bad.returncode)
 
 
 class FredDispatchRegistryTests(unittest.TestCase):

@@ -8,12 +8,14 @@ RUFF ?= ruff
 check:
 	$(RUFF) check .
 	$(RUFF) format --check .
+	$(PYTHON) -m mypy
 	$(PYTHON) scripts/sync_audit_resources.py --check
 	$(PYTHON) scripts/build_catalog.py --check
 	$(PYTHON) scripts/build_experience.py --check
 	$(PYTHON) scripts/validate_skills.py --telemetry validation-telemetry.json
 	$(PYTHON) scripts/check_doc_links.py
 	$(PYTHON) scripts/verify_doc_snippets.py
+	$(PYTHON) scripts/verify_workflow_actions.py --check
 	$(PYTHON) -m unittest discover -s tests -v
 
 fix:

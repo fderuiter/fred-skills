@@ -24,6 +24,8 @@ FIXTURE_PATH = ROOT / "tests/fixtures/audit-valid.json"
 SARIF_SCHEMA_PATH = ROOT / "tests/fixtures/sarif-schema-2.1.0.json"
 
 spec = importlib.util.spec_from_file_location("audit_to_sarif", SCRIPT_PATH)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Unable to load {SCRIPT_PATH}")
 audit_to_sarif_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit_to_sarif_mod)
 audit_to_sarif = audit_to_sarif_mod.audit_to_sarif

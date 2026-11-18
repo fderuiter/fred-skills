@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "skills/repo-audit-program"
 SCRIPT = PACKAGE / "scripts/validate_audit.py"
 spec = importlib.util.spec_from_file_location("audit_validator", SCRIPT)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Unable to load {SCRIPT}")
 validator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validator)
 SCHEMA = json.loads((PACKAGE / "assets/audit.schema.json").read_text())

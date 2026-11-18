@@ -6,6 +6,7 @@ import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import jsonschema
@@ -65,7 +66,8 @@ def plan(
         raise ValueError("Invalid execution mode or budget")
     recipe = recipes[task]
     detected = preflight(repo, exclude)
-    changed, resolved_base = [], None
+    changed: list[str] = []
+    resolved_base: str | None = None
     if mode == "changes" or recipe.get("requires_base"):
         if not base:
             raise ValueError(
@@ -267,6 +269,8 @@ checkpoint when the selected work cannot be completed. An empty findings list is
 def audit_errors(audit: dict) -> list[str]:
     script = ROOT / "skills/repo-audit-program/scripts/validate_audit.py"
     spec = importlib.util.spec_from_file_location("fred_audit_validator", script)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load audit validator from {script}")
     module = importlib.util.module_from_spec(spec)
     previous = sys.dont_write_bytecode
     try:
@@ -383,7 +387,7 @@ def compare(before: dict, after: dict) -> dict:
         return groups
 
     old, new = indexed(before), indexed(after)
-    result = {
+    result: dict[str, list[Any]] = {
         "introduced": [],
         "persisting": [],
         "status_changed": [],
@@ -478,21 +482,20 @@ def reconcile(
                 "Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result"
             )
     path = directory / "remediation.json"
-    records = (
+    records: dict[str, Any] = (
         read_json(path) if path.exists() else {"schema_version": "1.0", "records": []}
     )
-    records["records"].append(
-        {
-            "at": now(),
-            "finding_id": finding_id,
-            "fingerprint": fingerprint(finding, audit),
-            "state": state,
-            "note": note,
-            "verification": proof,
-        }
-    )
+    record: dict[str, Any] = {
+        "at": now(),
+        "finding_id": finding_id,
+        "fingerprint": fingerprint(finding, audit),
+        "state": state,
+        "note": note,
+        "verification": proof,
+    }
+    records["records"].append(record)
     atomic_json(path, records)
-    return records["records"][-1]
+    return record
 
 
 def memory(directory: Path) -> dict:
@@ -930,7 +933,8 @@ def _lookup_rule_in_component(
 
 
 def _find_sarif_rule(result: dict, driver: dict, extensions: list[dict]) -> dict | None:
-    rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
+    raw_rule_ref = result.get("rule")
+    rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
     raw_rule_id = result.get("ruleId") or rule_ref.get("id")
     rule_id = raw_rule_id if isinstance(raw_rule_id, str) and raw_rule_id else None
     raw_guid = rule_ref.get("guid")
@@ -975,12 +979,10 @@ def _find_override_level(result: dict, run: dict, rule_id: str | None) -> str | 
         if isinstance(inv_idx, int) and 0 <= inv_idx < len(invocations)
         else invocations
     )
-    rule_ref = result.get("rule") if isinstance(result.get("rule"), dict) else {}
-    res_idx = (
-        rule_ref.get("index")
-        if isinstance(rule_ref.get("index"), int)
-        else result.get("ruleIndex")
-    )
+    raw_rule_ref = result.get("rule")
+    rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
+    ref_index = rule_ref.get("index")
+    res_idx = ref_index if isinstance(ref_index, int) else result.get("ruleIndex")
 
     for inv in ordered:
         if not isinstance(inv, dict):
@@ -1096,10 +1098,10 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
     for run in document.get("runs", []):
         if not isinstance(run, dict):
             continue
-        tool_obj = run.get("tool") if isinstance(run.get("tool"), dict) else {}
-        driver = (
-            tool_obj.get("driver") if isinstance(tool_obj.get("driver"), dict) else {}
-        )
+        raw_tool = run.get("tool")
+        tool_obj: dict[str, Any] = raw_tool if isinstance(raw_tool, dict) else {}
+        raw_driver = tool_obj.get("driver")
+        driver: dict[str, Any] = raw_driver if isinstance(raw_driver, dict) else {}
         raw_exts = tool_obj.get("extensions")
         extensions = (
             [ext for ext in raw_exts if isinstance(ext, dict)]
@@ -1119,8 +1121,9 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
                 else default_sarif_roots
             )
             matched_rule = _find_sarif_rule(result, driver, extensions)
-            rule_ref = (
-                result.get("rule") if isinstance(result.get("rule"), dict) else {}
+            raw_rule_ref = result.get("rule")
+            rule_ref: dict[str, Any] = (
+                raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
             )
             rule_id = (
                 result.get("ruleId")
@@ -1136,10 +1139,9 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
             for item in result.get("locations", []):
                 if not isinstance(item, dict):
                     continue
-                physical = (
-                    item.get("physicalLocation")
-                    if isinstance(item.get("physicalLocation"), dict)
-                    else {}
+                raw_physical = item.get("physicalLocation")
+                physical: dict[str, Any] = (
+                    raw_physical if isinstance(raw_physical, dict) else {}
                 )
                 norm_path = _normalize_sarif_artifact_path(
                     physical.get("artifactLocation"),
@@ -1150,10 +1152,9 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
                 )
                 if not norm_path:
                     continue
-                region = (
-                    physical.get("region")
-                    if isinstance(physical.get("region"), dict)
-                    else {}
+                raw_region = physical.get("region")
+                region: dict[str, Any] = (
+                    raw_region if isinstance(raw_region, dict) else {}
                 )
                 loc_record: dict = {
                     "path": norm_path,
@@ -1166,9 +1167,8 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
                     loc_record["symbol"] = symbol
                 locations.append(loc_record)
 
-            msg_obj = (
-                result.get("message") if isinstance(result.get("message"), dict) else {}
-            )
+            raw_msg = result.get("message")
+            msg_obj: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else {}
             observation: dict = {
                 "tool": driver.get("name", "unknown"),
                 "tool_version": driver.get("version")
