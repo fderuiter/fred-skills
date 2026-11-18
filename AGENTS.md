@@ -19,7 +19,7 @@ it is not an audit of this repository or proof about any consuming application.
 - Do not add private installation IDs, absolute workspace paths, credentials, or real
   application audit data. Use synthetic fixtures for repeatable validation.
 
-Run from the repository root before proposing a change (`make check` delegates to `scripts/run_checks.py` to execute Ruff linting, formatting checks, package validations, and tests):
+Run from the repository root before proposing a change (`make check` delegates to `scripts/run_checks.py` to execute Ruff linting, formatting checks, mypy static type checks, package validations, and tests):
 
 ```sh
 make check
@@ -31,7 +31,7 @@ To automatically format code and apply safe lint fixes with Ruff, repair drift, 
 make fix
 ```
 
-Or run pre-commit hooks for fast static and Markdown/Python formatting verification (`git commit` runs fast static checks, while `pre-push` runs `unit-tests`):
+Or run pre-commit hooks for fast static, type, and Markdown/Python formatting verification (`git commit` runs fast static and `mypy` checks, while `pre-push` runs `unit-tests`):
 
 ```sh
 pre-commit install
@@ -39,11 +39,12 @@ pre-commit run --all-files
 pre-commit run --hook-stage pre-push --all-files
 ```
 
-`make check` and `make fix` run Ruff automatically. For environments without `make` (including Windows), execute the cross-platform check runner or individual phases directly:
+`make check` and `make fix` run Ruff automatically (`make check` also runs `mypy`). For environments without `make` (including Windows), execute the cross-platform check runner or individual phases directly:
 
 ```sh
 python scripts/run_checks.py
 python scripts/run_checks.py --phase lint
+python scripts/run_checks.py --phase typecheck
 python scripts/run_checks.py --phase packages
 python scripts/run_checks.py --phase docs
 python scripts/run_checks.py --phase tests

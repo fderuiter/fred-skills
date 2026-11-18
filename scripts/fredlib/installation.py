@@ -171,47 +171,123 @@ def _receipt_identifies_host(
     )
 
 
-def _resolve_agents_marker_host(dest: Path, scope: str) -> str:
-    has_antigravity = _receipt_identifies_host(dest, "antigravity", scope)
-    has_codex = _receipt_identifies_host(dest, "codex", scope)
-    if has_antigravity and has_codex:
-        raise ValueError(
-            f"Ambiguous host receipts for both codex and antigravity found in destination '{dest}'; please specify --host"
-        )
-    return "antigravity" if has_antigravity else "codex"
+def _host_marker_entries(
+    hosts: dict[str, Any], scope: str
+) -> list[tuple[str, str, str]]:
+    key = "user_markers" if scope == "user" else "project_markers"
+    entries: list[tuple[str, str, str]] = []
+    for host_name, host_cfg in hosts.items():
+        for marker in host_cfg.get(key, []):
+            entries.append((marker["path"], marker["tier"], host_name))
+    return entries
 
 
-def _check_host_markers(dest: Path) -> list[str]:
-    marker_map = {
-        ".claude": "claude-code",
-        ".agents": "codex",
-        ".gemini": "gemini-cli",
-    }
-    found = [m for m in marker_map if (dest / m).exists()]
-    if not found:
+def _matching_tier_markers(
+    dest: Path, entries: list[tuple[str, str, str]], tier: str
+) -> dict[str, list[str]]:
+    matched: dict[str, list[str]] = {}
+    for marker_path, marker_tier, host_name in entries:
+        if marker_tier == tier and (dest / relative_path(marker_path)).exists():
+            matched.setdefault(marker_path, []).append(host_name)
+    return matched
+
+
+def _conflicting_fallback_receipt(
+    dest: Path, scope: str, hosts: dict[str, Any], allowed_hosts: set[str]
+) -> bool:
+    return any(
+        host_name not in allowed_hosts
+        and _receipt_identifies_host(dest, host_name, scope)
+        for host_name in hosts
+    )
+
+
+def _select_active_markers(
+    dest: Path,
+    scope: str,
+    hosts: dict[str, Any],
+    entries: list[tuple[str, str, str]],
+) -> dict[str, list[str]]:
+    primary = _matching_tier_markers(dest, entries, "primary")
+    fallback = _matching_tier_markers(dest, entries, "fallback")
+    if primary:
+        active = dict(primary)
+        for marker_path, marker_hosts in fallback.items():
+            if any(_receipt_identifies_host(dest, h, scope) for h in marker_hosts):
+                active[marker_path] = marker_hosts
+        return active
+    if not fallback:
+        return {}
+    fallback_hosts = {h for hs in fallback.values() for h in hs}
+    if _conflicting_fallback_receipt(dest, scope, hosts, fallback_hosts):
         raise ValueError(
-            f"No host markers (.claude, .agents, .gemini) found in destination '{dest}'; please specify --host"
+            f"Conflicting host receipt found alongside fallback marker in destination '{dest}'; please specify --host"
         )
-    if len(found) > 1:
-        markers_str = ", ".join(sorted(found))
+    return fallback
+
+
+def _resolve_marker_host(dest: Path, scope: str, candidates: list[str]) -> str:
+    if len(candidates) == 1:
+        return candidates[0]
+    receipt_hosts = [h for h in candidates if _receipt_identifies_host(dest, h, scope)]
+    if len(receipt_hosts) > 1:
+        hosts_label = " and ".join(receipt_hosts)
+        raise ValueError(
+            f"Ambiguous host receipts for both {hosts_label} found in destination '{dest}'; please specify --host"
+        )
+    return receipt_hosts[0] if receipt_hosts else candidates[0]
+
+
+def _check_host_markers(
+    dest: Path, scope: str = "project", root: Path = ROOT
+) -> list[str]:
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    entries = _host_marker_entries(hosts, scope)
+    active = _select_active_markers(dest, scope, hosts, entries)
+    if not active:
+        configured = list(dict.fromkeys(path for path, _, _ in entries))
+        markers_str = ", ".join(configured)
+        raise ValueError(
+            f"No host markers ({markers_str}) found in destination '{dest}'; please specify --host"
+        )
+    host_groups = {tuple(hs) for hs in active.values()}
+    if len(host_groups) > 1:
+        markers_str = ", ".join(sorted(active))
         raise ValueError(
             f"Multiple host markers found ({markers_str}) in destination '{dest}'; please specify --host"
         )
-    return found
+    return sorted(active)
+
+
+def _detect_host_with_root(
+    destination: Path | None, scope: str, root: Path = ROOT
+) -> str:
+    if scope not in {"project", "user"}:
+        raise ValueError("Unknown installation scope")
+    dest = (
+        _default_destination(scope).resolve()
+        if destination is None
+        else Path(destination).resolve()
+    )
+    found = _check_host_markers(dest, scope, root)
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    entries = _host_marker_entries(hosts, scope)
+    candidates = [h for path, _, h in entries if path == found[0]]
+    return _resolve_marker_host(dest, scope, candidates)
+
+
+def _resolve_target_host(
+    destination: Path | None, host: str | None, scope: str, root: Path
+) -> str:
+    if host is not None:
+        return host
+    if root == ROOT:
+        return detect_host(destination, scope)
+    return _detect_host_with_root(destination, scope, root)
 
 
 def detect_host(destination: Path | None = None, scope: str = "project") -> str:
-    if destination is None:
-        dest = (Path.home() if scope == "user" else Path.cwd()).resolve()
-    else:
-        dest = destination.resolve()
-    found = _check_host_markers(dest)
-    marker = found[0]
-    if marker == ".claude":
-        return "claude-code"
-    if marker == ".gemini":
-        return "gemini-cli"
-    return _resolve_agents_marker_host(dest, scope)
+    return _detect_host_with_root(destination, scope, ROOT)
 
 
 def _default_destination(scope: str) -> Path:
@@ -253,8 +329,9 @@ def locations(
     dest, resolved_host, resolved_scope, resolved_root = _resolve_locations_env(
         destination, host, scope, root
     )
-    if resolved_host is None:
-        resolved_host = detect_host(dest, resolved_scope)
+    resolved_host = _resolve_target_host(
+        dest, resolved_host, resolved_scope, resolved_root
+    )
     hosts = read_json(resolved_root / "catalog/hosts.json")["hosts"]
     if resolved_host not in hosts or resolved_scope not in {"project", "user"}:
         raise ValueError("Unknown host or installation scope")
@@ -424,11 +501,11 @@ def _validate_receipt_hosts(existing_receipt_hosts: list[str], dest: Path) -> No
     )
 
 
-def _query_detected_host(dest: Path, scope: str, root: Path) -> dict:
+def _query_detected_host(dest: Path, scope: str, root: Path) -> dict[str, Any]:
     try:
-        detected_host = detect_host(dest, scope)
+        detected_host = _resolve_target_host(dest, None, scope, root)
         target, state = locations(dest, detected_host, scope, root)
-        base = {
+        base: dict[str, Any] = {
             "destination": str(dest),
             "target": str(target),
             "state": str(state),
@@ -459,7 +536,7 @@ def _resolve_lifecycle_host(
     if host is not None:
         return host
     try:
-        return detect_host(dest, scope)
+        return _resolve_target_host(dest, None, scope, root)
     except ValueError as exc:
         if "No host markers" not in str(exc):
             raise
@@ -1086,7 +1163,7 @@ def rollback(
         scope=scope,
         root=root,
     )
-    resolved_host = env.host or detect_host(env.destination, env.scope)
+    resolved_host = _resolve_target_host(env.destination, env.host, env.scope, env.root)
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )
@@ -1274,7 +1351,7 @@ def recover(
         raise ValueError(
             "Recovery requires --confirm-interrupted after verifying the previous writer has stopped"
         )
-    resolved_host = env.host or detect_host(env.destination, env.scope)
+    resolved_host = _resolve_target_host(env.destination, env.host, env.scope, env.root)
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )

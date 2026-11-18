@@ -17,8 +17,21 @@ sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 
-ALL_PHASES: tuple[str, ...] = ("lint", "format", "packages", "docs", "tests")
-DEFAULT_PHASES: tuple[str, ...] = ("lint", "format", "packages", "tests")
+ALL_PHASES: tuple[str, ...] = (
+    "lint",
+    "format",
+    "typecheck",
+    "packages",
+    "docs",
+    "tests",
+)
+DEFAULT_PHASES: tuple[str, ...] = (
+    "lint",
+    "format",
+    "typecheck",
+    "packages",
+    "tests",
+)
 
 
 def build_check_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -91,6 +104,8 @@ def build_phase_commands(
         return [[*resolved_ruff, "check", "."]]
     if phase == "format":
         return [[*resolved_ruff, "format", "--check", "."]]
+    if phase == "typecheck":
+        return [[python_executable, "-m", "mypy"]]
     if phase == "packages":
         validate_cmd = [python_executable, str(scripts_dir / "validate_skills.py")]
         if telemetry_path:
@@ -193,8 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run cross-platform repository validation checks. "
-            "Defaults to lint, format, packages, and tests (omitting standalone doc "
-            "scripts covered by tests/test_doc_verification.py)."
+            "Defaults to lint, format, typecheck, packages, and tests (omitting "
+            "standalone doc scripts covered by tests/test_doc_verification.py)."
         )
     )
     parser.add_argument(

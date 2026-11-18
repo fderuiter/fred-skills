@@ -815,7 +815,10 @@ def handle_runs(a: argparse.Namespace) -> Any:
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "compare":
-        return runs.compare(read_json(a.before), read_json(a.after))
+        return runs.compare(
+            read_json(resolve_audit_path(a.before)),
+            read_json(resolve_audit_path(a.after)),
+        )
     if a.command == "reconcile":
         return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
     if a.command == "import-sarif":
@@ -830,32 +833,32 @@ def handle_installation(a: argparse.Namespace) -> Any:
     if a.command == "installed":
         return installation.query_installed(target)
     if a.command in {"install", "update"}:
-        options = installation.InstallOptions(
+        install_options = installation.InstallOptions(
             pack=a.pack,
             skills=a.skill,
             update=a.command == "update",
             dry_run=a.dry_run,
             force=a.force,
         )
-        return installation.install(target, options)
+        return installation.install(target, install_options)
     if a.command == "remove":
         if not a.skill:
             raise ValueError(
                 "Remove requires at least one --skill; there is no implicit remove-all"
             )
-        options = installation.RemoveOptions(
+        remove_options = installation.RemoveOptions(
             skills=a.skill, dry_run=a.dry_run, force=a.force
         )
-        return installation.remove(target, options)
+        return installation.remove(target, remove_options)
     if a.command == "rollback":
-        options = installation.RollbackOptions(target=target)
-        return installation.rollback(target, options)
+        rollback_options = installation.RollbackOptions(target=target)
+        return installation.rollback(target, rollback_options)
     if a.command == "recover-install":
-        options = installation.RecoverOptions(
+        recover_options = installation.RecoverOptions(
             confirm_interrupted=a.confirm_interrupted,
             target=target,
         )
-        return installation.recover(target, options)
+        return installation.recover(target, recover_options)
     raise ValueError(f"Unknown installation command: {a.command}")
 
 
@@ -916,6 +919,8 @@ def _load_triage_module() -> Any:
     if not script_path.is_file():
         raise ValueError(f"Triage script not found at {script_path}")
     spec = importlib.util.spec_from_file_location("diagnostics_triage", script_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load triage module from {script_path}")
     triage = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(triage)
     return triage
@@ -1008,7 +1013,8 @@ DISPATCH_REGISTRY: dict[str, Callable[[argparse.Namespace], Any]] = COMMAND_REGI
 
 
 def dispatch(a: argparse.Namespace) -> Any:
-    handler = COMMAND_REGISTRY.get(getattr(a, "command", None))
+    command = getattr(a, "command", None)
+    handler = COMMAND_REGISTRY.get(command) if isinstance(command, str) else None
     if handler is None:
         raise ValueError("Unknown command")
     return handler(a)

@@ -26,7 +26,7 @@ python -m pip install -r requirements-dev.txt
 pre-commit install
 ```
 
-Once installed, fast static and Markdown formatting hooks run on every `git commit`, while `unit-tests` runs on `git push` (`pre-push`). You can also execute either stage manually across the repository:
+Once installed, fast static, `mypy` type, and Markdown formatting hooks run on every `git commit`, while `unit-tests` runs on `git push` (`pre-push`). You can also execute either stage manually across the repository:
 
 ```sh
 pre-commit run --all-files
@@ -35,7 +35,7 @@ pre-commit run --hook-stage pre-push --all-files
 
 To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
 
-Run verification checks with `make` (`make check` delegates to `scripts/run_checks.py` to run Ruff linting, code formatting checks, package validation, and unit tests):
+Run verification checks with `make` (`make check` delegates to `scripts/run_checks.py` to run Ruff linting, code formatting checks, mypy static type checks, package validation, and unit tests):
 
 ```sh
 make check
@@ -53,20 +53,22 @@ To run the unit test suite:
 make test
 ```
 
-`make check` and `make fix` run Ruff automatically. For environments without `make` (including Windows), run the unified cross-platform runner or individual check commands:
+`make check` and `make fix` run Ruff automatically (`make check` also runs `mypy`). For environments without `make` (including Windows), run the unified cross-platform runner or individual check commands:
 
 ```sh
 # Full cross-platform check suite and targeted phases
 python scripts/run_checks.py
 python scripts/run_checks.py --phase lint
 python scripts/run_checks.py --phase format
+python scripts/run_checks.py --phase typecheck
 python scripts/run_checks.py --phase packages
 python scripts/run_checks.py --phase docs
 python scripts/run_checks.py --phase tests
 
-# Individual linting and verification commands
+# Individual linting, formatting, static type, and verification commands
 ruff check .
 ruff format --check .
+python -m mypy
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check
@@ -134,6 +136,8 @@ For optional local browser checks, install requirements-browser.txt and run
 Chromium needs ordinary process/socket support; if a managed environment prevents launch,
 record that limitation and use CI. Do not weaken the environment's restrictions.
 
-Before requesting a release, read docs/releasing.md and docs/licensing.md. No owner
-license, public release, real host certification, or quality benchmark should be inferred
-from this repository's package structure or fixture results.
+Before bumping `VERSION` for a release, read [docs/releasing.md](docs/releasing.md) and
+[docs/licensing.md](docs/licensing.md): merging an unpublished `VERSION` to `main`
+automatically tags `v<VERSION>` and publishes verified release archives under the MIT
+[LICENSE](LICENSE). Real host certification and broad model quality benchmarks should not
+be inferred from this repository's package structure or fixture results.

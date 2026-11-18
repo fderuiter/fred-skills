@@ -23,6 +23,8 @@ FIXTURE_PATH = ROOT / "tests/fixtures/audit-valid.json"
 SARIF_SCHEMA_PATH = ROOT / "tests/fixtures/sarif-schema-2.1.0.json"
 
 spec = importlib.util.spec_from_file_location("audit_to_sarif", SCRIPT_PATH)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Unable to load {SCRIPT_PATH}")
 audit_to_sarif_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit_to_sarif_mod)
 audit_to_sarif = audit_to_sarif_mod.audit_to_sarif
@@ -632,6 +634,41 @@ class AuditToSarifTests(unittest.TestCase):
         )
         self.assertEqual(500, len(sarif["runs"][0]["results"]))
         self.assertEqual(500, len(sarif["runs"][0]["tool"]["driver"]["rules"]))
+
+    def test_domain_artifacts_rejected_with_clear_audit_guidance(self):
+        payloads = {
+            "architecture.json": {
+                "schema_version": "1.0",
+                "title": "System Architecture",
+                "status": "draft",
+            },
+            "review.json": {
+                "schema_version": "1.0",
+                "verdict": "comment",
+                "summary": "Review summary",
+                "findings": [],
+            },
+            "testing.json": {
+                "schema_version": "1.0",
+                "component": "core",
+                "framework": "unittest",
+                "test_cases": [],
+            },
+        }
+        for filename, payload in payloads.items():
+            with self.subTest(artifact=filename):
+                with self.assertRaises(ValueError) as ctx:
+                    audit_to_sarif(payload)
+                self.assertIn("audit.json", str(ctx.exception))
+                self.assertIn(filename, str(ctx.exception))
+
+                dom_dir = self.temp_path / f"dom_{filename}"
+                dom_dir.mkdir()
+                (dom_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaises(ValueError) as dir_ctx:
+                    convert_file(dom_dir)
+                self.assertIn("audit.json", str(dir_ctx.exception))
+                self.assertIn(filename, str(dir_ctx.exception))
 
 
 class AuditToSarifSyncTests(unittest.TestCase):

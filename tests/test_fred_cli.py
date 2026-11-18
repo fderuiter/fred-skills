@@ -7,9 +7,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 
+pty: ModuleType | None
 try:
-    import pty
+    import pty as _pty
+
+    pty = _pty
 except ImportError:
     pty = None
 
@@ -265,14 +269,32 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("--pack", stdout)
 
         # Check host choices
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
             self.assertIn(host, stdout)
 
     def test_host_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("install", "--host", "invalid", "--destination", "/tmp")
         self.assertEqual(2, proc.returncode)
         self.assertIn("invalid choice: 'invalid'", proc.stderr)
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
             self.assertIn(host, proc.stderr)
 
         # Also verify without --destination (destination is optional)
@@ -286,12 +308,39 @@ class FredCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             proc = self.run_cli("install", cwd=tmp_dir)
             self.assertEqual(1, proc.returncode)
-            self.assertIn(
-                "No host markers (.claude, .agents, .gemini) found in destination",
-                proc.stderr,
-            )
+            self.assertIn("No host markers (", proc.stderr)
+            for marker in [
+                ".claude",
+                ".cursor",
+                ".agents",
+                ".gemini",
+                ".opencode",
+                ".windsurf",
+            ]:
+                self.assertIn(marker, proc.stderr)
             self.assertIn(str(Path(tmp_dir).resolve()), proc.stderr)
             self.assertIn("--host", proc.stderr)
+
+    def test_cli_install_succeeds_for_new_hosts_in_project_and_user_scopes(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            for host in ["cursor", "copilot", "opencode", "windsurf"]:
+                for scope in ["project", "user"]:
+                    dest = base / f"{host}-{scope}"
+                    proc = self.run_cli(
+                        "install",
+                        "--destination",
+                        str(dest),
+                        "--host",
+                        host,
+                        "--scope",
+                        scope,
+                        "--pack",
+                        "starter",
+                    )
+                    self.assertEqual(0, proc.returncode, proc.stderr)
 
     def test_task_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("plan", "/tmp", "--task", "invalid-task")
@@ -340,12 +389,23 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("Invocation", stdout)
 
         # Verify host entries
-        self.assertIn("codex", stdout)
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
+            self.assertIn(host, stdout)
         self.assertIn(".agents/skills", stdout)
-        self.assertIn("claude-code", stdout)
         self.assertIn(".claude/skills", stdout)
-        self.assertIn("antigravity", stdout)
-        self.assertIn("gemini-cli", stdout)
+        self.assertIn(".cursor/skills", stdout)
+        self.assertIn(".github/skills", stdout)
+        self.assertIn(".opencode/skills", stdout)
+        self.assertIn(".windsurf/skills", stdout)
 
     def test_discovery_packs_and_tasks_table_in_terminal(self):
         packs_proc = self.run_cli("packs", isatty=True)
@@ -996,6 +1056,127 @@ class FredCLITests(unittest.TestCase):
             for subcmd in ["rollback", "recover-install"]:
                 bad = self.run_cli(subcmd, "--force")
                 self.assertEqual(2, bad.returncode)
+
+    def test_domain_workflows_end_to_end_cli_and_audit_only_guardrails(self):
+        import shutil
+
+        if not shutil.which("git"):
+            self.skipTest("Git unavailable")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            repo = tmp_path / "sample_repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b\n")
+            for argv in [
+                ["init", "-q"],
+                ["config", "user.name", "Fixture"],
+                ["config", "user.email", "fixture@example.invalid"],
+                ["add", "."],
+                ["commit", "-qm", "initial"],
+            ]:
+                subprocess.run(["git", "-C", str(repo), *argv], check=True)
+            base_rev = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b + 0\n")
+
+            cases = [
+                ("design-architecture", [], "architecture.json"),
+                ("review-code-changes", ["--base", base_rev], "review.json"),
+                ("expand-automated-tests", [], "testing.json"),
+            ]
+            for task, extra_args, deliverable in cases:
+                with self.subTest(task=task):
+                    plan_proc = self.run_cli(
+                        "plan",
+                        str(repo),
+                        "--task",
+                        task,
+                        "--mode",
+                        "comprehensive",
+                        *extra_args,
+                        "--json",
+                    )
+                    self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
+                    plan_json = json.loads(plan_proc.stdout)["plan"]
+                    self.assertEqual(3, len(plan_json["skills"]))
+                    self.assertFalse(
+                        any(
+                            s.startswith("repo-audit-")
+                            for s in plan_json["skills"] + plan_json["deferred_skills"]
+                        )
+                    )
+
+                    ws = tmp_path / f"run-{task}"
+                    init_proc = self.run_cli(
+                        "init",
+                        str(repo),
+                        "--task",
+                        task,
+                        "--output",
+                        str(ws),
+                        *extra_args,
+                        "--json",
+                    )
+                    self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+                    self.assertTrue((ws / deliverable).is_file())
+                    self.assertTrue((ws / "prompt.md").is_file())
+
+                    val_proc = self.run_cli("validate-run", str(ws))
+                    self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+                    # Report on workspace directory and on JSON file directly
+                    rep_dir_html = tmp_path / f"report-dir-{task}.html"
+                    rep_proc1 = self.run_cli(
+                        "report", str(ws), "--output", str(rep_dir_html)
+                    )
+                    self.assertEqual(0, rep_proc1.returncode, rep_proc1.stderr)
+                    self.assertTrue(rep_dir_html.is_file())
+
+                    rep_file_html = tmp_path / f"report-file-{task}.html"
+                    rep_proc2 = self.run_cli(
+                        "report",
+                        str(ws / deliverable),
+                        "--output",
+                        str(rep_file_html),
+                    )
+                    self.assertEqual(0, rep_proc2.returncode, rep_proc2.stderr)
+                    self.assertTrue(rep_file_html.is_file())
+
+                    # Audit-only commands fail with exit code 1 and clear audit.json guidance
+                    iss_proc = self.run_cli(
+                        "issues", str(ws), "--output", str(tmp_path / f"iss-{task}")
+                    )
+                    self.assertEqual(1, iss_proc.returncode)
+                    self.assertIn("audit.json", iss_proc.stderr)
+
+                    sarif_proc = self.run_cli(
+                        "export-sarif",
+                        str(ws),
+                        "--output",
+                        str(tmp_path / f"{task}.sarif"),
+                    )
+                    self.assertEqual(1, sarif_proc.returncode)
+                    self.assertIn("audit.json", sarif_proc.stderr)
+
+                    cmp_proc = self.run_cli(
+                        "compare", str(ws / deliverable), str(ws / deliverable)
+                    )
+                    self.assertEqual(1, cmp_proc.returncode)
+                    self.assertIn("audit.json", cmp_proc.stderr)
+
+                    rec_proc = self.run_cli(
+                        "reconcile",
+                        str(ws),
+                        "--finding",
+                        "F-1",
+                        "--state",
+                        "open",
+                        "--note",
+                        "note",
+                    )
+                    self.assertEqual(1, rec_proc.returncode)
+                    self.assertIn("audit.json", rec_proc.stderr)
 
 
 class FredDispatchRegistryTests(unittest.TestCase):

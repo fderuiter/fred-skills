@@ -233,7 +233,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover all 32 code blocks in docs/integration.md",
         )
 
-    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self):
+    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self) -> None:
         """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
         errors = verify_toolkit_subcommands(root=ROOT)
         self.assertEqual(
@@ -338,22 +338,26 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("run_checks.py failed", msg)
 
-    def test_repeated_readonly_subprocess_checks_are_cached(self):
+    def test_repeated_readonly_subprocess_checks_are_cached(self) -> None:
         """Repeated read-only subprocess checks in verify_doc_snippets execute once and hit cache."""
         clear_subprocess_cache()
         real_run = subprocess.run
         spawned: list[list[str]] = []
 
-        def counting_run(cmd, *args, **kwargs):
+        def counting_run(
+            cmd: list[str], *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             spawned.append(list(cmd))
-            return real_run(cmd, *args, **kwargs)
+            return real_run(cmd, *args, **kwargs)  # type: ignore[call-overload,no-any-return]
 
         commands = [
             "ruff check .",
             "ruff format --check .",
+            "python -m mypy",
             "python scripts/sync_audit_resources.py --check",
             "python scripts/validate_skills.py",
             "python scripts/run_checks.py --phase lint",
+            "python scripts/run_checks.py --phase typecheck",
         ]
         try:
             with patch("verify_doc_snippets.subprocess.run", side_effect=counting_run):
