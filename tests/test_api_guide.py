@@ -92,6 +92,11 @@ class ApiGuideTests(unittest.TestCase):
 
     def test_private_helpers_are_not_publicly_documented(self):
         self.assertNotIn("### `_receipt_identifies_host`", self.api_text)
+        self.assertNotIn("### `_parse_sarif_uri`", self.api_text)
+        self.assertIn(
+            "def import_sarif(path: Path, root: Path | None = None) -> dict",
+            self.api_text,
+        )
 
     def test_cross_references_in_guides(self):
         toolkit_path = ROOT / "docs/toolkit.md"

@@ -656,6 +656,82 @@ class FredCLITests(unittest.TestCase):
                 "Audit ledger 'audit.json' not found in directory", proc3.stderr
             )
 
+    def test_import_sarif_with_optional_root(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_dir = Path(tmp_dir) / "repo"
+            repo_dir.mkdir()
+            src_file = repo_dir / "app.py"
+            src_file.write_text("x = 1\n", encoding="utf-8")
+            outside_file = Path(tmp_dir) / "outside.py"
+            outside_file.write_text("y = 2\n", encoding="utf-8")
+
+            sarif_doc = {
+                "version": "2.1.0",
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "name": "semgrep",
+                                "version": "1.90.0",
+                                "rules": [
+                                    {
+                                        "id": "py.check",
+                                        "defaultConfiguration": {"level": "error"},
+                                    }
+                                ],
+                            }
+                        },
+                        "results": [
+                            {
+                                "ruleId": "py.check",
+                                "message": {"text": "found issue"},
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {
+                                                "uri": src_file.resolve().as_uri()
+                                            },
+                                            "region": {"startLine": 1, "endLine": 1},
+                                        },
+                                        "logicalLocations": [{"name": "main"}],
+                                    },
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {
+                                                "uri": outside_file.resolve().as_uri()
+                                            },
+                                            "region": {"startLine": 1},
+                                        }
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+            sarif_path = Path(tmp_dir) / "scan.sarif"
+            sarif_path.write_text(json.dumps(sarif_doc), encoding="utf-8")
+            out_path = Path(tmp_dir) / "observations.json"
+
+            proc = self.run_cli(
+                "import-sarif",
+                str(sarif_path),
+                "--root",
+                str(repo_dir),
+                "--output",
+                str(out_path),
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            imported = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual("error", imported["observations"][0]["reported_level"])
+            self.assertEqual(
+                [{"path": "app.py", "line": 1, "end_line": 1, "symbol": "main"}],
+                imported["observations"][0]["locations"],
+            )
+
     def test_installed_table_in_terminal(self):
         import tempfile
 

@@ -337,16 +337,17 @@ Generates a portable memory ledger extracting contracts, evidence hashes, and fi
 ### `import_sarif`
 
 ```python
-def import_sarif(path: Path) -> dict
+def import_sarif(path: Path, root: Path | None = None) -> dict
 ```
 
-Imports static analysis observations from a SARIF JSON file, normalizing file URIs and sanitizing relative paths.
+Imports static analysis observations from a SARIF JSON file, normalizing `file://` URIs against SARIF base metadata or an optional repository root, inheriting rule severity levels, and sanitizing relative paths.
 
 - **Parameters:**
   - `path` (`Path`): Path to the SARIF file.
+  - `root` (`Path | None`, default: `None`): Optional repository root directory used to resolve `file://` URIs and reject out-of-tree paths.
 - **Returns:** `dict` — Schema 1.0 imported observation ledger containing:
   - `"schema_version"`: `"1.0"`
-  - `"observations"`: List of normalized observation records (`tool`, `tool_version`, `rule`, `reported_level`, `message`, `locations`, `evidence_state`).
+  - `"observations"`: List of normalized observation records (`tool`, `tool_version`, `rule`, `reported_level`, `message`, `locations`, `evidence_state`, plus optional `security_severity`, `fingerprints`, and `partial_fingerprints`).
   - `"limitations"`: Explicit caveats indicating scanner claims require agent verification.
 - **Exceptions:** None.
 
