@@ -103,6 +103,11 @@ def build_phase_commands(
             ],
             [python_executable, str(scripts_dir / "build_catalog.py"), "--check"],
             [python_executable, str(scripts_dir / "build_experience.py"), "--check"],
+            [
+                python_executable,
+                str(scripts_dir / "verify_workflow_actions.py"),
+                "--check",
+            ],
             validate_cmd,
         ]
     if phase == "docs":

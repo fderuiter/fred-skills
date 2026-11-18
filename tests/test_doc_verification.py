@@ -369,6 +369,75 @@ class DocSnippetVerificationTests(unittest.TestCase):
         finally:
             clear_subprocess_cache()
 
+    def test_marketplace_plugin_install_validation(self):
+        """Marketplace registration and plugin install commands validate against .claude-plugin/marketplace.json."""
+        valid_cmds = [
+            "/plugin marketplace add fderuiter/fred-skills",
+            "/plugin install complete@fred-skills",
+            "/plugin install starter@fred-skills",
+            "/plugin install repo-audit-concurrency@fred-skills",
+            "codex plugin marketplace add fderuiter/fred-skills",
+            "codex plugin add starter@fred-skills",
+            "codex plugin add complete@fred-skills",
+            "codex plugin add repo-audit-concurrency@fred-skills",
+        ]
+        for cmd in valid_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(ok, f"Expected valid marketplace command '{cmd}': {msg}")
+
+        invalid_cmds = [
+            ("/plugin install unknown-pack@fred-skills", "Unknown marketplace plugin"),
+            (
+                "codex plugin add unknown-skill@fred-skills",
+                "Unknown marketplace plugin",
+            ),
+            ("/plugin install complete@other-market", "Unexpected marketplace"),
+            ("/plugin install complete", "requires '<name>@fred-skills'"),
+            ("codex plugin add starter", "requires '<name>@fred-skills'"),
+            ("/plugin marketplace add other/repo", "Unexpected plugin id"),
+            ("/plugin remove complete@fred-skills", "Unsupported marketplace plugin"),
+            (
+                "codex plugin install starter@fred-skills",
+                "Unsupported marketplace plugin",
+            ),
+        ]
+        for cmd, expected_err in invalid_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(
+                ok, f"Expected invalid marketplace command '{cmd}' to fail"
+            )
+            self.assertIn(expected_err, msg)
+
+    def test_incomplete_marketplace_add_blocks_rejected(self):
+        """Marketplace add blocks in README.md, docs/usage.md, and docs/integration.md must include an install step."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            (tmp_root / ".claude-plugin").mkdir(parents=True)
+            (tmp_root / ".claude-plugin/marketplace.json").write_bytes(
+                (ROOT / ".claude-plugin/marketplace.json").read_bytes()
+            )
+            (tmp_root / "docs").mkdir(parents=True)
+            for rel_path in ("README.md", "docs/usage.md", "docs/integration.md"):
+                content = (ROOT / rel_path).read_text(encoding="utf-8")
+                stripped = "\n".join(
+                    line
+                    for line in content.splitlines()
+                    if "/plugin install " not in line
+                    and "codex plugin add " not in line
+                )
+                (tmp_root / rel_path).write_text(stripped + "\n", encoding="utf-8")
+
+            for rel_path in ("README.md", "docs/usage.md", "docs/integration.md"):
+                errors = verify_all_snippets(root=tmp_root, files=[rel_path])
+                self.assertTrue(
+                    any("missing '/plugin install" in err for err in errors),
+                    f"Expected missing Claude install error for {rel_path}, got: {errors}",
+                )
+                self.assertTrue(
+                    any("missing 'codex plugin add" in err for err in errors),
+                    f"Expected missing Codex install error for {rel_path}, got: {errors}",
+                )
+
     def test_line_range_filtering(self):
         """Blocks outside the specified range are ignored."""
         readme = ROOT / "README.md"

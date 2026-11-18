@@ -30,11 +30,15 @@ OpenAI Codex discovers skills stored in the `.agents/skills` directory.
 - **User Scope**: `<user-home>/.agents/skills/<skill-name>/`
 
 #### Installation Commands
-Install skills using the Codex marketplace command or the local toolkit CLI:
+Register the marketplace catalog and install a curated pack or individual skill, or use the local toolkit CLI:
 
-1. **Marketplace install**:
+1. **Marketplace install (pack or individual skill)**:
    ```sh
    codex plugin marketplace add fderuiter/fred-skills
+   codex plugin add starter@fred-skills
+   # Or install all 51 skills or one specialist:
+   codex plugin add complete@fred-skills
+   codex plugin add repo-audit-concurrency@fred-skills
    ```
 
 2. **Toolkit CLI (Project Scope)**:
@@ -75,9 +79,15 @@ Claude Code discovers skills stored in the `.claude/skills` directory.
 - **User Scope**: `<user-home>/.claude/skills/<skill-name>/`
 
 #### Installation Commands
-1. **Marketplace install**:
+Register the marketplace catalog and install a curated pack or individual skill, or use the local toolkit CLI:
+
+1. **Marketplace install (pack or individual skill)**:
    ```sh
    /plugin marketplace add fderuiter/fred-skills
+   /plugin install complete@fred-skills
+   # Or install the starter pack or one specialist:
+   /plugin install starter@fred-skills
+   /plugin install repo-audit-concurrency@fred-skills
    ```
 
 2. **Toolkit CLI (Project Scope)**:
