@@ -449,7 +449,7 @@ Reads the installation receipt and resolves host harness target paths for a targ
   - `host` (`str | None`, default: `None`): Agent host identifier, or `None` to auto-detect.
   - `scope` (`str`, default: `"project"`): Target scope (`"project"` or `"user"`).
   - `root` (`Path`, default: repository root): Toolkit root directory.
-- **Returns:** `dict` — Installation status dictionary containing `"destination"`, `"target"`, `"state"`, `"host"`, `"scope"`, and `"skills"`.
+- **Returns:** `dict` — Installation status dictionary containing `"destination"`, `"target"`, `"state"`, `"host"`, `"scope"`, `"skills"` (each entry enriched with `"status"` as `"tracked"`, `"modified"`, or `"missing"`), `"untracked"` (`list[str]` of unmanaged `SKILL.md` directories), `"locked"` (`bool`), and `"healthy"` (`bool`).
 - **Exceptions:**
   - `ValueError`: Raised if multiple host receipts or markers exist without an explicit `host` parameter, or if `scope` or `host` is unknown.
 
@@ -500,6 +500,7 @@ def install(
     skills: list[str] | None = None,
     update: bool = False,
     dry_run: bool = False,
+    force: bool = False,
     root: Path = ROOT,
 ) -> dict
 ```
@@ -514,10 +515,11 @@ Installs or updates skills into the destination environment using a two-phase jo
   - `skills` (`list[str] | None`, default: `None`): Explicit list of skill names to install.
   - `update` (`bool`, default: `False`): Whether to allow replacing existing managed skills.
   - `dry_run` (`bool`, default: `False`): If `True`, returns planned operations without writing changes.
+  - `force` (`bool`, default: `False`): If `True`, archives modified managed folders under `.fred-skills/<host>-<scope>/backups/` and repairs modified or missing managed skills without touching `untracked` user directories.
   - `root` (`Path`, default: repository root): Toolkit root directory.
 - **Returns:** `dict` — Installation outcome summary with `"action"`, `"skills"`, `"host"`, `"scope"`, `"target"`, `"dry_run"`, `"source_version"`, and `"runtime_behavior_verified"`.
 - **Exceptions:**
-  - `ValueError`: Raised if host cannot be detected; if skills are already installed and `update=False`; if unmanaged or locally modified skills are encountered; or if lock cannot be acquired.
+  - `ValueError`: Raised if host cannot be detected; if skills are already installed and both `update=False` and `force=False`; if unmanaged skills are encountered; if locally modified or missing managed skills are encountered with `force=False`; or if lock cannot be acquired.
 
 ---
 
@@ -530,6 +532,7 @@ def remove(
     scope: str = "project",
     skills: list[str] | None = None,
     dry_run: bool = False,
+    force: bool = False,
     root: Path = ROOT,
 ) -> dict
 ```
@@ -542,10 +545,11 @@ Removes managed skills from the destination environment, archiving previous pack
   - `scope` (`str`, default: `"project"`): Installation scope.
   - `skills` (`list[str] | None`, default: `None`): List of skill names to remove.
   - `dry_run` (`bool`, default: `False`): If `True`, returns preview without removing packages.
+  - `force` (`bool`, default: `False`): If `True`, archives any remaining modified managed folders to backups and removes modified or missing managed skills from `receipt.json`.
   - `root` (`Path`, default: repository root): Toolkit root.
 - **Returns:** `dict` — Removal outcome dictionary with `"action"`, `"skills"`, and `"dry_run"`.
 - **Exceptions:**
-  - `ValueError`: Raised if target skills are not managed by the receipt, or if skills were locally modified.
+  - `ValueError`: Raised if target skills are not managed by the receipt, or if managed skills were locally modified or missing with `force=False`.
 
 ---
 

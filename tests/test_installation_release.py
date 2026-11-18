@@ -800,6 +800,202 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(expected_before, (target / "sample/SKILL.md").read_bytes())
         self.assertFalse((state / "operation.lock").exists())
 
+    def test_query_installed_reports_tracked_modified_missing_and_untracked(self):
+        self.install()
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        res_clean = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertTrue(res_clean["healthy"])
+        self.assertFalse(res_clean["locked"])
+        self.assertEqual([], res_clean["untracked"])
+        self.assertEqual("tracked", res_clean["skills"]["sample"]["status"])
+        self.assertEqual("tracked", res_clean["skills"]["other"]["status"])
+
+        # Edit sample, delete other, add untracked skill and non-skill directory
+        (target / "sample/SKILL.md").write_text("Edited on disk")
+        shutil.rmtree(target / "other")
+        (target / "custom-local").mkdir(parents=True)
+        (target / "custom-local/SKILL.md").write_text("Local custom skill")
+        (target / "not-a-skill").mkdir(parents=True)
+        (target / "not-a-skill/README.md").write_text("Not a skill")
+
+        res_drift = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertFalse(res_drift["healthy"])
+        self.assertFalse(res_drift["locked"])
+        self.assertEqual("modified", res_drift["skills"]["sample"]["status"])
+        self.assertEqual("missing", res_drift["skills"]["other"]["status"])
+        self.assertEqual(["custom-local"], res_drift["untracked"])
+        # Existing metadata keys remain intact
+        self.assertEqual("0.2.0", res_drift["skills"]["sample"]["source_version"])
+        self.assertIn("content_hash", res_drift["skills"]["sample"])
+
+    def test_query_installed_detects_operation_lock_as_unhealthy(self):
+        self.install()
+        _, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (state / "operation.lock").write_text("active")
+        res = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertTrue(res["locked"])
+        self.assertFalse(res["healthy"])
+        self.assertEqual("tracked", res["skills"]["sample"]["status"])
+
+    def test_require_unmodified_errors_guide_to_force_flag(self):
+        self.install()
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        rec = installation.receipt(state)["skills"]["sample"]
+        (target / "sample/SKILL.md").write_text("Drifted content")
+        with self.assertRaises(ValueError) as mod_ctx:
+            installation.require_unmodified(target / "sample", rec)
+        self.assertIn("Locally modified skill: sample", str(mod_ctx.exception))
+        self.assertIn("--force", str(mod_ctx.exception))
+
+        shutil.rmtree(target / "sample")
+        with self.assertRaises(ValueError) as miss_ctx:
+            installation.require_unmodified(target / "sample", rec)
+        self.assertIn("Managed skill is missing: sample", str(miss_ctx.exception))
+        self.assertIn("--force", str(miss_ctx.exception))
+
+    def test_install_and_update_force_archive_edits_and_restore_deleted_skills(self):
+        dest = self.root / "claude-force-project"
+        installation.install(dest, host="claude-code", pack="starter", root=self.source)
+        target, state = installation.locations(
+            dest, "claude-code", "project", self.source
+        )
+        (target / "sample/SKILL.md").write_text("Operator custom edit")
+        shutil.rmtree(target / "other")
+        (target / "user-local").mkdir(parents=True)
+        (target / "user-local/SKILL.md").write_text("Untracked user skill")
+
+        installation.install(
+            dest,
+            host="claude-code",
+            pack="starter",
+            update=True,
+            force=True,
+            root=self.source,
+        )
+        archived = list((state / "backups").glob("*/sample/SKILL.md"))
+        self.assertTrue(any(p.read_text() == "Operator custom edit" for p in archived))
+        self.assertEqual(
+            "Synthetic package sample", (target / "sample/SKILL.md").read_text()
+        )
+        self.assertEqual(
+            "Synthetic package other", (target / "other/SKILL.md").read_text()
+        )
+        self.assertEqual(
+            "Untracked user skill", (target / "user-local/SKILL.md").read_text()
+        )
+        res_after_update = installation.query_installed(
+            dest, "claude-code", "project", root=self.source
+        )
+        self.assertTrue(res_after_update["healthy"])
+        self.assertEqual(["user-local"], res_after_update["untracked"])
+
+        # Delete entire .claude/skills target and repair with install --force
+        shutil.rmtree(target)
+        installation.install(
+            dest,
+            host="claude-code",
+            pack="starter",
+            force=True,
+            root=self.source,
+        )
+        res_after_install = installation.query_installed(
+            dest, "claude-code", "project", root=self.source
+        )
+        self.assertTrue(res_after_install["healthy"])
+        self.assertEqual("tracked", res_after_install["skills"]["sample"]["status"])
+        self.assertEqual("tracked", res_after_install["skills"]["other"]["status"])
+
+    def test_remove_force_archives_modified_and_removes_missing_skills(self):
+        self.install()
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (target / "sample/SKILL.md").write_text("Edited before uninstall")
+        shutil.rmtree(target / "other")
+        (target / "untracked-keep").mkdir(parents=True)
+        (target / "untracked-keep/SKILL.md").write_text("Keep me")
+
+        installation.remove(
+            self.destination,
+            host="codex",
+            scope="project",
+            skills=["sample", "other"],
+            force=True,
+            root=self.source,
+        )
+        archived = list((state / "backups").glob("*/sample/SKILL.md"))
+        self.assertTrue(
+            any(p.read_text() == "Edited before uninstall" for p in archived)
+        )
+        rec = installation.receipt(state)
+        self.assertEqual({}, rec["skills"])
+        self.assertEqual("Keep me", (target / "untracked-keep/SKILL.md").read_text())
+
+    def test_force_never_touches_untracked_or_symlink_targets(self):
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (target / "sample").mkdir(parents=True)
+        (target / "sample/SKILL.md").write_text("User unmanaged skill")
+        with self.assertRaises(ValueError) as ctx1:
+            installation.install(
+                self.destination,
+                host="codex",
+                pack="starter",
+                force=True,
+                root=self.source,
+            )
+        self.assertIn("Refusing to replace unmanaged skill", str(ctx1.exception))
+        self.assertEqual(
+            "User unmanaged skill", (target / "sample/SKILL.md").read_text()
+        )
+
+        with self.assertRaises(ValueError) as ctx2:
+            installation.remove(
+                self.destination,
+                host="codex",
+                skills=["sample"],
+                force=True,
+                root=self.source,
+            )
+        self.assertIn("Not managed by this installation", str(ctx2.exception))
+        self.assertEqual(
+            "User unmanaged skill", (target / "sample/SKILL.md").read_text()
+        )
+
+        shutil.rmtree(target / "sample")
+        self.install()
+        shutil.rmtree(target / "sample")
+        outside = self.root / "outside_dir"
+        outside.mkdir(parents=True)
+        (outside / "SKILL.md").write_text("Outside")
+        try:
+            (target / "sample").symlink_to(outside, target_is_directory=True)
+        except OSError:
+            return
+        with self.assertRaises(ValueError) as sym_ctx:
+            installation.install(
+                self.destination,
+                host="codex",
+                pack="starter",
+                update=True,
+                force=True,
+                root=self.source,
+            )
+        self.assertIn("Unsafe installed package path", str(sym_ctx.exception))
+
     def test_installation_cyclomatic_complexity_under_ten(self):
         import ast
 
