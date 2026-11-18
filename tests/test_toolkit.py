@@ -84,6 +84,10 @@ class RunTests(unittest.TestCase):
             runs.plan(self.repo, "review-pr", mode="changes")
         with self.assertRaises(ValueError):
             runs.plan(self.repo, "review-pr", mode="changes", base="--evil")
+        with self.assertRaises(ValueError):
+            runs.plan(self.repo, "review-code-changes", mode="changes")
+        with self.assertRaises(ValueError):
+            runs.plan(self.repo, "review-code-changes", mode="changes", base="--evil")
 
     @unittest.skipUnless(shutil.which("git"), "Git unavailable")
     def test_git_diff_planning_includes_committed_and_dirty_changes(self):

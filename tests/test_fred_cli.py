@@ -360,6 +360,9 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("Task", tasks_proc.stdout)
         self.assertIn("Outcome", tasks_proc.stdout)
         self.assertIn("review-pr", tasks_proc.stdout)
+        self.assertIn("design-architecture", tasks_proc.stdout)
+        self.assertIn("review-code-changes", tasks_proc.stdout)
+        self.assertIn("expand-automated-tests", tasks_proc.stdout)
 
         search_proc = self.run_cli("search", "contracts", isatty=True)
         self.assertEqual(0, search_proc.returncode)

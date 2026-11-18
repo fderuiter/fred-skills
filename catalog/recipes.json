@@ -274,6 +274,60 @@
         "audit.json",
         "continuation or implementation handoff"
       ]
+    },
+    "design-architecture": {
+      "outcome": "Record architecture decisions, specify system boundaries, and decompose components.",
+      "skills": [
+        "arch-decision-record",
+        "arch-boundary-specification",
+        "arch-component-decomposition"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "System boundaries, architectural decisions, and component decomposition"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "review-code-changes": {
+      "outcome": "Review pull request changes, verify invariants, and synthesize feedback.",
+      "skills": [
+        "review-diff-analysis",
+        "review-invariant-violations",
+        "review-actionable-feedback"
+      ],
+      "requires_base": true,
+      "workflows": [
+        "Modified files, contract invariants, and differential review feedback"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
+    },
+    "expand-automated-tests": {
+      "outcome": "Detect test gaps, generate regression tests, and verify test suite coverage.",
+      "skills": [
+        "test-gap-analysis",
+        "test-case-generation",
+        "test-suite-verification"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Uncovered execution paths, generated test cases, and test suite verification"
+      ],
+      "outputs": [
+        "audit.json",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
     }
   }
 }
