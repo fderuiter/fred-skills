@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Regression Specification Output Format Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "finding_id",
+    "failure_boundaries",
+    "test_command_traces",
+    "assertion_expectations"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "finding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "test_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "failure_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "failure_boundary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "test_command_traces": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "exit_code": {
+                "type": "integer"
+              },
+              "output": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "command_traces": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "assertion_expectations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "expected"
+            ],
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "expected": {
+                "type": "string",
+                "minLength": 1
+              },
+              "actual": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

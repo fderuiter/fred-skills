@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Applied Correction Output Format Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "file_changes",
+    "diff_summaries",
+    "execution_results",
+    "compatibility_limits"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "finding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "before_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "after_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "file_changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "modified",
+                  "added",
+                  "deleted"
+                ]
+              },
+              "additions": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deletions": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      }
+    },
+    "diff_summaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "summary"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      }
+    },
+    "diff_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "execution_results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "exit_code",
+          "passed"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "output": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "compatibility_limits": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

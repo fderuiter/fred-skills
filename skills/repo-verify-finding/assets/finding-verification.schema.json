@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Finding Verification Output Format Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "finding_id",
+    "reproduction_status",
+    "safe_control_outcomes",
+    "confidence_rating"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "finding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reproduction_status": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "statically-supported",
+        "needs-validation",
+        "hardening",
+        "refuted"
+      ]
+    },
+    "safe_control_outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "control",
+          "passed"
+        ],
+        "properties": {
+          "control": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "confidence_rating": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "result": {
+      "type": "string"
+    },
+    "reproduced": {
+      "type": "boolean"
+    },
+    "safe_controls_passed": {
+      "type": "boolean"
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}
