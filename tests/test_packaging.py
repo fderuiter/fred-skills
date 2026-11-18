@@ -15,6 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_catalog import build
 from package_skills import get_suite_skills
+from run_checks import (
+    ALL_PHASES,
+    DEFAULT_PHASES,
+    build_check_env,
+    build_phase_commands,
+    resolve_phases,
+    run_checks,
+)
 from skill_tools import build_outputs
 from sync_audit_resources import sync
 from validate_skills import validate_skill, validate_with_telemetry
@@ -311,6 +319,10 @@ class PackageTests(unittest.TestCase):
         with config_path.open("r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         self.assertIn("repos", config)
+        self.assertEqual(
+            config.get("default_install_hook_types"), ["pre-commit", "pre-push"]
+        )
+        self.assertEqual(config.get("default_stages"), ["pre-commit"])
         local_repos = [r for r in config["repos"] if r.get("repo") == "local"]
         self.assertTrue(local_repos)
         hooks = {h["id"]: h for h in local_repos[0].get("hooks", [])}
@@ -325,6 +337,7 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(hooks[hook_id].get("language"), "system")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
             self.assertTrue(hooks[hook_id].get("always_run", False))
+        self.assertEqual(hooks["unit-tests"].get("stages"), ["pre-push"])
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
@@ -349,11 +362,52 @@ class PackageTests(unittest.TestCase):
         validate_steps = (
             validate_wf.get("jobs", {}).get("validate", {}).get("steps", [])
         )
-        self.assertTrue(
-            any(
-                "pre-commit run --all-files" in s.get("run", "") for s in validate_steps
+        pre_commit_steps = [
+            s
+            for s in validate_steps
+            if "pre-commit run --all-files" in s.get("run", "")
+        ]
+        self.assertEqual(
+            1,
+            len(pre_commit_steps),
+            "validate.yml must execute pre-commit run --all-files once",
+        )
+        skip_ids = set(pre_commit_steps[0].get("env", {}).get("SKIP", "").split(","))
+        for skipped_hook in [
+            "ruff-lint",
+            "sync-audit-resources",
+            "build-catalog",
+            "build-experience",
+            "validate-skills",
+            "check-doc-links",
+            "verify-doc-snippets",
+            "unit-tests",
+        ]:
+            self.assertIn(skipped_hook, skip_ids)
+        self.assertNotIn("ruff-format", skip_ids)
+
+        run_cmds = [s.get("run", "") for s in validate_steps]
+        for phase in ["lint", "packages", "tests"]:
+            self.assertTrue(
+                any(
+                    f"scripts/run_checks.py --phase {phase}" in cmd for cmd in run_cmds
+                ),
+                f"validate.yml must run dedicated '{phase}' phase step",
+            )
+        self.assertEqual(
+            1,
+            sum(
+                1
+                for cmd in run_cmds
+                if "scripts/run_checks.py --phase tests" in cmd or "unittest" in cmd
             ),
-            "validate.yml must execute pre-commit run --all-files",
+            "validate.yml must execute unittest once per job",
+        )
+        make_steps = [s for s in validate_steps if "make -n check" in s.get("run", "")]
+        self.assertEqual(1, len(make_steps))
+        self.assertEqual(make_steps[0].get("if"), "runner.os != 'Windows'")
+        self.assertFalse(
+            any("Windows fallback" in s.get("name", "") for s in validate_steps)
         )
 
     def test_makefile_target_definitions(self):
@@ -368,11 +422,11 @@ class PackageTests(unittest.TestCase):
                 f"Target {target} must be defined",
             )
         self.assertIn("RUFF ?= ruff", content)
+        self.assertIn("scripts/run_checks.py", content)
+        self.assertNotIn("validation-telemetry.json", content)
         self.assertIn("scripts/sync_audit_resources.py", content)
         self.assertIn("scripts/build_catalog.py", content)
-        self.assertIn("scripts/validate_skills.py", content)
-        self.assertIn("scripts/check_doc_links.py", content)
-        self.assertIn("scripts/verify_doc_snippets.py", content)
+        self.assertIn("scripts/build_experience.py", content)
         self.assertIn("unittest", content)
 
     def test_makefile_dry_run_execution(self):
@@ -393,15 +447,8 @@ class PackageTests(unittest.TestCase):
             )
             output = result.stdout
             if target == "check":
-                self.assertIn("ruff check .", output)
-                self.assertIn("ruff format --check .", output)
-                self.assertIn("scripts/sync_audit_resources.py", output)
-                self.assertIn("--check", output)
-                self.assertIn("scripts/build_catalog.py", output)
-                self.assertIn("scripts/validate_skills.py", output)
-                self.assertIn("scripts/check_doc_links.py", output)
-                self.assertIn("scripts/verify_doc_snippets.py", output)
-                self.assertIn("unittest", output)
+                self.assertIn("scripts/run_checks.py", output)
+                self.assertNotIn("validation-telemetry.json", output)
             elif target == "fix":
                 self.assertIn("ruff format .", output)
                 self.assertIn("ruff check --fix .", output)
@@ -418,9 +465,80 @@ class PackageTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(default_result.returncode, 0)
-        self.assertIn("ruff check .", default_result.stdout)
-        self.assertIn("ruff format --check .", default_result.stdout)
-        self.assertIn("scripts/validate_skills.py", default_result.stdout)
+        self.assertIn("scripts/run_checks.py", default_result.stdout)
+
+    def test_run_checks_phase_resolution_and_doc_omission(self):
+        self.assertEqual(("lint", "format", "packages", "docs", "tests"), ALL_PHASES)
+        self.assertEqual(("lint", "format", "packages", "tests"), DEFAULT_PHASES)
+        self.assertEqual(["lint", "format", "packages", "tests"], resolve_phases())
+        self.assertNotIn("docs", resolve_phases())
+        self.assertEqual(["docs"], resolve_phases(["docs"]))
+        self.assertEqual(["lint", "tests"], resolve_phases(["tests", "lint", "lint"]))
+        with self.assertRaises(ValueError):
+            resolve_phases(["unknown-phase"])
+
+    def test_run_checks_enforces_no_bytecode_and_opt_in_telemetry(self):
+        env = build_check_env({"PYTHONDONTWRITEBYTECODE": "0"})
+        self.assertEqual("1", env["PYTHONDONTWRITEBYTECODE"])
+        self.assertEqual("utf-8", env["PYTHONIOENCODING"])
+
+        default_pkg_cmds = build_phase_commands("packages", root=ROOT)
+        self.assertEqual(4, len(default_pkg_cmds))
+        self.assertFalse(
+            any("--telemetry" in cmd for cmd in default_pkg_cmds),
+            "Default packages phase must not emit validation-telemetry.json",
+        )
+
+        telemetry_pkg_cmds = build_phase_commands(
+            "packages", root=ROOT, telemetry_path="custom-telemetry.json"
+        )
+        self.assertIn("--telemetry", telemetry_pkg_cmds[-1])
+        self.assertIn("custom-telemetry.json", telemetry_pkg_cmds[-1])
+
+        docs_cmds = build_phase_commands("docs", root=ROOT)
+        self.assertEqual(2, len(docs_cmds))
+        self.assertTrue(docs_cmds[0][-1].endswith("check_doc_links.py"))
+        self.assertTrue(docs_cmds[1][-1].endswith("verify_doc_snippets.py"))
+
+    def test_run_checks_dry_run_and_failure_isolation(self):
+        dry = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/run_checks.py"), "--dry-run"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, dry.returncode, dry.stderr)
+        self.assertIn("[dry-run:lint]", dry.stdout)
+        self.assertIn("[dry-run:format]", dry.stdout)
+        self.assertIn("[dry-run:packages]", dry.stdout)
+        self.assertIn("[dry-run:tests]", dry.stdout)
+        self.assertNotIn("[dry-run:docs]", dry.stdout)
+
+        invoked: list[tuple[list[str], dict[str, str]]] = []
+
+        def fake_run(cmd, cwd=None, env=None, check=False):
+            invoked.append((list(cmd), dict(env or {})))
+            return subprocess.CompletedProcess(cmd, returncode=2)
+
+        import contextlib
+        import io
+
+        out_buf, err_buf = io.StringIO(), io.StringIO()
+        with (
+            patch("run_checks.subprocess.run", side_effect=fake_run),
+            contextlib.redirect_stdout(out_buf),
+            contextlib.redirect_stderr(err_buf),
+        ):
+            rc = run_checks(
+                phases=["lint", "tests"],
+                root=ROOT,
+                env={"PYTHONDONTWRITEBYTECODE": "0"},
+            )
+        self.assertEqual(2, rc)
+        self.assertEqual(1, len(invoked))
+        self.assertEqual("1", invoked[0][1]["PYTHONDONTWRITEBYTECODE"])
+        self.assertIn("FAILED: phase 'lint'", err_buf.getvalue())
 
     def test_documentation_files_state_accurate_package_count(self):
         suites_doc = json.loads(

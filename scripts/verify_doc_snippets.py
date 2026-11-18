@@ -30,7 +30,7 @@ except ImportError:
 # Line ranges for acceptance criteria verification
 DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = {
     "README.md": (27, 122),
-    "CONTRIBUTING.md": (22, 73),
+    "CONTRIBUTING.md": (22, 83),
     "AGENTS.md": (24, 52),
     "docs/toolkit.md": (10, 195),
     "docs/usage.md": (24, 127),
@@ -390,6 +390,49 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
 
 ToolHandler = Callable[[list[str], Path, str], tuple[bool, str]]
 
+_SUBPROCESS_CACHE: dict[
+    tuple[tuple[str, ...], str], subprocess.CompletedProcess[str]
+] = {}
+
+
+def clear_subprocess_cache() -> None:
+    """Clear cached read-only subprocess check results."""
+    _SUBPROCESS_CACHE.clear()
+
+
+def _run_cached_subprocess(
+    cmd: list[str],
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a read-only subprocess check once per (argv, cwd) and cache it."""
+    cwd_key = str(cwd.resolve()) if cwd is not None else ""
+    key = (tuple(cmd), cwd_key)
+    cached = _SUBPROCESS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _SUBPROCESS_CACHE[key] = proc
+    return proc
+
+
+def _run_readonly_check(
+    cmd: list[str],
+    cwd: Path | None,
+    label: str,
+) -> tuple[bool, str]:
+    """Run a cached read-only subprocess command and format failure messages."""
+    proc = _run_cached_subprocess(cmd, cwd=cwd)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip()
+        return False, f"{label} failed: {detail}"
+    return True, ""
+
 
 def _validate_marketplace(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     """Validate marketplace plugin commands."""
@@ -411,16 +454,7 @@ def _validate_make(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     """Validate make commands in dry-run mode (-n) or against Makefile targets."""
     target_args = [p for p in parts[1:] if not p.startswith("-")]
     if shutil.which("make"):
-        proc = subprocess.run(
-            ["make", "-n", *target_args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return False, f"make dry-run failed: {proc.stderr.strip()}"
-        return True, ""
+        return _run_readonly_check(["make", "-n", *target_args], root, "make dry-run")
 
     makefile = root / "Makefile"
     if not makefile.is_file():
@@ -460,26 +494,19 @@ def _validate_python_module(parts: list[str], root: Path) -> tuple[bool, str]:
         return False, "Incomplete python -m command"
     mod = parts[2]
     if mod == "venv":
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, "-m", "venv", "--help"],
-            capture_output=True,
-            text=True,
-            check=False,
+            None,
+            "python -m venv check",
         )
-        if proc.returncode != 0:
-            return False, f"python -m venv check failed: {proc.stderr.strip()}"
-        return True, ""
     if mod == "pip":
         return _validate_pip_install(parts, root)
     if mod == "unittest":
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, "-m", "unittest", "--help"],
-            capture_output=True,
-            text=True,
-            check=False,
+            None,
+            "unittest runner",
         )
-        if proc.returncode != 0:
-            return False, f"unittest runner unavailable: {proc.stderr.strip()}"
     return True, ""
 
 
@@ -506,29 +533,37 @@ def _validate_python_fred(
 
     if len(parts) >= 3 and parts[2] == "search":
         search_args = [normalize_cli_token(arg) for arg in parts[2:]]
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path), *search_args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            "scripts/fred.py search",
         )
-        if proc.returncode != 0:
-            return False, f"scripts/fred.py search failed: {proc.stderr.strip()}"
     return True, ""
 
 
 def _run_script_help_check(script_path: Path, script_arg: str) -> tuple[bool, str]:
     """Run script with --help to verify CLI arguments without side effects."""
-    proc = subprocess.run(
+    return _run_readonly_check(
         [sys.executable, str(script_path), "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
+        None,
+        f"{script_arg} --help",
     )
-    if proc.returncode != 0:
-        return False, f"{script_arg} --help failed: {proc.stderr.strip()}"
-    return True, ""
+
+
+def _validate_run_checks_script(
+    parts: list[str],
+    script_path: Path,
+    root: Path,
+) -> tuple[bool, str]:
+    """Validate scripts/run_checks.py invocations in dry-run mode."""
+    extra_args = [
+        normalize_cli_token(arg) for arg in parts[2:] if arg not in ("-n", "--dry-run")
+    ]
+    return _run_readonly_check(
+        [sys.executable, str(script_path), "--dry-run", *extra_args],
+        root,
+        "run_checks.py",
+    )
 
 
 def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
@@ -541,29 +576,22 @@ def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
     if script_arg.endswith("fred.py"):
         return _validate_python_fred(parts, script_path, root)
 
+    if script_arg.endswith("run_checks.py"):
+        return _validate_run_checks_script(parts, script_path, root)
+
     if "--check" in parts:
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path), "--check"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            f"{script_arg} --check",
         )
-        if proc.returncode != 0:
-            return False, f"{script_arg} --check failed: {proc.stderr.strip()}"
-        return True, ""
 
     if script_arg.endswith("validate_skills.py"):
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            "validate_skills.py",
         )
-        if proc.returncode != 0:
-            return False, f"validate_skills.py failed: {proc.stderr.strip()}"
-        return True, ""
 
     if "--output" in parts or script_arg.endswith(("package_skills.py", "run_demo.py")):
         return _run_script_help_check(script_path, script_arg)
@@ -587,15 +615,7 @@ def _validate_ruff(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     if not shutil.which("ruff"):
         return True, ""
     if "check" in parts or "--check" in parts:
-        proc = subprocess.run(
-            parts,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return False, f"ruff check failed: {proc.stderr.strip()}"
+        return _run_readonly_check(parts, root, "ruff check")
     return True, ""
 
 
@@ -603,16 +623,11 @@ def _validate_pre_commit(parts: list[str], root: Path, _cmd: str) -> tuple[bool,
     """Validate pre-commit configuration file."""
     if not shutil.which("pre-commit"):
         return True, ""
-    proc = subprocess.run(
+    return _run_readonly_check(
         ["pre-commit", "validate-config", str(root / ".pre-commit-config.yaml")],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
+        root,
+        "pre-commit validate-config",
     )
-    if proc.returncode != 0:
-        return False, f"pre-commit validate-config failed: {proc.stderr.strip()}"
-    return True, ""
 
 
 def _validate_curl(parts: list[str], _root: Path, _cmd: str) -> tuple[bool, str]:
@@ -768,6 +783,7 @@ def verify_all_snippets(
         should_execute = target_rel_paths is not None or rel_path in (
             "README.md",
             "CONTRIBUTING.md",
+            "AGENTS.md",
             "docs/runbooks.md",
             "docs/integration.md",
         )

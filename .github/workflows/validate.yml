@@ -36,25 +36,19 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Install validation dependencies
         run: python -m pip install -r requirements-dev.txt
-      - name: Run pre-commit validation
+      - name: Verify Python and Markdown formatting
+        env:
+          SKIP: ruff-lint,sync-audit-resources,build-catalog,build-experience,validate-skills,check-doc-links,verify-doc-snippets,unit-tests
         run: pre-commit run --all-files
       - name: Lint Python sources
-        run: ruff check .
-      - name: Verify code formatting
-        run: ruff format --check .
-      - name: Check skill packages and test suites
+        run: python scripts/run_checks.py --phase lint
+      - name: Validate skill packages and catalogs
+        run: python scripts/run_checks.py --phase packages
+      - name: Verify Makefile syntax
         if: runner.os != 'Windows'
-        run: make check
-      - name: Check skill packages and test suites (Windows fallback)
-        if: runner.os == 'Windows'
-        run: |
-          python scripts/sync_audit_resources.py --check
-          python scripts/build_catalog.py --check
-          python scripts/build_experience.py --check
-          python scripts/validate_skills.py --telemetry validation-telemetry.json
-          python scripts/check_doc_links.py
-          python scripts/verify_doc_snippets.py
-          python -m unittest discover -s tests -v
+        run: make -n check
+      - name: Run unit and documentation test suites
+        run: python scripts/run_checks.py --phase tests
       - name: Execute original, correction, and safe controls
         run: python -c "import os, subprocess, sys; subprocess.run([sys.executable, 'examples/walkthrough/run_demo.py', '--output', os.path.join(os.environ['RUNNER_TEMP'], 'fred-demo')], check=True)"
       - name: Build and verify a standalone pack

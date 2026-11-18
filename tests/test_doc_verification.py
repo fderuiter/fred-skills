@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from unittest.mock import patch
+
 from check_doc_links import check_docs, check_file_links, extract_relative_links
 from skill_tools import (
     extract_relative_links as skill_tools_extract_relative_links,
@@ -21,6 +23,7 @@ from skill_tools import (
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
     TOOL_DISPATCHERS,
+    clear_subprocess_cache,
     discover_doc_blocks,
     execute_snippet_command,
     extract_blocks_from_file,
@@ -326,6 +329,45 @@ class DocSnippetVerificationTests(unittest.TestCase):
             root=ROOT,
         )
         self.assertFalse(ok)
+
+        # Invalid run_checks.py phase
+        ok, msg = execute_snippet_command(
+            "python scripts/run_checks.py --phase nonexistent_phase",
+            root=ROOT,
+        )
+        self.assertFalse(ok)
+        self.assertIn("run_checks.py failed", msg)
+
+    def test_repeated_readonly_subprocess_checks_are_cached(self):
+        """Repeated read-only subprocess checks in verify_doc_snippets execute once and hit cache."""
+        clear_subprocess_cache()
+        real_run = subprocess.run
+        spawned: list[list[str]] = []
+
+        def counting_run(cmd, *args, **kwargs):
+            spawned.append(list(cmd))
+            return real_run(cmd, *args, **kwargs)
+
+        commands = [
+            "ruff check .",
+            "ruff format --check .",
+            "python scripts/sync_audit_resources.py --check",
+            "python scripts/validate_skills.py",
+            "python scripts/run_checks.py --phase lint",
+        ]
+        try:
+            with patch("verify_doc_snippets.subprocess.run", side_effect=counting_run):
+                for _ in range(2):
+                    for cmd in commands:
+                        ok, msg = execute_snippet_command(cmd, root=ROOT)
+                        self.assertTrue(ok, f"{cmd} failed: {msg}")
+            self.assertEqual(
+                len(commands),
+                len(spawned),
+                f"Expected {len(commands)} unique subprocess spawns across 2 passes, got {len(spawned)}",
+            )
+        finally:
+            clear_subprocess_cache()
 
     def test_line_range_filtering(self):
         """Blocks outside the specified range are ignored."""
