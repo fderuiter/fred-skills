@@ -7,9 +7,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 
+pty: ModuleType | None
 try:
-    import pty
+    import pty as _pty
+
+    pty = _pty
 except ImportError:
     pty = None
 
@@ -265,14 +269,32 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("--pack", stdout)
 
         # Check host choices
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
             self.assertIn(host, stdout)
 
     def test_host_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("install", "--host", "invalid", "--destination", "/tmp")
         self.assertEqual(2, proc.returncode)
         self.assertIn("invalid choice: 'invalid'", proc.stderr)
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
             self.assertIn(host, proc.stderr)
 
         # Also verify without --destination (destination is optional)
@@ -286,12 +308,39 @@ class FredCLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             proc = self.run_cli("install", cwd=tmp_dir)
             self.assertEqual(1, proc.returncode)
-            self.assertIn(
-                "No host markers (.claude, .agents, .gemini) found in destination",
-                proc.stderr,
-            )
+            self.assertIn("No host markers (", proc.stderr)
+            for marker in [
+                ".claude",
+                ".cursor",
+                ".agents",
+                ".gemini",
+                ".opencode",
+                ".windsurf",
+            ]:
+                self.assertIn(marker, proc.stderr)
             self.assertIn(str(Path(tmp_dir).resolve()), proc.stderr)
             self.assertIn("--host", proc.stderr)
+
+    def test_cli_install_succeeds_for_new_hosts_in_project_and_user_scopes(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            for host in ["cursor", "copilot", "opencode", "windsurf"]:
+                for scope in ["project", "user"]:
+                    dest = base / f"{host}-{scope}"
+                    proc = self.run_cli(
+                        "install",
+                        "--destination",
+                        str(dest),
+                        "--host",
+                        host,
+                        "--scope",
+                        scope,
+                        "--pack",
+                        "starter",
+                    )
+                    self.assertEqual(0, proc.returncode, proc.stderr)
 
     def test_task_choice_validation_fails_with_exit_code_2(self):
         proc = self.run_cli("plan", "/tmp", "--task", "invalid-task")
@@ -340,12 +389,23 @@ class FredCLITests(unittest.TestCase):
         self.assertIn("Invocation", stdout)
 
         # Verify host entries
-        self.assertIn("codex", stdout)
+        for host in [
+            "codex",
+            "claude-code",
+            "antigravity",
+            "gemini-cli",
+            "cursor",
+            "copilot",
+            "opencode",
+            "windsurf",
+        ]:
+            self.assertIn(host, stdout)
         self.assertIn(".agents/skills", stdout)
-        self.assertIn("claude-code", stdout)
         self.assertIn(".claude/skills", stdout)
-        self.assertIn("antigravity", stdout)
-        self.assertIn("gemini-cli", stdout)
+        self.assertIn(".cursor/skills", stdout)
+        self.assertIn(".github/skills", stdout)
+        self.assertIn(".opencode/skills", stdout)
+        self.assertIn(".windsurf/skills", stdout)
 
     def test_discovery_packs_and_tasks_table_in_terminal(self):
         packs_proc = self.run_cli("packs", isatty=True)

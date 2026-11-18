@@ -200,12 +200,37 @@ class PackageTests(unittest.TestCase):
         self.manifest()
         self.assertEqual([], build(self.root))
         marketplace_path = self.root / ".claude-plugin/marketplace.json"
+        cursor_marketplace_path = self.root / ".cursor-plugin/marketplace.json"
+        gemini_ext_path = self.root / "gemini-extension.json"
         self.assertTrue(marketplace_path.is_file())
+        self.assertTrue(cursor_marketplace_path.is_file())
+        self.assertTrue(gemini_ext_path.is_file())
+        gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
+        self.assertEqual("0.0.0", gemini_default["version"])
+        self.assertEqual("fred-skills", gemini_default["name"])
+
+        (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+        problems_version = build(self.root, check=True)
+        self.assertTrue(
+            any("gemini-extension.json" in problem for problem in problems_version)
+        )
+        self.assertEqual([], build(self.root))
+        self.assertEqual(
+            "1.2.3",
+            json.loads(gemini_ext_path.read_text(encoding="utf-8"))["version"],
+        )
+
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        gemini_ext_path.write_text('{"tampered": true}', encoding="utf-8")
         problems = build(self.root, check=True)
         self.assertTrue(
             any(".claude-plugin/marketplace.json" in problem for problem in problems)
         )
+        self.assertTrue(
+            any(".cursor-plugin/marketplace.json" in problem for problem in problems)
+        )
+        self.assertTrue(any("gemini-extension.json" in problem for problem in problems))
 
     def test_build_outputs_helper_creates_files_and_detects_drift(self):
         target_file = "generated/sample.txt"
@@ -312,42 +337,59 @@ class PackageTests(unittest.TestCase):
     def test_committed_marketplace_manifest_is_valid_and_current(self):
         self.assertEqual([], build(ROOT, check=True))
         self.assertFalse((ROOT / ".claude-plugin/plugin.json").exists())
-        manifest_path = ROOT / ".claude-plugin/marketplace.json"
-        self.assertTrue(manifest_path.is_file())
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["name"], "fred-skills")
-        self.assertEqual(data["owner"]["name"], "fderuiter")
+        self.assertFalse((ROOT / ".cursor-plugin/plugin.json").exists())
         suite_skills = get_suite_skills(ROOT)
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
         ]
-        plugins = data["plugins"]
-        self.assertEqual(len(plugins), len(suite_skills) + len(packs))
-        plugin_names = [plugin["name"] for plugin in plugins]
-        self.assertEqual(len(plugin_names), len(set(plugin_names)))
-        skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
-        pack_plugins = [p for p in plugins if p["source"] == "./"]
-        self.assertEqual(len(skill_plugins) + len(pack_plugins), len(plugins))
-        self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
-        self.assertEqual({p["name"] for p in pack_plugins}, set(packs))
-        for workflow_skill in get_suite_skills(ROOT, suite_name="repository-workflows"):
-            self.assertIn(workflow_skill, set(plugin_names))
-        for plugin in skill_plugins:
-            self.assertIn("description", plugin)
-            self.assertNotIn("strict", plugin)
-            entry_file = ROOT / plugin["source"] / "SKILL.md"
-            self.assertTrue(entry_file.is_file())
-        for plugin in pack_plugins:
-            expected_pack = packs[plugin["name"]]
-            self.assertEqual(plugin["description"], expected_pack["description"])
-            self.assertIs(plugin["strict"], False)
-            self.assertEqual(
-                plugin["skills"],
-                [f"./skills/{member}" for member in expected_pack["skills"]],
-            )
-            for member_source in plugin["skills"]:
-                self.assertTrue(member_source.startswith("./skills/"))
-                self.assertTrue((ROOT / member_source / "SKILL.md").is_file())
+        for rel_manifest in [
+            ".claude-plugin/marketplace.json",
+            ".cursor-plugin/marketplace.json",
+        ]:
+            manifest_path = ROOT / rel_manifest
+            self.assertTrue(manifest_path.is_file())
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["name"], "fred-skills")
+            self.assertEqual(data["owner"]["name"], "fderuiter")
+            plugins = data["plugins"]
+            self.assertEqual(len(plugins), len(suite_skills) + len(packs))
+            plugin_names = [plugin["name"] for plugin in plugins]
+            self.assertEqual(len(plugin_names), len(set(plugin_names)))
+            skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
+            pack_plugins = [p for p in plugins if p["source"] == "./"]
+            self.assertEqual(len(skill_plugins) + len(pack_plugins), len(plugins))
+            self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
+            self.assertEqual({p["name"] for p in pack_plugins}, set(packs))
+            for workflow_skill in get_suite_skills(
+                ROOT, suite_name="repository-workflows"
+            ):
+                self.assertIn(workflow_skill, set(plugin_names))
+            for plugin in skill_plugins:
+                self.assertIn("description", plugin)
+                self.assertNotIn("strict", plugin)
+                entry_file = ROOT / plugin["source"] / "SKILL.md"
+                self.assertTrue(entry_file.is_file())
+            for plugin in pack_plugins:
+                expected_pack = packs[plugin["name"]]
+                self.assertEqual(plugin["description"], expected_pack["description"])
+                self.assertIs(plugin["strict"], False)
+                self.assertEqual(
+                    plugin["skills"],
+                    [f"./skills/{member}" for member in expected_pack["skills"]],
+                )
+                for member_source in plugin["skills"]:
+                    self.assertTrue(member_source.startswith("./skills/"))
+                    self.assertTrue((ROOT / member_source / "SKILL.md").is_file())
+
+        gemini_ext_path = ROOT / "gemini-extension.json"
+        self.assertTrue(gemini_ext_path.is_file())
+        gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
+        self.assertEqual(gemini_data["name"], "fred-skills")
+        self.assertTrue(gemini_data["description"])
+        self.assertEqual(
+            gemini_data["version"],
+            (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        )
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
         self.manifest()
@@ -824,6 +866,111 @@ class PackageTests(unittest.TestCase):
                     "https://json-schema.org/draft/2020-12/schema",
                     f"{schema_path} does not use draft 2020-12",
                 )
+
+    def test_mypy_static_type_enforcement_contracts(self) -> None:
+        import re
+        import tomllib
+
+        pyproject_path = ROOT / "pyproject.toml"
+        self.assertTrue(pyproject_path.is_file(), "Root pyproject.toml must exist")
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        mypy_cfg = pyproject.get("tool", {}).get("mypy", {})
+        self.assertEqual(mypy_cfg.get("python_version"), "3.12")
+        self.assertEqual(mypy_cfg.get("mypy_path"), [".", "scripts"])
+        self.assertEqual(
+            mypy_cfg.get("files"),
+            ["scripts", "tests", "evals", "examples", "skills"],
+        )
+        self.assertTrue(mypy_cfg.get("explicit_package_bases"))
+        self.assertTrue(mypy_cfg.get("namespace_packages"))
+        self.assertTrue(mypy_cfg.get("show_error_codes"))
+        excludes = mypy_cfg.get("exclude", [])
+        for candidate_path in (
+            "skills/repo-audit-synthesis/scripts/audit_to_sarif.py",
+            r"skills\repo-audit-synthesis\scripts\audit_to_sarif.py",
+        ):
+            self.assertTrue(
+                any(re.search(pattern, candidate_path) for pattern in excludes),
+                f"Synced audit_to_sarif.py copy ({candidate_path}) must be excluded from batch mypy discovery",
+            )
+        overrides = mypy_cfg.get("overrides", [])
+        self.assertEqual(len(overrides), 1)
+        self.assertEqual(overrides[0].get("module"), ["playwright", "playwright.*"])
+        self.assertTrue(overrides[0].get("ignore_missing_imports"))
+
+        reqs = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+        self.assertIn("mypy==2.4.0", reqs)
+        self.assertIn("types-PyYAML==6.0.12.20261113", reqs)
+        self.assertIn("types-jsonschema==4.26.0.20261006", reqs)
+
+        pre_commit_cfg = yaml.safe_load(
+            (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        )
+        hooks = {h["id"]: h for h in pre_commit_cfg["repos"][0]["hooks"]}
+        self.assertEqual(len(hooks), 11)
+        self.assertIn("mypy", hooks)
+        self.assertEqual(hooks["mypy"].get("entry"), "python -m mypy")
+        self.assertEqual(hooks["mypy"].get("language"), "system")
+        self.assertFalse(hooks["mypy"].get("pass_filenames", True))
+        self.assertTrue(hooks["mypy"].get("always_run", False))
+
+        makefile_text = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("$(PYTHON) -m mypy", makefile_text)
+
+        validate_wf = yaml.safe_load(
+            (ROOT / ".github/workflows/validate.yml").read_text(encoding="utf-8")
+        )
+        steps = validate_wf["jobs"]["validate"]["steps"]
+        self.assertTrue(
+            any(
+                s.get("run", "").strip() == "python -m mypy" and "if" not in s
+                for s in steps
+            ),
+            "validate.yml must run python -m mypy across matrix OS jobs",
+        )
+        win_steps = [s for s in steps if s.get("if") == "runner.os == 'Windows'"]
+        self.assertTrue(
+            any("python -m mypy" in s.get("run", "") for s in win_steps),
+            "validate.yml Windows fallback must include python -m mypy",
+        )
+
+        alt_platform = "linux" if sys.platform == "win32" else "win32"
+        cross_check = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "mypy",
+                "--platform",
+                alt_platform,
+                "--no-incremental",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            cross_check.returncode,
+            f"mypy failed for --platform {alt_platform}:\n{cross_check.stdout}\n{cross_check.stderr}",
+        )
+
+    def test_mypy_cache_excluded_from_gitignore_and_repository_snapshot(self) -> None:
+        from fredlib import repository
+
+        gitignore_lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertTrue(
+            any(line.strip().rstrip("/") == ".mypy_cache" for line in gitignore_lines),
+            ".gitignore must ignore .mypy_cache",
+        )
+        self.assertIn(".mypy_cache", repository.IGNORED)
+
+        repo_dir = self.root / "unversioned-repo"
+        (repo_dir / ".mypy_cache").mkdir(parents=True)
+        (repo_dir / ".mypy_cache/cache.json").write_text("{}", encoding="utf-8")
+        (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
+        snap = repository.snapshot(repo_dir)
+        self.assertEqual(list(snap["files"].keys()), ["app.py"])
 
 
 if __name__ == "__main__":

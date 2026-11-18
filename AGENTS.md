@@ -19,7 +19,7 @@ it is not an audit of this repository or proof about any consuming application.
 - Do not add private installation IDs, absolute workspace paths, credentials, or real
   application audit data. Use synthetic fixtures for repeatable validation.
 
-Run from the repository root before proposing a change (executes Ruff linting, formatting checks, script validations, and tests):
+Run from the repository root before proposing a change (executes Ruff linting, formatting checks, static type checks, script validations, and tests):
 
 ```sh
 make check
@@ -31,7 +31,7 @@ To automatically format code and apply safe lint fixes with Ruff, repair drift, 
 make fix
 ```
 
-Or run pre-commit hooks for Markdown and Python formatting verification (pre-commit validates both Python source code and Markdown documentation):
+Or run pre-commit hooks for Markdown, Python formatting, and static type verification (pre-commit validates both Python source code and Markdown documentation):
 
 ```sh
 pre-commit install
@@ -43,6 +43,7 @@ pre-commit run --all-files
 ```sh
 ruff check .
 ruff format --check .
+python -m mypy
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check

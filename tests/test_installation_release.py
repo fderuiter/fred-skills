@@ -48,16 +48,62 @@ class InstallationTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
 
     def test_all_four_hosts_copy_complete_packages(self):
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
-            destination = self.root / host
-            installation.install(destination, host, pack="starter", root=self.source)
-            target, _ = installation.locations(
-                destination, host, "project", self.source
-            )
-            self.assertEqual(
-                (self.source / "skills/sample/SKILL.md").read_bytes(),
-                (target / "sample/SKILL.md").read_bytes(),
-            )
+        hosts = list(read_json(self.source / "catalog/hosts.json")["hosts"].keys())
+        self.assertEqual(
+            hosts,
+            [
+                "codex",
+                "claude-code",
+                "antigravity",
+                "gemini-cli",
+                "cursor",
+                "copilot",
+                "opencode",
+                "windsurf",
+            ],
+        )
+        initial_bytes = b"Synthetic package sample"
+        updated_bytes = b"Updated synthetic package sample"
+        for host in hosts:
+            for scope in ["project", "user"]:
+                (self.source / "skills/sample/SKILL.md").write_bytes(initial_bytes)
+                destination = self.root / f"{host}-{scope}"
+                installation.install(
+                    destination,
+                    host,
+                    scope=scope,
+                    pack="starter",
+                    root=self.source,
+                )
+                target, state = installation.locations(
+                    destination, host, scope, self.source
+                )
+                self.assertEqual(
+                    initial_bytes, (target / "sample/SKILL.md").read_bytes()
+                )
+                rec = installation.receipt(state)
+                self.assertEqual(host, rec["host"])
+                self.assertIn("sample", rec["skills"])
+                self.assertIn("other", rec["skills"])
+
+                (self.source / "skills/sample/SKILL.md").write_bytes(updated_bytes)
+                installation.install(
+                    destination,
+                    host,
+                    scope=scope,
+                    pack="starter",
+                    update=True,
+                    root=self.source,
+                )
+                self.assertEqual(
+                    updated_bytes, (target / "sample/SKILL.md").read_bytes()
+                )
+
+                installation.rollback(destination, host, scope, self.source)
+                self.assertEqual(
+                    initial_bytes, (target / "sample/SKILL.md").read_bytes()
+                )
+        (self.source / "skills/sample/SKILL.md").write_bytes(initial_bytes)
 
     def test_query_installed_returns_installed_skills(self):
         self.install()
@@ -381,6 +427,131 @@ class InstallationTests(unittest.TestCase):
         res = installation.install(dest, pack="starter", root=self.source)
         self.assertEqual("claude-code", res["host"])
         self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
+
+    def test_auto_detect_new_project_markers_and_copilot_fallback(self):
+        cases = [
+            ("cursor_proj", [".cursor"], "cursor", ".cursor/skills/sample/SKILL.md"),
+            (
+                "opencode_proj",
+                [".opencode"],
+                "opencode",
+                ".opencode/skills/sample/SKILL.md",
+            ),
+            (
+                "windsurf_proj",
+                [".windsurf"],
+                "windsurf",
+                ".windsurf/skills/sample/SKILL.md",
+            ),
+            (
+                "devin_proj",
+                [".devin"],
+                "windsurf",
+                ".windsurf/skills/sample/SKILL.md",
+            ),
+            (
+                "windsurf_both_proj",
+                [".windsurf", ".devin"],
+                "windsurf",
+                ".windsurf/skills/sample/SKILL.md",
+            ),
+            (
+                "copilot_bare_github",
+                [".github/workflows"],
+                "copilot",
+                ".github/skills/sample/SKILL.md",
+            ),
+            (
+                "copilot_skills_dir",
+                [".github/skills"],
+                "copilot",
+                ".github/skills/sample/SKILL.md",
+            ),
+        ]
+        for folder, markers, expected_host, expected_skill in cases:
+            with self.subTest(folder=folder):
+                dest = self.root / folder
+                for marker in markers:
+                    (dest / marker).mkdir(parents=True, exist_ok=True)
+                self.assertEqual(expected_host, installation.detect_host(dest))
+                res = installation.install(dest, pack="starter", root=self.source)
+                self.assertEqual(expected_host, res["host"])
+                self.assertTrue((dest / expected_skill).is_file())
+
+    def test_primary_markers_outrank_bare_github_unless_copilot_skills_or_receipt(self):
+        claude_gh = self.root / "claude_with_github_workflows"
+        (claude_gh / ".claude").mkdir(parents=True)
+        (claude_gh / ".github/workflows").mkdir(parents=True)
+        self.assertEqual("claude-code", installation.detect_host(claude_gh))
+        res = installation.install(claude_gh, pack="starter", root=self.source)
+        self.assertEqual("claude-code", res["host"])
+
+        cursor_gh = self.root / "cursor_with_github_workflows"
+        (cursor_gh / ".cursor").mkdir(parents=True)
+        (cursor_gh / ".github/workflows").mkdir(parents=True)
+        self.assertEqual("cursor", installation.detect_host(cursor_gh))
+
+        claude_copilot_skills = self.root / "claude_and_github_skills"
+        (claude_copilot_skills / ".claude").mkdir(parents=True)
+        (claude_copilot_skills / ".github/skills").mkdir(parents=True)
+        with self.assertRaises(ValueError) as ctx1:
+            installation.detect_host(claude_copilot_skills)
+        self.assertIn("--host", str(ctx1.exception))
+
+        claude_cursor = self.root / "claude_and_cursor"
+        (claude_cursor / ".claude").mkdir(parents=True)
+        (claude_cursor / ".cursor").mkdir(parents=True)
+        with self.assertRaises(ValueError) as ctx2:
+            installation.detect_host(claude_cursor)
+        self.assertIn("--host", str(ctx2.exception))
+
+        claude_copilot_receipt = self.root / "claude_github_and_copilot_receipt"
+        (claude_copilot_receipt / ".claude").mkdir(parents=True)
+        (claude_copilot_receipt / ".github/workflows").mkdir(parents=True)
+        copilot_state = claude_copilot_receipt / ".fred-skills/copilot-project"
+        copilot_state.mkdir(parents=True)
+        atomic_json(
+            copilot_state / "receipt.json",
+            {"schema_version": "1.0", "host": "copilot", "skills": {}, "history": []},
+        )
+        with self.assertRaises(ValueError) as ctx3:
+            installation.detect_host(claude_copilot_receipt)
+        self.assertIn("--host", str(ctx3.exception))
+
+        bare_gh_conflicting_receipt = self.root / "bare_github_claude_receipt"
+        (bare_gh_conflicting_receipt / ".github/workflows").mkdir(parents=True)
+        claude_state = bare_gh_conflicting_receipt / ".fred-skills/claude-code-project"
+        claude_state.mkdir(parents=True)
+        atomic_json(
+            claude_state / "receipt.json",
+            {
+                "schema_version": "1.0",
+                "host": "claude-code",
+                "skills": {},
+                "history": [],
+            },
+        )
+        with self.assertRaises(ValueError) as ctx4:
+            installation.detect_host(bare_gh_conflicting_receipt)
+        self.assertIn("--host", str(ctx4.exception))
+
+    def test_detect_host_user_scope_markers(self):
+        user_cases = [
+            (".claude", "claude-code"),
+            (".cursor", "cursor"),
+            (".agents", "codex"),
+            (".gemini", "gemini-cli"),
+            (".copilot", "copilot"),
+            (".config/opencode", "opencode"),
+            (".config/devin", "windsurf"),
+        ]
+        for idx, (marker, expected_host) in enumerate(user_cases):
+            with self.subTest(marker=marker):
+                home_dir = self.root / f"user_home_{idx}"
+                (home_dir / marker).mkdir(parents=True)
+                self.assertEqual(
+                    expected_host, installation.detect_host(home_dir, scope="user")
+                )
 
     def test_auto_detect_gemini_marker(self):
         dest = self.root / "gemini_project"

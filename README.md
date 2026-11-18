@@ -155,5 +155,6 @@ Use `make fix` to repair drift or regenerate shared copies and discovery catalog
 
 For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
 [architecture](docs/architecture.md), [runbooks](docs/runbooks.md), [security](SECURITY.md), and
-[research](docs/research.md). [Licensing](docs/licensing.md) requires an owner decision
-before public release publication; this PR does not select a license or publish a tag.
+[research](docs/research.md). Distributed under the MIT [LICENSE](LICENSE) (see
+[licensing](docs/licensing.md)); pushes to `main` automatically tag and publish verified
+`VERSION` releases as documented in [releasing](docs/releasing.md).

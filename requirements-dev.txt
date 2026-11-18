@@ -1,5 +1,8 @@
 # Authoring and validation dependencies; the instruction-only skills do not need these.
 PyYAML==6.0.3
 jsonschema==4.26.0
+mypy==2.4.0
 pre-commit==4.7.0
 ruff==0.17.2
+types-PyYAML==6.0.12.20261113
+types-jsonschema==4.26.0.20261006

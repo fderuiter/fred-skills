@@ -1,0 +1,12 @@
+[tool.mypy]
+python_version = "3.12"
+mypy_path = [".", "scripts"]
+files = ["scripts", "tests", "evals", "examples", "skills"]
+explicit_package_bases = true
+namespace_packages = true
+show_error_codes = true
+exclude = ["^skills[\\\\/]repo-audit-synthesis[\\\\/]scripts[\\\\/]audit_to_sarif\\.py$"]
+
+[[tool.mypy.overrides]]
+module = ["playwright", "playwright.*"]
+ignore_missing_imports = true
