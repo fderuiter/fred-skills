@@ -17,33 +17,46 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Install all 51 packages directly via plugin marketplaces or the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Antigravity, and Gemini CLI, see the [integration guide](integration.md).
+Register the marketplace catalog and install a curated pack (such as `complete` for all 51 packages or `starter`) or an individual skill, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, and Windsurf, see the [integration guide](integration.md).
 
-### Claude Code
+### Claude Code and Cursor
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
+/plugin install complete@fred-skills
 ```
 
 ### Codex
 
 ```sh
 codex plugin marketplace add fderuiter/fred-skills
+codex plugin add starter@fred-skills
 ```
 
-### Antigravity and Gemini CLI
-
-For Antigravity, Gemini CLI, and manual or offline installations, install skills with the toolkit CLI:
+### Gemini CLI Extension
 
 ```sh
-# Antigravity (project scope)
-python scripts/fred.py install --destination /path/to/project --host antigravity --pack starter
+gemini extensions install https://github.com/fderuiter/fred-skills
+```
 
-# Gemini CLI (project scope)
+### Toolkit CLI (Project and User Scopes)
+
+Auto-detect the active workspace host (`.claude`, `.cursor`, `.agents`, `.gemini`, `.github`, `.opencode`, `.windsurf`, or `.devin`) or pass `--host` explicitly:
+
+```sh
+# Auto-detect active workspace host
+python scripts/fred.py install --pack starter
+
+# Explicit project-scope installations
+python scripts/fred.py install --destination /path/to/project --host cursor --pack starter
+python scripts/fred.py install --destination /path/to/project --host copilot --pack starter
+python scripts/fred.py install --destination /path/to/project --host opencode --pack starter
+python scripts/fred.py install --destination /path/to/project --host windsurf --pack starter
+python scripts/fred.py install --destination /path/to/project --host antigravity --pack starter
 python scripts/fred.py install --destination /path/to/project --host gemini-cli --pack starter
 ```
 
-For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install`. See the [integration guide](integration.md) for detailed host adapter setup, marker detection rules, and multi-agent orchestration.
+For offline or manual workflows, copy skill directories directly to your host's skills path or use `python scripts/fred.py install` with `--scope user`. See the [integration guide](integration.md) for detailed host adapter setup, marker detection rules, and multi-agent orchestration.
 
 ## Focused investigation
 

@@ -4,6 +4,18 @@
     "codex": {
       "project_path": ".agents/skills",
       "user_path": ".agents/skills",
+      "project_markers": [
+        {
+          "path": ".agents",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".agents",
+          "tier": "primary"
+        }
+      ],
       "invocation": "$skill-name",
       "install_method": "copy",
       "installation_test": "filesystem-test",
@@ -13,6 +25,18 @@
     "claude-code": {
       "project_path": ".claude/skills",
       "user_path": ".claude/skills",
+      "project_markers": [
+        {
+          "path": ".claude",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".claude",
+          "tier": "primary"
+        }
+      ],
       "invocation": "/skill-name or natural-language activation; check current host behavior",
       "install_method": "copy",
       "installation_test": "filesystem-test",
@@ -22,6 +46,18 @@
     "antigravity": {
       "project_path": ".agents/skills",
       "user_path": ".gemini/antigravity/skills",
+      "project_markers": [
+        {
+          "path": ".agents",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".agents",
+          "tier": "primary"
+        }
+      ],
       "invocation": "Use the named skill; verify current host discovery",
       "install_method": "copy",
       "installation_test": "filesystem-test",
@@ -31,11 +67,115 @@
     "gemini-cli": {
       "project_path": ".gemini/skills",
       "user_path": ".gemini/skills",
+      "project_markers": [
+        {
+          "path": ".gemini",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".gemini",
+          "tier": "primary"
+        }
+      ],
       "invocation": "Use the named skill; verify current host discovery",
       "install_method": "copy",
       "installation_test": "filesystem-test",
       "behavior_test": "not-executed",
       "source": "https://geminicli.com/docs/cli/skills/"
+    },
+    "cursor": {
+      "project_path": ".cursor/skills",
+      "user_path": ".cursor/skills",
+      "project_markers": [
+        {
+          "path": ".cursor",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".cursor",
+          "tier": "primary"
+        }
+      ],
+      "invocation": "/skill-name or natural-language activation; check current host behavior",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://cursor.com/docs/context/skills"
+    },
+    "copilot": {
+      "project_path": ".github/skills",
+      "user_path": ".copilot/skills",
+      "project_markers": [
+        {
+          "path": ".github/skills",
+          "tier": "primary"
+        },
+        {
+          "path": ".github",
+          "tier": "fallback"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".copilot",
+          "tier": "primary"
+        }
+      ],
+      "invocation": "/skill-name or natural-language activation; check current host behavior",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://docs.github.com/en/copilot/concepts/agents/about-agent-skills"
+    },
+    "opencode": {
+      "project_path": ".opencode/skills",
+      "user_path": ".config/opencode/skills",
+      "project_markers": [
+        {
+          "path": ".opencode",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".config/opencode",
+          "tier": "primary"
+        }
+      ],
+      "invocation": "/skill-name or natural-language activation; check current host behavior",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://opencode.ai/docs/skills/"
+    },
+    "windsurf": {
+      "project_path": ".windsurf/skills",
+      "user_path": ".config/devin/skills",
+      "project_markers": [
+        {
+          "path": ".windsurf",
+          "tier": "primary"
+        },
+        {
+          "path": ".devin",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".config/devin",
+          "tier": "primary"
+        }
+      ],
+      "invocation": "@skill-name or natural-language activation; check current host behavior",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://docs.windsurf.com/windsurf/cascade/skills"
     }
   }
 }

@@ -9,6 +9,33 @@ from pathlib import Path
 from skill_tools import ROOT, build_outputs, read_frontmatter, suite_members
 
 
+def _pack_plugins(root: Path, known_skills: set[str]) -> list[dict[str, object]]:
+    packs_path = root / "catalog/packs.json"
+    if not packs_path.exists():
+        return []
+    packs = json.loads(packs_path.read_text(encoding="utf-8")).get("packs", {})
+    bundles: list[dict[str, object]] = []
+    for pack_name, pack_data in packs.items():
+        if pack_name in known_skills:
+            raise ValueError(f"Pack name collides with skill name: {pack_name}")
+        pack_skills = pack_data.get("skills", [])
+        missing = set(pack_skills) - known_skills
+        if not pack_skills or missing:
+            raise ValueError(
+                f"Invalid skill selection in pack '{pack_name}': {sorted(missing)}"
+            )
+        bundles.append(
+            {
+                "name": pack_name,
+                "description": pack_data["description"],
+                "source": "./",
+                "strict": False,
+                "skills": [f"./skills/{skill_name}" for skill_name in pack_skills],
+            }
+        )
+    return bundles
+
+
 def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
     membership = suite_members(root)
     for name in sorted(membership):
@@ -59,7 +86,7 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         desc = entry["description"].replace("|", "\\|").replace("\n", " ")
         phase = entry["phase_title"] or "Independent"
         markdown += f"| {phase} | [{entry['name']}](../{entry['path']}) | {desc} |\n"
-    plugins = [
+    plugins = _pack_plugins(root, set(membership)) + [
         {
             "name": entry["name"],
             "description": entry["description"],
@@ -68,16 +95,27 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         for entry in sorted(entries, key=lambda item: item["name"])
         if entry["name"] in membership
     ]
+    description = (
+        "Portable engineering workflows for investigating repositories, planning"
+        " useful fixes, and verifying that those fixes work."
+    )
+    version_path = root / "VERSION"
+    extension_version = (
+        version_path.read_text(encoding="utf-8").strip() or "0.0.0"
+        if version_path.is_file()
+        else "0.0.0"
+    )
     marketplace = {
         "name": "fred-skills",
         "owner": {"name": "fderuiter"},
-        "metadata": {
-            "description": (
-                "Portable engineering workflows for investigating repositories, planning"
-                " useful fixes, and verifying that those fixes work."
-            )
-        },
+        "metadata": {"description": description},
         "plugins": plugins,
+    }
+    marketplace_text = json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+    gemini_extension = {
+        "name": "fred-skills",
+        "description": description,
+        "version": extension_version,
     }
     return {
         "catalog/skills.json": (
@@ -89,8 +127,10 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
             + "\n"
         ),
         "docs/catalog.md": markdown,
-        ".claude-plugin/marketplace.json": (
-            json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+        ".claude-plugin/marketplace.json": marketplace_text,
+        ".cursor-plugin/marketplace.json": marketplace_text,
+        "gemini-extension.json": (
+            json.dumps(gemini_extension, indent=2, ensure_ascii=False) + "\n"
         ),
     }
 

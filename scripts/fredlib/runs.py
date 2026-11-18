@@ -5,6 +5,7 @@ import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import yaml
@@ -63,7 +64,8 @@ def plan(
         raise ValueError("Invalid execution mode or budget")
     recipe = recipes[task]
     detected = preflight(repo, exclude)
-    changed, resolved_base = [], None
+    changed: list[str] = []
+    resolved_base: str | None = None
     if mode == "changes" or recipe.get("requires_base"):
         if not base:
             raise ValueError(
@@ -265,6 +267,8 @@ checkpoint when the selected work cannot be completed. An empty findings list is
 def audit_errors(audit: dict) -> list[str]:
     script = ROOT / "skills/repo-audit-program/scripts/validate_audit.py"
     spec = importlib.util.spec_from_file_location("fred_audit_validator", script)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load audit validator from {script}")
     module = importlib.util.module_from_spec(spec)
     previous = sys.dont_write_bytecode
     try:
@@ -381,7 +385,7 @@ def compare(before: dict, after: dict) -> dict:
         return groups
 
     old, new = indexed(before), indexed(after)
-    result = {
+    result: dict[str, list[Any]] = {
         "introduced": [],
         "persisting": [],
         "status_changed": [],
@@ -476,21 +480,20 @@ def reconcile(
                 "Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result"
             )
     path = directory / "remediation.json"
-    records = (
+    records: dict[str, Any] = (
         read_json(path) if path.exists() else {"schema_version": "1.0", "records": []}
     )
-    records["records"].append(
-        {
-            "at": now(),
-            "finding_id": finding_id,
-            "fingerprint": fingerprint(finding, audit),
-            "state": state,
-            "note": note,
-            "verification": proof,
-        }
-    )
+    record: dict[str, Any] = {
+        "at": now(),
+        "finding_id": finding_id,
+        "fingerprint": fingerprint(finding, audit),
+        "state": state,
+        "note": note,
+        "verification": proof,
+    }
+    records["records"].append(record)
     atomic_json(path, records)
-    return records["records"][-1]
+    return record
 
 
 def memory(directory: Path) -> dict:

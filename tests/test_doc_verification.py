@@ -230,7 +230,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover all 32 code blocks in docs/integration.md",
         )
 
-    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self):
+    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self) -> None:
         """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
         errors = verify_toolkit_subcommands(root=ROOT)
         self.assertEqual(
@@ -326,6 +326,75 @@ class DocSnippetVerificationTests(unittest.TestCase):
             root=ROOT,
         )
         self.assertFalse(ok)
+
+    def test_marketplace_plugin_install_validation(self):
+        """Marketplace registration and plugin install commands validate against .claude-plugin/marketplace.json."""
+        valid_cmds = [
+            "/plugin marketplace add fderuiter/fred-skills",
+            "/plugin install complete@fred-skills",
+            "/plugin install starter@fred-skills",
+            "/plugin install repo-audit-concurrency@fred-skills",
+            "codex plugin marketplace add fderuiter/fred-skills",
+            "codex plugin add starter@fred-skills",
+            "codex plugin add complete@fred-skills",
+            "codex plugin add repo-audit-concurrency@fred-skills",
+        ]
+        for cmd in valid_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(ok, f"Expected valid marketplace command '{cmd}': {msg}")
+
+        invalid_cmds = [
+            ("/plugin install unknown-pack@fred-skills", "Unknown marketplace plugin"),
+            (
+                "codex plugin add unknown-skill@fred-skills",
+                "Unknown marketplace plugin",
+            ),
+            ("/plugin install complete@other-market", "Unexpected marketplace"),
+            ("/plugin install complete", "requires '<name>@fred-skills'"),
+            ("codex plugin add starter", "requires '<name>@fred-skills'"),
+            ("/plugin marketplace add other/repo", "Unexpected plugin id"),
+            ("/plugin remove complete@fred-skills", "Unsupported marketplace plugin"),
+            (
+                "codex plugin install starter@fred-skills",
+                "Unsupported marketplace plugin",
+            ),
+        ]
+        for cmd, expected_err in invalid_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(
+                ok, f"Expected invalid marketplace command '{cmd}' to fail"
+            )
+            self.assertIn(expected_err, msg)
+
+    def test_incomplete_marketplace_add_blocks_rejected(self):
+        """Marketplace add blocks in README.md, docs/usage.md, and docs/integration.md must include an install step."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            (tmp_root / ".claude-plugin").mkdir(parents=True)
+            (tmp_root / ".claude-plugin/marketplace.json").write_bytes(
+                (ROOT / ".claude-plugin/marketplace.json").read_bytes()
+            )
+            (tmp_root / "docs").mkdir(parents=True)
+            for rel_path in ("README.md", "docs/usage.md", "docs/integration.md"):
+                content = (ROOT / rel_path).read_text(encoding="utf-8")
+                stripped = "\n".join(
+                    line
+                    for line in content.splitlines()
+                    if "/plugin install " not in line
+                    and "codex plugin add " not in line
+                )
+                (tmp_root / rel_path).write_text(stripped + "\n", encoding="utf-8")
+
+            for rel_path in ("README.md", "docs/usage.md", "docs/integration.md"):
+                errors = verify_all_snippets(root=tmp_root, files=[rel_path])
+                self.assertTrue(
+                    any("missing '/plugin install" in err for err in errors),
+                    f"Expected missing Claude install error for {rel_path}, got: {errors}",
+                )
+                self.assertTrue(
+                    any("missing 'codex plugin add" in err for err in errors),
+                    f"Expected missing Codex install error for {rel_path}, got: {errors}",
+                )
 
     def test_line_range_filtering(self):
         """Blocks outside the specified range are ignored."""
@@ -569,7 +638,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
                     f"Function '{item.name}' nesting depth {depth} exceeds limit of 3",
                 )
 
-    def test_documented_ranges_cover_all_seven_guides_completely(self):
+    def test_documented_ranges_cover_all_seven_guides_completely(self) -> None:
         """All 7 registered guides use full-file (1, None) bounds."""
         expected_guides = {
             "README.md",
@@ -588,7 +657,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 f"Expected full-file (1, None) bounds for {guide}, got {bounds}",
             )
 
-    def test_default_verify_all_snippets_executes_all_seven_guides(self):
+    def test_default_verify_all_snippets_executes_all_seven_guides(self) -> None:
         """Default verify_all_snippets executes commands in AGENTS.md, docs/toolkit.md, and docs/usage.md."""
         executed_targets: list[str] = []
         orig_tar = TOOL_DISPATCHERS[("tar",)]
@@ -621,17 +690,19 @@ class DocSnippetVerificationTests(unittest.TestCase):
             any("audit_to_sarif.py" in cmd for cmd in executed_targets),
             "Expected docs/toolkit.md snippets to execute on default run",
         )
-        # docs/usage.md L133 & L136 have tar -xf fred-skills-0.2.0-starter.tar / complete.tar
+        # docs/usage.md has tar -xf fred-skills-0.2.0-starter.tar / complete.tar
         self.assertTrue(
             any("fred-skills-0.2.0-starter.tar" in cmd for cmd in executed_targets),
-            "Expected docs/usage.md L133 tar snippet to execute on default run",
+            "Expected docs/usage.md starter.tar snippet to execute on default run",
         )
         self.assertTrue(
             any("fred-skills-0.2.0-complete.tar" in cmd for cmd in executed_targets),
-            "Expected docs/usage.md L136 tar snippet to execute on default run",
+            "Expected docs/usage.md complete.tar snippet to execute on default run",
         )
 
-    def test_tar_validation_enforces_compression_and_rejects_unknown_flags(self):
+    def test_tar_validation_enforces_compression_and_rejects_unknown_flags(
+        self,
+    ) -> None:
         """_validate_tar accepts -xf/-tf on .tar and -xzf/-ztf on .tar.gz, rejecting mismatches and unknown flags."""
         valid_cmds = [
             "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agent/skills/",
@@ -657,8 +728,8 @@ class DocSnippetVerificationTests(unittest.TestCase):
             ok, _ = execute_snippet_command(cmd, root=ROOT)
             self.assertFalse(ok, f"Expected invalid tar command to fail: {cmd}")
 
-    def test_invalid_cli_flag_probes_fail_across_all_dispatchers(self):
-        """Invalid CLI flags across make, python, ruff, pre-commit, sha256sum, git, curl, and gh must fail."""
+    def test_invalid_cli_flag_probes_fail_across_all_dispatchers(self) -> None:
+        """Invalid CLI flags across make, python, ruff, pre-commit, sha256sum, git, curl, gh, and marketplace must fail."""
         invalid_probes = [
             "make check --invalid-flag",
             "make --nonexistent-option",
@@ -667,6 +738,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "python -m pip install -r requirements-dev.txt --invalid-flag",
             "python -m unittest discover -s tests -v --invalid-flag",
             "python -m json.tool receipt.json --invalid-flag",
+            "python -m mypy --invalid-flag",
             "python scripts/sync_audit_resources.py --check --invalid-flag",
             "python scripts/sync_audit_resources.py --invalid-flag",
             "python scripts/validate_skills.py --invalid-flag",
@@ -674,6 +746,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "python scripts/check_doc_links.py --check",
             "python scripts/check_doc_links.py --invalid-flag",
             "python scripts/verify_doc_snippets.py --invalid-flag",
+            "python scripts/verify_workflow_actions.py --invalid-flag",
             "python scripts/audit_to_sarif.py audit.json --output out.sarif --invalid-flag",
             "python examples/walkthrough/run_demo.py --output audit-output/demo --invalid-flag",
             "python skills/repo-audit-program/scripts/validate_audit.py audit.json --invalid-flag",
@@ -688,12 +761,17 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "git --invalid-flag status",
             "curl -LO --invalid-flag https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS",
             "gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills --invalid-flag",
+            "/plugin marketplace add fderuiter/fred-skills --invalid-flag",
+            "/plugin install complete@fred-skills --invalid-flag",
+            "codex plugin add starter@fred-skills --invalid-flag",
         ]
         for probe in invalid_probes:
             ok, _ = execute_snippet_command(probe, root=ROOT)
             self.assertFalse(ok, f"Invalid-flag probe unexpectedly passed: {probe}")
 
-    def test_shell_operators_pipes_and_redirections_split_before_dispatch(self):
+    def test_shell_operators_pipes_and_redirections_split_before_dispatch(
+        self,
+    ) -> None:
         """Logical operators, pipes, and redirections split cleanly while preserving quotes and placeholders."""
         valid_compound = [
             'python -m json.tool /path/to/project/.fred-skills/<host>-<scope>/receipt.json > /dev/null && echo "Valid"',
@@ -715,7 +793,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             ok, _ = execute_snippet_command(cmd, root=ROOT)
             self.assertFalse(ok, f"Invalid compound command unexpectedly passed: {cmd}")
 
-    def test_make_dispatcher_fallback_without_gnu_make(self):
+    def test_make_dispatcher_fallback_without_gnu_make(self) -> None:
         """_validate_make validates both flags and Makefile targets when GNU make is unavailable."""
         from unittest.mock import patch
 
@@ -731,7 +809,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             ok_bad_target, _ = execute_snippet_command("make bogus_target", root=ROOT)
             self.assertFalse(ok_bad_target)
 
-    def test_agents_md_includes_doc_verification_scripts(self):
+    def test_agents_md_includes_doc_verification_scripts(self) -> None:
         """AGENTS.md fallback command block includes check_doc_links.py and verify_doc_snippets.py."""
         agents_text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("python scripts/check_doc_links.py", agents_text)

@@ -21,21 +21,23 @@ or choose a package from the [catalog](docs/catalog.md).
 
 ## Installation
 
-Install all 51 packages with a single marketplace command:
+Register the marketplace catalog, then install a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills) or any individual skill:
 
 ### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
+/plugin install complete@fred-skills
 ```
 
 ### Codex
 
 ```sh
 codex plugin marketplace add fderuiter/fred-skills
+codex plugin add starter@fred-skills
 ```
 
-Manual directory copying and local installer workflows (`scripts/fred.py install`) remain supported for environments without marketplace access.
+Replace `complete` or `starter` with any pack in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Manual directory copying and local installer workflows (`scripts/fred.py install`) remain supported for environments without marketplace access.
 
 ## Try the local walkthrough
 
@@ -151,5 +153,6 @@ Use `make fix` to repair drift or regenerate shared copies and discovery catalog
 
 For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
 [architecture](docs/architecture.md), [runbooks](docs/runbooks.md), [security](SECURITY.md), and
-[research](docs/research.md). [Licensing](docs/licensing.md) requires an owner decision
-before public release publication; this PR does not select a license or publish a tag.
+[research](docs/research.md). Distributed under the MIT [LICENSE](LICENSE) (see
+[licensing](docs/licensing.md)); pushes to `main` automatically tag and publish verified
+`VERSION` releases as documented in [releasing](docs/releasing.md).

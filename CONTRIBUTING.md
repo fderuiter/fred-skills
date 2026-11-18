@@ -34,7 +34,7 @@ pre-commit run --all-files
 
 To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
 
-Run verification checks with `make` (which runs Ruff linting, code formatting checks, script validation, and unit tests):
+Run verification checks with `make` (which runs Ruff linting, code formatting checks, static type checks, script validation, and unit tests):
 
 ```sh
 make check
@@ -55,9 +55,10 @@ make test
 `make check` and `make fix` run Ruff automatically. For environments without `make`, run direct Python and Ruff commands:
 
 ```sh
-# Linting and formatting checks
+# Linting, formatting, and static type checks
 ruff check .
 ruff format --check .
+python -m mypy
 
 # Verification checks (CI-equivalent non-mutating checks)
 python scripts/sync_audit_resources.py --check
@@ -66,6 +67,7 @@ python scripts/build_experience.py --check
 python scripts/validate_skills.py
 python scripts/check_doc_links.py
 python scripts/verify_doc_snippets.py
+python scripts/verify_workflow_actions.py --check
 python -m unittest discover -s tests -v
 
 # Regenerate shared copies and indexes
@@ -76,7 +78,7 @@ python scripts/build_experience.py
 
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
-All commands run without network access once the development dependencies are installed.
+All commands above run without network access once the development dependencies are installed; CI additionally runs `python scripts/verify_workflow_actions.py --online` to confirm upstream commit and tag resolution via `git ls-remote`.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.
 
 ## Change a skill
@@ -126,6 +128,8 @@ For optional local browser checks, install requirements-browser.txt and run
 Chromium needs ordinary process/socket support; if a managed environment prevents launch,
 record that limitation and use CI. Do not weaken the environment's restrictions.
 
-Before requesting a release, read docs/releasing.md and docs/licensing.md. No owner
-license, public release, real host certification, or quality benchmark should be inferred
-from this repository's package structure or fixture results.
+Before bumping `VERSION` for a release, read [docs/releasing.md](docs/releasing.md) and
+[docs/licensing.md](docs/licensing.md): merging an unpublished `VERSION` to `main`
+automatically tags `v<VERSION>` and publishes verified release archives under the MIT
+[LICENSE](LICENSE). Real host certification and broad model quality benchmarks should not
+be inferred from this repository's package structure or fixture results.

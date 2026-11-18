@@ -48,16 +48,62 @@ class InstallationTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
 
     def test_all_four_hosts_copy_complete_packages(self):
-        for host in ["codex", "claude-code", "antigravity", "gemini-cli"]:
-            destination = self.root / host
-            installation.install(destination, host, pack="starter", root=self.source)
-            target, _ = installation.locations(
-                destination, host, "project", self.source
-            )
-            self.assertEqual(
-                (self.source / "skills/sample/SKILL.md").read_bytes(),
-                (target / "sample/SKILL.md").read_bytes(),
-            )
+        hosts = list(read_json(self.source / "catalog/hosts.json")["hosts"].keys())
+        self.assertEqual(
+            hosts,
+            [
+                "codex",
+                "claude-code",
+                "antigravity",
+                "gemini-cli",
+                "cursor",
+                "copilot",
+                "opencode",
+                "windsurf",
+            ],
+        )
+        initial_bytes = b"Synthetic package sample"
+        updated_bytes = b"Updated synthetic package sample"
+        for host in hosts:
+            for scope in ["project", "user"]:
+                (self.source / "skills/sample/SKILL.md").write_bytes(initial_bytes)
+                destination = self.root / f"{host}-{scope}"
+                installation.install(
+                    destination,
+                    host,
+                    scope=scope,
+                    pack="starter",
+                    root=self.source,
+                )
+                target, state = installation.locations(
+                    destination, host, scope, self.source
+                )
+                self.assertEqual(
+                    initial_bytes, (target / "sample/SKILL.md").read_bytes()
+                )
+                rec = installation.receipt(state)
+                self.assertEqual(host, rec["host"])
+                self.assertIn("sample", rec["skills"])
+                self.assertIn("other", rec["skills"])
+
+                (self.source / "skills/sample/SKILL.md").write_bytes(updated_bytes)
+                installation.install(
+                    destination,
+                    host,
+                    scope=scope,
+                    pack="starter",
+                    update=True,
+                    root=self.source,
+                )
+                self.assertEqual(
+                    updated_bytes, (target / "sample/SKILL.md").read_bytes()
+                )
+
+                installation.rollback(destination, host, scope, self.source)
+                self.assertEqual(
+                    initial_bytes, (target / "sample/SKILL.md").read_bytes()
+                )
+        (self.source / "skills/sample/SKILL.md").write_bytes(initial_bytes)
 
     def test_query_installed_returns_installed_skills(self):
         self.install()
@@ -360,6 +406,131 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual("claude-code", res["host"])
         self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
 
+    def test_auto_detect_new_project_markers_and_copilot_fallback(self):
+        cases = [
+            ("cursor_proj", [".cursor"], "cursor", ".cursor/skills/sample/SKILL.md"),
+            (
+                "opencode_proj",
+                [".opencode"],
+                "opencode",
+                ".opencode/skills/sample/SKILL.md",
+            ),
+            (
+                "windsurf_proj",
+                [".windsurf"],
+                "windsurf",
+                ".windsurf/skills/sample/SKILL.md",
+            ),
+            (
+                "devin_proj",
+                [".devin"],
+                "windsurf",
+                ".windsurf/skills/sample/SKILL.md",
+            ),
+            (
+                "windsurf_both_proj",
+                [".windsurf", ".devin"],
+                "windsurf",
+                ".windsurf/skills/sample/SKILL.md",
+            ),
+            (
+                "copilot_bare_github",
+                [".github/workflows"],
+                "copilot",
+                ".github/skills/sample/SKILL.md",
+            ),
+            (
+                "copilot_skills_dir",
+                [".github/skills"],
+                "copilot",
+                ".github/skills/sample/SKILL.md",
+            ),
+        ]
+        for folder, markers, expected_host, expected_skill in cases:
+            with self.subTest(folder=folder):
+                dest = self.root / folder
+                for marker in markers:
+                    (dest / marker).mkdir(parents=True, exist_ok=True)
+                self.assertEqual(expected_host, installation.detect_host(dest))
+                res = installation.install(dest, pack="starter", root=self.source)
+                self.assertEqual(expected_host, res["host"])
+                self.assertTrue((dest / expected_skill).is_file())
+
+    def test_primary_markers_outrank_bare_github_unless_copilot_skills_or_receipt(self):
+        claude_gh = self.root / "claude_with_github_workflows"
+        (claude_gh / ".claude").mkdir(parents=True)
+        (claude_gh / ".github/workflows").mkdir(parents=True)
+        self.assertEqual("claude-code", installation.detect_host(claude_gh))
+        res = installation.install(claude_gh, pack="starter", root=self.source)
+        self.assertEqual("claude-code", res["host"])
+
+        cursor_gh = self.root / "cursor_with_github_workflows"
+        (cursor_gh / ".cursor").mkdir(parents=True)
+        (cursor_gh / ".github/workflows").mkdir(parents=True)
+        self.assertEqual("cursor", installation.detect_host(cursor_gh))
+
+        claude_copilot_skills = self.root / "claude_and_github_skills"
+        (claude_copilot_skills / ".claude").mkdir(parents=True)
+        (claude_copilot_skills / ".github/skills").mkdir(parents=True)
+        with self.assertRaises(ValueError) as ctx1:
+            installation.detect_host(claude_copilot_skills)
+        self.assertIn("--host", str(ctx1.exception))
+
+        claude_cursor = self.root / "claude_and_cursor"
+        (claude_cursor / ".claude").mkdir(parents=True)
+        (claude_cursor / ".cursor").mkdir(parents=True)
+        with self.assertRaises(ValueError) as ctx2:
+            installation.detect_host(claude_cursor)
+        self.assertIn("--host", str(ctx2.exception))
+
+        claude_copilot_receipt = self.root / "claude_github_and_copilot_receipt"
+        (claude_copilot_receipt / ".claude").mkdir(parents=True)
+        (claude_copilot_receipt / ".github/workflows").mkdir(parents=True)
+        copilot_state = claude_copilot_receipt / ".fred-skills/copilot-project"
+        copilot_state.mkdir(parents=True)
+        atomic_json(
+            copilot_state / "receipt.json",
+            {"schema_version": "1.0", "host": "copilot", "skills": {}, "history": []},
+        )
+        with self.assertRaises(ValueError) as ctx3:
+            installation.detect_host(claude_copilot_receipt)
+        self.assertIn("--host", str(ctx3.exception))
+
+        bare_gh_conflicting_receipt = self.root / "bare_github_claude_receipt"
+        (bare_gh_conflicting_receipt / ".github/workflows").mkdir(parents=True)
+        claude_state = bare_gh_conflicting_receipt / ".fred-skills/claude-code-project"
+        claude_state.mkdir(parents=True)
+        atomic_json(
+            claude_state / "receipt.json",
+            {
+                "schema_version": "1.0",
+                "host": "claude-code",
+                "skills": {},
+                "history": [],
+            },
+        )
+        with self.assertRaises(ValueError) as ctx4:
+            installation.detect_host(bare_gh_conflicting_receipt)
+        self.assertIn("--host", str(ctx4.exception))
+
+    def test_detect_host_user_scope_markers(self):
+        user_cases = [
+            (".claude", "claude-code"),
+            (".cursor", "cursor"),
+            (".agents", "codex"),
+            (".gemini", "gemini-cli"),
+            (".copilot", "copilot"),
+            (".config/opencode", "opencode"),
+            (".config/devin", "windsurf"),
+        ]
+        for idx, (marker, expected_host) in enumerate(user_cases):
+            with self.subTest(marker=marker):
+                home_dir = self.root / f"user_home_{idx}"
+                (home_dir / marker).mkdir(parents=True)
+                self.assertEqual(
+                    expected_host, installation.detect_host(home_dir, scope="user")
+                )
+
     def test_auto_detect_gemini_marker(self):
         dest = self.root / "gemini_project"
         (dest / ".gemini").mkdir(parents=True)
@@ -628,6 +799,202 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual("restored-before-state", result["recovery"])
         self.assertEqual(expected_before, (target / "sample/SKILL.md").read_bytes())
         self.assertFalse((state / "operation.lock").exists())
+
+    def test_query_installed_reports_tracked_modified_missing_and_untracked(self):
+        self.install()
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        res_clean = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertTrue(res_clean["healthy"])
+        self.assertFalse(res_clean["locked"])
+        self.assertEqual([], res_clean["untracked"])
+        self.assertEqual("tracked", res_clean["skills"]["sample"]["status"])
+        self.assertEqual("tracked", res_clean["skills"]["other"]["status"])
+
+        # Edit sample, delete other, add untracked skill and non-skill directory
+        (target / "sample/SKILL.md").write_text("Edited on disk")
+        shutil.rmtree(target / "other")
+        (target / "custom-local").mkdir(parents=True)
+        (target / "custom-local/SKILL.md").write_text("Local custom skill")
+        (target / "not-a-skill").mkdir(parents=True)
+        (target / "not-a-skill/README.md").write_text("Not a skill")
+
+        res_drift = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertFalse(res_drift["healthy"])
+        self.assertFalse(res_drift["locked"])
+        self.assertEqual("modified", res_drift["skills"]["sample"]["status"])
+        self.assertEqual("missing", res_drift["skills"]["other"]["status"])
+        self.assertEqual(["custom-local"], res_drift["untracked"])
+        # Existing metadata keys remain intact
+        self.assertEqual("0.2.0", res_drift["skills"]["sample"]["source_version"])
+        self.assertIn("content_hash", res_drift["skills"]["sample"])
+
+    def test_query_installed_detects_operation_lock_as_unhealthy(self):
+        self.install()
+        _, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (state / "operation.lock").write_text("active")
+        res = installation.query_installed(
+            self.destination, "codex", "project", root=self.source
+        )
+        self.assertTrue(res["locked"])
+        self.assertFalse(res["healthy"])
+        self.assertEqual("tracked", res["skills"]["sample"]["status"])
+
+    def test_require_unmodified_errors_guide_to_force_flag(self):
+        self.install()
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        rec = installation.receipt(state)["skills"]["sample"]
+        (target / "sample/SKILL.md").write_text("Drifted content")
+        with self.assertRaises(ValueError) as mod_ctx:
+            installation.require_unmodified(target / "sample", rec)
+        self.assertIn("Locally modified skill: sample", str(mod_ctx.exception))
+        self.assertIn("--force", str(mod_ctx.exception))
+
+        shutil.rmtree(target / "sample")
+        with self.assertRaises(ValueError) as miss_ctx:
+            installation.require_unmodified(target / "sample", rec)
+        self.assertIn("Managed skill is missing: sample", str(miss_ctx.exception))
+        self.assertIn("--force", str(miss_ctx.exception))
+
+    def test_install_and_update_force_archive_edits_and_restore_deleted_skills(self):
+        dest = self.root / "claude-force-project"
+        installation.install(dest, host="claude-code", pack="starter", root=self.source)
+        target, state = installation.locations(
+            dest, "claude-code", "project", self.source
+        )
+        (target / "sample/SKILL.md").write_text("Operator custom edit")
+        shutil.rmtree(target / "other")
+        (target / "user-local").mkdir(parents=True)
+        (target / "user-local/SKILL.md").write_text("Untracked user skill")
+
+        installation.install(
+            dest,
+            host="claude-code",
+            pack="starter",
+            update=True,
+            force=True,
+            root=self.source,
+        )
+        archived = list((state / "backups").glob("*/sample/SKILL.md"))
+        self.assertTrue(any(p.read_text() == "Operator custom edit" for p in archived))
+        self.assertEqual(
+            "Synthetic package sample", (target / "sample/SKILL.md").read_text()
+        )
+        self.assertEqual(
+            "Synthetic package other", (target / "other/SKILL.md").read_text()
+        )
+        self.assertEqual(
+            "Untracked user skill", (target / "user-local/SKILL.md").read_text()
+        )
+        res_after_update = installation.query_installed(
+            dest, "claude-code", "project", root=self.source
+        )
+        self.assertTrue(res_after_update["healthy"])
+        self.assertEqual(["user-local"], res_after_update["untracked"])
+
+        # Delete entire .claude/skills target and repair with install --force
+        shutil.rmtree(target)
+        installation.install(
+            dest,
+            host="claude-code",
+            pack="starter",
+            force=True,
+            root=self.source,
+        )
+        res_after_install = installation.query_installed(
+            dest, "claude-code", "project", root=self.source
+        )
+        self.assertTrue(res_after_install["healthy"])
+        self.assertEqual("tracked", res_after_install["skills"]["sample"]["status"])
+        self.assertEqual("tracked", res_after_install["skills"]["other"]["status"])
+
+    def test_remove_force_archives_modified_and_removes_missing_skills(self):
+        self.install()
+        target, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (target / "sample/SKILL.md").write_text("Edited before uninstall")
+        shutil.rmtree(target / "other")
+        (target / "untracked-keep").mkdir(parents=True)
+        (target / "untracked-keep/SKILL.md").write_text("Keep me")
+
+        installation.remove(
+            self.destination,
+            host="codex",
+            scope="project",
+            skills=["sample", "other"],
+            force=True,
+            root=self.source,
+        )
+        archived = list((state / "backups").glob("*/sample/SKILL.md"))
+        self.assertTrue(
+            any(p.read_text() == "Edited before uninstall" for p in archived)
+        )
+        rec = installation.receipt(state)
+        self.assertEqual({}, rec["skills"])
+        self.assertEqual("Keep me", (target / "untracked-keep/SKILL.md").read_text())
+
+    def test_force_never_touches_untracked_or_symlink_targets(self):
+        target, _ = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (target / "sample").mkdir(parents=True)
+        (target / "sample/SKILL.md").write_text("User unmanaged skill")
+        with self.assertRaises(ValueError) as ctx1:
+            installation.install(
+                self.destination,
+                host="codex",
+                pack="starter",
+                force=True,
+                root=self.source,
+            )
+        self.assertIn("Refusing to replace unmanaged skill", str(ctx1.exception))
+        self.assertEqual(
+            "User unmanaged skill", (target / "sample/SKILL.md").read_text()
+        )
+
+        with self.assertRaises(ValueError) as ctx2:
+            installation.remove(
+                self.destination,
+                host="codex",
+                skills=["sample"],
+                force=True,
+                root=self.source,
+            )
+        self.assertIn("Not managed by this installation", str(ctx2.exception))
+        self.assertEqual(
+            "User unmanaged skill", (target / "sample/SKILL.md").read_text()
+        )
+
+        shutil.rmtree(target / "sample")
+        self.install()
+        shutil.rmtree(target / "sample")
+        outside = self.root / "outside_dir"
+        outside.mkdir(parents=True)
+        (outside / "SKILL.md").write_text("Outside")
+        try:
+            (target / "sample").symlink_to(outside, target_is_directory=True)
+        except OSError:
+            return
+        with self.assertRaises(ValueError) as sym_ctx:
+            installation.install(
+                self.destination,
+                host="codex",
+                pack="starter",
+                update=True,
+                force=True,
+                root=self.source,
+            )
+        self.assertIn("Unsafe installed package path", str(sym_ctx.exception))
 
     def test_installation_cyclomatic_complexity_under_ten(self):
         import ast

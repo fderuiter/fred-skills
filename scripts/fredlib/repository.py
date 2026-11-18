@@ -17,6 +17,7 @@ IGNORED = {
     "venv",
     "node_modules",
     "__pycache__",
+    ".mypy_cache",
     ".fred-skills",
     "audit-output",
     "dist",
@@ -59,14 +60,15 @@ def snapshot(
     else:
         # Walk without descending through dependencies or symlinked directories.
         paths = []
-        for base, dirs, files in os.walk(repo, followlinks=False):
+        for base, dirs, walk_files in os.walk(repo, followlinks=False):
             dirs[:] = sorted(
                 d
                 for d in dirs
                 if d not in IGNORED and not (Path(base) / d).is_symlink()
             )
-            paths.extend(Path(base) / name for name in sorted(files))
-    files, skipped = {}, {}
+            paths.extend(Path(base) / name for name in sorted(walk_files))
+    files: dict[str, str] = {}
+    skipped: dict[str, str] = {}
     for path in sorted(set(paths)):
         rel = path.relative_to(repo).as_posix()
         if any(p in IGNORED for p in Path(rel).parts) or any(
@@ -108,10 +110,14 @@ def changed_files(repo: Path, base: str) -> tuple[list[str], str]:
         base + "^{commit}",
         required=True,
     )
-    if not re.fullmatch(r"[0-9a-f]{40,64}", sha or ""):
+    if sha is None or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
         raise ValueError("Base did not resolve to a commit")
     head = git(repo, "rev-parse", "--verify", "HEAD", required=True)
+    if head is None:
+        raise ValueError("HEAD did not resolve to a commit")
     merge_base = git(repo, "merge-base", sha, head, required=True)
+    if merge_base is None:
+        raise ValueError("Could not resolve merge-base")
     committed = git(
         repo,
         "diff",
@@ -130,7 +136,13 @@ def changed_files(repo: Path, base: str) -> tuple[list[str], str]:
         repo, "ls-files", "--others", "--exclude-standard", "-z", required=True
     )
     return sorted(
-        {p for output in [committed, dirty, untracked] for p in output.split("\0") if p}
+        {
+            p
+            for output in (committed, dirty, untracked)
+            if output is not None
+            for p in output.split("\0")
+            if p
+        }
     ), merge_base
 
 
