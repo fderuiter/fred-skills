@@ -821,7 +821,10 @@ def handle_runs(a: argparse.Namespace) -> Any:
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "compare":
-        return runs.compare(read_json(a.before), read_json(a.after))
+        return runs.compare(
+            read_json(resolve_audit_path(a.before)),
+            read_json(resolve_audit_path(a.after)),
+        )
     if a.command == "reconcile":
         return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
     if a.command == "import-sarif":

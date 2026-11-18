@@ -9,17 +9,125 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+SUITE_DELIVERABLES: dict[str, tuple[str, str]] = {
+    "repository-audits": (
+        "audit.json",
+        "shared/repo-audit/resources/assets/audit.schema.json",
+    ),
+    "repository-workflows": (
+        "audit.json",
+        "shared/repo-audit/resources/assets/audit.schema.json",
+    ),
+    "software-architecture": (
+        "architecture.json",
+        "skills/arch-decision-record/assets/architecture.schema.json",
+    ),
+    "code-review": (
+        "review.json",
+        "skills/review-diff-analysis/assets/review.schema.json",
+    ),
+    "automated-testing": (
+        "testing.json",
+        "skills/test-gap-analysis/assets/testing.schema.json",
+    ),
+}
+
+DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
+    "architecture.json": "skills/arch-decision-record/assets/architecture.schema.json",
+    "review.json": "skills/review-diff-analysis/assets/review.schema.json",
+    "testing.json": "skills/test-gap-analysis/assets/testing.schema.json",
+}
+
+
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _suite_for_skills(skills: list[str], root: Path = ROOT) -> str:
+    skill_to_suite = {
+        row["name"]: row["suite"]
+        for row in read_json(root / "catalog/skills.json")["skills"]
+        if row.get("suite")
+    }
+    suites = list(
+        dict.fromkeys(skill_to_suite[s] for s in skills if s in skill_to_suite)
+    )
+    if "repository-audits" in suites:
+        return "repository-audits"
+    return suites[0] if suites else "repository-audits"
+
+
+def _deliverable_for_run(run: dict, root: Path = ROOT) -> str:
+    plan_data = run.get("plan", {}) if isinstance(run, dict) else {}
+    outputs = plan_data.get("expected_outputs", [])
+    if isinstance(outputs, list):
+        for name in DOMAIN_DELIVERABLE_SCHEMAS:
+            if name in outputs:
+                return name
+        if "audit.json" in outputs:
+            return "audit.json"
+    skills = plan_data.get("skills", [])
+    if isinstance(skills, list) and skills:
+        suite = _suite_for_skills(skills, root=root)
+        return SUITE_DELIVERABLES.get(suite, ("audit.json", ""))[0]
+    task = plan_data.get("task")
+    if isinstance(task, str):
+        recipes = read_json(root / "catalog/recipes.json")["recipes"]
+        if task in recipes:
+            suite = _suite_for_skills(recipes[task]["skills"], root=root)
+            return SUITE_DELIVERABLES.get(suite, ("audit.json", ""))[0]
+    return "audit.json"
+
+
+def _detect_domain_kind(data: object) -> str | None:
+    if not isinstance(data, dict) or "run_id" in data:
+        return None
+    if "verdict" in data or ("summary" in data and "findings" in data):
+        return "review"
+    if "test_cases" in data or ("component" in data and "framework" in data):
+        return "testing"
+    if (
+        "boundaries" in data
+        or "decisions" in data
+        or ("title" in data and "status" in data and "findings" not in data)
+    ):
+        return "architecture"
+    return None
 
 
 def resolve_audit_path(path: Path | str | None = None) -> Path:
     p = Path(path) if path is not None else Path(".")
     if p.is_dir():
+        run_file = p / "run.json"
+        if run_file.is_file():
+            try:
+                expected = _deliverable_for_run(read_json(run_file))
+            except (OSError, ValueError, TypeError):
+                expected = "audit.json"
+            target = p / expected
+            if target.is_file():
+                return target
+            if expected == "audit.json":
+                raise ValueError(
+                    f"Audit ledger 'audit.json' not found in directory: {p}"
+                )
+            raise ValueError(
+                f"Suite deliverable '{expected}' not found in directory: {p}"
+            )
         audit_file = p / "audit.json"
-        if not audit_file.is_file():
-            raise ValueError(f"Audit ledger 'audit.json' not found in directory: {p}")
-        return audit_file
+        if audit_file.is_file():
+            return audit_file
+        domain_files = [
+            p / name for name in DOMAIN_DELIVERABLE_SCHEMAS if (p / name).is_file()
+        ]
+        if len(domain_files) == 1:
+            return domain_files[0]
+        if len(domain_files) > 1:
+            names = ", ".join(f.name for f in domain_files)
+            raise ValueError(
+                f"Multiple suite deliverables ({names}) found in directory {p}; specify an explicit file path"
+            )
+        raise ValueError(f"Audit ledger 'audit.json' not found in directory: {p}")
     return p
 
 

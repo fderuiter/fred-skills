@@ -451,6 +451,23 @@ def _build_sarif_run(
     return run
 
 
+def _detect_domain_artifact(data: dict[str, Any]) -> str | None:
+    """Identify non-audit domain payloads so SARIF export fails with clear guidance."""
+    if "run_id" in data:
+        return None
+    if "verdict" in data or ("summary" in data and "findings" in data):
+        return "review.json"
+    if "test_cases" in data or ("component" in data and "framework" in data):
+        return "testing.json"
+    if (
+        "boundaries" in data
+        or "decisions" in data
+        or ("title" in data and "status" in data and "findings" not in data)
+    ):
+        return "architecture.json"
+    return None
+
+
 def audit_to_sarif(
     data: dict[str, Any],
     *,
@@ -460,6 +477,11 @@ def audit_to_sarif(
     """Convert audit data conforming to audit.schema.json into SARIF v2.1.0."""
     if not isinstance(data, dict):
         raise TypeError("Audit data must be a JSON object")
+    domain_artifact = _detect_domain_artifact(data)
+    if domain_artifact is not None:
+        raise ValueError(
+            f"SARIF export ('export-sarif') requires an 'audit.json' ledger; domain artifact '{domain_artifact}' is not supported"
+        )
 
     evidence_map = _build_evidence_map(data.get("evidence", []))
     rules: list[dict[str, Any]] = []
@@ -506,6 +528,11 @@ def _load_audit_file(input_path: Path) -> dict[str, Any]:
     if target.is_dir():
         ledger_path = target / "audit.json"
         if not ledger_path.is_file():
+            for domain_name in ("architecture.json", "review.json", "testing.json"):
+                if (target / domain_name).is_file():
+                    raise ValueError(
+                        f"Audit ledger 'audit.json' not found in directory: {input_path}; SARIF export ('export-sarif') requires 'audit.json' and does not support domain artifact '{domain_name}'"
+                    )
             raise ValueError(
                 f"Audit ledger 'audit.json' not found in directory: {input_path}"
             )
