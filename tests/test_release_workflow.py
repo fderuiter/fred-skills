@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import yaml
@@ -25,6 +26,9 @@ CHECKOUT_SHA = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 
 class ReleaseWorkflowTests(unittest.TestCase):
     """Verify release workflow triggers, detection, non-draft publication, notes, and idempotency."""
+
+    workflow_text: str
+    workflow_data: dict[str, Any]
 
     @classmethod
     def setUpClass(cls):
