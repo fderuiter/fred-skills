@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: skills-${{ github.workflow }}-${{ github.ref }}
+  group: skills-${{ github.workflow }}-${{ (github.event_name == 'push' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -54,7 +54,11 @@ jobs:
           python scripts/validate_skills.py --telemetry validation-telemetry.json
           python scripts/check_doc_links.py
           python scripts/verify_doc_snippets.py
+          python scripts/verify_workflow_actions.py --check
           python -m unittest discover -s tests -v
+      - name: Verify workflow action pins upstream
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: python scripts/verify_workflow_actions.py --online
       - name: Execute original, correction, and safe controls
         run: python -c "import os, subprocess, sys; subprocess.run([sys.executable, 'examples/walkthrough/run_demo.py', '--output', os.path.join(os.environ['RUNNER_TEMP'], 'fred-demo')], check=True)"
       - name: Build and verify a standalone pack
