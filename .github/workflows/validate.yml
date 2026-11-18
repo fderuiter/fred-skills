@@ -42,12 +42,15 @@ jobs:
         run: ruff check .
       - name: Verify code formatting
         run: ruff format --check .
+      - name: Check Python static types
+        run: python -m mypy
       - name: Check skill packages and test suites
         if: runner.os != 'Windows'
         run: make check
       - name: Check skill packages and test suites (Windows fallback)
         if: runner.os == 'Windows'
         run: |
+          python -m mypy
           python scripts/sync_audit_resources.py --check
           python scripts/build_catalog.py --check
           python scripts/build_experience.py --check

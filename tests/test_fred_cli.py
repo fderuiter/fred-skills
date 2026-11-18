@@ -7,9 +7,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 
+pty: ModuleType | None
 try:
-    import pty
+    import pty as _pty
+
+    pty = _pty
 except ImportError:
     pty = None
 

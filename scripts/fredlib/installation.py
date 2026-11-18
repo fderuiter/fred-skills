@@ -424,11 +424,11 @@ def _validate_receipt_hosts(existing_receipt_hosts: list[str], dest: Path) -> No
     )
 
 
-def _query_detected_host(dest: Path, scope: str, root: Path) -> dict:
+def _query_detected_host(dest: Path, scope: str, root: Path) -> dict[str, Any]:
     try:
         detected_host = detect_host(dest, scope)
         target, state = locations(dest, detected_host, scope, root)
-        base = {
+        base: dict[str, Any] = {
             "destination": str(dest),
             "target": str(target),
             "state": str(state),

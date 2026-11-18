@@ -6,6 +6,7 @@ import shutil
 import signal
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -88,12 +89,12 @@ def evaluate(
                             cwd=work,
                             stdout=stdout,
                             stderr=stderr,
-                            start_new_session=os.name == "posix",
+                            start_new_session=sys.platform != "win32",
                         )
                         try:
                             proc.wait(timeout=timeout)
                         except subprocess.TimeoutExpired:
-                            if os.name == "posix":
+                            if sys.platform != "win32":
                                 with contextlib.suppress(ProcessLookupError):
                                     os.killpg(proc.pid, signal.SIGKILL)
                             else:

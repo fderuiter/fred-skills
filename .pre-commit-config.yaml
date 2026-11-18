@@ -11,6 +11,12 @@ repos:
         entry: ruff format --check
         language: system
         types_or: [python, markdown]
+      - id: mypy
+        name: Check Python static types with mypy
+        entry: python -m mypy
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: sync-audit-resources
         name: Check shared resource copies
         entry: python scripts/sync_audit_resources.py --check

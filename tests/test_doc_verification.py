@@ -230,7 +230,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover all 32 code blocks in docs/integration.md",
         )
 
-    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self):
+    def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self) -> None:
         """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
         errors = verify_toolkit_subcommands(root=ROOT)
         self.assertEqual(

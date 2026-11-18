@@ -34,7 +34,7 @@ pre-commit run --all-files
 
 To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
 
-Run verification checks with `make` (which runs Ruff linting, code formatting checks, script validation, and unit tests):
+Run verification checks with `make` (which runs Ruff linting, code formatting checks, static type checks, script validation, and unit tests):
 
 ```sh
 make check
@@ -55,9 +55,10 @@ make test
 `make check` and `make fix` run Ruff automatically. For environments without `make`, run direct Python and Ruff commands:
 
 ```sh
-# Linting and formatting checks
+# Linting, formatting, and static type checks
 ruff check .
 ruff format --check .
+python -m mypy
 
 # Verification checks (CI-equivalent non-mutating checks)
 python scripts/sync_audit_resources.py --check

@@ -8,6 +8,7 @@ RUFF ?= ruff
 check:
 	$(RUFF) check .
 	$(RUFF) format --check .
+	$(PYTHON) -m mypy
 	$(PYTHON) scripts/sync_audit_resources.py --check
 	$(PYTHON) scripts/build_catalog.py --check
 	$(PYTHON) scripts/build_experience.py --check

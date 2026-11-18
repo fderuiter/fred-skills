@@ -909,7 +909,8 @@ def _extract_turns_from_record(obj: dict[str, Any], line_no: int) -> list[Parsed
         return turns
 
     # 5. Claude Code / Anthropic / OpenAI message envelopes
-    msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+    raw_msg = obj.get("message")
+    msg: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else obj
     role = str(msg.get("role") or rec_type or "").lower()
     is_api_error = bool(
         obj.get("isApiErrorMessage")
@@ -1027,11 +1028,8 @@ def _extract_turns_from_record(obj: dict[str, Any], line_no: int) -> list[Parsed
         if isinstance(tool_calls, list):
             for tc in tool_calls:
                 if isinstance(tc, dict):
-                    fn = (
-                        tc.get("function")
-                        if isinstance(tc.get("function"), dict)
-                        else tc
-                    )
+                    raw_fn = tc.get("function")
+                    fn: dict[str, Any] = raw_fn if isinstance(raw_fn, dict) else tc
                     turns.append(
                         ParsedTurn(
                             line_no,
