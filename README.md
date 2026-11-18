@@ -7,8 +7,8 @@ remediation reconciliation, and nine software architecture, code review, and aut
 testing skills. All packages currently have experimental maturity.
 
 Start with a task in the [task guide](docs/experience.md), browse the
-[searchable offline explorer](docs/explorer.html) after downloading the repository,
-or choose a package from the [catalog](docs/catalog.md).
+[hosted explorer](https://fderuiter.github.io/fred-skills) (or local
+[offline explorer](docs/explorer.html)), or choose a package from the [catalog](docs/catalog.md).
 
 | I want to… | Start here |
 | --- | --- |
