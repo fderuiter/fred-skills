@@ -2,20 +2,30 @@
 
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import patch
 
+fcntl: ModuleType | None
 pty: ModuleType | None
+termios: ModuleType | None
 try:
+    import fcntl as _fcntl
     import pty as _pty
+    import termios as _termios
 
+    fcntl = _fcntl
     pty = _pty
+    termios = _termios
 except ImportError:
+    fcntl = None
     pty = None
+    termios = None
 
 ROOT = Path(__file__).resolve().parents[1]
 FRED_PY = ROOT / "scripts/fred.py"
@@ -28,6 +38,7 @@ class FredCLITests(unittest.TestCase):
         isatty: bool = False,
         cwd: Path | str | None = None,
         env: dict[str, str] | None = None,
+        columns: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if not isatty:
             return subprocess.run(
@@ -41,6 +52,12 @@ class FredCLITests(unittest.TestCase):
         if pty is None:
             self.skipTest("pty module is not available on this platform")
         master, slave = pty.openpty()
+        run_env = dict(os.environ if env is None else env)
+        if columns is not None:
+            run_env["COLUMNS"] = str(columns)
+            if fcntl is not None and termios is not None:
+                winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
         proc = subprocess.run(
             [sys.executable, str(FRED_PY), *args],
             stdin=subprocess.DEVNULL,
@@ -48,7 +65,7 @@ class FredCLITests(unittest.TestCase):
             stderr=slave,
             check=False,
             cwd=cwd,
-            env=env,
+            env=run_env,
         )
         os.close(slave)
         output = b""
@@ -456,6 +473,333 @@ class FredCLITests(unittest.TestCase):
         self.assertEqual(0, proc2.returncode)
         data2 = json.loads(proc2.stdout)
         self.assertIn("hosts", data2)
+
+    def test_pty_table_wraps_to_terminal_width_and_clamps_narrow_columns(self):
+        for cmd_args, expected_id in [
+            (["search", "contracts"], "repo-audit-behavioral-contracts"),
+            (["packs"], "starter"),
+            (["tasks"], "expand-automated-tests"),
+            (["hosts"], "antigravity"),
+        ]:
+            with self.subTest(cmd=cmd_args):
+                proc = self.run_cli(*cmd_args, isatty=True, columns=80)
+                self.assertEqual(0, proc.returncode)
+                lines = proc.stdout.splitlines()
+                self.assertTrue(lines)
+                for line in lines:
+                    self.assertLessEqual(
+                        len(line),
+                        80,
+                        f"Line exceeded 80 columns ({len(line)}): {line!r}",
+                    )
+                self.assertIn(expected_id, proc.stdout)
+
+        for narrow_cols in (25, 10):
+            narrow_proc = self.run_cli(
+                "search", "contracts", isatty=True, columns=narrow_cols
+            )
+            self.assertEqual(0, narrow_proc.returncode)
+            self.assertIn("repo-audit-behavioral-contracts", narrow_proc.stdout)
+
+    def test_format_table_unit_width_and_below_forty_column_clamping(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import fred
+
+        headers = ["Skill", "Title", "Description"]
+        rows = [
+            [
+                "repo-audit-behavioral-contracts",
+                "Behavioral Contracts and Boundary Verification",
+                "Inspect implicit and explicit behavioral contracts across module boundaries, asynchronous callbacks, and error semantics.",
+            ]
+        ]
+        with (
+            patch.object(sys.stdout, "isatty", return_value=True),
+            patch("shutil.get_terminal_size", return_value=os.terminal_size((80, 24))),
+        ):
+            rendered_80 = fred.format_table(headers, rows)
+        for line in rendered_80.splitlines():
+            self.assertLessEqual(len(line), 80)
+        self.assertIn("repo-audit-behavioral-contracts", rendered_80)
+
+        for tiny_cols in (35, 20, 5, 1):
+            with (
+                patch.object(sys.stdout, "isatty", return_value=True),
+                patch(
+                    "shutil.get_terminal_size",
+                    return_value=os.terminal_size((tiny_cols, 24)),
+                ),
+            ):
+                rendered_tiny = fred.format_table(headers, rows)
+            self.assertIn("repo-audit-behavioral-contracts", rendered_tiny)
+
+    def test_tty_summaries_and_json_override_across_subcommands(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            repo_dir = tmp_path / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+            # preflight: TTY concise summary vs --json override vs piped JSON
+            pre_tty = self.run_cli("preflight", str(repo_dir), isatty=True)
+            self.assertEqual(0, pre_tty.returncode)
+            self.assertIn("Repository:", pre_tty.stdout)
+            self.assertIn("Files indexed:", pre_tty.stdout)
+            self.assertFalse(pre_tty.stdout.lstrip().startswith("{"))
+
+            pre_json = self.run_cli("preflight", str(repo_dir), "--json", isatty=True)
+            self.assertEqual(0, pre_json.returncode)
+            self.assertEqual(
+                str(repo_dir), json.loads(pre_json.stdout)["repository"]["path"]
+            )
+
+            # plan: TTY concise summary vs --json override
+            plan_tty = self.run_cli(
+                "plan", str(repo_dir), "--task", "investigate-bug", isatty=True
+            )
+            self.assertEqual(0, plan_tty.returncode)
+            self.assertIn("Plan: investigate-bug", plan_tty.stdout)
+            self.assertIn("Selected skills", plan_tty.stdout)
+            self.assertFalse(plan_tty.stdout.lstrip().startswith("{"))
+
+            plan_json = self.run_cli(
+                "plan",
+                str(repo_dir),
+                "--task",
+                "investigate-bug",
+                "--json",
+                isatty=True,
+            )
+            self.assertEqual(0, plan_json.returncode)
+            self.assertEqual(
+                "investigate-bug", json.loads(plan_json.stdout)["plan"]["task"]
+            )
+
+            # init, validate-run, checkpoint, resume, report, export-sarif
+            ws = tmp_path / "audit-ws"
+            init_tty = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "investigate-bug",
+                "--output",
+                str(ws),
+                isatty=True,
+            )
+            self.assertEqual(0, init_tty.returncode)
+            self.assertIn("Initialized run:", init_tty.stdout)
+            self.assertIn("Prompt:", init_tty.stdout)
+
+            val_tty = self.run_cli("validate-run", str(ws), isatty=True)
+            self.assertEqual(0, val_tty.returncode)
+            self.assertIn("Run validation: valid", val_tty.stdout)
+
+            val_json = self.run_cli("validate-run", str(ws), "--json", isatty=True)
+            self.assertEqual(0, val_json.returncode)
+            self.assertTrue(json.loads(val_json.stdout)["valid"])
+
+            chk_tty = self.run_cli(
+                "checkpoint",
+                str(ws),
+                "--state",
+                "paused",
+                "--note",
+                "slice complete",
+                isatty=True,
+            )
+            self.assertEqual(0, chk_tty.returncode)
+            self.assertIn("Recorded checkpoint:", chk_tty.stdout)
+            self.assertIn("slice complete", chk_tty.stdout)
+
+            res_tty = self.run_cli("resume", str(ws), isatty=True)
+            self.assertEqual(0, res_tty.returncode)
+            self.assertIn("Resume check:", res_tty.stdout)
+
+            rep_out = tmp_path / "report.html"
+            rep_tty = self.run_cli(
+                "report", str(ws), "--output", str(rep_out), isatty=True
+            )
+            self.assertEqual(0, rep_tty.returncode)
+            self.assertIn("Rendered report:", rep_tty.stdout)
+
+            # install, update, remove, rollback
+            dest = tmp_path / "host-dest"
+            inst_tty = self.run_cli(
+                "install",
+                "--destination",
+                str(dest),
+                "--host",
+                "codex",
+                "--pack",
+                "starter",
+                isatty=True,
+            )
+            self.assertEqual(0, inst_tty.returncode)
+            self.assertIn("Installed", inst_tty.stdout)
+
+            upd_json = self.run_cli(
+                "update",
+                "--destination",
+                str(dest),
+                "--host",
+                "codex",
+                "--pack",
+                "starter",
+                "--json",
+                isatty=True,
+            )
+            self.assertEqual(0, upd_json.returncode)
+            self.assertEqual("update", json.loads(upd_json.stdout)["action"])
+
+    def test_render_tty_output_covers_all_twenty_seven_subcommands(self):
+        import argparse
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import fred
+
+        sample_payloads: dict[str, object] = {
+            "tasks": {"recipes": {"review-pr": {"outcome": "Review", "skills": ["a"]}}},
+            "packs": {
+                "packs": {"starter": {"skills": ["a"], "description": "Starter"}}
+            },
+            "hosts": {
+                "hosts": {
+                    "codex": {"project_path": ".agents/skills", "invocation": "$skill"}
+                }
+            },
+            "search": [{"name": "s1", "title": "Skill 1", "description": "Desc"}],
+            "preflight": {
+                "repository": {"path": "/repo", "revision": "abc123", "dirty": False},
+                "snapshot": {"file_count": 10, "complete": True},
+                "languages": ["Python"],
+            },
+            "plan": {
+                "plan": {
+                    "task": "review-pr",
+                    "mode": "changes",
+                    "budget": "balanced",
+                    "skills": ["s1"],
+                    "deferred_skills": [],
+                    "expected_outputs": ["audit.json"],
+                },
+                "preflight": {"repository": {"path": "/repo", "revision": "abc123"}},
+            },
+            "init": {
+                "output": "/ws",
+                "run": {
+                    "run_id": "run-1",
+                    "plan": {
+                        "task": "review-pr",
+                        "mode": "investigate",
+                        "budget": "balanced",
+                        "skills": ["s1"],
+                    },
+                },
+            },
+            "validate-run": {"valid": True, "semantic_claims_verified": False},
+            "resume": {
+                "old_snapshot": "aaa111222333444",
+                "new_snapshot": "bbb111222333444",
+                "changed_files": ["a.py"],
+                "stale_finding_ids": [],
+                "next_action": "Review changes",
+            },
+            "memory": {"output": "/mem.json", "contracts": 2},
+            "checkpoint": {
+                "run_id": "run-1",
+                "state": "paused",
+                "checkpoints": [{"note": "paused here"}],
+            },
+            "report": {"output": "/report.html"},
+            "issues": {"drafts": ["/issues/I-1.md"], "remote_writes": 0},
+            "compare": {
+                "introduced": ["F-2"],
+                "persisting": [],
+                "status_changed": [],
+                "not_observed": [],
+                "ambiguous": [],
+            },
+            "reconcile": {
+                "finding_id": "F-1",
+                "state": "in-progress",
+                "note": "working",
+            },
+            "import-sarif": {"observations": 3, "output": "/obs.json"},
+            "export-sarif": {"results": 2, "output": "/out.sarif"},
+            "triage": {
+                "session_id": "s-1",
+                "failure_classification": {
+                    "failure_type": "tool_timeout",
+                    "line_number": 4,
+                    "summary": "Timed out",
+                },
+                "correlated_domain": {"specialist_skill": "repo-audit-concurrency"},
+                "recovery": {"instructions": ["1. Retry narrowly"]},
+                "scrubbed_transcript": "LARGE_TRANSCRIPT_BODY",
+            },
+            "installed": {
+                "target": "/dest/.agents/skills",
+                "skills": {"s1": {"source_version": "0.2.0", "status": "tracked"}},
+                "untracked": [],
+            },
+            "install": {
+                "action": "install",
+                "skills": ["s1"],
+                "host": "codex",
+                "scope": "project",
+                "target": "/dest/.agents/skills",
+                "dry_run": False,
+            },
+            "update": {
+                "action": "update",
+                "skills": ["s1"],
+                "host": "codex",
+                "scope": "project",
+                "target": "/dest/.agents/skills",
+                "dry_run": True,
+            },
+            "remove": {"action": "remove", "skills": ["s1"], "dry_run": False},
+            "rollback": {"action": "rollback", "skills": ["s1"]},
+            "recover-install": {
+                "recovery": "restored-before-state",
+                "skills": ["s1"],
+                "preserved_interrupted_content": "/backups/p1",
+            },
+            "evaluate": {
+                "runs": [{"case": "c1"}, {"case": "c1"}],
+                "summary": {
+                    "without_skill": {
+                        "runs": 1,
+                        "exact_match_rate": 0.0,
+                        "failures": 0,
+                    },
+                    "with_skill": {"runs": 1, "exact_match_rate": 1.0, "failures": 0},
+                },
+            },
+            "release": {
+                "version": "0.2.0",
+                "pack": "starter",
+                "archives": [{"file": "a.zip"}],
+                "skills": ["s1"],
+            },
+            "verify-release": {
+                "version": "0.2.0",
+                "verified_archives": 2,
+                "authenticity": "Checksums verified.",
+            },
+        }
+        all_commands = [cmd for cmds in fred.LIFECYCLE_GROUPS.values() for cmd in cmds]
+        self.assertEqual(27, len(all_commands))
+        for cmd in all_commands:
+            with self.subTest(command=cmd):
+                rendered = fred.render_tty_output(
+                    cmd,
+                    sample_payloads[cmd],
+                    argparse.Namespace(command=cmd, output=None, output_dir=None),
+                )
+                self.assertTrue(rendered.strip())
+                self.assertFalse(rendered.lstrip().startswith("{"))
+                self.assertNotIn("LARGE_TRANSCRIPT_BODY", rendered)
 
     def test_release_all_cli_command_and_verify(self):
         import tempfile
