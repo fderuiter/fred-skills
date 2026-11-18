@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from unittest.mock import patch
+
 from check_doc_links import check_docs, check_file_links, extract_relative_links
 from skill_tools import (
     extract_relative_links as skill_tools_extract_relative_links,
@@ -21,6 +23,7 @@ from skill_tools import (
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
     TOOL_DISPATCHERS,
+    clear_subprocess_cache,
     discover_doc_blocks,
     execute_snippet_command,
     extract_blocks_from_file,
@@ -431,6 +434,49 @@ class DocSnippetVerificationTests(unittest.TestCase):
             root=ROOT,
         )
         self.assertFalse(ok)
+
+        # Invalid run_checks.py phase
+        ok, msg = execute_snippet_command(
+            "python scripts/run_checks.py --phase nonexistent_phase",
+            root=ROOT,
+        )
+        self.assertFalse(ok)
+        self.assertIn("run_checks.py failed", msg)
+
+    def test_repeated_readonly_subprocess_checks_are_cached(self) -> None:
+        """Repeated read-only subprocess checks in verify_doc_snippets execute once and hit cache."""
+        clear_subprocess_cache()
+        real_run = subprocess.run
+        spawned: list[list[str]] = []
+
+        def counting_run(
+            cmd: list[str], *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            spawned.append(list(cmd))
+            return real_run(cmd, *args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+        commands = [
+            "ruff check .",
+            "ruff format --check .",
+            "python -m mypy",
+            "python scripts/sync_audit_resources.py --check",
+            "python scripts/validate_skills.py",
+            "python scripts/run_checks.py --phase lint",
+            "python scripts/run_checks.py --phase typecheck",
+        ]
+        try:
+            with patch("verify_doc_snippets.subprocess.run", side_effect=counting_run):
+                for _ in range(2):
+                    for cmd in commands:
+                        ok, msg = execute_snippet_command(cmd, root=ROOT)
+                        self.assertTrue(ok, f"{cmd} failed: {msg}")
+            self.assertEqual(
+                len(commands),
+                len(spawned),
+                f"Expected {len(commands)} unique subprocess spawns across 2 passes, got {len(spawned)}",
+            )
+        finally:
+            clear_subprocess_cache()
 
     def test_marketplace_plugin_install_validation(self):
         """Marketplace registration and plugin install commands validate against .claude-plugin/marketplace.json."""
@@ -848,6 +894,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "python scripts/sync_audit_resources.py --invalid-flag",
             "python scripts/validate_skills.py --invalid-flag",
             "python scripts/package_skills.py --output /tmp/release-verify --invalid-flag",
+            "python scripts/run_checks.py --invalid-flag",
             "python scripts/check_doc_links.py --check",
             "python scripts/check_doc_links.py --invalid-flag",
             "python scripts/verify_doc_snippets.py --invalid-flag",

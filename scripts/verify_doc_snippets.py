@@ -895,6 +895,51 @@ def _parse_option_line_flags(line: str) -> set[str]:
     return flags
 
 
+_SUBPROCESS_CACHE: dict[
+    tuple[tuple[str, ...], str], subprocess.CompletedProcess[str]
+] = {}
+
+
+def clear_subprocess_cache() -> None:
+    """Clear cached read-only subprocess and --help flag check results."""
+    _SUBPROCESS_CACHE.clear()
+    _HELP_FLAGS_CACHE.clear()
+
+
+def _run_cached_subprocess(
+    cmd: list[str],
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a read-only subprocess check once per (argv, cwd) and cache it."""
+    cwd_key = str(cwd.resolve()) if cwd is not None else ""
+    key = (tuple(cmd), cwd_key)
+    cached = _SUBPROCESS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    _SUBPROCESS_CACHE[key] = proc
+    return proc
+
+
+def _run_readonly_check(
+    cmd: list[str],
+    cwd: Path | None,
+    label: str,
+) -> tuple[bool, str]:
+    """Run a cached read-only subprocess command and format failure messages."""
+    proc = _run_cached_subprocess(cmd, cwd=cwd)
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip()
+        return False, f"{label} failed: {detail}"
+    return True, ""
+
+
 def _get_help_flags(
     cmd: list[str],
     accept_nonzero: bool = False,
@@ -903,7 +948,7 @@ def _get_help_flags(
     key = (*cmd, str(accept_nonzero))
     if key in _HELP_FLAGS_CACHE:
         return _HELP_FLAGS_CACHE[key]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = _run_cached_subprocess(cmd, cwd=None)
     if proc.returncode != 0 and not accept_nonzero:
         _HELP_FLAGS_CACHE[key] = None
         return None
@@ -1103,16 +1148,7 @@ def _validate_make(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
         return False, f"Invalid make flag: {bad}"
     if not shutil.which("make"):
         return _validate_make_fallback(parts[1:], root)
-    proc = subprocess.run(
-        ["make", "-n", *parts[1:]],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return False, f"make dry-run failed: {proc.stderr.strip()}"
-    return True, ""
+    return _run_readonly_check(["make", "-n", *parts[1:]], root, "make dry-run")
 
 
 def _validate_python_inline(parts: list[str]) -> tuple[bool, str]:
@@ -1178,15 +1214,11 @@ def _validate_python_fred(
 
     if len(parts) >= 3 and parts[2] == "search":
         search_args = [normalize_cli_token(arg) for arg in parts[2:]]
-        proc = subprocess.run(
+        return _run_readonly_check(
             [sys.executable, str(script_path), *search_args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            root,
+            "scripts/fred.py search",
         )
-        if proc.returncode != 0:
-            return False, f"scripts/fred.py search failed: {proc.stderr.strip()}"
     return True, ""
 
 
@@ -1211,37 +1243,45 @@ def _validate_script_cli_args(
     return True, ""
 
 
-def _run_safe_script_check(
+def _validate_run_checks_script(
+    parts: list[str],
     script_path: Path,
-    script_arg: str,
-    script_args: list[str],
     root: Path,
 ) -> tuple[bool, str]:
-    """Execute non-mutating repository scripts in check mode after flag validation."""
+    """Validate scripts/run_checks.py invocations in dry-run mode."""
+    extra_args = [
+        normalize_cli_token(arg) for arg in parts[2:] if arg not in ("-n", "--dry-run")
+    ]
+    return _run_readonly_check(
+        [sys.executable, str(script_path), "--dry-run", *extra_args],
+        root,
+        "run_checks.py",
+    )
+
+
+def _try_direct_readonly_script(
+    script_path: Path,
+    script_arg: str,
+    raw_args: list[str],
+    root: Path,
+) -> tuple[bool, str] | None:
+    """Execute argparse-backed non-mutating scripts directly when safe."""
     if script_arg.endswith("verify_doc_snippets.py"):
-        return True, ""
-    if "--check" in script_args:
-        proc = subprocess.run(
-            [sys.executable, str(script_path), *script_args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+        return None
+    norm_args = [normalize_cli_token(arg) for arg in raw_args]
+    if "--check" in norm_args:
+        return _run_readonly_check(
+            [sys.executable, str(script_path), *norm_args],
+            root,
+            f"{script_arg} --check",
         )
-        if proc.returncode != 0:
-            return False, f"{script_arg} --check failed: {proc.stderr.strip()}"
-        return True, ""
-    if script_arg.endswith("validate_skills.py"):
-        proc = subprocess.run(
-            [sys.executable, str(script_path)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+    if script_arg.endswith("validate_skills.py") and "--telemetry" not in norm_args:
+        return _run_readonly_check(
+            [sys.executable, str(script_path), *norm_args],
+            root,
+            "validate_skills.py",
         )
-        if proc.returncode != 0:
-            return False, f"validate_skills.py failed: {proc.stderr.strip()}"
-    return True, ""
+    return None
 
 
 def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
@@ -1254,11 +1294,14 @@ def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
     if script_arg.endswith("fred.py"):
         return _validate_python_fred(parts, script_path, root)
 
-    ok, err = _validate_script_cli_args(script_path, script_arg, parts[2:])
-    if not ok:
-        return False, err
+    if script_arg.endswith("run_checks.py"):
+        return _validate_run_checks_script(parts, script_path, root)
 
-    return _run_safe_script_check(script_path, script_arg, parts[2:], root)
+    direct = _try_direct_readonly_script(script_path, script_arg, parts[2:], root)
+    if direct is not None:
+        return direct
+
+    return _validate_script_cli_args(script_path, script_arg, parts[2:])
 
 
 def _validate_python(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
@@ -1279,27 +1322,23 @@ def _validate_python(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str
     return True, ""
 
 
-def _run_ruff_dry_check(parts: list[str], root: Path) -> tuple[bool, str]:
-    """Execute ruff only when invoked in a non-mutating check mode."""
-    if not shutil.which("ruff"):
-        return True, ""
-    is_safe_lint = (
-        parts[1] == "check" and "--fix" not in parts and "--add-noqa" not in parts
+def _is_safe_ruff_check(parts: list[str]) -> bool:
+    """Return True when ruff is invoked in a non-mutating check mode."""
+    if parts[1] == "check":
+        return "--fix" not in parts and "--add-noqa" not in parts
+    return parts[1] == "format" and "--check" in parts
+
+
+def _validate_ruff_flags(subcmd: str, args: list[str]) -> tuple[bool, str]:
+    """Validate ruff subcommand flags via --help or fallback allowlist."""
+    allowed = (
+        _get_help_flags(["ruff", subcmd, "--help"])
+        if shutil.which("ruff")
+        else RUFF_FALLBACK_FLAGS
     )
-    is_safe_fmt = parts[1] == "format" and "--check" in parts
-    if is_safe_lint or is_safe_fmt:
-        proc = subprocess.run(
-            parts,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return (
-                False,
-                f"ruff check failed: {proc.stderr.strip() or proc.stdout.strip()}",
-            )
+    bad = _find_unknown_flag(args, allowed or RUFF_FALLBACK_FLAGS)
+    if bad:
+        return False, f"Invalid ruff {subcmd} flag: {bad}"
     return True, ""
 
 
@@ -1313,31 +1352,20 @@ def _validate_ruff(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
         return (False, f"Invalid ruff flag: {bad}") if bad else (True, "")
     if subcmd not in RUFF_SUBCOMMANDS:
         return False, f"Invalid ruff subcommand: {subcmd}"
-    allowed = (
-        _get_help_flags(["ruff", subcmd, "--help"])
-        if shutil.which("ruff")
-        else RUFF_FALLBACK_FLAGS
-    )
-    bad = _find_unknown_flag(parts[2:], allowed or RUFF_FALLBACK_FLAGS)
-    if bad:
-        return False, f"Invalid ruff {subcmd} flag: {bad}"
-    return _run_ruff_dry_check(parts, root)
+    if _is_safe_ruff_check(parts) and shutil.which("ruff"):
+        return _run_readonly_check(parts, root, "ruff check")
+    return _validate_ruff_flags(subcmd, parts[2:])
 
 
 def _validate_pre_commit_config(root: Path) -> tuple[bool, str]:
     """Validate .pre-commit-config.yaml when pre-commit is installed."""
     if not shutil.which("pre-commit"):
         return True, ""
-    proc = subprocess.run(
+    return _run_readonly_check(
         ["pre-commit", "validate-config", str(root / ".pre-commit-config.yaml")],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
+        root,
+        "pre-commit validate-config",
     )
-    if proc.returncode != 0:
-        return False, f"pre-commit validate-config failed: {proc.stderr.strip()}"
-    return True, ""
 
 
 def _validate_pre_commit(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:

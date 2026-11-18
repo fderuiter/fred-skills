@@ -26,15 +26,16 @@ python -m pip install -r requirements-dev.txt
 pre-commit install
 ```
 
-Once installed, pre-commit hooks run automatically on every `git commit`. You can also execute all verification checks manually across the repository:
+Once installed, fast static, `mypy` type, and Markdown formatting hooks run on every `git commit`, while `unit-tests` runs on `git push` (`pre-push`). You can also execute either stage manually across the repository:
 
 ```sh
 pre-commit run --all-files
+pre-commit run --hook-stage pre-push --all-files
 ```
 
 To bypass hooks for emergency fixes, use `--no-verify` (e.g. `git commit --no-verify`) or skip specific checks with `SKIP=<hook-id> git commit`.
 
-Run verification checks with `make` (which runs Ruff linting, code formatting checks, static type checks, script validation, and unit tests):
+Run verification checks with `make` (`make check` delegates to `scripts/run_checks.py` to run Ruff linting, code formatting checks, mypy static type checks, package validation, and unit tests):
 
 ```sh
 make check
@@ -52,15 +53,22 @@ To run the unit test suite:
 make test
 ```
 
-`make check` and `make fix` run Ruff automatically. For environments without `make`, run direct Python and Ruff commands:
+`make check` and `make fix` run Ruff automatically (`make check` also runs `mypy`). For environments without `make` (including Windows), run the unified cross-platform runner or individual check commands:
 
 ```sh
-# Linting, formatting, and static type checks
+# Full cross-platform check suite and targeted phases
+python scripts/run_checks.py
+python scripts/run_checks.py --phase lint
+python scripts/run_checks.py --phase format
+python scripts/run_checks.py --phase typecheck
+python scripts/run_checks.py --phase packages
+python scripts/run_checks.py --phase docs
+python scripts/run_checks.py --phase tests
+
+# Individual linting, formatting, static type, and verification commands
 ruff check .
 ruff format --check .
 python -m mypy
-
-# Verification checks (CI-equivalent non-mutating checks)
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check

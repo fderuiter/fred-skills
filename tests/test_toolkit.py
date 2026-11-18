@@ -232,6 +232,338 @@ class RunTests(unittest.TestCase):
         )
         self.assertNotIn("findings", result)
 
+    def test_sarif_import_resolves_file_uris_via_base_ids_working_dir_and_root(self):
+        sarif_base_ids = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {"driver": {"name": "CodeQL", "semanticVersion": "2.19.0"}},
+                    "originalUriBaseIds": {
+                        "%SRCROOT%": {"uri": "file:///workspace/repo/"},
+                        "SUBPKG": {"uri": "packages/api/", "uriBaseId": "%SRCROOT%"},
+                        "EXTERNAL": {"uri": "file:///usr/include/"},
+                    },
+                    "artifacts": [
+                        {
+                            "location": {
+                                "uri": "file:///workspace/repo/src/from_artifact.py"
+                            }
+                        }
+                    ],
+                    "results": [
+                        {
+                            "ruleId": "py/sql-injection",
+                            "message": {"text": "SQL query built from user input"},
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///workspace/repo/src/db%20pool.py"
+                                        },
+                                        "region": {"startLine": 10, "endLine": 14},
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "routes.py",
+                                            "uriBaseId": "SUBPKG",
+                                        },
+                                        "region": {"startLine": 5},
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"index": 0},
+                                        "region": {"startLine": 3},
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "stdio.h",
+                                            "uriBaseId": "EXTERNAL",
+                                        }
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///workspace/other/secret.py"
+                                        }
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///workspace/repo/../secret.py"
+                                        }
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///workspace/repo/%2e%2e/secret.py"
+                                        }
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///workspace/repo/.git/config"
+                                        }
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "https://example.com/workspace/repo/a.py"
+                                        }
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file://evil.example/workspace/repo/a.py"
+                                        }
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        atomic_json(self.root / "base_ids.sarif", sarif_base_ids)
+        imported_base = runs.import_sarif(self.root / "base_ids.sarif")
+        self.assertEqual("2.19.0", imported_base["observations"][0]["tool_version"])
+        self.assertEqual(
+            [
+                {"path": "src/db pool.py", "line": 10, "end_line": 14},
+                {"path": "packages/api/routes.py", "line": 5},
+                {"path": "src/from_artifact.py", "line": 3},
+            ],
+            imported_base["observations"][0]["locations"],
+        )
+
+        sarif_workdir = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {"driver": {"name": "semgrep", "version": "1.90.0"}},
+                    "invocations": [
+                        {
+                            "executionSuccessful": True,
+                            "workingDirectory": {"uri": "file:///builds/service"},
+                        }
+                    ],
+                    "results": [
+                        {
+                            "ruleId": "python.exec",
+                            "message": {"text": "avoid exec"},
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///builds/service/app/runner.py"
+                                        },
+                                        "region": {"startLine": 22},
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": "file:///builds/service-other/leak.py"
+                                        },
+                                        "region": {"startLine": 1},
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        atomic_json(self.root / "workdir.sarif", sarif_workdir)
+        imported_workdir = runs.import_sarif(self.root / "workdir.sarif")
+        self.assertEqual(
+            [{"path": "app/runner.py", "line": 22}],
+            imported_workdir["observations"][0]["locations"],
+        )
+
+        outside_file = self.root / "outside.py"
+        outside_file.write_text("secret = 1\n")
+        sarif_explicit_root = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {"driver": {"name": "semgrep", "version": "1.90.0"}},
+                    "originalUriBaseIds": {
+                        "%SRCROOT%": {"uri": self.root.resolve().as_uri() + "/"}
+                    },
+                    "results": [
+                        {
+                            "ruleId": "R-root",
+                            "message": {"text": "scoped to explicit root"},
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": (self.repo / "source.py")
+                                            .resolve()
+                                            .as_uri()
+                                        },
+                                        "region": {"startLine": 1},
+                                    }
+                                },
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {
+                                            "uri": outside_file.resolve().as_uri()
+                                        },
+                                        "region": {"startLine": 1},
+                                    }
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        atomic_json(self.root / "explicit_root.sarif", sarif_explicit_root)
+        imported_root = runs.import_sarif(
+            self.root / "explicit_root.sarif", root=self.repo
+        )
+        self.assertEqual(
+            [{"path": "source.py", "line": 1}],
+            imported_root["observations"][0]["locations"],
+        )
+
+    def test_sarif_import_inherits_rule_levels_and_preserves_metadata(self):
+        sarif = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "CodeQL",
+                            "version": "2.18.0",
+                            "rules": [
+                                {
+                                    "id": "driver/high-rule",
+                                    "defaultConfiguration": {"level": "error"},
+                                    "properties": {"security-severity": "9.1"},
+                                }
+                            ],
+                        },
+                        "extensions": [
+                            {
+                                "name": "codeql/python-queries",
+                                "rules": [
+                                    {
+                                        "id": "ext/note-rule",
+                                        "defaultConfiguration": {"level": "note"},
+                                        "properties": {"security-severity": "3.5"},
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    "logicalLocations": [
+                        {"name": "IndexedHandler.handle", "kind": "function"}
+                    ],
+                    "results": [
+                        {
+                            "ruleId": "driver/high-rule",
+                            "message": {"text": "driver error rule"},
+                            "partialFingerprints": {
+                                "primaryLocationLineHash": "abc123"
+                            },
+                            "fingerprints": {"matchBasedId/v1": "def456"},
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "source.py"},
+                                        "region": {"startLine": 4, "endLine": 9},
+                                    },
+                                    "logicalLocations": [{"name": "Auth.verify"}],
+                                }
+                            ],
+                        },
+                        {
+                            "ruleId": "ext/note-rule",
+                            "rule": {
+                                "id": "ext/note-rule",
+                                "index": 0,
+                                "toolComponent": {"index": 0},
+                            },
+                            "message": {"text": "extension note rule"},
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "source.py"},
+                                        "region": {"startLine": 12, "endLine": 15},
+                                    },
+                                    "logicalLocations": [{"index": 0}],
+                                }
+                            ],
+                        },
+                        {
+                            "ruleId": "unlisted/default-rule",
+                            "message": {"text": "fallback warning rule"},
+                            "locations": [],
+                        },
+                    ],
+                }
+            ],
+        }
+        atomic_json(self.root / "levels.sarif", sarif)
+        result = runs.import_sarif(self.root / "levels.sarif")
+        obs = result["observations"]
+        self.assertEqual(3, len(obs))
+
+        self.assertEqual("error", obs[0]["reported_level"])
+        self.assertEqual("9.1", obs[0]["security_severity"])
+        self.assertEqual(
+            {"primaryLocationLineHash": "abc123"}, obs[0]["partial_fingerprints"]
+        )
+        self.assertEqual({"matchBasedId/v1": "def456"}, obs[0]["fingerprints"])
+        self.assertEqual(
+            [
+                {
+                    "path": "source.py",
+                    "line": 4,
+                    "end_line": 9,
+                    "symbol": "Auth.verify",
+                }
+            ],
+            obs[0]["locations"],
+        )
+        self.assertEqual(
+            "scanner-reported; agent verification not performed",
+            obs[0]["evidence_state"],
+        )
+
+        self.assertEqual("note", obs[1]["reported_level"])
+        self.assertEqual("3.5", obs[1]["security_severity"])
+        self.assertEqual(
+            [
+                {
+                    "path": "source.py",
+                    "line": 12,
+                    "end_line": 15,
+                    "symbol": "IndexedHandler.handle",
+                }
+            ],
+            obs[1]["locations"],
+        )
+
+        self.assertEqual("warning", obs[2]["reported_level"])
+        self.assertNotIn("security_severity", obs[2])
+        self.assertNotIn("fingerprints", obs[2])
+        self.assertNotIn("partial_fingerprints", obs[2])
+        self.assertNotIn("findings", result)
+
     @unittest.skipUnless(shutil.which("git"), "Git unavailable")
     def test_comprehensive_planning_preserves_domain_suites_without_repo_audit(self):
         for argv in [

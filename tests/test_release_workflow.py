@@ -568,14 +568,28 @@ class WorkflowActionPinVerificationTests(unittest.TestCase):
         self.assertIn("PASS", proc.stdout)
 
     def test_validate_workflow_runs_windows_offline_check_and_single_online_check(self):
-        """validate.yml must run --check in Windows fallback and --online once in validate job."""
+        """validate.yml must run offline pin checks across OS matrix (including Windows) and --online once."""
+        import run_checks
+
         validate_data = yaml.safe_load(VALIDATE_WORKFLOW.read_text(encoding="utf-8"))
         steps = validate_data["jobs"]["validate"]["steps"]
 
-        win_step = next(s for s in steps if "Windows fallback" in s.get("name", ""))
-        self.assertIn(
-            "python scripts/verify_workflow_actions.py --check",
-            win_step["run"],
+        pkg_step = next(
+            s
+            for s in steps
+            if "scripts/run_checks.py --phase packages" in s.get("run", "")
+        )
+        self.assertIsNone(
+            pkg_step.get("if"),
+            "packages phase must run unconditionally across Ubuntu and Windows runners",
+        )
+        pkg_cmds = run_checks.build_phase_commands("packages", root=ROOT)
+        self.assertTrue(
+            any(
+                cmd[-2].endswith("verify_workflow_actions.py") and cmd[-1] == "--check"
+                for cmd in pkg_cmds
+            ),
+            "packages phase must execute scripts/verify_workflow_actions.py --check",
         )
 
         online_steps = [
