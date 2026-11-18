@@ -1620,10 +1620,10 @@ jobs:
             self.assertEqual(1, len(errors))
             self.assertIn("timed out", errors[0])
 
-    def test_action_pins_lockfile_records_all_six_repository_actions_and_passes_offline(
+    def test_action_pins_lockfile_records_all_repository_actions_and_passes_offline(
         self,
     ) -> None:
-        """The committed .github/action-pins.json lockfile must record all six actions and pass check_workflow_pins.py."""
+        """The committed .github/action-pins.json lockfile must record all nine repository actions and pass check_workflow_pins.py."""
         self.assertTrue(ACTION_PINS_LOCKFILE.is_file())
         locked, lock_errors = check_workflow_pins.load_lockfile(
             ACTION_PINS_LOCKFILE, root=ROOT
@@ -1643,6 +1643,14 @@ jobs:
                     "d23441a48e516b6c34aea4fa41551a30e30af803",
                     "v6",
                 ),
+                "actions/configure-pages": (
+                    "45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+                    "v6.0.0",
+                ),
+                "actions/deploy-pages": (
+                    "368f82528645a54fb793d4d04e342629a3f51346",
+                    "v5.0.1",
+                ),
                 "actions/download-artifact": (
                     "cc203385981b70ca67e1cc392babf9cc229d5806",
                     "v4",
@@ -1654,6 +1662,10 @@ jobs:
                 "actions/upload-artifact": (
                     "ea165f8d65b6e75b540449e92b4886f43607fa02",
                     "v4",
+                ),
+                "actions/upload-pages-artifact": (
+                    "fc324d3547104276b827a68afc52ff2a11cc49c9",
+                    "v5.0.0",
                 ),
             },
             {repo: (pin.sha, pin.version) for repo, pin in locked.items()},
