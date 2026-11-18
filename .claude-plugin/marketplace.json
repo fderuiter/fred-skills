@@ -8,6 +8,237 @@
   },
   "plugins": [
     {
+      "name": "starter",
+      "description": "A small starting set for understanding and reviewing a workflow.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-audit-program",
+        "./skills/repo-audit-behavioral-contracts",
+        "./skills/repo-audit-concurrency",
+        "./skills/repo-audit-trust-boundaries",
+        "./skills/repo-audit-test-contracts",
+        "./skills/repo-audit-synthesis"
+      ]
+    },
+    {
+      "name": "async-correctness",
+      "description": "Timing, state, ownership, and cancellation.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-audit-behavioral-contracts",
+        "./skills/repo-audit-concurrency",
+        "./skills/repo-audit-cancellation",
+        "./skills/repo-audit-lifecycle",
+        "./skills/repo-audit-temporal-coupling",
+        "./skills/repo-audit-state-machines",
+        "./skills/repo-audit-synthesis"
+      ]
+    },
+    {
+      "name": "backend-consistency",
+      "description": "Authoritative writes, permissions, transactions, and replay.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-audit-invariants",
+        "./skills/repo-audit-transactions",
+        "./skills/repo-audit-idempotency",
+        "./skills/repo-audit-trust-boundaries",
+        "./skills/repo-audit-data-integrity",
+        "./skills/repo-audit-synthesis"
+      ]
+    },
+    {
+      "name": "web-review",
+      "description": "Client/server boundaries and interactive behavior.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-audit-trust-boundaries",
+        "./skills/repo-audit-canonicalization",
+        "./skills/repo-audit-concurrency",
+        "./skills/repo-audit-cache-coherence",
+        "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-synthesis"
+      ]
+    },
+    {
+      "name": "release-readiness",
+      "description": "Compatibility, migrations, configuration, and recovery.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-audit-compatibility",
+        "./skills/repo-audit-configuration",
+        "./skills/repo-audit-protocol-drift",
+        "./skills/repo-audit-failure-modes",
+        "./skills/repo-audit-test-contracts",
+        "./skills/repo-audit-synthesis"
+      ]
+    },
+    {
+      "name": "verified-fixes",
+      "description": "From a reported finding to verified correction and reconciliation.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-verify-finding",
+        "./skills/repo-specify-regression",
+        "./skills/repo-plan-fix",
+        "./skills/repo-apply-fix",
+        "./skills/repo-verify-fix",
+        "./skills/repo-reconcile-findings"
+      ]
+    },
+    {
+      "name": "software-architecture",
+      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/arch-decision-record",
+        "./skills/arch-boundary-specification",
+        "./skills/arch-component-decomposition"
+      ]
+    },
+    {
+      "name": "architecture",
+      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/arch-decision-record",
+        "./skills/arch-boundary-specification",
+        "./skills/arch-component-decomposition"
+      ]
+    },
+    {
+      "name": "code-review",
+      "description": "Pull request diff review, invariant verification, and actionable feedback.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/review-diff-analysis",
+        "./skills/review-invariant-violations",
+        "./skills/review-actionable-feedback"
+      ]
+    },
+    {
+      "name": "automated-testing",
+      "description": "Test gap detection, regression test generation, and test suite verification.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/test-gap-analysis",
+        "./skills/test-case-generation",
+        "./skills/test-suite-verification"
+      ]
+    },
+    {
+      "name": "full-audit",
+      "description": "All 33 specialist audits plus coordinator and synthesis.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-api-consistency",
+        "./skills/repo-audit-architecture",
+        "./skills/repo-audit-behavioral-contracts",
+        "./skills/repo-audit-boundary-conditions",
+        "./skills/repo-audit-cache-coherence",
+        "./skills/repo-audit-cancellation",
+        "./skills/repo-audit-canonicalization",
+        "./skills/repo-audit-capacity",
+        "./skills/repo-audit-cohesion",
+        "./skills/repo-audit-compatibility",
+        "./skills/repo-audit-complexity",
+        "./skills/repo-audit-concurrency",
+        "./skills/repo-audit-configuration",
+        "./skills/repo-audit-data-integrity",
+        "./skills/repo-audit-dead-code",
+        "./skills/repo-audit-domain-models",
+        "./skills/repo-audit-error-semantics",
+        "./skills/repo-audit-failure-modes",
+        "./skills/repo-audit-idempotency",
+        "./skills/repo-audit-invariants",
+        "./skills/repo-audit-lifecycle",
+        "./skills/repo-audit-nondeterminism",
+        "./skills/repo-audit-observability",
+        "./skills/repo-audit-program",
+        "./skills/repo-audit-protocol-drift",
+        "./skills/repo-audit-side-effects",
+        "./skills/repo-audit-sources-of-truth",
+        "./skills/repo-audit-state-machines",
+        "./skills/repo-audit-synthesis",
+        "./skills/repo-audit-temporal-coupling",
+        "./skills/repo-audit-test-contracts",
+        "./skills/repo-audit-test-oracles",
+        "./skills/repo-audit-transactions",
+        "./skills/repo-audit-trust-boundaries"
+      ]
+    },
+    {
+      "name": "complete",
+      "description": "Every audit and engineering workflow.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/arch-boundary-specification",
+        "./skills/arch-component-decomposition",
+        "./skills/arch-decision-record",
+        "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-api-consistency",
+        "./skills/repo-audit-architecture",
+        "./skills/repo-audit-behavioral-contracts",
+        "./skills/repo-audit-boundary-conditions",
+        "./skills/repo-audit-cache-coherence",
+        "./skills/repo-audit-cancellation",
+        "./skills/repo-audit-canonicalization",
+        "./skills/repo-audit-capacity",
+        "./skills/repo-audit-cohesion",
+        "./skills/repo-audit-compatibility",
+        "./skills/repo-audit-complexity",
+        "./skills/repo-audit-concurrency",
+        "./skills/repo-audit-configuration",
+        "./skills/repo-audit-data-integrity",
+        "./skills/repo-audit-dead-code",
+        "./skills/repo-audit-diagnostics",
+        "./skills/repo-audit-domain-models",
+        "./skills/repo-audit-error-semantics",
+        "./skills/repo-audit-failure-modes",
+        "./skills/repo-audit-idempotency",
+        "./skills/repo-audit-invariants",
+        "./skills/repo-audit-lifecycle",
+        "./skills/repo-audit-nondeterminism",
+        "./skills/repo-audit-observability",
+        "./skills/repo-audit-program",
+        "./skills/repo-audit-protocol-drift",
+        "./skills/repo-audit-side-effects",
+        "./skills/repo-audit-sources-of-truth",
+        "./skills/repo-audit-state-machines",
+        "./skills/repo-audit-synthesis",
+        "./skills/repo-audit-temporal-coupling",
+        "./skills/repo-audit-test-contracts",
+        "./skills/repo-audit-test-oracles",
+        "./skills/repo-audit-transactions",
+        "./skills/repo-audit-trust-boundaries",
+        "./skills/repo-verify-finding",
+        "./skills/repo-specify-regression",
+        "./skills/repo-plan-fix",
+        "./skills/repo-apply-fix",
+        "./skills/repo-verify-fix",
+        "./skills/repo-reconcile-findings",
+        "./skills/review-actionable-feedback",
+        "./skills/review-diff-analysis",
+        "./skills/review-invariant-violations",
+        "./skills/test-case-generation",
+        "./skills/test-gap-analysis",
+        "./skills/test-suite-verification"
+      ]
+    },
+    {
       "name": "arch-boundary-specification",
       "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
       "source": "./skills/arch-boundary-specification"

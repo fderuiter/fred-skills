@@ -613,6 +613,718 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertNotIn("supersecretvalue1234567890", proc.stdout)
         self.assertIn("[REDACTED_AUTH_TOKEN]", proc.stdout)
 
+    def _isolated_home_env(self, home_dir: Path) -> dict[str, str]:
+        import os
+
+        env = dict(os.environ)
+        env["HOME"] = str(home_dir)
+        env["USERPROFILE"] = str(home_dir)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return env
+
+    def test_fred_cli_discovers_claude_code_transcript_from_run_json(self):
+        import os
+
+        from fredlib import runs
+
+        repo_dir = self.temp_path / "sample_repo"
+        repo_dir.mkdir()
+        (repo_dir / "app.py").write_text("print('ok')\n", encoding="utf-8")
+
+        workspace = self.temp_path / "stalled_claude_ws"
+        run_info = runs.initialize(repo_dir, workspace, task="recover-audit")
+        run_id = run_info["run_id"]
+
+        initial_run_bytes = (workspace / "run.json").read_bytes()
+        initial_audit_bytes = (workspace / "audit.json").read_bytes()
+
+        fake_home = self.temp_path / "fake_home_claude"
+        slug = (
+            str(repo_dir.resolve())
+            .replace("\\", "-")
+            .replace("/", "-")
+            .replace(":", "-")
+        )
+        claude_proj_dir = fake_home / ".claude" / "projects" / slug
+        claude_proj_dir.mkdir(parents=True)
+
+        # Unrelated project transcript (should be rejected)
+        other_proj_dir = fake_home / ".claude" / "projects" / "-tmp-unrelated-repo"
+        other_proj_dir.mkdir(parents=True)
+        unrelated_jsonl = other_proj_dir / "unrelated-session.jsonl"
+        unrelated_jsonl.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "sessionId": "unrelated-session",
+                    "cwd": "/tmp/unrelated-repo",
+                    "message": {"role": "user", "content": "Unrelated audit"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.utime(unrelated_jsonl, (5000, 5000))
+
+        # Subagent sidechain transcript (should be rejected in favor of primary session)
+        subagents_dir = claude_proj_dir / "claude-sess-1" / "subagents"
+        subagents_dir.mkdir(parents=True)
+        sidechain_jsonl = subagents_dir / "agent-sub1.jsonl"
+        sidechain_jsonl.write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "sessionId": "claude-sess-1",
+                    "isSidechain": True,
+                    "cwd": str(repo_dir.resolve()),
+                    "message": {
+                        "role": "assistant",
+                        "content": f"Subagent for {run_id}",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.utime(sidechain_jsonl, (4000, 4000))
+
+        # Matching primary Claude Code session transcript
+        matching_jsonl = claude_proj_dir / "claude-sess-1.jsonl"
+        matching_lines = [
+            {
+                "type": "user",
+                "sessionId": "claude-sess-1",
+                "cwd": str(repo_dir.resolve()),
+                "message": {
+                    "role": "user",
+                    "content": f"Execute audit run {run_id} in {workspace}",
+                },
+            },
+            {
+                "type": "assistant",
+                "sessionId": "claude-sess-1",
+                "cwd": str(repo_dir.resolve()),
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Running repo-audit-concurrency pass now.",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "sessionId": "claude-sess-1",
+                "isApiErrorMessage": True,
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Prompt is too long: 215000 tokens > 200000 maximum",
+                        }
+                    ],
+                },
+            },
+        ]
+        matching_jsonl.write_text(
+            "\n".join(json.dumps(rec) for rec in matching_lines) + "\n",
+            encoding="utf-8",
+        )
+        os.utime(matching_jsonl, (3000, 3000))
+
+        export_dir = self.temp_path / "claude_diag_out"
+        fred_cli = ROOT / "scripts/fred.py"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(fred_cli),
+                "triage",
+                "--workspace",
+                str(workspace),
+                "--output",
+                str(export_dir),
+                "--check-schema",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=self._isolated_home_env(fake_home),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(str(matching_jsonl), proc.stderr)
+
+        bundle = json.loads(
+            (export_dir / "diagnostic_bundle.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            bundle["failure_classification"]["failure_type"], "context_limit"
+        )
+        self.assertEqual(
+            bundle["correlated_domain"]["specialist_skill"], "repo-audit-concurrency"
+        )
+        disc = bundle["transcript_discovery"]
+        self.assertEqual(disc["source"], "claude-code")
+        self.assertEqual(Path(disc["selected_transcript"]), matching_jsonl)
+        self.assertIn(run_id, disc["selection_reason"])
+        rejected_paths = {Path(item["path"]) for item in disc["rejected_candidates"]}
+        self.assertIn(unrelated_jsonl, rejected_paths)
+        self.assertIn(sidechain_jsonl, rejected_paths)
+
+        report_md = (export_dir / "diagnostic_report.md").read_text(encoding="utf-8")
+        self.assertIn("## Transcript discovery", report_md)
+        self.assertIn("claude-code", report_md)
+        self.assertIn("unrelated-session.jsonl", report_md)
+
+        # Workspace ledgers must remain strictly unmodified
+        self.assertEqual((workspace / "run.json").read_bytes(), initial_run_bytes)
+        self.assertEqual((workspace / "audit.json").read_bytes(), initial_audit_bytes)
+
+    def test_fred_cli_discovers_codex_transcript_via_run_json_and_session_id(self):
+        import os
+
+        from fredlib import runs
+
+        repo_dir = self.temp_path / "codex_repo"
+        repo_dir.mkdir()
+        (repo_dir / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+        workspace = self.temp_path / "stalled_codex_ws"
+        runs.initialize(repo_dir, workspace, task="recover-audit")
+
+        fake_home = self.temp_path / "fake_home_codex"
+        codex_day_dir = fake_home / ".codex" / "sessions" / "2026" / "11" / "18"
+        codex_day_dir.mkdir(parents=True)
+
+        target_sid = "019a9000-1111-7222-8333-444455556666"
+        other_sid = "019a9000-9999-7222-8333-444455557777"
+
+        target_rollout = (
+            codex_day_dir / f"rollout-2026-11-18T10-00-00-{target_sid}.jsonl"
+        )
+        target_records = [
+            {
+                "type": "session_meta",
+                "payload": {"id": target_sid, "cwd": str(repo_dir.resolve())},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Executing repo-audit-transactions checks.",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": json.dumps(
+                        {
+                            "output": "Command 'pytest' timed out after 60.0 seconds",
+                            "metadata": {"exit_code": 124, "timed_out": True},
+                        }
+                    ),
+                },
+            },
+        ]
+        target_rollout.write_text(
+            "\n".join(json.dumps(r) for r in target_records) + "\n",
+            encoding="utf-8",
+        )
+        os.utime(target_rollout, (1000, 1000))
+
+        # Newer session in a different repo (rejected by cwd when discovering by workspace,
+        # and rejected by session_id when --session-id is supplied)
+        other_rollout = codex_day_dir / f"rollout-2026-11-18T11-00-00-{other_sid}.jsonl"
+        other_rollout.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {"id": other_sid, "cwd": "/tmp/some-other-project"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.utime(other_rollout, (2000, 2000))
+
+        fred_cli = ROOT / "scripts/fred.py"
+        env = self._isolated_home_env(fake_home)
+
+        # 1. Discover automatically from workspace run.json repository.path
+        proc_ws = subprocess.run(
+            [
+                sys.executable,
+                str(fred_cli),
+                "triage",
+                "--workspace",
+                str(workspace),
+                "--check-schema",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(proc_ws.returncode, 0, proc_ws.stderr)
+        bundle_ws = json.loads(proc_ws.stdout)
+        self.assertEqual(bundle_ws["transcript_discovery"]["source"], "codex")
+        self.assertEqual(
+            Path(bundle_ws["transcript_discovery"]["selected_transcript"]),
+            target_rollout,
+        )
+        self.assertEqual(
+            bundle_ws["failure_classification"]["failure_type"], "tool_timeout"
+        )
+        self.assertEqual(
+            bundle_ws["correlated_domain"]["specialist_skill"],
+            "repo-audit-transactions",
+        )
+
+        # 2. Forward --session-id explicitly even when another newer transcript shares the repo
+        newer_same_repo = (
+            codex_day_dir / "rollout-2026-11-18T12-00-00-newer-same-repo.jsonl"
+        )
+        newer_same_repo.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "newer-same-repo",
+                        "cwd": str(repo_dir.resolve()),
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.utime(newer_same_repo, (3000, 3000))
+
+        proc_sid = subprocess.run(
+            [
+                sys.executable,
+                str(fred_cli),
+                "triage",
+                "--workspace",
+                str(workspace),
+                "--session-id",
+                target_sid,
+                "--check-schema",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(proc_sid.returncode, 0, proc_sid.stderr)
+        bundle_sid = json.loads(proc_sid.stdout)
+        self.assertEqual(bundle_sid["session_id"], target_sid)
+        self.assertEqual(
+            Path(bundle_sid["transcript_discovery"]["selected_transcript"]),
+            target_rollout,
+        )
+        rejected_reasons = {
+            Path(item["path"]): item["reason"]
+            for item in bundle_sid["transcript_discovery"]["rejected_candidates"]
+        }
+        self.assertIn(newer_same_repo, rejected_reasons)
+        self.assertIn("session_id mismatch", rejected_reasons[newer_same_repo])
+
+    def test_discover_transcript_host_mismatch_preserves_error_and_records_rejected(
+        self,
+    ):
+        fake_home = self.temp_path / "fake_home_mismatch"
+        codex_dir = fake_home / ".codex" / "sessions"
+        codex_dir.mkdir(parents=True)
+        wrong_host = codex_dir / "rollout-wrong.jsonl"
+        wrong_host.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {"id": "wrong-id", "cwd": "/tmp/other-repo"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        workspace = self.temp_path / "ws_no_match"
+        workspace.mkdir()
+        (workspace / "run.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "run-expected-999",
+                    "repository": {"path": "/tmp/expected-repo"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"HOME": str(fake_home), "USERPROFILE": str(fake_home)},
+            ),
+            self.assertRaises(triage.TranscriptNotFoundError) as cm,
+        ):
+            triage.discover_transcript(workspace)
+
+        msg = str(cm.exception)
+        for pattern in triage.CANDIDATE_TRANSCRIPTS:
+            self.assertIn(pattern, msg)
+        self.assertEqual(len(cm.exception.rejected_candidates), 1)
+        self.assertEqual(Path(cm.exception.rejected_candidates[0]["path"]), wrong_host)
+
+    def test_detect_failures_claude_multiturn_prompt_too_long_over_earlier_timeout_prose(
+        self,
+    ):
+        records = [
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "Inspect TimeoutError handling with repo-audit-failure-modes.",
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Earlier logs mentioned Command 'rg' timed out after 30 seconds and TimeoutError: worker stalled.",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "is_error": False,
+                            "content": "def handle(): raise TimeoutError('simulated')",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Now switching to repo-audit-data-integrity for ledger verification.",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 204800 tokens > 200000 maximum",
+                },
+            },
+        ]
+        transcript_text = "\n".join(json.dumps(r) for r in records) + "\n"
+
+        failure = triage.detect_failures(transcript_text)
+        self.assertEqual(failure["failure_type"], "context_limit")
+        self.assertEqual(failure["line_number"], 5)
+        self.assertIn("prompt is too long", failure["matched_line"].lower())
+
+        correlated = triage.correlate_audit_domain(
+            transcript_text, failure_line=failure["line_number"]
+        )
+        self.assertEqual(correlated["specialist_skill"], "repo-audit-data-integrity")
+
+    def test_detect_failures_ignores_error_substring_in_hyphenated_skill_names_on_codex_jsonl(
+        self,
+    ):
+        codex_records = [
+            {
+                "type": "session_meta",
+                "payload": {"id": "sess-codex-err-sem", "cwd": "/app/project"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Run $repo-audit-error-semantics on src/handlers.py",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Loaded repo-audit-error-semantics and error-semantics checklist.",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call_ok",
+                    "output": "Checkedskills/repo-audit-error-semantics/SKILL.md successfully",
+                },
+            },
+        ]
+        stalled_jsonl = "\n".join(json.dumps(r) for r in codex_records) + "\n"
+        failure = triage.detect_failures(stalled_jsonl)
+        self.assertEqual(failure["failure_type"], "unclassified_failure")
+        self.assertEqual(
+            failure["summary"],
+            "Session ended unexpectedly without an explicit error signature",
+        )
+        self.assertEqual(failure["line_number"], 4)
+
+        # Plain-text transcript mentioning repo-audit-error-semantics also ignores hyphenated 'error'
+        plain_stalled = (
+            "[2026-11-18T10:00:00Z] Starting specialist repo-audit-error-semantics\n"
+            "[2026-11-18T10:00:05Z] Completed pass for error-semantics\n"
+        )
+        plain_failure = triage.detect_failures(plain_stalled)
+        self.assertEqual(
+            plain_failure["summary"],
+            "Session ended unexpectedly without an explicit error signature",
+        )
+
+    def test_correlate_audit_domain_prefers_latest_specialist_before_failure_line(self):
+        # repo-audit-behavioral-contracts appears first in KNOWN_SPECIALISTS,
+        # repo-audit-observability is active right before failure line 4,
+        # and repo-audit-synthesis appears only after the failure line.
+        transcript = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": "Use these skills in order: repo-audit-behavioral-contracts, repo-audit-invariants, repo-audit-observability",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": "Completed repo-audit-behavioral-contracts and repo-audit-invariants.",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": "Starting specialist repo-audit-observability on telemetry module.",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "t9",
+                                    "is_error": True,
+                                    "content": "Command 'pytest' timed out after 30 seconds",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": "Deferred repo-audit-synthesis until timeout is resolved.",
+                        },
+                    }
+                ),
+            ]
+        )
+        correlated = triage.correlate_audit_domain(transcript)
+        self.assertEqual(correlated["specialist_skill"], "repo-audit-observability")
+        self.assertEqual(correlated["topic"], "observability")
+
+    def test_scrub_credentials_json_escaped_tool_results_uri_and_tiers(self):
+        import jsonschema
+
+        escaped_payload = json.dumps(
+            {
+                "api_key": "json-field-secret-value-123",
+                "client_secret": "oauth-client-secret-456",
+                "dsn": "postgresql://dbadmin:MyUriP@ssw0rd!@db.internal.example:5432/auditdb",
+                "cache_url": "redis://:RedisSecret999@cache.internal:6379/0",
+                "PROPRIETARY_CODE": "class BillingEngine: SECRET_MULTIPLIER = 42",
+            }
+        )
+        records = [
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "Diagnose repo https://deploy_user:GitPatSecret789@github.com/org/private.git",
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool_non_cited",
+                            "is_error": False,
+                            "content": escaped_payload,
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "usage": {"input_tokens": 4096, "output_tokens": 512},
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Running repo-audit-configuration verification with E-1.",
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool_cited_failure",
+                            "is_error": True,
+                            "content": "Command timed out after 45 seconds while connecting to mysql://svc:CitedDbSecret!@127.0.0.1:3306/prod",
+                        }
+                    ],
+                },
+            },
+        ]
+        raw_jsonl = "\n".join(json.dumps(r) for r in records) + "\n"
+        transcript_file = self.temp_path / "tiered_session.jsonl"
+        transcript_file.write_text(raw_jsonl, encoding="utf-8")
+
+        secrets = (
+            "json-field-secret-value-123",
+            "oauth-client-secret-456",
+            "MyUriP@ssw0rd!",
+            "RedisSecret999",
+            "GitPatSecret789",
+            "CitedDbSecret!",
+        )
+
+        # 1. Full tier: scrubs all secrets, preserves both tool outputs and numeric token usage
+        scrubbed_full = triage.scrub_credentials(raw_jsonl, tier="full")
+        for secret in secrets:
+            self.assertNotIn(secret, scrubbed_full)
+        self.assertIn("PROPRIETARY_CODE", scrubbed_full)
+        self.assertIn("Command timed out after 45 seconds", scrubbed_full)
+        self.assertIn('"input_tokens": 4096', scrubbed_full)
+
+        # 2. Evidence tier: strips non-cited tool_result (line 2), keeps cited failure tool_result (line 4) with secrets scrubbed
+        scrubbed_evidence = triage.scrub_credentials(raw_jsonl, tier="evidence")
+        for secret in secrets:
+            self.assertNotIn(secret, scrubbed_evidence)
+        self.assertNotIn("PROPRIETARY_CODE", scrubbed_evidence)
+        self.assertIn("[OMITTED_TOOL_OUTPUT]", scrubbed_evidence)
+        self.assertIn("Command timed out after 45 seconds", scrubbed_evidence)
+        self.assertIn("[REDACTED_URI_PASSWORD]", scrubbed_evidence)
+
+        # 3. Skeleton tier: strips ALL tool_result bodies and scrubs remaining secrets
+        scrubbed_skeleton = triage.scrub_credentials(raw_jsonl, tier="skeleton")
+        for secret in secrets:
+            self.assertNotIn(secret, scrubbed_skeleton)
+        self.assertNotIn("PROPRIETARY_CODE", scrubbed_skeleton)
+        self.assertNotIn("Command timed out after 45 seconds", scrubbed_skeleton)
+
+        # 4. End-to-end CLI export with --redaction-tier evidence and skeleton + schema validation
+        validator = jsonschema.Draft202012Validator(SCHEMA)
+        fred_cli = ROOT / "scripts/fred.py"
+        for tier_name, expected_omitted in (
+            ("full", 0),
+            ("evidence", 1),
+            ("skeleton", 2),
+        ):
+            out_dir = self.temp_path / f"export_{tier_name}"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(fred_cli),
+                    "triage",
+                    str(transcript_file),
+                    "--output",
+                    str(out_dir),
+                    "--redaction-tier",
+                    tier_name,
+                    "--check-schema",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bundle = json.loads(
+                (out_dir / "diagnostic_bundle.json").read_text(encoding="utf-8")
+            )
+            errors = list(validator.iter_errors(bundle))
+            self.assertEqual([], errors, [e.message for e in errors])
+            self.assertEqual(bundle["redaction"]["tier"], tier_name)
+            self.assertEqual(
+                bundle["redaction"]["tool_outputs_omitted"], expected_omitted
+            )
+            self.assertGreaterEqual(bundle["redaction"]["credentials_redacted"], 1)
+
+            for secret in secrets:
+                self.assertNotIn(secret, json.dumps(bundle, ensure_ascii=False))
+
+            report_md = (out_dir / "diagnostic_report.md").read_text(encoding="utf-8")
+            self.assertIn(f"**Redaction Tier:** {tier_name}", report_md)
+            self.assertIn(f"**Tool Outputs Omitted:** {expected_omitted}", report_md)
+            self.assertIn("**Credentials Redacted:**", report_md)
+            self.assertIn("**Total Redactions:**", report_md)
+
 
 if __name__ == "__main__":
     unittest.main()

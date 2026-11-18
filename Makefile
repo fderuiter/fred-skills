@@ -14,6 +14,7 @@ check:
 	$(PYTHON) scripts/validate_skills.py --telemetry validation-telemetry.json
 	$(PYTHON) scripts/check_doc_links.py
 	$(PYTHON) scripts/verify_doc_snippets.py
+	$(PYTHON) scripts/verify_workflow_actions.py --check
 	$(PYTHON) -m unittest discover -s tests -v
 
 fix:

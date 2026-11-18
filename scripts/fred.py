@@ -91,6 +91,37 @@ def format_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join([header_line, separator_line, *data_lines])
 
 
+def _render_installed_table(data: Any) -> str:
+    headers = ["Skill", "Version", "Status", "Harness Path"]
+    skills_dict = data.get("skills", {}) if isinstance(data, dict) else {}
+    untracked_list = data.get("untracked", []) if isinstance(data, dict) else []
+    target = data.get("target", "") if isinstance(data, dict) else ""
+    if not skills_dict and not untracked_list:
+        if isinstance(data, dict) and data.get("message"):
+            return data["message"]
+        return "No entries found."
+    rows = [
+        [
+            name,
+            info.get("source_version", "unknown"),
+            info.get("status", "tracked"),
+            str(Path(target) / name) if target else "",
+        ]
+        for name, info in skills_dict.items()
+    ]
+    for item in untracked_list:
+        name = item if isinstance(item, str) else item.get("name", "")
+        rows.append(
+            [
+                name,
+                "-",
+                "untracked",
+                str(Path(target) / name) if target else "",
+            ]
+        )
+    return format_table(headers, rows)
+
+
 def render_discovery_table(command: str, data: Any) -> str:
     if command == "hosts":
         headers = ["Host", "Project Path", "Invocation"]
@@ -137,22 +168,7 @@ def render_discovery_table(command: str, data: Any) -> str:
         ]
         return format_table(headers, rows)
     if command == "installed":
-        headers = ["Skill", "Version", "Harness Path"]
-        skills_dict = data.get("skills", {}) if isinstance(data, dict) else {}
-        target = data.get("target", "") if isinstance(data, dict) else ""
-        if not skills_dict:
-            if isinstance(data, dict) and data.get("message"):
-                return data["message"]
-            return "No entries found."
-        rows = [
-            [
-                name,
-                info.get("source_version", "unknown"),
-                str(Path(target) / name) if target else "",
-            ]
-            for name, info in skills_dict.items()
-        ]
-        return format_table(headers, rows)
+        return _render_installed_table(data)
     return ""
 
 
@@ -538,6 +554,12 @@ def parser() -> argparse.ArgumentParser:
         "--session-id", default=None, help="Explicit session or run ID"
     )
     sub_tri.add_argument(
+        "--redaction-tier",
+        choices=["skeleton", "evidence", "full"],
+        default="full",
+        help="Transcript redaction tier: skeleton, evidence, or full (default: full)",
+    )
+    sub_tri.add_argument(
         "--check-schema",
         action="store_true",
         help="Validate generated bundle against bundle.schema.json",
@@ -583,6 +605,12 @@ def parser() -> argparse.ArgumentParser:
             default="project",
             help="Installation scope: project or user",
         )
+        if command == "installed":
+            sub.add_argument(
+                "--check",
+                action="store_true",
+                help="Exit with code 1 when skill drift or an active operation lock exists",
+            )
         if command not in {"installed", "rollback", "recover-install"}:
             skill_help = (
                 "Specific skill name to install (can be repeated)"
@@ -599,6 +627,11 @@ def parser() -> argparse.ArgumentParser:
                 "--dry-run",
                 action="store_true",
                 help="Simulate installation actions without modifying the filesystem",
+            )
+            sub.add_argument(
+                "--force",
+                action="store_true",
+                help="Archive modified managed skills to backups and repair or remove drifted entries",
             )
         if command in {"install", "update"}:
             sub.add_argument(
@@ -805,6 +838,7 @@ def handle_installation(a: argparse.Namespace) -> Any:
             skills=a.skill,
             update=a.command == "update",
             dry_run=a.dry_run,
+            force=a.force,
         )
         return installation.install(target, options)
     if a.command == "remove":
@@ -812,7 +846,9 @@ def handle_installation(a: argparse.Namespace) -> Any:
             raise ValueError(
                 "Remove requires at least one --skill; there is no implicit remove-all"
             )
-        options = installation.RemoveOptions(skills=a.skill, dry_run=a.dry_run)
+        options = installation.RemoveOptions(
+            skills=a.skill, dry_run=a.dry_run, force=a.force
+        )
         return installation.remove(target, options)
     if a.command == "rollback":
         options = installation.RollbackOptions(target=target)
@@ -898,18 +934,35 @@ def handle_diagnostics(a: argparse.Namespace) -> Any:
     triage = _load_triage_module()
 
     transcript = a.transcript or a.transcript_opt
+    discovery_meta = None
     if not transcript:
         if workspace and workspace.is_dir():
-            transcript = triage.discover_transcript(workspace)
+            discovery_meta = triage.discover_transcript_details(
+                workspace, session_id=a.session_id
+            )
+            transcript = Path(discovery_meta["selected_transcript"])
             print(f"Discovered transcript: {transcript}", file=sys.stderr)
         elif workspace:
             raise ValueError(f"Workspace directory not found: {workspace}")
+        elif a.session_id:
+            discovery_meta = triage.discover_transcript_details(
+                None, session_id=a.session_id
+            )
+            transcript = Path(discovery_meta["selected_transcript"])
+            print(f"Discovered transcript: {transcript}", file=sys.stderr)
         else:
             raise ValueError("Transcript file path is required")
     if not transcript.is_file():
         raise ValueError(f"Transcript file not found: {transcript}")
 
-    bundle = triage.generate_diagnostic_bundle(transcript, workspace, a.session_id)
+    redaction_tier = getattr(a, "redaction_tier", "full") or "full"
+    bundle = triage.generate_diagnostic_bundle(
+        transcript,
+        workspace,
+        a.session_id,
+        redaction_tier=redaction_tier,
+        discovery_metadata=discovery_meta,
+    )
     if a.check_schema:
         triage.validate_bundle(bundle)
     if output_dir:
@@ -979,6 +1032,13 @@ def main() -> int:
         print(render_discovery_table(args.command, result))
     else:
         print(json.dumps(result, indent=2, ensure_ascii=False))
+    if (
+        args.command == "installed"
+        and getattr(args, "check", False)
+        and isinstance(result, dict)
+        and not result.get("healthy", True)
+    ):
+        return 1
     return 0
 
 

@@ -14,20 +14,22 @@ Read [diagnostics guide](references/diagnostics-guide.md) for failure patterns a
 Consult [protocol](references/protocol.md) for multi-pass coordination invariants.
 
 1. **Ingest transcript and run state:** Load the agent session transcript (`.json`, `.jsonl`,
-   `.md`, or raw log text) alongside the audit workspace directory containing `run.json`
-   and `audit.json` when available.
-2. **Detect failure signatures:** Scan transcript execution history to identify:
+   `.md`, or raw log text) from an explicit path, the workspace, `~/.claude/projects/`, or
+   `~/.codex/sessions/` using `run.json` paths and `--session-id`, recording rejected candidates.
+2. **Detect failure signatures:** Parse structured JSONL/JSON roles (`user`, `assistant`,
+   `tool_output`, `error`) and scan failed turns backward before plain-text fallback to identify:
    - Tool timeouts (long-running commands, process timeouts, tool execution deadlines).
    - Schema validation failures (structural mismatches against [schema](assets/audit.schema.json),
      invalid references, duplicate IDs, reversed line numbers, cycle errors).
    - Context window exhaustion (token limit exceptions, truncated model turns).
    Pinpoint the precise transcript line and failed command or tool invocation.
-3. **Correlate specialist domain and ledger entries:** Identify the active specialist
-   audit skill (e.g. `repo-audit-concurrency`, `repo-audit-trust-boundaries`) and correlate
-   failure context with existing `audit.json` records (evidence, contracts, findings).
-4. **Scrub private credentials:** Redact authorization headers, Bearer tokens, API keys
-   (`sk-...`, `ghp_...`, AWS keys), passwords, private keys, and environment secrets
-   from transcripts, logs, and diagnostic exports.
+3. **Correlate specialist domain and ledger entries:** Identify the most recently active
+   specialist audit skill before the failure line (e.g. `repo-audit-concurrency`,
+   `repo-audit-trust-boundaries`) and correlate failure context with `audit.json` records.
+4. **Scrub private credentials and apply redaction tier:** Recursively redact authorization
+   headers, Bearer tokens, API keys (`sk-...`, `ghp_...`, AWS keys), JSON secret fields,
+   escaped `tool_result` secrets, URI passwords, private keys, and environment secrets across
+   `skeleton` (strip all tool outputs), `evidence` (keep cited tool outputs only), and `full` tiers.
 5. **Formulate recovery steps:** Inspect the last recorded checkpoint in `run.json`.
    Produce actionable resumption commands using `python scripts/fred.py resume` or
    bounded checkpoint repair commands.

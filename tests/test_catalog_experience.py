@@ -26,6 +26,24 @@ class ExperienceTests(unittest.TestCase):
                     self.assertTrue(item[field])
                     self.assertFalse(set(item[field]) - known)
 
+        marketplace_plugins = {
+            plugin["name"]: plugin
+            for plugin in read_json(ROOT / ".claude-plugin/marketplace.json")["plugins"]
+        }
+        for skill_name in known:
+            self.assertIn(skill_name, marketplace_plugins)
+        for pack_name, pack_data in read_json(ROOT / "catalog/packs.json")[
+            "packs"
+        ].items():
+            self.assertIn(pack_name, marketplace_plugins)
+            bundle = marketplace_plugins[pack_name]
+            self.assertEqual(bundle["source"], "./")
+            self.assertIs(bundle["strict"], False)
+            self.assertEqual(
+                bundle["skills"],
+                [f"./skills/{member}" for member in pack_data["skills"]],
+            )
+
     def test_searchable_experience_is_current(self):
         self.assertEqual([], build(check=True))
         page = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
