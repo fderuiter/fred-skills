@@ -66,6 +66,8 @@ class ExperienceTests(unittest.TestCase):
 
     def test_domain_specific_task_recipes(self):
         recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
+        experience_md = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
+        explorer_html = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
         expected_recipes = {
             "design-architecture": {
                 "skills": [
@@ -74,6 +76,7 @@ class ExperienceTests(unittest.TestCase):
                     "arch-component-decomposition",
                 ],
                 "requires_base": False,
+                "deliverable": "architecture.json",
             },
             "review-code-changes": {
                 "skills": [
@@ -82,6 +85,7 @@ class ExperienceTests(unittest.TestCase):
                     "review-actionable-feedback",
                 ],
                 "requires_base": True,
+                "deliverable": "review.json",
             },
             "expand-automated-tests": {
                 "skills": [
@@ -90,6 +94,7 @@ class ExperienceTests(unittest.TestCase):
                     "test-suite-verification",
                 ],
                 "requires_base": False,
+                "deliverable": "testing.json",
             },
         }
         for name, expected in expected_recipes.items():
@@ -99,6 +104,10 @@ class ExperienceTests(unittest.TestCase):
             self.assertTrue(recipes[name]["outcome"])
             self.assertTrue(recipes[name]["workflows"])
             self.assertTrue(recipes[name]["outputs"])
+            self.assertEqual(expected["deliverable"], recipes[name]["outputs"][0])
+            self.assertNotIn("audit.json", recipes[name]["outputs"])
+            self.assertIn(expected["deliverable"], experience_md)
+            self.assertIn(expected["deliverable"], explorer_html)
 
 
 if __name__ == "__main__":

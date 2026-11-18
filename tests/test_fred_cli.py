@@ -816,6 +816,127 @@ class FredCLITests(unittest.TestCase):
             self.assertEqual("claude-code", data["host"])
             self.assertIn("repo-audit-concurrency", data["skills"])
 
+    def test_domain_workflows_end_to_end_cli_and_audit_only_guardrails(self):
+        import shutil
+
+        if not shutil.which("git"):
+            self.skipTest("Git unavailable")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            repo = tmp_path / "sample_repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b\n")
+            for argv in [
+                ["init", "-q"],
+                ["config", "user.name", "Fixture"],
+                ["config", "user.email", "fixture@example.invalid"],
+                ["add", "."],
+                ["commit", "-qm", "initial"],
+            ]:
+                subprocess.run(["git", "-C", str(repo), *argv], check=True)
+            base_rev = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b + 0\n")
+
+            cases = [
+                ("design-architecture", [], "architecture.json"),
+                ("review-code-changes", ["--base", base_rev], "review.json"),
+                ("expand-automated-tests", [], "testing.json"),
+            ]
+            for task, extra_args, deliverable in cases:
+                with self.subTest(task=task):
+                    plan_proc = self.run_cli(
+                        "plan",
+                        str(repo),
+                        "--task",
+                        task,
+                        "--mode",
+                        "comprehensive",
+                        *extra_args,
+                        "--json",
+                    )
+                    self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
+                    plan_json = json.loads(plan_proc.stdout)["plan"]
+                    self.assertEqual(3, len(plan_json["skills"]))
+                    self.assertFalse(
+                        any(
+                            s.startswith("repo-audit-")
+                            for s in plan_json["skills"] + plan_json["deferred_skills"]
+                        )
+                    )
+
+                    ws = tmp_path / f"run-{task}"
+                    init_proc = self.run_cli(
+                        "init",
+                        str(repo),
+                        "--task",
+                        task,
+                        "--output",
+                        str(ws),
+                        *extra_args,
+                        "--json",
+                    )
+                    self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+                    self.assertTrue((ws / deliverable).is_file())
+                    self.assertTrue((ws / "prompt.md").is_file())
+
+                    val_proc = self.run_cli("validate-run", str(ws))
+                    self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+                    # Report on workspace directory and on JSON file directly
+                    rep_dir_html = tmp_path / f"report-dir-{task}.html"
+                    rep_proc1 = self.run_cli(
+                        "report", str(ws), "--output", str(rep_dir_html)
+                    )
+                    self.assertEqual(0, rep_proc1.returncode, rep_proc1.stderr)
+                    self.assertTrue(rep_dir_html.is_file())
+
+                    rep_file_html = tmp_path / f"report-file-{task}.html"
+                    rep_proc2 = self.run_cli(
+                        "report",
+                        str(ws / deliverable),
+                        "--output",
+                        str(rep_file_html),
+                    )
+                    self.assertEqual(0, rep_proc2.returncode, rep_proc2.stderr)
+                    self.assertTrue(rep_file_html.is_file())
+
+                    # Audit-only commands fail with exit code 1 and clear audit.json guidance
+                    iss_proc = self.run_cli(
+                        "issues", str(ws), "--output", str(tmp_path / f"iss-{task}")
+                    )
+                    self.assertEqual(1, iss_proc.returncode)
+                    self.assertIn("audit.json", iss_proc.stderr)
+
+                    sarif_proc = self.run_cli(
+                        "export-sarif",
+                        str(ws),
+                        "--output",
+                        str(tmp_path / f"{task}.sarif"),
+                    )
+                    self.assertEqual(1, sarif_proc.returncode)
+                    self.assertIn("audit.json", sarif_proc.stderr)
+
+                    cmp_proc = self.run_cli(
+                        "compare", str(ws / deliverable), str(ws / deliverable)
+                    )
+                    self.assertEqual(1, cmp_proc.returncode)
+                    self.assertIn("audit.json", cmp_proc.stderr)
+
+                    rec_proc = self.run_cli(
+                        "reconcile",
+                        str(ws),
+                        "--finding",
+                        "F-1",
+                        "--state",
+                        "open",
+                        "--note",
+                        "note",
+                    )
+                    self.assertEqual(1, rec_proc.returncode)
+                    self.assertIn("audit.json", rec_proc.stderr)
+
 
 class FredDispatchRegistryTests(unittest.TestCase):
     @classmethod

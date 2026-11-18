@@ -287,7 +287,7 @@
         "System boundaries, architectural decisions, and component decomposition"
       ],
       "outputs": [
-        "audit.json",
+        "architecture.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -305,7 +305,7 @@
         "Modified files, contract invariants, and differential review feedback"
       ],
       "outputs": [
-        "audit.json",
+        "review.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -323,7 +323,7 @@
         "Uncovered execution paths, generated test cases, and test suite verification"
       ],
       "outputs": [
-        "audit.json",
+        "testing.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
