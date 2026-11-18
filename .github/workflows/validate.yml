@@ -53,7 +53,7 @@ jobs:
         run: python scripts/run_checks.py --phase tests
       - name: Verify workflow action pins upstream
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: python scripts/verify_workflow_actions.py --online
+        run: python scripts/check_workflow_pins.py --verify-remote
       - name: Execute original, correction, and safe controls
         run: python -c "import os, subprocess, sys; subprocess.run([sys.executable, 'examples/walkthrough/run_demo.py', '--output', os.path.join(os.environ['RUNNER_TEMP'], 'fred-demo')], check=True)"
       - name: Build and verify a standalone pack
