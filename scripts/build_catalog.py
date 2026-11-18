@@ -68,16 +68,27 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         for entry in sorted(entries, key=lambda item: item["name"])
         if entry["name"] in membership
     ]
+    description = (
+        "Portable engineering workflows for investigating repositories, planning"
+        " useful fixes, and verifying that those fixes work."
+    )
+    version_path = root / "VERSION"
+    extension_version = (
+        version_path.read_text(encoding="utf-8").strip() or "0.0.0"
+        if version_path.is_file()
+        else "0.0.0"
+    )
     marketplace = {
         "name": "fred-skills",
         "owner": {"name": "fderuiter"},
-        "metadata": {
-            "description": (
-                "Portable engineering workflows for investigating repositories, planning"
-                " useful fixes, and verifying that those fixes work."
-            )
-        },
+        "metadata": {"description": description},
         "plugins": plugins,
+    }
+    marketplace_text = json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+    gemini_extension = {
+        "name": "fred-skills",
+        "description": description,
+        "version": extension_version,
     }
     return {
         "catalog/skills.json": (
@@ -89,8 +100,10 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
             + "\n"
         ),
         "docs/catalog.md": markdown,
-        ".claude-plugin/marketplace.json": (
-            json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+        ".claude-plugin/marketplace.json": marketplace_text,
+        ".cursor-plugin/marketplace.json": marketplace_text,
+        "gemini-extension.json": (
+            json.dumps(gemini_extension, indent=2, ensure_ascii=False) + "\n"
         ),
     }
 

@@ -200,12 +200,37 @@ class PackageTests(unittest.TestCase):
         self.manifest()
         self.assertEqual([], build(self.root))
         marketplace_path = self.root / ".claude-plugin/marketplace.json"
+        cursor_marketplace_path = self.root / ".cursor-plugin/marketplace.json"
+        gemini_ext_path = self.root / "gemini-extension.json"
         self.assertTrue(marketplace_path.is_file())
+        self.assertTrue(cursor_marketplace_path.is_file())
+        self.assertTrue(gemini_ext_path.is_file())
+        gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
+        self.assertEqual("0.0.0", gemini_default["version"])
+        self.assertEqual("fred-skills", gemini_default["name"])
+
+        (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+        problems_version = build(self.root, check=True)
+        self.assertTrue(
+            any("gemini-extension.json" in problem for problem in problems_version)
+        )
+        self.assertEqual([], build(self.root))
+        self.assertEqual(
+            "1.2.3",
+            json.loads(gemini_ext_path.read_text(encoding="utf-8"))["version"],
+        )
+
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        gemini_ext_path.write_text('{"tampered": true}', encoding="utf-8")
         problems = build(self.root, check=True)
         self.assertTrue(
             any(".claude-plugin/marketplace.json" in problem for problem in problems)
         )
+        self.assertTrue(
+            any(".cursor-plugin/marketplace.json" in problem for problem in problems)
+        )
+        self.assertTrue(any("gemini-extension.json" in problem for problem in problems))
 
     def test_build_outputs_helper_creates_files_and_detects_drift(self):
         target_file = "generated/sample.txt"
@@ -269,23 +294,39 @@ class PackageTests(unittest.TestCase):
 
     def test_committed_marketplace_manifest_is_valid_and_current(self):
         self.assertEqual([], build(ROOT, check=True))
-        manifest_path = ROOT / ".claude-plugin/marketplace.json"
-        self.assertTrue(manifest_path.is_file())
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["name"], "fred-skills")
-        self.assertEqual(data["owner"]["name"], "fderuiter")
-        plugins = data["plugins"]
-        self.assertEqual(len(plugins), len(get_suite_skills(ROOT)))
-        plugin_names = {plugin["name"] for plugin in plugins}
-        for workflow_skill in get_suite_skills(ROOT, suite_name="repository-workflows"):
-            self.assertIn(workflow_skill, plugin_names)
-        for plugin in plugins:
-            self.assertIn("name", plugin)
-            self.assertIn("description", plugin)
-            self.assertIn("source", plugin)
-            self.assertTrue(plugin["source"].startswith("./skills/"))
-            entry_file = ROOT / plugin["source"] / "SKILL.md"
-            self.assertTrue(entry_file.is_file())
+        for rel_manifest in [
+            ".claude-plugin/marketplace.json",
+            ".cursor-plugin/marketplace.json",
+        ]:
+            manifest_path = ROOT / rel_manifest
+            self.assertTrue(manifest_path.is_file())
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["name"], "fred-skills")
+            self.assertEqual(data["owner"]["name"], "fderuiter")
+            plugins = data["plugins"]
+            self.assertEqual(len(plugins), len(get_suite_skills(ROOT)))
+            plugin_names = {plugin["name"] for plugin in plugins}
+            for workflow_skill in get_suite_skills(
+                ROOT, suite_name="repository-workflows"
+            ):
+                self.assertIn(workflow_skill, plugin_names)
+            for plugin in plugins:
+                self.assertIn("name", plugin)
+                self.assertIn("description", plugin)
+                self.assertIn("source", plugin)
+                self.assertTrue(plugin["source"].startswith("./skills/"))
+                entry_file = ROOT / plugin["source"] / "SKILL.md"
+                self.assertTrue(entry_file.is_file())
+
+        gemini_ext_path = ROOT / "gemini-extension.json"
+        self.assertTrue(gemini_ext_path.is_file())
+        gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
+        self.assertEqual(gemini_data["name"], "fred-skills")
+        self.assertTrue(gemini_data["description"])
+        self.assertEqual(
+            gemini_data["version"],
+            (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        )
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
         self.manifest()
