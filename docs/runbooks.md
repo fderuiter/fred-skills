@@ -301,8 +301,8 @@ The file `receipt.json` located at `<destination>/.fred-skills/<host>-<scope>/re
 - Specific error messages:
   - `fred-skills: Expecting value: line 1 column 1 (char 0)` (corrupted or empty JSON)
   - `fred-skills: Refusing to replace unmanaged skill: <name>`
-  - `fred-skills: Locally modified skill: <name>; preserve or move it before updating/removing`
-  - `fred-skills: Managed skill is missing: <name>; inspect the receipt before proceeding`
+  - `fred-skills: Locally modified skill: <name>; pass --force for managed recovery or preserve/move it before updating/removing`
+  - `fred-skills: Managed skill is missing: <name>; pass --force for managed recovery or inspect the receipt before proceeding`
   - `fred-skills: Unsafe installed package path: <name>`
 
 ### Diagnostic Checks
@@ -313,14 +313,14 @@ The file `receipt.json` located at `<destination>/.fred-skills/<host>-<scope>/re
    ```
    If this outputs a `JSONDecodeError`, the receipt file is malformed or truncated.
 
-2. **Inspect the receipt structure:**
-   Check the current recorded skills and hashes:
+2. **Inspect the receipt structure and live status:**
+   Check the current recorded skills, on-disk status (`tracked`, `modified`, `missing`, `untracked`), and hashes:
    ```sh
-   # Inspect installation receipt, recorded skills, and harness paths.
+   # Inspect installation receipt, live status, and harness paths.
    # Target project root and host can be explicitly specified:
    python scripts/fred.py installed --destination /path/to/project --host <host> --scope <scope>
 
-   # Output structured receipt information in machine-readable JSON:
+   # Output structured receipt and health fields in machine-readable JSON:
    python scripts/fred.py installed --destination /path/to/project --host <host> --scope <scope> --json
 
    # When running directly within the target project root directory,
@@ -329,29 +329,29 @@ The file `receipt.json` located at `<destination>/.fred-skills/<host>-<scope>/re
    python scripts/fred.py installed
    ```
 
-3. **Check for local file modifications (hash mismatch):**
-   Compare the computed content hash of an installed skill with the receipt's recorded hash:
+3. **Check for workspace drift or active operation locks:**
+   Run `installed --check` to verify live package hashes against `receipt.json` (exits `1` when drift or a lock exists):
    ```sh
-   python -c "
-   import sys, pathlib
-   sys.path.insert(0, 'scripts')
-   from fredlib.common import package_files, digest, read_json
-   state = pathlib.Path('/path/to/project/.fred-skills/<host>-<scope>')
-   target = pathlib.Path('/path/to/project/<target_path>')
-   receipt = read_json(state / 'receipt.json')
-   for name, record in receipt.get('skills', {}).items():
-       skill_path = target / name
-       if not skill_path.exists():
-           print(f'MISSING: {name}')
-           continue
-       current_hash = digest(package_files(skill_path))
-       expected_hash = record['content_hash']
-       if current_hash != expected_hash:
-           print(f'MODIFIED: {name} (current: {current_hash[:8]}... expected: {expected_hash[:8]}...)')
-       else:
-           print(f'OK: {name}')
-   "
+   # Check a specific project and host (exits 0 when healthy, 1 on drift or lock):
+   python scripts/fred.py installed --destination /path/to/project --host <host> --scope <scope> --check
+
+   # Emit machine-readable JSON with per-skill status, untracked folders, locked, and healthy flags:
+   python scripts/fred.py installed --destination /path/to/project --host <host> --check --json
+
+   # Check the current working directory using auto-detected host markers or receipts:
+   python scripts/fred.py installed --check
    ```
+   In interactive terminals, `installed` renders a `Status` column classifying each entry:
+   - `tracked`: Managed skill matches the SHA-256 `content_hash` recorded in `receipt.json`.
+   - `modified`: Managed skill files on disk diverge from the recorded `content_hash`.
+   - `missing`: Managed skill recorded in `receipt.json` is absent from the target directory.
+   - `untracked`: Local `SKILL.md` folder in the target directory is not managed by `receipt.json`.
+
+   Preview whether a planned repair will succeed before modifying files:
+   ```sh
+   python scripts/fred.py update --destination /path/to/project --host <host> --pack starter --force --dry-run
+   ```
+   Dry-run validation confirms host detection and confirms no unmanaged skill paths collide.
 
 ### Step-by-Step Remediation
 
@@ -362,40 +362,40 @@ If an update or removal is blocked by `Locally modified skill: <name>`:
    diff -ru /path/to/fred-skills/skills/<name> /path/to/project/<target_path>/<name> || true
    ```
 2. Choose one of two recovery routes:
-   - **Route 1: Preserve customizations outside managed skills:**
-     Copy the customized skill to a personal/custom directory or rename it:
+   - **Route 1: Repair with `--force` (archives modified files to `.fred-skills/<host>-<scope>/backups/`):**
+     Update or reinstall the managed skill cleanly while preserving your prior edits in backups:
+     ```sh
+     python scripts/fred.py update --destination /path/to/project --host <host> --skill <name> --force
+     ```
+     Or uninstall a locally modified managed skill after archiving its edited folder:
+     ```sh
+     python scripts/fred.py remove --destination /path/to/project --host <host> --skill <name> --force
+     ```
+   - **Route 2: Keep customizations as a standalone untracked skill:**
+     Copy the customized skill to a custom folder name (which `installed` reports as `untracked`):
      ```sh
      cp -a /path/to/project/<target_path>/<name> /path/to/project/<target_path>/<name>-custom
      ```
-     Then reset the managed skill from the toolkit source:
-     ```sh
-     cp -a /path/to/fred-skills/skills/<name>/* /path/to/project/<target_path>/<name>/
-     ```
-   - **Route 2: Revert local modifications to match receipt:**
-     Re-copy the original skill files from the toolkit repository:
-     ```sh
-     cp /path/to/fred-skills/skills/<name>/* /path/to/project/<target_path>/<name>/
-     ```
-3. Now run the update or remove command cleanly:
+3. Verify the workspace is healthy after recovery:
    ```sh
-   python scripts/fred.py update --destination /path/to/project --host <host> --skill <name>
+   python scripts/fred.py installed --destination /path/to/project --host <host> --check
    ```
 
 #### Scenario B: Resolving Missing Managed Skills
 If blocked by `Managed skill is missing: <name>`:
-1. Check the backups directory for an archived copy:
+1. Restore missing managed skills in one step with `--force`:
    ```sh
-   find /path/to/project/.fred-skills/<host>-<scope>/backups -name "<name>" -type d
+   python scripts/fred.py install --destination /path/to/project --host <host> --pack starter --force
    ```
-2. If found, restore it:
+2. Or drop an intentionally deleted skill from `receipt.json` with `remove --force`:
    ```sh
-   cp -a <backup_path>/<name> /path/to/project/<target_path>/<name>
+   python scripts/fred.py remove --destination /path/to/project --host <host> --skill <name> --force
    ```
-3. If no backup is available, re-copy the skill from the toolkit:
-   ```sh
-   cp -a /path/to/fred-skills/skills/<name> /path/to/project/<target_path>/<name>
-   ```
-4. Verify the restored skill hash matches the receipt record.
+3. Confirm that `installed --check` now exits `0` with all remaining managed skills `tracked`.
+4. Archived edits (if any) remain available under `.fred-skills/<host>-<scope>/backups/`.
+5. Note: `--force` never modifies `untracked` user skill folders absent from `receipt.json`.
+6. Note: `rollback` and `recover-install` do not accept `--force`; inspect backups before rolling back.
+7. If `receipt.json` itself is corrupted rather than drifted, proceed to Scenario C below.
 
 #### Scenario C: Non-Destructive Repair and Reconstruction of Corrupted `receipt.json`
 **Never delete the `.fred-skills/` directory.** If `receipt.json` is missing or unparseable:
