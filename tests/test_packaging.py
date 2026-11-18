@@ -260,6 +260,48 @@ class PackageTests(unittest.TestCase):
         names = [plugin["name"] for plugin in manifest["plugins"]]
         self.assertEqual(names, ["sample-audit", "sample-workflow"])
 
+    def test_marketplace_manifest_emits_inline_pack_bundles_and_rejects_invalid_packs(
+        self,
+    ):
+        self.manifest()
+        packs_doc = {
+            "schema_version": "1.0",
+            "packs": {
+                "starter": {
+                    "description": "Starter bundle.",
+                    "skills": ["sample-audit"],
+                }
+            },
+        }
+        packs_file = self.root / "catalog/packs.json"
+        packs_file.write_text(json.dumps(packs_doc), encoding="utf-8")
+        self.assertEqual([], build(self.root))
+        manifest = json.loads(
+            (self.root / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            manifest["plugins"],
+            [
+                {
+                    "name": "starter",
+                    "description": "Starter bundle.",
+                    "source": "./",
+                    "strict": False,
+                    "skills": ["./skills/sample-audit"],
+                },
+                {
+                    "name": "sample-audit",
+                    "description": "Audit synthetic contracts when explicitly requested.",
+                    "source": "./skills/sample-audit",
+                },
+            ],
+        )
+
+        packs_doc["packs"]["starter"]["skills"] = ["nonexistent-skill"]
+        packs_file.write_text(json.dumps(packs_doc), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            build(self.root)
+
     def test_listed_skill_without_valid_entry_point_is_rejected(self):
         self.manifest()
         self.entry.unlink()
@@ -269,23 +311,43 @@ class PackageTests(unittest.TestCase):
 
     def test_committed_marketplace_manifest_is_valid_and_current(self):
         self.assertEqual([], build(ROOT, check=True))
+        self.assertFalse((ROOT / ".claude-plugin/plugin.json").exists())
         manifest_path = ROOT / ".claude-plugin/marketplace.json"
         self.assertTrue(manifest_path.is_file())
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(data["name"], "fred-skills")
         self.assertEqual(data["owner"]["name"], "fderuiter")
+        suite_skills = get_suite_skills(ROOT)
+        packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
+            "packs"
+        ]
         plugins = data["plugins"]
-        self.assertEqual(len(plugins), len(get_suite_skills(ROOT)))
-        plugin_names = {plugin["name"] for plugin in plugins}
+        self.assertEqual(len(plugins), len(suite_skills) + len(packs))
+        plugin_names = [plugin["name"] for plugin in plugins]
+        self.assertEqual(len(plugin_names), len(set(plugin_names)))
+        skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
+        pack_plugins = [p for p in plugins if p["source"] == "./"]
+        self.assertEqual(len(skill_plugins) + len(pack_plugins), len(plugins))
+        self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
+        self.assertEqual({p["name"] for p in pack_plugins}, set(packs))
         for workflow_skill in get_suite_skills(ROOT, suite_name="repository-workflows"):
-            self.assertIn(workflow_skill, plugin_names)
-        for plugin in plugins:
-            self.assertIn("name", plugin)
+            self.assertIn(workflow_skill, set(plugin_names))
+        for plugin in skill_plugins:
             self.assertIn("description", plugin)
-            self.assertIn("source", plugin)
-            self.assertTrue(plugin["source"].startswith("./skills/"))
+            self.assertNotIn("strict", plugin)
             entry_file = ROOT / plugin["source"] / "SKILL.md"
             self.assertTrue(entry_file.is_file())
+        for plugin in pack_plugins:
+            expected_pack = packs[plugin["name"]]
+            self.assertEqual(plugin["description"], expected_pack["description"])
+            self.assertIs(plugin["strict"], False)
+            self.assertEqual(
+                plugin["skills"],
+                [f"./skills/{member}" for member in expected_pack["skills"]],
+            )
+            for member_source in plugin["skills"]:
+                self.assertTrue(member_source.startswith("./skills/"))
+                self.assertTrue((ROOT / member_source / "SKILL.md").is_file())
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
         self.manifest()
@@ -459,13 +521,20 @@ class PackageTests(unittest.TestCase):
         self.assertIn("complete 51-package pack", usage_text)
         self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
         self.assertIn(
-            "Install all 51 packages directly via plugin marketplaces", usage_text
+            "Register the marketplace catalog and install a curated pack (such as `complete` for all 51 packages or `starter`)",
+            usage_text,
         )
+        self.assertIn("/plugin install complete@fred-skills", usage_text)
+        self.assertIn("codex plugin add starter@fred-skills", usage_text)
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Install all 51 packages with a single marketplace command:", readme_text
+            "Register the marketplace catalog, then install a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills)",
+            readme_text,
         )
+        self.assertIn("/plugin install complete@fred-skills", readme_text)
+        self.assertIn("codex plugin add starter@fred-skills", readme_text)
+        self.assertNotIn("single marketplace command", readme_text)
 
         for doc_name in [
             "docs/architecture.md",
