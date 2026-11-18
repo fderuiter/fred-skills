@@ -51,3 +51,7 @@ Paths are relative to the explicit project/home destination. Filesystem checks a
 | claude-code | `.claude/skills` | `.claude/skills` | not-executed |
 | antigravity | `.agents/skills` | `.gemini/antigravity/skills` | not-executed |
 | gemini-cli | `.gemini/skills` | `.gemini/skills` | not-executed |
+| cursor | `.cursor/skills` | `.cursor/skills` | not-executed |
+| copilot | `.github/skills` | `.copilot/skills` | not-executed |
+| opencode | `.opencode/skills` | `.config/opencode/skills` | not-executed |
+| windsurf | `.windsurf/skills` | `.config/devin/skills` | not-executed |

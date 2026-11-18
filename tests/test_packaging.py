@@ -200,12 +200,37 @@ class PackageTests(unittest.TestCase):
         self.manifest()
         self.assertEqual([], build(self.root))
         marketplace_path = self.root / ".claude-plugin/marketplace.json"
+        cursor_marketplace_path = self.root / ".cursor-plugin/marketplace.json"
+        gemini_ext_path = self.root / "gemini-extension.json"
         self.assertTrue(marketplace_path.is_file())
+        self.assertTrue(cursor_marketplace_path.is_file())
+        self.assertTrue(gemini_ext_path.is_file())
+        gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
+        self.assertEqual("0.0.0", gemini_default["version"])
+        self.assertEqual("fred-skills", gemini_default["name"])
+
+        (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
+        problems_version = build(self.root, check=True)
+        self.assertTrue(
+            any("gemini-extension.json" in problem for problem in problems_version)
+        )
+        self.assertEqual([], build(self.root))
+        self.assertEqual(
+            "1.2.3",
+            json.loads(gemini_ext_path.read_text(encoding="utf-8"))["version"],
+        )
+
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        gemini_ext_path.write_text('{"tampered": true}', encoding="utf-8")
         problems = build(self.root, check=True)
         self.assertTrue(
             any(".claude-plugin/marketplace.json" in problem for problem in problems)
         )
+        self.assertTrue(
+            any(".cursor-plugin/marketplace.json" in problem for problem in problems)
+        )
+        self.assertTrue(any("gemini-extension.json" in problem for problem in problems))
 
     def test_build_outputs_helper_creates_files_and_detects_drift(self):
         target_file = "generated/sample.txt"
@@ -312,42 +337,59 @@ class PackageTests(unittest.TestCase):
     def test_committed_marketplace_manifest_is_valid_and_current(self):
         self.assertEqual([], build(ROOT, check=True))
         self.assertFalse((ROOT / ".claude-plugin/plugin.json").exists())
-        manifest_path = ROOT / ".claude-plugin/marketplace.json"
-        self.assertTrue(manifest_path.is_file())
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["name"], "fred-skills")
-        self.assertEqual(data["owner"]["name"], "fderuiter")
+        self.assertFalse((ROOT / ".cursor-plugin/plugin.json").exists())
         suite_skills = get_suite_skills(ROOT)
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
         ]
-        plugins = data["plugins"]
-        self.assertEqual(len(plugins), len(suite_skills) + len(packs))
-        plugin_names = [plugin["name"] for plugin in plugins]
-        self.assertEqual(len(plugin_names), len(set(plugin_names)))
-        skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
-        pack_plugins = [p for p in plugins if p["source"] == "./"]
-        self.assertEqual(len(skill_plugins) + len(pack_plugins), len(plugins))
-        self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
-        self.assertEqual({p["name"] for p in pack_plugins}, set(packs))
-        for workflow_skill in get_suite_skills(ROOT, suite_name="repository-workflows"):
-            self.assertIn(workflow_skill, set(plugin_names))
-        for plugin in skill_plugins:
-            self.assertIn("description", plugin)
-            self.assertNotIn("strict", plugin)
-            entry_file = ROOT / plugin["source"] / "SKILL.md"
-            self.assertTrue(entry_file.is_file())
-        for plugin in pack_plugins:
-            expected_pack = packs[plugin["name"]]
-            self.assertEqual(plugin["description"], expected_pack["description"])
-            self.assertIs(plugin["strict"], False)
-            self.assertEqual(
-                plugin["skills"],
-                [f"./skills/{member}" for member in expected_pack["skills"]],
-            )
-            for member_source in plugin["skills"]:
-                self.assertTrue(member_source.startswith("./skills/"))
-                self.assertTrue((ROOT / member_source / "SKILL.md").is_file())
+        for rel_manifest in [
+            ".claude-plugin/marketplace.json",
+            ".cursor-plugin/marketplace.json",
+        ]:
+            manifest_path = ROOT / rel_manifest
+            self.assertTrue(manifest_path.is_file())
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["name"], "fred-skills")
+            self.assertEqual(data["owner"]["name"], "fderuiter")
+            plugins = data["plugins"]
+            self.assertEqual(len(plugins), len(suite_skills) + len(packs))
+            plugin_names = [plugin["name"] for plugin in plugins]
+            self.assertEqual(len(plugin_names), len(set(plugin_names)))
+            skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
+            pack_plugins = [p for p in plugins if p["source"] == "./"]
+            self.assertEqual(len(skill_plugins) + len(pack_plugins), len(plugins))
+            self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
+            self.assertEqual({p["name"] for p in pack_plugins}, set(packs))
+            for workflow_skill in get_suite_skills(
+                ROOT, suite_name="repository-workflows"
+            ):
+                self.assertIn(workflow_skill, set(plugin_names))
+            for plugin in skill_plugins:
+                self.assertIn("description", plugin)
+                self.assertNotIn("strict", plugin)
+                entry_file = ROOT / plugin["source"] / "SKILL.md"
+                self.assertTrue(entry_file.is_file())
+            for plugin in pack_plugins:
+                expected_pack = packs[plugin["name"]]
+                self.assertEqual(plugin["description"], expected_pack["description"])
+                self.assertIs(plugin["strict"], False)
+                self.assertEqual(
+                    plugin["skills"],
+                    [f"./skills/{member}" for member in expected_pack["skills"]],
+                )
+                for member_source in plugin["skills"]:
+                    self.assertTrue(member_source.startswith("./skills/"))
+                    self.assertTrue((ROOT / member_source / "SKILL.md").is_file())
+
+        gemini_ext_path = ROOT / "gemini-extension.json"
+        self.assertTrue(gemini_ext_path.is_file())
+        gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
+        self.assertEqual(gemini_data["name"], "fred-skills")
+        self.assertTrue(gemini_data["description"])
+        self.assertEqual(
+            gemini_data["version"],
+            (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+        )
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
         self.manifest()

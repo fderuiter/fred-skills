@@ -362,14 +362,14 @@ The `fredlib.installation` module handles skill discovery, host environment mark
 def detect_host(destination: Path | None = None, scope: str = "project") -> str
 ```
 
-Inspects the target destination for agent configuration markers and historical receipts to identify the host platform automatically.
+Inspects the target destination for declarative `project_markers` or `user_markers` configured in `catalog/hosts.json` (`primary` before `fallback`) and historical receipts to identify the host platform automatically.
 
 - **Parameters:**
-  - `destination` (`Path | None`, default: `None`): Project root directory to inspect, or `None` to default to current working directory (project scope) or user home (user scope).
+  - `destination` (`Path | None`, default: `None`): Project root or user home directory to inspect, or `None` to default to current working directory (`"project"` scope) or user home (`"user"` scope).
   - `scope` (`str`, default: `"project"`): Installation scope (`"project"` or `"user"`).
-- **Returns:** `str` — Detected host identifier: `"claude-code"`, `"gemini-cli"`, `"antigravity"`, or `"codex"`.
+- **Returns:** `str` — Detected host identifier from `catalog/hosts.json`: `"codex"`, `"claude-code"`, `"antigravity"`, `"gemini-cli"`, `"cursor"`, `"copilot"`, `"opencode"`, or `"windsurf"`.
 - **Exceptions:**
-  - `ValueError`: Raised if no host markers are found; if multiple conflicting marker directories exist; or if ambiguous receipt records exist for both codex and antigravity.
+  - `ValueError`: Raised if `scope` is invalid; if no configured host markers are found; if markers from multiple distinct hosts coexist; or if conflicting receipt records exist alongside shared or fallback markers.
 
 ---
 
