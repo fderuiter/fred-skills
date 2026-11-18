@@ -10,14 +10,16 @@ Before bumping `VERSION`, review the selected diff, run all checks in
 synthetic walkthrough, build and verify the intended pack, review the recorded behavioral
 limits, and ensure [LICENSE](../LICENSE) remains present and nonempty.
 
-Pushes to `main` run a read-only `preflight` gate that validates `v<VERSION>`, resolves
-an immutable `target_sha`, verifies `LICENSE` and `VERSION` at `target_sha`, and checks
-live GitHub Releases. When `v<VERSION>` is unpublished (or exists only as a draft), the
-release workflow checks out `target_sha`, runs `make check`, packages and verifies all
-release archives and SHA-256 manifests, attests SLSA build provenance, pushes tag
-`v<VERSION>` if missing on `origin`, and publishes (or promotes) the GitHub Release using
-`docs/release-notes-<VERSION>.md` when present (or generated notes otherwise). Subsequent
-`main` pushes with an already published `VERSION` skip packaging and publication cleanly.
+Pushes to `main` run a read-only `preflight` gate that validates SemVer 2.0.0 `v<VERSION>`,
+resolves an immutable `target_sha`, verifies `LICENSE` and `VERSION` at `target_sha`, and
+checks live GitHub Releases. When `v<VERSION>` is unpublished (or exists only as a draft),
+the release workflow checks out `target_sha`, runs `make check`, packages and verifies all
+release archives and SHA-256 manifests, verifies downloaded `manifest.json`, `SHA256SUMS`,
+and `checksums.sha256` completeness before attesting SLSA build provenance, serializes
+publication per release tag, pushes tag `v<VERSION>` if missing on `origin`, and publishes
+(or promotes) the GitHub Release using `docs/release-notes-<VERSION>.md` when present (or
+generated notes otherwise, marking pre-release tags with `--prerelease`). Subsequent `main`
+pushes with an already published `VERSION` skip packaging and publication cleanly.
 
 Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
 `workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)
