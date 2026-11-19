@@ -1,0 +1,33 @@
+{
+  "objective": "Bound retry backoff jitter in retry_policy.py",
+  "revision": "a1b2c3d",
+  "dirty": true,
+  "touched_files": [
+    "retry_policy.py"
+  ],
+  "untouched_scope": [
+    "billing_gateway.py"
+  ],
+  "verified_facts": [
+    "retry_policy.compute_delay overflows cap when jitter_ratio > 1.0"
+  ],
+  "assumptions": [
+    "Production callers pass positive base_ms"
+  ],
+  "completed_steps": [
+    "Reproduced delay cap overflow on jitter_ratio=1.5"
+  ],
+  "dead_ends": [
+    {
+      "hypothesis": "Socket keepalive reset caused retry burst",
+      "reason_rejected": "Packet capture showed deterministic 0ms backoff delay"
+    }
+  ],
+  "commands_run": [
+    {
+      "command": "python -m unittest tests/test_retry_policy.py",
+      "outcome": "failed"
+    }
+  ],
+  "next_action": "Clamp jittered delay to max_delay_ms in retry_policy.py"
+}

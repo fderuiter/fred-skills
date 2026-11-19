@@ -1,0 +1,13 @@
+interface:
+  display_name: Terse Output and Commit
+  short_description: Enforce brief exact-code replies and 50-char commit subjects
+  default_prompt: Use $terse-output-commit for brief exact-code replies and concise commits.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

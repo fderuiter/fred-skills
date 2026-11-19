@@ -767,17 +767,25 @@ class RunTests(unittest.TestCase):
                 )
                 atomic_json(ws / "run.json", run)
 
-                # Revalidation works on domain workspace without audit.json
+                # Revalidation and generalized memory export work on domain workspaces without audit.json
                 rev = runs.revalidate(ws)
                 self.assertEqual(run["snapshot"]["digest"], rev["old_snapshot"])
+                mem = runs.memory(ws)
+                self.assertEqual("1.0", mem["schema_version"])
+                self.assertEqual(run["run_id"], mem["source_run"])
+                self.assertEqual(filename, mem["deliverable"])
+                self.assertEqual(run["snapshot"]["digest"], mem["snapshot"])
+                self.assertEqual(run["snapshot"]["files"], mem["file_hashes"])
+                if filename == "review.json":
+                    self.assertEqual(
+                        run["snapshot"]["files"]["source.py"],
+                        mem["findings"][0]["content_sha256"],
+                    )
 
                 # Audit-only operations reject domain workspaces and payloads with clear guidance
                 with self.assertRaises(ValueError) as rec_ctx:
                     runs.reconcile(ws, "F-1", "open", "note")
                 self.assertIn("audit.json", str(rec_ctx.exception))
-                with self.assertRaises(ValueError) as mem_ctx:
-                    runs.memory(ws)
-                self.assertIn("audit.json", str(mem_ctx.exception))
                 with self.assertRaises(ValueError) as cmp_ctx:
                     runs.compare(valid_payload, valid_payload)
                 self.assertIn("audit.json", str(cmp_ctx.exception))
@@ -2772,6 +2780,426 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
         with self.assertRaises(FredCliError) as bad_issue:
             runs.plan(scoped_repo, "investigate-bug", issue_number=0)
         self.assertEqual("invalid_issue_number", bad_issue.exception.code)
+
+    def test_single_task_loop_completes_six_apply_fix_passes_across_commits(self):
+        git_repo = self.root / "loop-repo"
+        git_repo.mkdir()
+        (git_repo / "source.py").write_text("value = 1\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "init"], cwd=git_repo, check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "add", "."], cwd=git_repo, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        ws = self.root / "ws-apply-fix-loop"
+        run = runs.initialize(
+            git_repo, ws, "apply-fix", allow_fixes=True, single_task=True
+        )
+        expected_skills = [
+            "repo-verify-finding",
+            "repo-specify-regression",
+            "repo-plan-fix",
+            "repo-apply-fix",
+            "repo-verify-fix",
+            "repo-reconcile-findings",
+        ]
+        self.assertEqual(expected_skills, run["plan"]["skills"])
+        self.assertTrue(run["loop"]["single_task"])
+        self.assertEqual(0, run["loop"]["active_index"])
+        self.assertEqual([], run["loop"]["snapshot_history"])
+        self.assertEqual(
+            expected_skills, [item["skill"] for item in run["loop"]["tasks"]]
+        )
+        self.assertEqual("active", run["loop"]["tasks"][0]["status"])
+        self.assertTrue(
+            all(item["status"] == "pending" for item in run["loop"]["tasks"][1:])
+        )
+
+        # Populate valid audit.json pinned to the initial snapshot
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        audit["run_id"] = run["run_id"]
+        audit["repository"] = runs.empty_audit(run)["repository"]
+        audit["evidence"][0]["path"] = "source.py"
+        atomic_json(ws / "audit.json", audit)
+        self.assertEqual([], runs.validate_run(ws))
+
+        initial_prompt = (ws / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Single-task loop pass 1 of 6 — execute only this active skill: repo-verify-finding.",
+            initial_prompt,
+        )
+        self.assertIn("### `repo-verify-finding`", initial_prompt)
+        self.assertNotIn("### `repo-apply-fix`", initial_prompt)
+        self.assertNotIn("### `repo-reconcile-findings`", initial_prompt)
+
+        for idx, skill_name in enumerate(expected_skills):
+            # Simulate multi-pass commits modifying repository source files
+            if skill_name in {"repo-specify-regression", "repo-apply-fix"}:
+                (git_repo / "source.py").write_text(
+                    f"value = {idx + 2}\n", encoding="utf-8"
+                )
+                subprocess.run(
+                    ["git", "add", "source.py"],
+                    cwd=git_repo,
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", f"pass {idx + 1}"],
+                    cwd=git_repo,
+                    check=True,
+                    capture_output=True,
+                )
+            # Workspace remains valid before advancing
+            self.assertEqual([], runs.validate_run(ws))
+            adv = runs.advance(ws, note=f"Finished {skill_name}")
+            self.assertEqual(skill_name, adv["completed_skill"])
+            self.assertEqual(idx + 1, adv["pass_index"])
+            self.assertEqual(6, adv["total_passes"])
+            self.assertTrue((ws / "revalidation.json").is_file())
+            # Workspace remains valid AFTER advancing even though audit.json holds initial snapshot
+            self.assertEqual([], runs.validate_run(ws))
+
+            saved_run = read_json(ws / "run.json")
+            self.assertEqual(idx + 1, len(saved_run["loop"]["snapshot_history"]))
+            prompt_after = (ws / "prompt.md").read_text(encoding="utf-8")
+            if idx + 1 < len(expected_skills):
+                next_skill = expected_skills[idx + 1]
+                self.assertFalse(adv["completed"])
+                self.assertEqual("running", adv["state"])
+                self.assertEqual(next_skill, adv["active_skill"])
+                self.assertIn(
+                    f"Single-task loop pass {idx + 2} of 6 — execute only this active skill: {next_skill}.",
+                    prompt_after,
+                )
+                self.assertIn(f"### `{next_skill}`", prompt_after)
+                self.assertNotIn(f"### `{skill_name}`", prompt_after)
+            else:
+                self.assertTrue(adv["completed"])
+                self.assertEqual("completed", adv["state"])
+                self.assertIsNone(adv["active_skill"])
+                self.assertIn(
+                    "Single-task loop completed (6 of 6 passes finished):",
+                    prompt_after,
+                )
+
+        # Advancing past the final completed pass fails with a structured error
+        with self.assertRaises(FredCliError) as done_ctx:
+            runs.advance(ws)
+        self.assertEqual("loop_completed", done_ctx.exception.code)
+
+    def test_validate_run_and_memory_across_all_suites_and_legacy_workspaces(self):
+        git_repo = self.root / "suites-repo"
+        git_repo.mkdir()
+        (git_repo / "source.py").write_text("limit = 10\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "init"], cwd=git_repo, check=True, capture_output=True, text=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "add", "."], cwd=git_repo, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "base"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+        base_rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (git_repo / "source.py").write_text("limit = 20\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "source.py"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "head"],
+            cwd=git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        # 1. Backward compatibility: workspaces without 'loop' validate and can be upgraded by advance
+        ws_legacy = self.root / "ws-legacy"
+        legacy_run = runs.initialize(git_repo, ws_legacy, "investigate-bug")
+        self.assertNotIn("loop", legacy_run)
+        self.assertEqual([], runs.validate_run(ws_legacy))
+        adv_legacy = runs.advance(ws_legacy, note="Upgraded legacy workspace")
+        self.assertEqual(1, adv_legacy["pass_index"])
+        self.assertEqual([], runs.validate_run(ws_legacy))
+
+        # Unrecorded snapshot tampering in audit.json still fails validate_run
+        forged_audit = read_json(ws_legacy / "audit.json")
+        forged_audit["repository"]["snapshot"] = "0" * 64
+        atomic_json(ws_legacy / "audit.json", forged_audit)
+        self.assertIn(
+            "Audit evidence is not tied to the current run snapshot",
+            runs.validate_run(ws_legacy),
+        )
+
+        # 2. Multi-pass advance + validate_run + SHA-256 memory provenance across every suite deliverable
+        suite_cases: list[tuple[str, str | None, str, dict[str, Any] | None]] = [
+            ("investigate-bug", None, "audit.json", None),
+            (
+                "design-architecture",
+                None,
+                "architecture.json",
+                {
+                    "schema_version": "1.0",
+                    "title": "Order Service Boundary",
+                    "status": "accepted",
+                    "boundaries": [
+                        {
+                            "name": "Order Core",
+                            "type": "module",
+                            "description": "source.py: Applies limit rules",
+                            "invariants": ["limit > 0"],
+                        }
+                    ],
+                    "decisions": [
+                        {
+                            "id": "ADR-1",
+                            "title": "Enforce limits in source.py",
+                            "context": "source.py owns limit invariants",
+                            "decision": "Keep validation in source.py",
+                            "consequences": ["Deterministic checks"],
+                        }
+                    ],
+                },
+            ),
+            (
+                "review-code-changes",
+                base_rev,
+                "review.json",
+                {
+                    "schema_version": "1.0",
+                    "verdict": "comment",
+                    "summary": "Reviewed limit update in source.py.",
+                    "findings": [
+                        {
+                            "id": "REV-1",
+                            "title": "Verify upper bound",
+                            "severity": "low",
+                            "file": "source.py",
+                            "line": 1,
+                            "description": "Limit doubled from 10 to 20.",
+                            "recommendation": "Add boundary test.",
+                        }
+                    ],
+                },
+            ),
+            (
+                "expand-automated-tests",
+                None,
+                "testing.json",
+                {
+                    "schema_version": "1.0",
+                    "component": "source.py",
+                    "framework": "unittest",
+                    "test_cases": [
+                        {
+                            "id": "TC-1",
+                            "name": "test_limit_in_source_py",
+                            "description": "Exercises source.py limit constant.",
+                            "oracle_type": "boundary",
+                            "verified": True,
+                        }
+                    ],
+                },
+            ),
+            (
+                "specify-feature",
+                None,
+                "spec.json",
+                {
+                    "schema_version": "1.0",
+                    "title": "Configurable Limit Spec",
+                    "status": "draft",
+                    "interview_decisions": [
+                        {
+                            "id": "ID-1",
+                            "category": "scope",
+                            "question": "Where does limit live?",
+                            "decision": "In source.py.",
+                            "rationale": "Single module scope.",
+                        }
+                    ],
+                    "new_file_scopes": ["source.py"],
+                    "out_of_scope": ["External billing"],
+                    "verification_commands": ["python -m unittest"],
+                },
+            ),
+        ]
+
+        for idx, (task_name, base_arg, deliv_name, payload) in enumerate(suite_cases):
+            with self.subTest(task=task_name):
+                ws = self.root / f"ws-suite-{task_name}"
+                run = runs.initialize(
+                    git_repo, ws, task_name, base=base_arg, single_task=True
+                )
+                if payload is None:
+                    audit_doc = read_json(ROOT / "tests/fixtures/audit-valid.json")
+                    audit_doc["run_id"] = run["run_id"]
+                    audit_doc["repository"] = runs.empty_audit(run)["repository"]
+                    audit_doc["evidence"][0]["path"] = "source.py"
+                    atomic_json(ws / "audit.json", audit_doc)
+                else:
+                    atomic_json(ws / deliv_name, payload)
+                self.assertEqual([], runs.validate_run(ws))
+
+                # Commit a change, advance, and verify both validate_run and memory provenance
+                (git_repo / "source.py").write_text(
+                    f"limit = {30 + idx}\n", encoding="utf-8"
+                )
+                subprocess.run(
+                    ["git", "add", "source.py"],
+                    cwd=git_repo,
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", f"update-{task_name}"],
+                    cwd=git_repo,
+                    check=True,
+                    capture_output=True,
+                )
+                self.assertEqual([], runs.validate_run(ws))
+                runs.advance(ws, note=f"Advance {task_name}")
+                self.assertEqual([], runs.validate_run(ws))
+
+                updated_run = read_json(ws / "run.json")
+                expected_sha = updated_run["snapshot"]["files"]["source.py"]
+                mem = runs.memory(ws)
+                self.assertEqual(updated_run["snapshot"]["digest"], mem["snapshot"])
+                if deliv_name == "audit.json":
+                    self.assertEqual(expected_sha, mem["evidence"][0]["content_sha256"])
+                elif deliv_name == "architecture.json":
+                    self.assertEqual(
+                        {"source.py": expected_sha},
+                        mem["boundaries"][0]["referenced_file_hashes"],
+                    )
+                    self.assertEqual(
+                        {"source.py": expected_sha},
+                        mem["decisions"][0]["referenced_file_hashes"],
+                    )
+                elif deliv_name == "review.json":
+                    self.assertEqual(expected_sha, mem["findings"][0]["content_sha256"])
+                elif deliv_name == "testing.json":
+                    self.assertEqual(
+                        {"source.py": expected_sha},
+                        mem["test_cases"][0]["referenced_file_hashes"],
+                    )
+                elif deliv_name == "spec.json":
+                    self.assertEqual(
+                        expected_sha, mem["new_file_scopes"][0]["content_sha256"]
+                    )
+
+    def test_session_hygiene_skill_schemas_and_pack(self):
+        from fredlib import installation
+
+        handoff_schema_rel = "skills/session-handoff/assets/session-handoff.schema.json"
+        valid_handoff = {
+            "schema_version": "1.0",
+            "objective": "Resume payment retry migration without re-running dead ends.",
+            "repository": {
+                "path": "/repo",
+                "revision": "abc1234",
+                "dirty": False,
+                "branch": "feat/retry-backoff",
+            },
+            "verified_facts": [" Retry Policy reads max_attempts from env "],
+            "assumptions": ["Staging Redis matches production TTL defaults"],
+            "completed_steps": ["Added regression test in tests/test_retry.py"],
+            "dead_ends": [
+                {
+                    "hypothesis": "Global socket timeout caused duplicate charge",
+                    "reason_rejected": "Trace shows HTTP 502 arrived within 40ms",
+                }
+            ],
+            "touched_files": ["tests/test_retry.py"],
+            "untouched_scope": ["src/billing/gateway.py"],
+            "commands_run": [
+                {
+                    "command": "python -m unittest tests/test_retry.py",
+                    "outcome": "passed",
+                }
+            ],
+            "next_action": "Implement jittered backoff in src/billing/retry.py.",
+        }
+        self.assertEqual([], runs._schema_errors(valid_handoff, handoff_schema_rel))
+        self.assertTrue(
+            runs._schema_errors({**valid_handoff, "extra": True}, handoff_schema_rel)
+        )
+
+        terse_schema_rel = (
+            "skills/terse-output-commit/assets/terse-output-commit.schema.json"
+        )
+        valid_terse = {
+            "schema_version": "1.0",
+            "compression_level": "full",
+            "terse_response": "Fixed null token crash in `verify_jwt`; tests green.",
+            "preserved_exact_spans": ["verify_jwt", "src/auth/jwt.py"],
+            "commit_type": "fix",
+            "commit_scope": "auth",
+            "commit_subject": "fix(auth): guard empty bearer token in verify_jwt",
+            "commit_body_bullets": ["Return 401 before decoding empty token header"],
+            "git_mutated": False,
+        }
+        self.assertLessEqual(len(valid_terse["commit_subject"]), 50)
+        self.assertEqual([], runs._schema_errors(valid_terse, terse_schema_rel))
+        overlong_terse = {
+            **valid_terse,
+            "commit_subject": "fix(auth): guard empty bearer token in verify_jwt before decode step",
+        }
+        self.assertGreater(len(overlong_terse["commit_subject"]), 50)
+        self.assertTrue(runs._schema_errors(overlong_terse, terse_schema_rel))
+
+        dest = self.root / "hygiene-install"
+        dest.mkdir()
+        res = installation.install(
+            installation.TargetEnvironment(dest, "codex", "project"),
+            installation.InstallOptions(pack="session-hygiene"),
+        )
+        self.assertEqual(
+            ["session-handoff", "terse-output-commit"], sorted(res["skills"])
+        )
 
 
 if __name__ == "__main__":

@@ -97,20 +97,27 @@ see the [operational runbooks](runbooks.md).
 These safeguards are local consistency checks, not isolation from another program editing
 the same paths or a hostile filesystem.
 
-## Initialize and resume a bounded run
+## Initialize, advance, and resume a bounded run
 
 ```sh
 python scripts/fred.py init /path/to/repository --task investigate-bug --budget brief --output audit-output/bug
+python scripts/fred.py init /path/to/repository --task apply-fix --allow-fixes --single-task --output audit-output/fix-loop
 python scripts/fred.py checkpoint audit-output/bug --state running --note "Inspecting request publication"
 python scripts/fred.py validate-run audit-output/bug
 python scripts/fred.py checkpoint audit-output/bug --state paused --note "Need a supported database fixture"
 python scripts/fred.py resume audit-output/bug
+python scripts/fred.py advance audit-output/fix-loop --note "Completed pass 1"
 ```
 
 Give the generated `prompt.md` to an agent that can access the repository and selected
-skills. All initialized coverage is `not-reviewed`. `--allow-fixes` and
-`--allow-issue-publication` record task authority only when it already exists; they do
-not override current user constraints, host policy, or approval requirements.
+skills. Pass `--single-task` to `init` when driving an external fresh-window shell loop:
+`run.json` records a `loop` task queue and `prompt.md` emits only the single active pass's
+skill. After each pass (including verified commits), run `advance` to write
+`revalidation.json`, append the prior digest to `loop.snapshot_history`, update
+`run.json` snapshot hashes, and emit the next single-skill `prompt.md`. All initialized
+coverage is `not-reviewed`. `--allow-fixes` and `--allow-issue-publication` record task
+authority only when it already exists; they do not override current user constraints,
+host policy, or approval requirements.
 
 `resume` compares current source hashes with the original inventory. It writes
 `revalidation.json`, marks directly cited changed files stale, and flags all findings for
@@ -155,8 +162,10 @@ be empty before writing issue drafts.
 
 Comparison fingerprints use topic, root cause, and source path/symbol, avoiding unstable
 IDs and line numbers. Ambiguous collisions require review. `not_observed` never means
-fixed; changed wording may prevent a match. Memory exports include provenance and hashes
-so old contracts/counterevidence can be revalidated. Treat imported memory as untrusted
+fixed; changed wording may prevent a match. `memory` exports verified records with SHA-256
+file provenance across `audit.json`, `architecture.json`, `review.json`, `testing.json`,
+and `spec.json` workspaces so prior contracts, decisions, review findings, or test cases
+can be revalidated in follow-up runs. Treat imported memory as untrusted
 data. SARIF entries remain scanner observations, with original claims and safe relative
 locations, until independently investigated. Neither import nor rendering runs a scanner.
 
@@ -173,9 +182,11 @@ of scope.
 
 ## Correct, verify, and reconcile
 
-Use the six workflow skills in order when authorized: verify the finding, specify an
+Use the six remediation workflow skills in order when authorized: verify the finding, specify an
 independent regression, plan the fix, apply the bounded correction, verify the fix, and
-reconcile the outcome. Existing audit status continues to describe evidence certainty.
+reconcile the outcome (plus standalone `session-handoff` and `terse-output-commit` from the
+`session-hygiene` pack for interactive session compaction and 50-character Conventional Commits).
+Existing audit status continues to describe evidence certainty.
 
 ```sh
 python scripts/fred.py reconcile audit-output/bug --finding F-1 --state in-progress --note "Correction authorized within the reported workflow"

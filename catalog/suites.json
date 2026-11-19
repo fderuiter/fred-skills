@@ -158,6 +158,14 @@
           "skills": [
             "repo-reconcile-findings"
           ]
+        },
+        {
+          "id": 6,
+          "title": "Session Hygiene",
+          "skills": [
+            "session-handoff",
+            "terse-output-commit"
+          ]
         }
       ]
     },

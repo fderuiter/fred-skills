@@ -68,6 +68,13 @@
         "repo-reconcile-findings"
       ]
     },
+    "session-hygiene": {
+      "description": "Fresh-window session handoff compaction and terse exact-code replies with 50-character commits.",
+      "skills": [
+        "session-handoff",
+        "terse-output-commit"
+      ]
+    },
     "software-architecture": {
       "description": "Architectural decision records, boundary specifications, and system decomposition.",
       "skills": [
@@ -194,9 +201,11 @@
         "review-actionable-feedback",
         "review-diff-analysis",
         "review-invariant-violations",
+        "session-handoff",
         "spec-authoring",
         "spec-convergence",
         "spec-interview",
+        "terse-output-commit",
         "test-case-generation",
         "test-gap-analysis",
         "test-suite-verification"

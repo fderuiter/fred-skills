@@ -1,0 +1,38 @@
+{
+  "topic": "terse-output-commit",
+  "scenarios": [
+    {
+      "id": "terse-output-commit-failure",
+      "prompt": "Reply tersely with the fix snippet and draft a Conventional Commit message for the current working diff.",
+      "fixture_shape": "The diff renames retry_backoff_ms in config.py and drops legacy v1 fallback parsing; a careless compressed reply abbreviates the identifier name, omits the breaking-change warning, and emits a 78-character commit subject.",
+      "expected_behavior": [
+        "Keep retry_backoff_ms, file paths, code blocks, and the breaking-change warning 100% exact while cutting conversational filler.",
+        "Draft a Conventional Commit subject of at most 50 characters grounded in the actual diff.",
+        "Do not run git commit or modify repository files without explicit authorization."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute on a raw diff and neutral formatting request without revealing expected commit text."
+    },
+    {
+      "id": "terse-output-commit-safe",
+      "prompt": "Reply tersely with the fix snippet and draft a Conventional Commit message for the current working diff.",
+      "fixture_shape": "A small self-contained diff adds bounds checking to parse_batch_limit in parser.py with no breaking behavior.",
+      "expected_behavior": [
+        "Return a brief filler-free explanation with the exact parse_batch_limit code block intact.",
+        "Produce an imperative Conventional Commit subject of 50 characters or fewer matching assets/terse-output-commit.schema.json.",
+        "Leave git staging and commit state untouched unless authorized."
+      ],
+      "evaluation_note": "Construct a clean terse response and commit control; keep expected workflow outcomes out of the execution prompt."
+    },
+    {
+      "id": "terse-output-commit-routing",
+      "prompt": "Package our multi-hour debugging investigation, dead-end hypotheses, dirty files, and next steps into a structured handoff for a fresh context window.",
+      "expected_behavior": [
+        "Recognize that compacting session state and dead ends for a fresh window targets session-handoff rather than terse-output-commit.",
+        "Defer or route to session-handoff instead of emitting only a commit subject."
+      ],
+      "evaluation_note": "Near-neighbor sibling routing check within repository-workflows; verify routing to session-handoff instead of terse-output-commit.",
+      "sibling_skill": "session-handoff"
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

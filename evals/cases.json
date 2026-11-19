@@ -965,6 +965,91 @@
         "status": "draft",
         "convergence_check_ids": []
       }
+    },
+    {
+      "id": "session-handoff-a",
+      "fixture": "fixtures/workflows/session_handoff/a",
+      "skill": "session-handoff",
+      "contract": "workflow",
+      "schema": "skills/session-handoff/assets/session-handoff.schema.json",
+      "prompt": "Synthesize a validated session handoff artifact from session_state.json separating verified facts from assumptions, recording rejected dead ends, touched_files, commands_run, and next_action.",
+      "expected_keys": [
+        "retry_policy.py"
+      ],
+      "expected_assertions": {
+        "dead_end_count": 1,
+        "next_action": "Clamp jittered delay to max_delay_ms in retry_policy.py"
+      }
+    },
+    {
+      "id": "session-handoff-b",
+      "fixture": "fixtures/workflows/session_handoff/b",
+      "skill": "session-handoff",
+      "contract": "workflow",
+      "schema": "skills/session-handoff/assets/session-handoff.schema.json",
+      "prompt": "Synthesize a validated session handoff artifact from session_state.json separating verified facts from assumptions, recording rejected dead ends, touched_files, commands_run, and next_action.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "dead_end_count": 0,
+        "next_action": "No source changes needed; close reconnaissance pass"
+      }
+    },
+    {
+      "id": "session-handoff-routing",
+      "fixture": "fixtures/workflows/session_handoff/a",
+      "skill": "session-handoff",
+      "contract": "workflow",
+      "schema": "skills/session-handoff/assets/session-handoff.schema.json",
+      "prompt": "Sibling routing request: compress response verbosity and draft a 50-character Conventional Commit message rather than writing a session continuation handoff. Abstain with empty touched_files and next_action abstained.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "dead_end_count": 0,
+        "next_action": "abstained"
+      }
+    },
+    {
+      "id": "terse-output-commit-a",
+      "fixture": "fixtures/workflows/terse_output_commit/a",
+      "skill": "terse-output-commit",
+      "contract": "workflow",
+      "schema": "skills/terse-output-commit/assets/terse-output-commit.schema.json",
+      "prompt": "Draft a terse summary and non-mutating Conventional Commit artifact from commit_context.json preserving exact code spans, keeping commit_subject <= 50 characters, and setting git_mutated false.",
+      "expected_keys": [
+        "fix"
+      ],
+      "expected_assertions": {
+        "compression_level": "full",
+        "commit_type": "fix",
+        "max_subject_length": 50,
+        "git_mutated": false
+      }
+    },
+    {
+      "id": "terse-output-commit-b",
+      "fixture": "fixtures/workflows/terse_output_commit/b",
+      "skill": "terse-output-commit",
+      "contract": "workflow",
+      "schema": "skills/terse-output-commit/assets/terse-output-commit.schema.json",
+      "prompt": "Draft a terse summary and non-mutating Conventional Commit artifact from commit_context.json when active_change is true, or abstain with chore: abstain when working tree has no diff.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "compression_level": "lite",
+        "max_subject_length": 50,
+        "git_mutated": false
+      }
+    },
+    {
+      "id": "terse-output-commit-routing",
+      "fixture": "fixtures/workflows/terse_output_commit/a",
+      "skill": "terse-output-commit",
+      "contract": "workflow",
+      "schema": "skills/terse-output-commit/assets/terse-output-commit.schema.json",
+      "prompt": "Sibling routing request: capture dead ends, verified facts, and untouched scope for a multi-session handoff rather than drafting a terse commit summary. Abstain with chore: abstain on sibling workflow request.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "max_subject_length": 50,
+        "git_mutated": false
+      }
     }
   ]
 }

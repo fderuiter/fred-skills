@@ -59,10 +59,10 @@ It validates the repository without invoking an external agent or requiring secr
 
 ## Optional local toolkit
 
-The 37-package audit family, six-package workflow family, and twelve engineering suite packages provide 55 total packages
+The 37-package audit family, eight-package workflow family, and twelve engineering suite packages provide 57 total packages
 across the repository. The workflow family uses `shared/repo-workflows/` for finding
 verification, independent regression specification, fix planning/application/verification,
-and reconciliation. The resource synchronizer reads family manifests; each resulting
+reconciliation, and standalone session hygiene (`session-handoff` and `terse-output-commit`). The resource synchronizer reads family manifests; each resulting
 package is independently portable.
 
 Root `scripts/fred.py` provides discovery and explicitly selected local operations.

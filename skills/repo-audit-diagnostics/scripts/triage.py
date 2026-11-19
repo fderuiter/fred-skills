@@ -300,6 +300,8 @@ _DEFAULT_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "repo-apply-fix",
         "repo-verify-fix",
         "repo-reconcile-findings",
+        "session-handoff",
+        "terse-output-commit",
     ),
     "software-architecture": (
         "arch-decision-record",

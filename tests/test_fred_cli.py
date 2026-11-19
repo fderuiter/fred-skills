@@ -770,6 +770,21 @@ class FredCLITests(unittest.TestCase):
                 "stale_finding_ids": [],
                 "next_action": "Review changes",
             },
+            "advance": {
+                "run_id": "run-1",
+                "state": "running",
+                "pass_index": 1,
+                "total_passes": 6,
+                "completed_skill": "repo-verify-finding",
+                "active_skill": "repo-specify-regression",
+                "completed": False,
+                "old_snapshot": "aaa111222333444",
+                "new_snapshot": "bbb111222333444",
+                "changed_files": ["a.py"],
+                "stale_finding_ids": [],
+                "prompt": "/ws/prompt.md",
+                "revalidation": "/ws/revalidation.json",
+            },
             "memory": {"output": "/mem.json", "contracts": 2},
             "checkpoint": {
                 "run_id": "run-1",
@@ -862,7 +877,7 @@ class FredCLITests(unittest.TestCase):
             },
         }
         all_commands = [cmd for cmds in fred.LIFECYCLE_GROUPS.values() for cmd in cmds]
-        self.assertEqual(28, len(all_commands))
+        self.assertEqual(29, len(all_commands))
         for cmd in all_commands:
             with self.subTest(command=cmd):
                 rendered = fred.render_tty_output(
@@ -2222,11 +2237,11 @@ class FredDispatchRegistryTests(unittest.TestCase):
         self.assertLessEqual(depth, 1, f"dispatch nesting depth {depth} exceeds 1")
 
     def test_dispatch_registry_maps_all_twenty_eight_commands(self):
-        """COMMAND_REGISTRY must contain all 28 subcommands across all lifecycle groups."""
+        """COMMAND_REGISTRY must contain all 29 subcommands across all lifecycle groups."""
         expected_commands = {
             cmd for cmds in self.fred.LIFECYCLE_GROUPS.values() for cmd in cmds
         }
-        self.assertEqual(28, len(expected_commands))
+        self.assertEqual(29, len(expected_commands))
         self.assertEqual(expected_commands, set(self.fred.COMMAND_REGISTRY.keys()))
         self.assertEqual(self.fred.COMMAND_REGISTRY, self.fred.DISPATCH_REGISTRY)
 
@@ -2577,6 +2592,108 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("`place_order`", prompt_md)
             self.assertIn("./src/orders/handler.py", prompt_md)
             self.assertIn("gh issue view 77", prompt_md)
+
+    def test_cli_single_task_advance_loop_and_multi_suite_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp) / "app"
+            repo_dir.mkdir()
+            (repo_dir / "service.py").write_text(
+                "def check() -> int:\n    return 1\n", encoding="utf-8"
+            )
+            ws_fix = Path(tmp) / "ws-fix"
+            init_proc = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "apply-fix",
+                "--allow-fixes",
+                "--single-task",
+                "--output",
+                str(ws_fix),
+                "--json",
+            )
+            self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+            prompt_1 = (ws_fix / "prompt.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "Single-task loop pass 1 of 6 — execute only this active skill: repo-verify-finding.",
+                prompt_1,
+            )
+            self.assertNotIn("### `repo-apply-fix`", prompt_1)
+
+            (repo_dir / "service.py").write_text(
+                "def check() -> int:\n    return 2\n", encoding="utf-8"
+            )
+            adv_proc = self.run_cli(
+                "advance",
+                str(ws_fix),
+                "--note",
+                "Verified root cause in service.py",
+                "--json",
+            )
+            self.assertEqual(0, adv_proc.returncode, adv_proc.stderr)
+            adv_payload = json.loads(adv_proc.stdout)
+            self.assertEqual("repo-verify-finding", adv_payload["completed_skill"])
+            self.assertEqual("repo-specify-regression", adv_payload["active_skill"])
+            self.assertEqual(["service.py"], adv_payload["changed_files"])
+            val_proc = self.run_cli("validate-run", str(ws_fix), "--json")
+            self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+            mem_audit_path = Path(tmp) / "audit-memory.json"
+            mem_audit_proc = self.run_cli(
+                "memory",
+                str(ws_fix),
+                "--output",
+                str(mem_audit_path),
+                "--json",
+            )
+            self.assertEqual(0, mem_audit_proc.returncode, mem_audit_proc.stderr)
+            self.assertIn("contracts", json.loads(mem_audit_proc.stdout))
+
+            # Domain deliverable CLI memory export (architecture.json)
+            ws_arch = Path(tmp) / "ws-arch"
+            arch_init = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "design-architecture",
+                "--output",
+                str(ws_arch),
+                "--json",
+            )
+            self.assertEqual(0, arch_init.returncode, arch_init.stderr)
+            mem_arch_path = Path(tmp) / "arch-memory.json"
+            mem_arch_proc = self.run_cli(
+                "memory",
+                str(ws_arch),
+                "--output",
+                str(mem_arch_path),
+                "--json",
+            )
+            self.assertEqual(0, mem_arch_proc.returncode, mem_arch_proc.stderr)
+            mem_arch_summary = json.loads(mem_arch_proc.stdout)
+            self.assertEqual("architecture.json", mem_arch_summary["deliverable"])
+            mem_arch_doc = json.loads(mem_arch_path.read_text(encoding="utf-8"))
+            self.assertIn("service.py", mem_arch_doc["file_hashes"])
+
+            # Install standalone session-hygiene pack via CLI
+            install_dest = Path(tmp) / "dest"
+            install_dest.mkdir()
+            inst_proc = self.run_cli(
+                "install",
+                "--destination",
+                str(install_dest),
+                "--host",
+                "codex",
+                "--pack",
+                "session-hygiene",
+                "--json",
+            )
+            self.assertEqual(0, inst_proc.returncode, inst_proc.stderr)
+            inst_payload = json.loads(inst_proc.stdout)
+            self.assertEqual(
+                ["session-handoff", "terse-output-commit"],
+                sorted(inst_payload["skills"]),
+            )
 
 
 if __name__ == "__main__":
