@@ -36,6 +36,25 @@ def _safe_relative_path(raw_path: str) -> Path:
     return rel
 
 
+def _excluded_for_skill(manifest: dict[str, object], skill_name: str) -> set[str]:
+    raw_exclude = manifest.get("exclude", {})
+    if not isinstance(raw_exclude, dict):
+        raise TypeError(
+            "Shared manifest 'exclude' must be an object mapping skill names to path lists"
+        )
+    skill_excludes = raw_exclude.get(skill_name, [])
+    if not isinstance(skill_excludes, list):
+        raise TypeError(f"Shared manifest exclusions for '{skill_name}' must be a list")
+    normalized: set[str] = set()
+    for item in skill_excludes:
+        if not isinstance(item, str):
+            raise TypeError(
+                f"Invalid excluded resource entry for '{skill_name}': {item!r}"
+            )
+        normalized.add(_safe_relative_path(item).as_posix())
+    return normalized
+
+
 def sync(root: Path = ROOT, check: bool = False) -> list[str]:
     problems = []
     for manifest_path in sorted((root / "shared").glob("*/manifest.json")):
@@ -49,9 +68,26 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
             if not (package / "SKILL.md").is_file():
                 problems.append(f"Missing skill package: {name}")
                 continue
+            excluded = _excluded_for_skill(manifest, name)
+            for excluded_rel in sorted(excluded):
+                excluded_target = package / Path(excluded_rel)
+                if not excluded_target.resolve().is_relative_to(package.resolve()):
+                    raise ValueError(
+                        f"Shared exclusion escapes package: {excluded_target}"
+                    )
+                if excluded_target.is_file() or excluded_target.is_symlink():
+                    if check:
+                        problems.append(
+                            f"Unexpected excluded resource in skill: {name}/{excluded_rel}"
+                        )
+                    else:
+                        excluded_target.unlink()
+
             file_targets: list[tuple[str, Path]] = []
             for relative in manifest.get("files", []):
                 rel = _safe_relative_path(relative)
+                if rel.as_posix() in excluded:
+                    continue
                 source = shared / "resources" / rel
                 file_targets.append((relative, source))
 
@@ -60,12 +96,16 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                 for s_path, s_targets in scripts.items():
                     if name in s_targets:
                         rel = _safe_relative_path(s_path)
+                        if rel.as_posix() in excluded:
+                            continue
                         source = _resolve_script_source(shared, root, rel)
                         file_targets.append((s_path, source))
             elif isinstance(scripts, list):
                 for s_item in scripts:
                     if isinstance(s_item, str):
                         rel = _safe_relative_path(s_item)
+                        if rel.as_posix() in excluded:
+                            continue
                         if s_item == "scripts/audit_to_sarif.py":
                             if name == "repo-audit-synthesis":
                                 source = _resolve_script_source(shared, root, rel)
@@ -85,6 +125,8 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                         targets = s_item.get("targets") or s_item.get("skills", [])
                         if rel_path and name in targets:
                             rel = _safe_relative_path(rel_path)
+                            if rel.as_posix() in excluded:
+                                continue
                             source = _resolve_script_source(shared, root, rel)
                             file_targets.append((rel_path, source))
 

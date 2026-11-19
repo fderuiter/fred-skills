@@ -1183,6 +1183,7 @@ class _ParsedSkillPackage:
         has_validator_script: bool = False,
         has_prompt_constraints: bool = False,
         has_boundary_sections: bool = False,
+        has_linked_companions: bool = True,
         has_routing_trigger: bool = False,
         description: str | None = None,
         short_description: str | None = None,
@@ -1199,7 +1200,10 @@ class _ParsedSkillPackage:
         self.has_boundary_sections = has_boundary_sections
         self.has_routing_trigger = has_routing_trigger
         self.deterministic_constraint_coverage = (
-            has_output_schema and has_prompt_constraints and has_boundary_sections
+            has_output_schema
+            and has_prompt_constraints
+            and has_boundary_sections
+            and has_linked_companions
         )
         self.description = description
         self.short_description = short_description
@@ -1353,6 +1357,46 @@ def _validate_schema_links(
             errors.append(
                 f"SKILL.md: missing markdown link to output schema "
                 f"{schema_file.relative_to(package).as_posix()}"
+            )
+    return errors
+
+
+_EXEMPT_COMPANION_RELS = frozenset(
+    {
+        "references/method.md",
+        "references/examples.md",
+        "references/evaluation-scenarios.json",
+    }
+)
+
+
+def _iter_companion_candidates(package: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for sub, pattern in (
+        ("references", "*.md"),
+        ("assets", "*.md"),
+        ("scripts", "*.py"),
+    ):
+        sub_dir = package / sub
+        if sub_dir.is_dir() and not sub_dir.is_symlink():
+            candidates.extend(sorted(sub_dir.rglob(pattern)))
+    return candidates
+
+
+def _validate_companion_links(
+    package: Path, resolved_skill_links: set[Path]
+) -> list[str]:
+    """Require package-local markdown templates/references and bundled scripts to be linked from SKILL.md."""
+    errors: list[str] = []
+    for candidate in _iter_companion_candidates(package):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        rel_posix = candidate.relative_to(package).as_posix()
+        if rel_posix in _EXEMPT_COMPANION_RELS:
+            continue
+        if candidate.resolve() not in resolved_skill_links:
+            errors.append(
+                f"SKILL.md: missing markdown link to companion file {rel_posix}"
             )
     return errors
 
@@ -1927,6 +1971,8 @@ def _inspect_skill_package(
         package, resolved_skill_links, assets_schemas, output_schemas
     )
     errors.extend(schema_link_errors)
+    companion_link_errors = _validate_companion_links(package, resolved_skill_links)
+    errors.extend(companion_link_errors)
 
     prompt_errors, has_prompt_constraints, prompt_body = _validate_prompt_template(
         package, output_schemas, cached_texts
@@ -1981,6 +2027,7 @@ def _inspect_skill_package(
         has_validator_script=has_validator_script,
         has_prompt_constraints=has_prompt_constraints,
         has_boundary_sections=has_boundary_sections,
+        has_linked_companions=not companion_link_errors,
         has_routing_trigger=has_routing_trigger,
         description=raw_description if isinstance(raw_description, str) else None,
         short_description=short_description,

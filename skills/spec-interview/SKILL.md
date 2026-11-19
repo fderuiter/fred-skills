@@ -24,5 +24,5 @@ Pause all feature implementation until critical product, architectural, and boun
 
 ## Deliver
 
-Structure notes for handoff to the [spec template](assets/spec-template.md), validate `spec.json` against the [spec schema](assets/spec.schema.json), and run the [spec validator](scripts/validate_spec.py).
+Structure notes for handoff to the [spec template](assets/spec-template.md), validate `spec.json` against the [spec schema](assets/spec.schema.json) using the [spec validator](scripts/validate_spec.py), and load the [invocation prompt](assets/prompt.md) when initiating a standalone pre-code interview.
 Keep `interview_decisions`, `new_file_scopes`, `out_of_scope`, and `verification_commands` explicit, closed-schema compliant, and free of undeclared properties.
