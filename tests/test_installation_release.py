@@ -1397,6 +1397,29 @@ class InstallationTests(unittest.TestCase):
             releases.verify(rel_out)
         self.assertEqual("missing_archive", miss_arch.exception.code)
 
+    def test_install_rejects_disallowed_and_binary_skill_files(self):
+        sample_dir = self.source / "skills" / "sample"
+        bad_cases: list[tuple[str, bytes]] = [
+            ("README.md", b"# Readme clutter\n"),
+            ("CHANGELOG.md", b"# Changelog clutter\n"),
+            ("scripts/runner", b"#!/bin/sh\necho bad\n"),
+            ("assets/payload.bin", b"\x00\xff\xfe"),
+            ("scripts/bad.py", b"x = 1\x00\n"),
+        ]
+        for idx, (rel_path, raw_bytes) in enumerate(bad_cases):
+            bad_file = sample_dir / rel_path
+            bad_file.parent.mkdir(parents=True, exist_ok=True)
+            bad_file.write_bytes(raw_bytes)
+            dest = self.root / f"bad_install_{idx}"
+            try:
+                with self.subTest(rel_path=rel_path), self.assertRaises(ValueError):
+                    installation.install(
+                        dest, host="codex", skills=["sample"], root=self.source
+                    )
+                self.assertFalse((dest / ".agents/skills/sample").exists())
+            finally:
+                bad_file.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

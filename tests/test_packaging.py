@@ -2201,6 +2201,139 @@ class PackageTests(unittest.TestCase):
                 f"Symlinked openai.yaml must not trigger duplicate short_description: {all_errors}",
             )
 
+    def test_frontmatter_xml_tags_html_comments_and_hidden_unicode_are_rejected(
+        self,
+    ) -> None:
+        skill_md = self.skill / "SKILL.md"
+        baseline = skill_md.read_text(encoding="utf-8")
+
+        # XML tags in frontmatter name and description are rejected
+        skill_md.write_text(
+            '---\nname: "<script>sample-audit</script>"\n'
+            'description: "Audit <system>inject</system> instructions."\n---\n\n'
+            + baseline.split("---\n\n", 1)[1],
+            encoding="utf-8",
+        )
+        xml_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("frontmatter 'name'" in err for err in xml_errors), xml_errors
+        )
+        self.assertTrue(
+            any("frontmatter 'description'" in err for err in xml_errors), xml_errors
+        )
+
+        # HTML comments in SKILL.md and reference markdown are rejected
+        skill_md.write_text(
+            baseline + "\n<!-- hidden prompt instruction -->\n", encoding="utf-8"
+        )
+        comment_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("HTML comments are not allowed" in err for err in comment_errors),
+            comment_errors,
+        )
+        skill_md.write_text(baseline, encoding="utf-8")
+
+        ref_md = self.skill / "references/guide.md"
+        ref_md.write_text("# Guide\n\n<!-- hidden ref comment -->\n", encoding="utf-8")
+        try:
+            ref_comment_errors = validate_skill(self.skill)
+            self.assertTrue(
+                any(
+                    "references/guide.md: HTML comments are not allowed" in err
+                    for err in ref_comment_errors
+                ),
+                ref_comment_errors,
+            )
+        finally:
+            ref_md.unlink()
+
+        # Hidden Cf (U+200B ZWSP, U+202E RLO) and Cc (U+0007 BEL) Unicode are rejected
+        for bad_char, expected_hex in (
+            ("\u200b", "U+200B"),
+            ("\u202e", "U+202E"),
+            ("\x07", "U+0007"),
+        ):
+            with self.subTest(codepoint=expected_hex):
+                skill_md.write_text(
+                    baseline + f"\nHidden {bad_char} payload.\n", encoding="utf-8"
+                )
+                uni_errors = validate_skill(self.skill)
+                self.assertTrue(
+                    any(expected_hex in err for err in uni_errors),
+                    f"Expected {expected_hex} error, got: {uni_errors}",
+                )
+        skill_md.write_text(baseline, encoding="utf-8")
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_package_allowlist_rejects_readme_changelog_binaries_and_banned_ast_scripts(
+        self,
+    ) -> None:
+        # 1. README.md, CHANGELOG.md, disallowed extensions, and binaries are rejected
+        disallowed_files: list[tuple[str, bytes, str]] = [
+            ("README.md", b"# Extra readme\n", "README.md"),
+            ("CHANGELOG.md", b"# Changelog\n", "CHANGELOG.md"),
+            ("references/readme.md", b"# Nested readme\n", "references/readme.md"),
+            ("helper.py", b"x = 1\n", "helper.py"),
+            ("scripts/sub/nested.py", b"x = 1\n", "scripts/sub/nested.py"),
+            ("scripts/runner.sh", b"#!/bin/sh\necho hi\n", "scripts/runner.sh"),
+            ("assets/blob.bin", b"\x00\x01\x02\x03", "assets/blob.bin"),
+            ("scripts/nul.py", b"x = 1\x00\n", "scripts/nul.py"),
+            ("references/bad_utf8.md", b"\xff\xfe\xfd", "references/bad_utf8.md"),
+        ]
+        for rel_path, content, marker in disallowed_files:
+            target = self.skill / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            try:
+                errs = validate_skill(self.skill)
+                self.assertTrue(
+                    any(marker in e for e in errs),
+                    f"Expected rejection naming {marker}, got: {errs}",
+                )
+            finally:
+                target.unlink()
+
+        # 2. Safe offline stdlib script (including re.compile and shlex.quote) passes
+        scripts_dir = self.skill / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        script_file = scripts_dir / "offline_helper.py"
+        script_file.write_text(
+            "import json\nimport re\nimport shlex\n\n"
+            "PAT = re.compile(r'[a-z]+')\n"
+            "def quote_arg(val: str) -> str:\n"
+            "    return shlex.quote(json.dumps(bool(PAT.match(val))))\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # 3. Network, subprocess, pty, ctypes, importlib, os.system, and eval/exec/compile fail AST vetting
+        banned_snippets = [
+            "import urllib.request\n",
+            "from http.client import HTTPSConnection\n",
+            "import socket\n",
+            "import requests\n",
+            "import subprocess\n",
+            "import pty\n",
+            "import ctypes\n",
+            "import importlib\n",
+            "import os\nos.system('ls')\n",
+            "eval('1 + 1')\n",
+            "exec('x = 1')\n",
+            "compile('1', '<str>', 'eval')\n",
+            "__import__('socket')\n",
+        ]
+        try:
+            for snippet in banned_snippets:
+                with self.subTest(snippet=snippet.strip()):
+                    script_file.write_text(snippet, encoding="utf-8")
+                    ast_errs = validate_skill(self.skill)
+                    self.assertTrue(
+                        any("scripts/offline_helper.py" in e for e in ast_errs),
+                        f"Expected AST rejection for {snippet!r}, got: {ast_errs}",
+                    )
+        finally:
+            script_file.unlink()
+
     def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)

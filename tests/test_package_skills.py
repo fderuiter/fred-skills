@@ -373,13 +373,15 @@ class PackageSkillsTests(unittest.TestCase):
             )
 
         if os.name != "nt":
-            bin_script = synth_skill / "scripts" / "runner"
-            bin_script.write_text("echo ok\n", encoding="utf-8")
+            bin_script = synth_skill / "scripts" / "runner.py"
+            bin_script.write_text("print('ok')\n", encoding="utf-8")
             bin_script.chmod(0o755)
             posix_out = self.output_dir / "posix_out"
             releases.build(posix_out, skills=["synth-skill"], root=synth_root)
             with tarfile.open(posix_out / "fred-skills-0.2.0-selected.tar", "r") as tf:
-                self.assertEqual(0o755, tf.getmember("synth-skill/scripts/runner").mode)
+                self.assertEqual(
+                    0o755, tf.getmember("synth-skill/scripts/runner.py").mode
+                )
 
     def test_pure_windows_path_sorting_matches_posix_order(self):
         win_root = PureWindowsPath(r"C:\repo\skills\sample")
@@ -492,6 +494,56 @@ class PackageSkillsTests(unittest.TestCase):
         first_concurrency_idx = prefixes.index("repo-audit-concurrency")
         last_apply_fix_idx = len(prefixes) - 1 - prefixes[::-1].index("repo-apply-fix")
         self.assertLess(last_apply_fix_idx, first_concurrency_idx)
+
+    def test_release_packaging_rejects_binaries_clutter_and_non_python_executables(
+        self,
+    ):
+        repo_root = self.output_dir / "neg_repo"
+        skill_dir = repo_root / "skills" / "neg-skill"
+        (skill_dir / "scripts").mkdir(parents=True)
+        (skill_dir / "assets").mkdir(parents=True)
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text("#!/bin/sh\n# Neg Skill\n", encoding="utf-8")
+        if os.name != "nt":
+            skill_md.chmod(0o755)
+        (repo_root / "VERSION").write_text("0.2.0\n", encoding="utf-8")
+        (repo_root / "catalog").mkdir(parents=True)
+        (repo_root / "catalog" / "skills.json").write_text(
+            json.dumps({"skills": [{"name": "neg-skill"}]}), encoding="utf-8"
+        )
+
+        # Executable SKILL.md with shebang still receives 0o644 in zip and tar
+        clean_out = self.output_dir / "clean_exec_md_out"
+        releases.build(clean_out, skills=["neg-skill"], root=repo_root)
+        with zipfile.ZipFile(clean_out / "fred-skills-0.2.0-selected.zip", "r") as zf:
+            self.assertEqual(
+                0o100644, zf.getinfo("neg-skill/SKILL.md").external_attr >> 16
+            )
+        with tarfile.open(clean_out / "fred-skills-0.2.0-selected.tar", "r") as tf:
+            self.assertEqual(0o644, tf.getmember("neg-skill/SKILL.md").mode)
+
+        negative_cases: list[tuple[str, bytes]] = [
+            ("README.md", b"# Duplicate readme\n"),
+            ("CHANGELOG.md", b"# Changelog\n"),
+            ("scripts/runner", b"#!/bin/sh\necho nope\n"),
+            ("helper.py", b"print('outside scripts')\n"),
+            ("assets/payload.bin", b"\x7fELF\x02\x01\x01\x00"),
+            ("scripts/nul_bytes.py", b"print('x')\x00\n"),
+            ("assets/non_utf8.md", b"\xff\xfe\xfd"),
+        ]
+        for idx, (rel_path, raw_bytes) in enumerate(negative_cases):
+            target = skill_dir / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw_bytes)
+            try:
+                with self.subTest(rel_path=rel_path), self.assertRaises(ValueError):
+                    releases.build(
+                        self.output_dir / f"neg_out_{idx}",
+                        skills=["neg-skill"],
+                        root=repo_root,
+                    )
+            finally:
+                target.unlink()
 
 
 if __name__ == "__main__":

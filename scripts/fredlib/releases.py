@@ -17,7 +17,10 @@ from .common import (
     ROOT,
     FredCliError,
     _infer_suite_name,
+    _is_ignored_skill_entry,
+    _is_skill_script_rel,
     _suite_skills_by_suite,
+    _validate_allowed_skill_file,
     atomic_json,
     choose_skills,
     read_json,
@@ -36,20 +39,6 @@ def _load_documented_packs(root: Path = ROOT) -> tuple[str, ...]:
 
 
 DOCUMENTED_PACKS: tuple[str, ...] = _load_documented_packs()
-
-_EXCLUDED_DIR_NAMES = {
-    "__pycache__",
-    ".git",
-    ".github",
-    ".venv",
-    "venv",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    "node_modules",
-}
-_EXCLUDED_FILE_SUFFIXES = {".pyc", ".pyo", ".pyd"}
-_EXCLUDED_FILE_NAMES = {".DS_Store", ".gitignore", ".gitattributes"}
 
 
 def _is_executable_file(path: Path, data: bytes) -> bool:
@@ -77,14 +66,14 @@ def _scan_skill_files(
             raise ValueError(f"File escapes repository root: {path}")
         if not path.is_file():
             continue
-        if any(part in _EXCLUDED_DIR_NAMES for part in path.parts):
+        rel_path = path.relative_to(package_dir)
+        if _is_ignored_skill_entry(rel_path.parts, path.name, path.suffix):
             continue
-        if path.suffix in _EXCLUDED_FILE_SUFFIXES or path.name in _EXCLUDED_FILE_NAMES:
-            continue
-        rel = path.relative_to(package_dir).as_posix()
+        rel = rel_path.as_posix()
         data = path.read_bytes()
+        _validate_allowed_skill_file(rel, data)
         files.append((rel, data))
-        if _is_executable_file(path, data):
+        if _is_skill_script_rel(rel) and _is_executable_file(path, data):
             executable_paths.add(rel)
     if not files:
         raise ValueError(f"No files found in skill package: {package_dir}")
@@ -160,7 +149,8 @@ def _write_zip_archive(
         archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9
     ) as archive:
         for name, data in sorted(entries, key=lambda x: x[0]):
-            mode = 0o100755 if name in exec_set else 0o100644
+            is_exec = name in exec_set and name.endswith(".py")
+            mode = 0o100755 if is_exec else 0o100644
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
             info.create_system = 3
             info.external_attr = mode << 16
@@ -175,9 +165,10 @@ def _write_tar_entries(
 ) -> None:
     exec_set = set(executable_paths) if executable_paths else set()
     for name, data in sorted(entries, key=lambda x: x[0]):
+        is_exec = name in exec_set and name.endswith(".py")
         info = tarfile.TarInfo(name)
         info.size = len(data)
-        info.mode = 0o755 if name in exec_set else 0o644
+        info.mode = 0o755 if is_exec else 0o644
         info.mtime = 0
         info.uid = 0
         info.gid = 0

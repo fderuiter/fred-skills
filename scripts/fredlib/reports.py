@@ -756,6 +756,72 @@ def render(
     return target
 
 
+_INLINE_CODE_SPAN_RE = re.compile(r"(`+)(?!`)([^\r\n]+?)(?<!`)\1(?!`)")
+_GITHUB_MENTION_RE = re.compile(
+    r"(^|(?<![A-Za-z0-9_]))@([A-Za-z0-9_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_][A-Za-z0-9_-]*)?)"
+)
+
+
+def _escape_plain_markdown_segment(segment: str) -> str:
+    escaped = segment.replace("<", "&lt;").replace(">", "&gt;")
+    escaped = escaped.replace("`", r"\`")
+    escaped = escaped.replace("~~~", r"\~~~")
+    return _GITHUB_MENTION_RE.sub(r"\1`@\2`", escaped)
+
+
+def _escape_inline_markdown_line(line: str) -> str:
+    parts: list[str] = []
+    last = 0
+    for match in _INLINE_CODE_SPAN_RE.finditer(line):
+        parts.append(_escape_plain_markdown_segment(line[last : match.start()]))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(_escape_plain_markdown_segment(line[last:]))
+    return "".join(parts)
+
+
+def _sanitize_markdown_line_structure(line: str) -> str:
+    sanitized = re.sub(r"^(\s*)(#+)", r"\1\\\2", line)
+    return re.sub(
+        r"^(\s*)([=-]{2,}|\*{3,}|_{3,})(\s*)$",
+        lambda m: f"{m.group(1)}\\{m.group(2)}{m.group(3)}",
+        sanitized,
+    )
+
+
+def _sanitize_issue_inline(value: object) -> str:
+    collapsed = " ".join(str(value).replace("\x00", "").splitlines())
+    escaped = _escape_inline_markdown_line(collapsed)
+    return _sanitize_markdown_line_structure(escaped)
+
+
+def _sanitize_issue_block(value: object) -> str:
+    normalized = (
+        str(value).replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    )
+    lines = [
+        _sanitize_markdown_line_structure(_escape_inline_markdown_line(ln))
+        for ln in normalized.split("\n")
+    ]
+    return "\n".join(lines)
+
+
+def _fence_issue_commands(commands: list[str]) -> str:
+    if not commands:
+        return ""
+    cleaned = [
+        str(cmd).replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+        for cmd in commands
+    ]
+    joined = "\n".join(cleaned)
+    max_ticks = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", joined)),
+        default=0,
+    )
+    fence = "`" * max(3, max_ticks + 1)
+    return f"{fence}\n{joined}\n{fence}"
+
+
 def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
     if format not in ("markdown", "json"):
         raise FredCliError(
@@ -798,52 +864,72 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
             continue
         if not re.fullmatch(r"[A-Za-z0-9_-]+", issue["id"]):
             raise ValueError("Issue IDs must be filename-safe")
+        safe_issue_title = _sanitize_issue_inline(issue["title"])
         sections = [
-            f"# {issue['title']}",
+            f"# {safe_issue_title}",
             "Publication state: local draft; no external write performed.",
         ]
         for fid in issue["finding_ids"]:
             f = findings[fid]
-            sections.extend(
-                [
-                    f"## {fid}: {f['title']}",
-                    f"Evidence: {f['status']}; severity: {f['severity']}; confidence: {f['confidence']}",
-                    f["impact"],
-                    "### Preconditions",
-                    f["preconditions"],
-                    "### Expected and actual behavior",
-                    "Expected: " + f["expected"],
-                    "Actual: " + f["actual"],
-                    "### Source evidence",
-                    "\n".join(
-                        f"- {evidence[eid]['path']}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({evidence[eid]['symbol']}): {evidence[eid]['context']}"
-                        for eid in f["evidence_ids"]
-                    ),
-                    "### Contract and cause",
-                    "Contract IDs: " + ", ".join(f["contract_ids"]),
-                    f["root_cause"],
-                    "### Failure sequence",
-                    "\n".join(
-                        f"{i}. {step}" for i, step in enumerate(f["sequence"], 1)
-                    ),
-                    "### Counterevidence",
-                    f["counterevidence"],
-                    "### Proposed correction",
-                    f["remedy"],
-                    "### Acceptance",
-                    "\n".join("- " + a for a in f["acceptance"]),
-                    "### Validation",
-                    f["validation"]["state"] + ": " + f["validation"]["result"],
-                    "\n".join(
-                        "    " + command for command in f["validation"]["commands"]
-                    ),
-                ]
+            safe_fid = _sanitize_issue_inline(fid)
+            safe_ftitle = _sanitize_issue_inline(f["title"])
+            safe_status = _sanitize_issue_inline(f["status"])
+            safe_severity = _sanitize_issue_inline(f["severity"])
+            safe_confidence = _sanitize_issue_inline(f["confidence"])
+            evidence_lines = "\n".join(
+                f"- {_sanitize_issue_inline(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({_sanitize_issue_inline(evidence[eid]['symbol'])}): {_sanitize_issue_inline(evidence[eid]['context'])}"
+                for eid in f["evidence_ids"]
             )
-        sections.append("Dependencies: " + ", ".join(issue["depends_on"]))
+            contract_ids_str = ", ".join(
+                _sanitize_issue_inline(cid) for cid in f["contract_ids"]
+            )
+            sequence_lines = "\n".join(
+                f"{i}. {_sanitize_issue_inline(step)}"
+                for i, step in enumerate(f["sequence"], 1)
+            )
+            acceptance_lines = "\n".join(
+                "- " + _sanitize_issue_inline(a) for a in f["acceptance"]
+            )
+            val_summary = (
+                _sanitize_issue_inline(f["validation"]["state"])
+                + ": "
+                + _sanitize_issue_inline(f["validation"]["result"])
+            )
+            commands_block = _fence_issue_commands(f["validation"]["commands"])
+            finding_sections = [
+                f"## {safe_fid}: {safe_ftitle}",
+                f"Evidence: {safe_status}; severity: {safe_severity}; confidence: {safe_confidence}",
+                _sanitize_issue_block(f["impact"]),
+                "### Preconditions",
+                _sanitize_issue_block(f["preconditions"]),
+                "### Expected and actual behavior",
+                "Expected: " + _sanitize_issue_inline(f["expected"]),
+                "Actual: " + _sanitize_issue_inline(f["actual"]),
+                "### Source evidence",
+                evidence_lines,
+                "### Contract and cause",
+                "Contract IDs: " + contract_ids_str,
+                _sanitize_issue_block(f["root_cause"]),
+                "### Failure sequence",
+                sequence_lines,
+                "### Counterevidence",
+                _sanitize_issue_block(f["counterevidence"]),
+                "### Proposed correction",
+                _sanitize_issue_block(f["remedy"]),
+                "### Acceptance",
+                acceptance_lines,
+                "### Validation",
+                val_summary,
+            ]
+            if commands_block:
+                finding_sections.append(commands_block)
+            sections.extend(finding_sections)
+        deps_str = ", ".join(_sanitize_issue_inline(d) for d in issue["depends_on"])
+        sections.append("Dependencies: " + deps_str)
         body_text = "\n\n".join(sections)
         if format == "json":
             payload = {
-                "title": issue["title"],
+                "title": safe_issue_title,
                 "body": body_text,
                 "labels": list(issue.get("labels", [])),
                 "assignees": list(issue.get("assignees", [])),

@@ -4,11 +4,13 @@ import copy
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
+import unicodedata
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -320,6 +322,50 @@ def _deliverable_for_run(run: dict, root: Path = ROOT) -> str:
     return str(_artifact_contract_for_run(run, root=root)["filename"])
 
 
+def _is_single_line_text(value: object) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if "\n" in value or "\r" in value or "\x00" in value:
+        return False
+    return not any(unicodedata.category(ch) in {"Cc", "Cf"} for ch in value)
+
+
+def _escape_code_span_char(ch: str) -> str:
+    if ch == "\n":
+        return r"\n"
+    if ch == "\r":
+        return r"\r"
+    if ch == "\t":
+        return r"\t"
+    if ch == "\x00":
+        return r"\x00"
+    if unicodedata.category(ch) in {"Cc", "Cf"}:
+        return f"\\u{ord(ch):04x}"
+    return ch
+
+
+def _markdown_code_span(value: object) -> str:
+    sanitized = "".join(_escape_code_span_char(ch) for ch in str(value))
+    if not sanitized:
+        return "` `"
+    max_ticks = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", sanitized)),
+        default=0,
+    )
+    fence = "`" * (max_ticks + 1)
+    needs_pad = (
+        sanitized.startswith("`")
+        or sanitized.endswith("`")
+        or (
+            sanitized.startswith(" ")
+            and sanitized.endswith(" ")
+            and bool(sanitized.strip(" "))
+        )
+    )
+    inner = f" {sanitized} " if needs_pad else sanitized
+    return f"{fence}{inner}{fence}"
+
+
 def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path, Path]]:
     shared_dir = root / "shared"
     if not shared_dir.is_dir():
@@ -523,6 +569,140 @@ def relative_path(value: str) -> Path:
             hint="Remove leading '/', drive letters, '..', and '.git' path segments.",
         )
     return Path(*pure.parts)
+
+
+_IGNORED_SKILL_DIR_NAMES = frozenset(
+    {
+        "__pycache__",
+        ".git",
+        ".github",
+        ".venv",
+        "venv",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "node_modules",
+    }
+)
+_IGNORED_SKILL_FILE_SUFFIXES = frozenset({".pyc", ".pyo", ".pyd"})
+_IGNORED_SKILL_FILE_NAMES = frozenset({".DS_Store", ".gitignore", ".gitattributes"})
+_ALLOWED_SKILL_TEXT_SUFFIXES = frozenset({".md", ".json", ".yaml", ".svg"})
+_DISALLOWED_SKILL_DOC_NAMES = frozenset({"readme.md", "changelog.md"})
+
+
+def _is_ignored_skill_entry(rel_parts: tuple[str, ...], name: str, suffix: str) -> bool:
+    return (
+        any(part in _IGNORED_SKILL_DIR_NAMES for part in rel_parts)
+        or suffix in _IGNORED_SKILL_FILE_SUFFIXES
+        or name in _IGNORED_SKILL_FILE_NAMES
+    )
+
+
+def _is_skill_script_rel(rel_posix: str) -> bool:
+    parts = PurePosixPath(rel_posix).parts
+    return (
+        len(parts) == 2
+        and parts[0] == "scripts"
+        and parts[1].endswith(".py")
+        and parts[1] != ".py"
+    )
+
+
+def _is_executable_skill_bytes(path: Path, data: bytes) -> bool:
+    return (os.name != "nt" and bool(path.stat().st_mode & 0o111)) or data.startswith(
+        b"#!"
+    )
+
+
+def _validate_allowed_skill_file(rel_posix: str, data: bytes) -> None:
+    pure = PurePosixPath(rel_posix)
+    if pure.name.lower() in _DISALLOWED_SKILL_DOC_NAMES:
+        raise FredCliError(
+            f"Disallowed documentation clutter in skill package: {rel_posix}",
+            code="disallowed_package_file",
+            hint="Keep README.md and CHANGELOG.md outside installable skills/ packages.",
+        )
+    if not (
+        _is_skill_script_rel(rel_posix) or pure.suffix in _ALLOWED_SKILL_TEXT_SUFFIXES
+    ):
+        raise FredCliError(
+            f"Disallowed file in skill package: {rel_posix}",
+            code="disallowed_package_file",
+            hint="Skill packages allow only UTF-8 .md, .json, .yaml, .svg, and scripts/*.py files.",
+        )
+    if b"\x00" in data:
+        raise FredCliError(
+            f"Binary file (NUL byte) not allowed in skill package: {rel_posix}",
+            code="binary_package_file",
+            hint="Remove binary assets from skill packages.",
+        )
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FredCliError(
+            f"Binary or non-UTF-8 file not allowed in skill package: {rel_posix}",
+            code="binary_package_file",
+            hint="Encode all skill package files as valid UTF-8 text.",
+        ) from exc
+
+
+def _scan_validated_skill_files(
+    package_dir: Path, root: Path | None = None
+) -> tuple[list[tuple[str, bytes]], set[str]]:
+    if package_dir.is_symlink() or not package_dir.is_dir():
+        raise FredCliError(
+            f"Expected a real package directory: {package_dir}",
+            code="invalid_package_directory",
+            hint="Ensure the skill package path exists as a regular directory and is not a symlink.",
+        )
+    resolved_root = root.resolve() if root is not None else None
+    if resolved_root is not None and not package_dir.resolve().is_relative_to(
+        resolved_root
+    ):
+        raise ValueError(f"Package directory escapes repository root: {package_dir}")
+    files: list[tuple[str, bytes]] = []
+    executable_paths: set[str] = set()
+    for path in sorted(
+        package_dir.rglob("*"),
+        key=lambda p: p.relative_to(package_dir).as_posix(),
+    ):
+        if path.is_symlink():
+            raise FredCliError(
+                f"Symlinks are not supported in packages: {path}",
+                code="unsupported_symlink",
+                hint="Replace symlinks inside skill packages with regular files.",
+            )
+        if resolved_root is not None and not path.resolve().is_relative_to(
+            resolved_root
+        ):
+            raise ValueError(f"File escapes repository root: {path}")
+        if not path.is_file():
+            continue
+        rel_path = path.relative_to(package_dir)
+        if _is_ignored_skill_entry(rel_path.parts, path.name, path.suffix):
+            continue
+        rel = rel_path.as_posix()
+        data = path.read_bytes()
+        _validate_allowed_skill_file(rel, data)
+        files.append((rel, data))
+        if _is_skill_script_rel(rel) and _is_executable_skill_bytes(path, data):
+            executable_paths.add(rel)
+    if not files:
+        raise ValueError(f"No files found in skill package: {package_dir}")
+    return files, executable_paths
+
+
+def _copy_allowed_skill_package(
+    source: Path, destination: Path, root: Path | None = None
+) -> None:
+    files, executable_paths = _scan_validated_skill_files(source, root=root)
+    destination.mkdir(parents=True, exist_ok=True)
+    for rel, data in files:
+        out_path = destination / relative_path(rel)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(data)
+        if os.name != "nt":
+            out_path.chmod(0o755 if rel in executable_paths else 0o644)
 
 
 def package_files(package: Path) -> dict[str, str]:
