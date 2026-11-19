@@ -176,6 +176,27 @@
       "installation_test": "filesystem-test",
       "behavior_test": "not-executed",
       "source": "https://docs.windsurf.com/windsurf/cascade/skills"
+    },
+    "kiro": {
+      "project_path": ".kiro/skills",
+      "user_path": ".kiro/skills",
+      "project_markers": [
+        {
+          "path": ".kiro",
+          "tier": "primary"
+        }
+      ],
+      "user_markers": [
+        {
+          "path": ".kiro",
+          "tier": "primary"
+        }
+      ],
+      "invocation": "/skill-name or natural-language activation; check current host behavior",
+      "install_method": "copy",
+      "installation_test": "filesystem-test",
+      "behavior_test": "not-executed",
+      "source": "https://kiro.dev/docs/skills/"
     }
   }
 }

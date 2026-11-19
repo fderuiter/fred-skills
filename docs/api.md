@@ -369,7 +369,7 @@ Inspects the target destination for declarative `project_markers` or `user_marke
 - **Parameters:**
   - `destination` (`Path | None`, default: `None`): Project root or user home directory to inspect, or `None` to default to current working directory (`"project"` scope) or user home (`"user"` scope).
   - `scope` (`str`, default: `"project"`): Installation scope (`"project"` or `"user"`).
-- **Returns:** `str` — Detected host identifier from `catalog/hosts.json`: `"codex"`, `"claude-code"`, `"antigravity"`, `"gemini-cli"`, `"cursor"`, `"copilot"`, `"opencode"`, or `"windsurf"`.
+- **Returns:** `str` — One of the nine host identifiers from `catalog/hosts.json`: `"codex"`, `"claude-code"`, `"antigravity"`, `"gemini-cli"`, `"cursor"`, `"copilot"`, `"opencode"`, `"windsurf"`, or `"kiro"`.
 - **Exceptions:**
   - `ValueError`: Raised if `scope` is invalid; if no configured host markers are found; if markers from multiple distinct hosts coexist; or if conflicting receipt records exist alongside shared or fallback markers.
 

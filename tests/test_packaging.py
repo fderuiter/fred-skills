@@ -366,6 +366,7 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
+        self.assertEqual("AGENTS.md", gemini_default["contextFileName"])
         root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
         self.assertEqual(root_version, marketplace_default["version"])
@@ -585,6 +586,7 @@ class PackageTests(unittest.TestCase):
         gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual(gemini_data["name"], "fred-skills")
         self.assertTrue(gemini_data["description"])
+        self.assertEqual(gemini_data["contextFileName"], "AGENTS.md")
         self.assertEqual(
             gemini_data["version"],
             (ROOT / "VERSION").read_text(encoding="utf-8").strip(),

@@ -60,6 +60,7 @@ class InstallationTests(unittest.TestCase):
                 "copilot",
                 "opencode",
                 "windsurf",
+                "kiro",
             ],
         )
         initial_bytes = b"Synthetic package sample"
@@ -606,6 +607,12 @@ class InstallationTests(unittest.TestCase):
                 ".windsurf/skills/sample/SKILL.md",
             ),
             (
+                "kiro_proj",
+                [".kiro"],
+                "kiro",
+                ".kiro/skills/sample/SKILL.md",
+            ),
+            (
                 "copilot_bare_github",
                 [".github/workflows"],
                 "copilot",
@@ -694,6 +701,7 @@ class InstallationTests(unittest.TestCase):
             (".copilot", "copilot"),
             (".config/opencode", "opencode"),
             (".config/devin", "windsurf"),
+            (".kiro", "kiro"),
         ]
         for idx, (marker, expected_host) in enumerate(user_cases):
             with self.subTest(marker=marker):

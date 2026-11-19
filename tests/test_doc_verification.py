@@ -959,10 +959,22 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertFalse(ok_bad_target)
 
     def test_agents_md_includes_doc_verification_scripts(self) -> None:
-        """AGENTS.md fallback command block includes check_doc_links.py and verify_doc_snippets.py."""
+        """AGENTS.md stays within 30 lines, includes doc verification scripts, and has thin vendor shims."""
         agents_text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        agents_lines = agents_text.splitlines()
+        self.assertLessEqual(
+            len(agents_lines),
+            30,
+            f"Expected AGENTS.md to stay at 30 lines or fewer, got {len(agents_lines)}",
+        )
         self.assertIn("python scripts/check_doc_links.py", agents_text)
         self.assertIn("python scripts/verify_doc_snippets.py", agents_text)
+        claude_text = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertEqual("@AGENTS.md", claude_text.strip())
+        copilot_text = (ROOT / ".github/copilot-instructions.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[AGENTS.md](../AGENTS.md)", copilot_text)
 
     def test_yaml_workflow_run_steps_extracted_and_reject_invalid_flags(self) -> None:
         """YAML workflow blocks in docs/integration.md execute run steps and reject invalid flags."""
@@ -1064,22 +1076,22 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 root=tmp_root, files=["README.md", "docs/usage.md"]
             )
             self.assertTrue(
-                any("README.md:L106:" in err and "v0.3.0" in err for err in ver_errors),
-                f"Expected README.md:L106 version drift failure, got: {ver_errors}",
+                any("README.md:L117:" in err and "v0.3.0" in err for err in ver_errors),
+                f"Expected README.md:L117 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L128:" in err and "v0.3.0" in err
+                    "docs/usage.md:L139:" in err and "v0.3.0" in err
                     for err in ver_errors
                 ),
-                f"Expected docs/usage.md:L128 version drift failure, got: {ver_errors}",
+                f"Expected docs/usage.md:L139 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L156:" in err and "0.3.0" in err
+                    "docs/usage.md:L167:" in err and "0.3.0" in err
                     for err in ver_errors
                 ),
-                f"Expected docs/usage.md:L156 tar version drift failure, got: {ver_errors}",
+                f"Expected docs/usage.md:L167 tar version drift failure, got: {ver_errors}",
             )
 
             # Restore VERSION and mutate catalog/packs.json skill count without updating docs
