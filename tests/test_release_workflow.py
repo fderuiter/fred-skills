@@ -9,42 +9,12 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import traceback
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 import yaml
-
-if os.environ.get("GITHUB_ACTIONS") == "true":
-    _orig_add_failure = unittest.TextTestResult.addFailure
-    _orig_add_error = unittest.TextTestResult.addError
-    _orig_add_subtest = unittest.TextTestResult.addSubTest
-
-    def _emit_gha_err(label: str, err: Any) -> None:
-        formatted = "".join(traceback.format_exception(*err))
-        escaped = (
-            formatted.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        )
-        print(f"\n::error title={label}::{escaped}", flush=True)
-
-    def _gha_add_failure(self: Any, test: Any, err: Any) -> None:
-        _emit_gha_err(test.id(), err)
-        _orig_add_failure(self, test, err)
-
-    def _gha_add_error(self: Any, test: Any, err: Any) -> None:
-        _emit_gha_err(test.id(), err)
-        _orig_add_error(self, test, err)
-
-    def _gha_add_subtest(self: Any, test: Any, subtest: Any, err: Any) -> None:
-        if err is not None:
-            _emit_gha_err(subtest.id(), err)
-        _orig_add_subtest(self, test, subtest, err)
-
-    unittest.TextTestResult.addFailure = _gha_add_failure  # type: ignore[method-assign]
-    unittest.TextTestResult.addError = _gha_add_error  # type: ignore[method-assign]
-    unittest.TextTestResult.addSubTest = _gha_add_subtest  # type: ignore[method-assign]
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -642,6 +612,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("--draft ", script)
         self.assertNotIn("--draft\n", script)
 
+    def _run_shell_step(
+        self,
+        cwd: Path,
+        script: str,
+        env_vars: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        with _temp_dir() as script_dir:
+            script_path = Path(script_dir) / "workflow_step.sh"
+            _write_lf(script_path, script)
+            return subprocess.run(
+                ["sh", script_path.as_posix()],
+                cwd=str(cwd),
+                env=env_vars,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
     def _run_preflight_script(
         self,
         cwd: Path,
@@ -653,14 +641,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         if output_file.exists():
             output_file.unlink()
         merged_env = _isolated_env(cwd, {"GITHUB_OUTPUT": str(output_file), **env_vars})
-        proc = subprocess.run(
-            ["sh", "-c", gate_step["run"]],
-            cwd=str(cwd),
-            env=merged_env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        proc = self._run_shell_step(cwd, str(gate_step["run"]), merged_env)
         return proc, _parse_github_output(output_file)
 
     def _run_verification_script(
@@ -670,13 +651,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         verify_step = next(
             s for s in release_steps if s.get("name") == "Verify release prerequisites"
         )
-        return subprocess.run(
-            ["sh", "-c", verify_step["run"]],
-            cwd=str(cwd),
-            env=_isolated_env(cwd, env_vars),
-            capture_output=True,
-            text=True,
-            check=False,
+        return self._run_shell_step(
+            cwd,
+            str(verify_step["run"]),
+            _isolated_env(cwd, env_vars),
         )
 
     def _run_checksum_step(self, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -686,13 +664,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             for s in release_steps
             if s.get("name") == "Verify downloaded artifact checksums"
         )
-        return subprocess.run(
-            ["sh", "-c", checksum_step["run"]],
-            cwd=str(cwd),
-            env=_isolated_env(cwd, {"PYTHON_BIN": sys.executable}),
-            capture_output=True,
-            text=True,
-            check=False,
+        return self._run_shell_step(
+            cwd,
+            str(checksum_step["run"]),
+            _isolated_env(cwd, {"PYTHON_BIN": sys.executable}),
         )
 
     def _run_publish_script(
@@ -702,13 +677,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         publish_step = next(
             s for s in release_steps if s.get("name") == "Publish GitHub Release"
         )
-        return subprocess.run(
-            ["sh", "-c", publish_step["run"]],
-            cwd=str(cwd),
-            env=_isolated_env(cwd, env_vars),
-            capture_output=True,
-            text=True,
-            check=False,
+        return self._run_shell_step(
+            cwd,
+            str(publish_step["run"]),
+            _isolated_env(cwd, env_vars),
         )
 
     def _setup_origin_and_clone(
