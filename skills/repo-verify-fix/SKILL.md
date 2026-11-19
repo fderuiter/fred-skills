@@ -30,3 +30,4 @@ observed versus inferred behavior, actual validation state, compatibility limits
 next action. Resolve related workflow skills by name, without assuming a host API.
 
 Write structured proof using [verification schema](assets/verification.schema.json).
+Do not modify application code, publish remote updates, or mark verification passed unless the checks actually executed under explicit user authorization.
