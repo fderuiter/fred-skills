@@ -1,4 +1,14 @@
 interface:
-  display_name: "Test Flakiness Isolation"
-  short_description: "Isolate nondeterministic clocks, seeds, races, and leaky state"
-  default_prompt: "Use $test-flakiness-isolation on this intermittent or order-dependent test suite."
+  display_name: Test Flakiness Isolation
+  short_description: Isolate nondeterministic clocks, seeds, races, and leaky state
+  default_prompt: Use $test-flakiness-isolation on this intermittent or order-dependent
+    test suite.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

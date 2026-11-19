@@ -1,4 +1,14 @@
 interface:
-  display_name: "Component Decomposition"
-  short_description: "Decompose capabilities into modular components"
-  default_prompt: "Use $arch-component-decomposition on this source and its modular interfaces."
+  display_name: Component Decomposition
+  short_description: Decompose capabilities into modular components
+  default_prompt: Use $arch-component-decomposition on this source and its modular
+    interfaces.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

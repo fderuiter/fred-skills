@@ -1,4 +1,14 @@
 interface:
-  display_name: "Operational Resilience"
-  short_description: "Specify failure isolation, backpressure, and recovery topology"
-  default_prompt: "Use $arch-operational-resilience on this service topology and failure model."
+  display_name: Operational Resilience
+  short_description: Specify failure isolation, backpressure, and recovery topology
+  default_prompt: Use $arch-operational-resilience on this service topology and failure
+    model.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

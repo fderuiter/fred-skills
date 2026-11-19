@@ -1,4 +1,13 @@
 interface:
-  display_name: "Remediation Reconciliation"
-  short_description: "Verify bounded engineering workflow outcomes"
-  default_prompt: "Use $repo-reconcile-findings on this source and its evidence artifacts."
+  display_name: Remediation Reconciliation
+  short_description: Reconcile findings, verified fixes, and state across runs
+  default_prompt: Use $repo-reconcile-findings on this source and its evidence artifacts.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

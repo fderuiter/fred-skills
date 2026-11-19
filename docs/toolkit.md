@@ -1,10 +1,10 @@
 # Local toolkit guide
 
 Run `python scripts/fred.py --help` from the toolkit root. Python 3.12+ and
-`requirements-dev.txt` are required for the CLI. JSON goes to stdout; concise errors
-go to stderr with exit 2. Paths with spaces need your shell's normal quoting. Commands
-work with `python` on Windows after activating a virtual environment. For programmatic
-Python integration and module contracts, see the [Developer API Guide](api.md).
+`requirements-dev.txt` are required for the CLI. JSON goes to stdout; runtime errors
+go to stderr (with `Hint:` lines, or JSON via `--json`) with exit `1`, while CLI usage
+errors exit `2`. Paths with spaces need normal shell quoting; commands work with `python`
+on Windows in a virtual environment. See the [Developer API Guide](api.md) for Python APIs.
 
 ## Discover and plan
 
@@ -111,7 +111,7 @@ skills. All initialized coverage is `not-reviewed`. `--allow-fixes` and
 not override current user constraints, host policy, or approval requirements.
 
 `resume` compares current source hashes with the original inventory. It writes
-`freshness.json`, marks directly cited changed files stale, and flags all findings for
+`revalidation.json`, marks directly cited changed files stale, and flags all findings for
 impact review when any file changes. Configuration/caller changes may invalidate a
 claim without changing its cited lines. The original audit and snapshot remain intact;
 start a new run to establish a new baseline. Snapshotting omits symlinks and default
@@ -123,7 +123,7 @@ inventory limits. Incomplete source inventory is never presented as complete cov
 | `run.json` | Versioned run ID, source revision/dirty flag, hash inventory, selected/deferred work, capabilities, authority, checkpoints; `schemas/run.schema.json` |
 | `audit.json` | Existing audit schema 1.0: contracts, evidence, findings, coverage, checks, draft issue graph |
 | `prompt.md` | Portable handoff derived from the plan; no runtime-specific calls |
-| `freshness.json` | Later source comparison; original evidence is retained |
+| `revalidation.json` | Later source comparison from `resume`; original evidence is retained |
 | `remediation.json` | Append-only local status records, separate from audit certainty |
 | `verification.json` | Explicit before/after identity, reproduction, regression, safe controls, actual commands and result |
 

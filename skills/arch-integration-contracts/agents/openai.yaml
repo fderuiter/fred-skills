@@ -1,4 +1,14 @@
 interface:
-  display_name: "Integration Contracts"
-  short_description: "Design wire protocols, event contracts, and compatibility rules"
-  default_prompt: "Use $arch-integration-contracts on these producer and consumer interfaces."
+  display_name: Integration Contracts
+  short_description: Design wire protocols, event contracts, and compatibility rules
+  default_prompt: Use $arch-integration-contracts on these producer and consumer
+    interfaces.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

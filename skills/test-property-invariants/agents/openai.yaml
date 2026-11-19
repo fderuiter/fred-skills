@@ -1,4 +1,13 @@
 interface:
-  display_name: "Property Invariant Testing"
-  short_description: "Specify property-based round-trip and algebraic test invariants"
-  default_prompt: "Use $test-property-invariants on this parser, codec, or state model."
+  display_name: Property Invariant Testing
+  short_description: Specify property-based round-trip and algebraic test invariants
+  default_prompt: Use $test-property-invariants on this parser, codec, or state model.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

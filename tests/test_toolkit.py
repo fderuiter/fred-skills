@@ -13,9 +13,13 @@ from fredlib import reports, repository, runs
 from fredlib.common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     SUITE_DELIVERABLES,
+    FredCliError,
     atomic_json,
     read_json,
+    read_json_object,
     resolve_audit_path,
+    resolve_manifest_path,
+    resolve_run_directory,
 )
 
 
@@ -1110,6 +1114,255 @@ class RunTests(unittest.TestCase):
         self.assertTrue((in_repo_ws / "assets/architecture.schema.json").is_file())
         self.assertEqual([], runs.revalidate(in_repo_ws)["changed_files"])
 
+    @unittest.skipUnless(shutil.which("git"), "Git unavailable")
+    def test_domain_deliverable_semantic_validation_and_revalidation_normalization(
+        self,
+    ):
+        (self.repo / "pkg").mkdir(exist_ok=True)
+        (self.repo / "pkg/helper.py").write_text("def helper():\n    return 1\n")
+        (self.repo / "unchanged.py").write_text("CONST = True\n")
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "fixture"],
+        ]:
+            subprocess.run(["git", "-C", str(self.repo), *argv], check=True)
+        base = repository.git(self.repo, "rev-parse", "HEAD", required=True)
+
+        # 1. Duplicate IDs rejected across architecture.json, review.json, and testing.json
+        ws_arch = self.root / "ws-sem-arch"
+        runs.initialize(self.repo, ws_arch, "design-architecture")
+        dup_arch = {
+            "schema_version": "1.0",
+            "title": "Architecture",
+            "status": "draft",
+            "decisions": [
+                {"id": "ADR-001", "title": "First", "decision": "Use queue"},
+                {"id": "ADR-001", "title": "Duplicate", "decision": "Use stream"},
+            ],
+        }
+        atomic_json(ws_arch / "architecture.json", dup_arch)
+        arch_errs = runs.validate_run(ws_arch)
+        self.assertIn("Duplicate IDs in decisions: ADR-001", arch_errs)
+
+        ws_rev = self.root / "ws-sem-review"
+        runs.initialize(self.repo, ws_rev, "review-code-changes", base=base)
+        dup_rev = {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Duplicate finding IDs",
+            "findings": [
+                {
+                    "id": "REV-1",
+                    "title": "First",
+                    "severity": "high",
+                    "file": "source.py",
+                    "description": "Issue A",
+                },
+                {
+                    "id": "REV-1",
+                    "title": "Second",
+                    "severity": "low",
+                    "file": "unchanged.py",
+                    "description": "Issue B",
+                },
+            ],
+        }
+        atomic_json(ws_rev / "review.json", dup_rev)
+        rev_errs = runs.validate_run(ws_rev)
+        self.assertIn("Duplicate IDs in findings: REV-1", rev_errs)
+
+        ws_test = self.root / "ws-sem-test"
+        runs.initialize(self.repo, ws_test, "expand-automated-tests")
+        dup_test = {
+            "schema_version": "1.0",
+            "component": "pkg.helper",
+            "framework": "unittest",
+            "test_cases": [
+                {
+                    "id": "TC-1",
+                    "name": "test_one",
+                    "description": "Case one",
+                    "oracle_type": "output",
+                },
+                {
+                    "id": "TC-1",
+                    "name": "test_two",
+                    "description": "Case two",
+                    "oracle_type": "state",
+                },
+            ],
+        }
+        atomic_json(ws_test / "testing.json", dup_test)
+        test_errs = runs.validate_run(ws_test)
+        self.assertIn("Duplicate IDs in test_cases: TC-1", test_errs)
+
+        # 2. Unsafe relative paths in review.json findings[*].file are rejected
+        for bad_path in (
+            "../secret.py",
+            "pkg/../../secret.py",
+            "/etc/passwd",
+            "C:/repo/source.py",
+            ".git/config",
+            "pkg\\helper.py",
+            ".",
+        ):
+            with self.subTest(bad_path=bad_path):
+                bad_rev = {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Unsafe path check",
+                    "findings": [
+                        {
+                            "id": "REV-PATH",
+                            "title": "Bad path",
+                            "severity": "medium",
+                            "file": bad_path,
+                            "description": "Points outside repository",
+                        }
+                    ],
+                }
+                atomic_json(ws_rev / "review.json", bad_rev)
+                path_errs = runs.validate_run(ws_rev)
+                self.assertTrue(
+                    any(
+                        "Finding file path must be repository-relative" in e
+                        for e in path_errs
+                    ),
+                    path_errs,
+                )
+
+        # 3. Malformed payloads skip semantic ID and path checks when JSON Schema validation fails
+        malformed_rev = {
+            "schema_version": "1.0",
+            "verdict": "invalid_enum_value",
+            "findings": [
+                {
+                    "id": "REV-DUP",
+                    "title": "One",
+                    "severity": "high",
+                    "file": "../outside.py",
+                    "description": "Desc",
+                },
+                {
+                    "id": "REV-DUP",
+                    "title": "Two",
+                    "severity": "high",
+                    "file": "/etc/passwd",
+                    "description": "Desc",
+                },
+            ],
+        }
+        atomic_json(ws_rev / "review.json", malformed_rev)
+        malformed_errs = runs.validate_run(ws_rev)
+        self.assertTrue(malformed_errs)
+        self.assertFalse(any("Duplicate IDs" in e for e in malformed_errs))
+        self.assertFalse(
+            any(
+                "Finding file path must be repository-relative" in e
+                for e in malformed_errs
+            )
+        )
+
+        # 4. Normalize review.json findings[*].file before comparing against changed_files and skipped,
+        #    and populate needs_impact_review across review.json, architecture.json, and testing.json
+        valid_arch = {
+            "schema_version": "1.0",
+            "title": "Architecture",
+            "status": "accepted",
+            "decisions": [
+                {"id": "ADR-001", "title": "Boundary", "decision": "Isolate"}
+            ],
+        }
+        atomic_json(ws_arch / "architecture.json", valid_arch)
+        valid_test = {
+            "schema_version": "1.0",
+            "component": "pkg.helper",
+            "framework": "unittest",
+            "test_cases": [
+                {
+                    "id": "TC-1",
+                    "name": "test_helper",
+                    "description": "Checks helper",
+                    "oracle_type": "output",
+                }
+            ],
+        }
+        atomic_json(ws_test / "testing.json", valid_test)
+        normalized_rev = {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Review with non-canonical relative paths",
+            "findings": [
+                {
+                    "id": "REV-DOT",
+                    "title": "Dot-prefixed path",
+                    "severity": "high",
+                    "file": "./source.py",
+                    "description": "Changed file with ./ prefix",
+                },
+                {
+                    "id": "REV-SUB",
+                    "title": "Redundant segment path",
+                    "severity": "medium",
+                    "file": "pkg/./helper.py",
+                    "description": "Changed file with /./ segment",
+                },
+                {
+                    "id": "REV-CLEAN",
+                    "title": "Unchanged file",
+                    "severity": "low",
+                    "file": "./unchanged.py",
+                    "description": "Unchanged file should not be stale",
+                },
+            ],
+        }
+        atomic_json(ws_rev / "review.json", normalized_rev)
+        self.assertEqual([], runs.validate_run(ws_rev))
+
+        # Before file modifications: nothing stale, needs_impact_review is empty
+        self.assertEqual([], runs.revalidate(ws_arch)["needs_impact_review"])
+        self.assertEqual([], runs.revalidate(ws_test)["needs_impact_review"])
+        initial_rev = runs.revalidate(ws_rev)
+        self.assertEqual([], initial_rev["stale_finding_ids"])
+        self.assertEqual([], initial_rev["needs_impact_review"])
+
+        # Modify source.py and pkg/helper.py while leaving unchanged.py untouched
+        (self.repo / "source.py").write_text("value = 42\n")
+        (self.repo / "pkg/helper.py").write_text("def helper():\n    return 2\n")
+
+        after_rev = runs.revalidate(ws_rev)
+        self.assertEqual(["pkg/helper.py", "source.py"], after_rev["changed_files"])
+        self.assertEqual(["REV-DOT", "REV-SUB"], after_rev["stale_finding_ids"])
+        self.assertEqual(
+            ["REV-DOT", "REV-SUB", "REV-CLEAN"], after_rev["needs_impact_review"]
+        )
+
+        after_arch = runs.revalidate(ws_arch)
+        self.assertEqual([], after_arch["stale_finding_ids"])
+        self.assertEqual(["ADR-001"], after_arch["needs_impact_review"])
+
+        after_test = runs.revalidate(ws_test)
+        self.assertEqual([], after_test["stale_finding_ids"])
+        self.assertEqual(["TC-1"], after_test["needs_impact_review"])
+
+        # Direct skipped-key normalization check (including backslash separator)
+        stale_skipped, _ = runs._revalidate_domain_records(
+            {
+                "findings": [
+                    {"id": "REV-SKIP", "file": "pkg\\helper.py"},
+                    {"id": "REV-OK", "file": "./unchanged.py"},
+                ]
+            },
+            "review.json",
+            changed=[],
+            skipped={"pkg/helper.py": "size-limit"},
+            complete=True,
+        )
+        self.assertEqual(["REV-SKIP"], stale_skipped)
+
 
 class ReportTests(unittest.TestCase):
     def test_untrusted_source_is_escaped_and_no_network_is_required(self):
@@ -1136,6 +1389,9 @@ class ReportTests(unittest.TestCase):
             self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
             self.assertIn('id="reset-filters"', page)
             self.assertIn("--table-border", page)
+            self.assertIn("overflow-wrap:anywhere", page)
+            self.assertIn("@media (max-width: 640px)", page)
+            self.assertIn("@media print", page)
 
     def test_mixed_empty_sections_and_badge_severities(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
@@ -1181,6 +1437,8 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn('id="count"', page)
             self.assertNotIn('id="empty-state"', page)
             self.assertNotIn('id="reset-filters"', page)
+            self.assertNotIn('id="toggle-details"', page)
+            self.assertNotIn(">Expand all</button>", page)
             self.assertNotIn("Search findings", page)
             self.assertNotIn("Evidence status", page)
             self.assertNotIn('article class="finding"', page)
@@ -1199,6 +1457,10 @@ class ReportTests(unittest.TestCase):
             self.assertIn('id="count"', page)
             self.assertIn('id="empty-state"', page)
             self.assertIn('id="reset-filters"', page)
+            self.assertIn(
+                '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>',
+                page,
+            )
             self.assertIn("Search findings", page)
             self.assertIn("Severity", page)
             self.assertIn("Evidence status", page)
@@ -1745,6 +2007,10 @@ class ReportTests(unittest.TestCase):
                     self.assertIn("connect-src &#x27;none&#x27;", html)
                     self.assertIn(expected_heading, html)
                     self.assertIn('id="query"', html)
+                    if label == "arch":
+                        self.assertIn('id="toggle-details"', html)
+                    else:
+                        self.assertNotIn('id="toggle-details"', html)
 
                     # Prior comparison, remediation, and issue drafts reject domain artifacts clearly
                     with self.assertRaises(ValueError) as prior_ctx:
@@ -1786,6 +2052,147 @@ class ReportTests(unittest.TestCase):
             }
             with self.assertRaises(ValueError):
                 reports.render(bad_testing, tmp_path / "bad.html")
+
+
+class BoundaryGuardAndContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        (self.repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_fred_cli_error_subclasses_value_error_and_serializes(self):
+        err = FredCliError(
+            "Broken input", code="invalid_input", hint="Fix the input file."
+        )
+        self.assertIsInstance(err, ValueError)
+        self.assertEqual("invalid_input", err.code)
+        self.assertEqual("Broken input", err.message)
+        self.assertEqual("Fix the input file.", err.hint)
+        self.assertEqual(
+            {
+                "code": "invalid_input",
+                "message": "Broken input",
+                "hint": "Fix the input file.",
+            },
+            err.to_dict(),
+        )
+
+    def test_common_json_and_path_helpers_guard_boundaries(self):
+        missing = self.root / "missing.json"
+        with self.assertRaises(FredCliError) as ctx_missing:
+            read_json_object(missing, label="Ledger")
+        self.assertEqual("missing_file", ctx_missing.exception.code)
+        self.assertTrue(ctx_missing.exception.hint)
+
+        with self.assertRaises(FredCliError) as ctx_dir:
+            read_json_object(self.repo, label="Ledger")
+        self.assertEqual("invalid_path_type", ctx_dir.exception.code)
+
+        bad_syntax = self.root / "bad.json"
+        bad_syntax.write_text("{\n  bad\n}\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as ctx_syntax:
+            read_json_object(bad_syntax, label="Ledger")
+        self.assertEqual("invalid_json", ctx_syntax.exception.code)
+        self.assertIn("line 2", ctx_syntax.exception.message)
+
+        for idx, raw in enumerate(["[]", "42", '"hello"', "true", "null"]):
+            prim = self.root / f"prim-{idx}.json"
+            prim.write_text(raw, encoding="utf-8")
+            with self.assertRaises(FredCliError) as ctx_root:
+                read_json_object(prim, label="Ledger")
+            self.assertEqual("invalid_json_root", ctx_root.exception.code)
+
+        rel_dir = self.root / "rel"
+        rel_dir.mkdir()
+        with self.assertRaises(FredCliError) as ctx_man:
+            resolve_manifest_path(rel_dir)
+        self.assertEqual("missing_manifest", ctx_man.exception.code)
+        manifest_file = rel_dir / "manifest.json"
+        manifest_file.write_text("{}", encoding="utf-8")
+        self.assertEqual(manifest_file, resolve_manifest_path(rel_dir))
+
+        file_not_dir = self.root / "not-a-dir.json"
+        file_not_dir.write_text("[]", encoding="utf-8")
+        with self.assertRaises(FredCliError) as ctx_rundir:
+            resolve_run_directory(file_not_dir)
+        self.assertEqual("invalid_run_directory", ctx_rundir.exception.code)
+
+    def test_validate_run_short_circuits_empty_ledgers_with_all_23_schema_errors(self):
+        ws = self.root / "empty-ws"
+        ws.mkdir()
+        atomic_json(ws / "run.json", {})
+        atomic_json(ws / "audit.json", {})
+        errors = runs.validate_run(ws)
+        self.assertEqual(23, len(errors))
+        self.assertTrue(all("is a required property" in err for err in errors))
+
+        # Non-dict plan inside run.json also collects schema errors without AttributeError
+        atomic_json(ws / "run.json", {"plan": []})
+        plan_errors = runs.validate_run(ws)
+        self.assertGreaterEqual(len(plan_errors), 22)
+
+    def test_plan_catches_malformed_yaml_and_lists_profiles(self):
+        bad_yaml = self.root / "broken.yaml"
+        bad_yaml.write_text("profile: [\nunterminated\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as yaml_ctx:
+            runs.plan(self.repo, "investigate-bug", config=bad_yaml)
+        self.assertEqual("invalid_yaml", yaml_ctx.exception.code)
+        self.assertIn("line", yaml_yaml_msg := yaml_ctx.exception.message)
+        self.assertIn("Malformed YAML", yaml_yaml_msg)
+        self.assertTrue(yaml_ctx.exception.hint)
+
+        expected_profiles = sorted(
+            read_json(ROOT / "catalog/profiles.json")["profiles"].keys()
+        )
+        unknown_profile_yaml = self.root / "unknown-profile.yaml"
+        unknown_profile_yaml.write_text(
+            "profile: not-a-real-profile\n", encoding="utf-8"
+        )
+        with self.assertRaises(FredCliError) as prof_ctx:
+            runs.plan(self.repo, "investigate-bug", config=unknown_profile_yaml)
+        self.assertEqual("invalid_profile", prof_ctx.exception.code)
+        for prof in expected_profiles:
+            self.assertIn(prof, prof_ctx.exception.message)
+            self.assertIn(prof, prof_ctx.exception.hint or "")
+
+    def test_import_sarif_and_compare_guard_non_object_and_nested_types(self):
+        arr = self.root / "arr.sarif"
+        arr.write_text("[1, 2, 3]", encoding="utf-8")
+        with self.assertRaises(FredCliError) as sarif_arr:
+            runs.import_sarif(arr)
+        self.assertEqual("invalid_json_root", sarif_arr.exception.code)
+
+        bad_runs = self.root / "bad-runs.sarif"
+        atomic_json(bad_runs, {"runs": "not-a-list"})
+        with self.assertRaises(FredCliError) as sarif_runs:
+            runs.import_sarif(bad_runs)
+        self.assertEqual("invalid_sarif", sarif_runs.exception.code)
+
+        with self.assertRaises(FredCliError):
+            runs.compare([], {})  # type: ignore[arg-type]
+        with self.assertRaises(FredCliError):
+            runs.compare(
+                {"findings": "bad", "evidence": []}, {"findings": [], "evidence": []}
+            )
+
+    def test_docs_name_revalidation_json_and_exit_codes_1_and_2(self):
+        toolkit_doc = (ROOT / "docs/toolkit.md").read_text(encoding="utf-8")
+        integration_doc = (ROOT / "docs/integration.md").read_text(encoding="utf-8")
+        self.assertIn("revalidation.json", toolkit_doc)
+        self.assertNotIn("freshness.json", toolkit_doc)
+        self.assertIn("exit `1`", toolkit_doc)
+        self.assertIn("exit `2`", toolkit_doc)
+
+        self.assertIn("revalidation.json", integration_doc)
+        self.assertNotIn("freshness.json", integration_doc)
+        self.assertNotIn("freshness.schema.json", integration_doc)
+        self.assertIn("`1`", integration_doc)
+        self.assertIn("`2`", integration_doc)
 
 
 if __name__ == "__main__":

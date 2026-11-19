@@ -1,4 +1,14 @@
 interface:
-  display_name: "API Compatibility Review"
-  short_description: "Review diffs for public API, wire, and SDK compatibility breaks"
-  default_prompt: "Use $review-api-compatibility on this pull request diff and public API."
+  display_name: API Compatibility Review
+  short_description: Review diffs for public API, wire, and SDK compatibility breaks
+  default_prompt: Use $review-api-compatibility on this pull request diff and public
+    API.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

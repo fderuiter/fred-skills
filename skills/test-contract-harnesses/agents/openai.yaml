@@ -1,4 +1,13 @@
 interface:
-  display_name: "Contract Test Harnesses"
-  short_description: "Design producer/consumer wire and schema contract test harnesses"
-  default_prompt: "Use $test-contract-harnesses on these API schemas and consumer mocks."
+  display_name: Contract Test Harnesses
+  short_description: Design producer/consumer wire and schema contract test harnesses
+  default_prompt: Use $test-contract-harnesses on these API schemas and consumer mocks.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

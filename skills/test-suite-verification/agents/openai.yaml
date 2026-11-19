@@ -1,4 +1,13 @@
 interface:
-  display_name: "Test Suite Verification"
-  short_description: "Execute and verify generated test suites"
-  default_prompt: "Use $test-suite-verification on this test suite and execution environment."
+  display_name: Test Suite Verification
+  short_description: Execute and verify generated test suites
+  default_prompt: Use $test-suite-verification on this test suite and execution environment.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

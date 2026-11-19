@@ -1,4 +1,14 @@
 interface:
-  display_name: "Concurrency Hazard Review"
-  short_description: "Review diffs for data races, lock ordering, and async hazards"
-  default_prompt: "Use $review-concurrency-hazards on this pull request diff and shared state."
+  display_name: Concurrency Hazard Review
+  short_description: Review diffs for data races, lock ordering, and async hazards
+  default_prompt: Use $review-concurrency-hazards on this pull request diff and shared
+    state.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

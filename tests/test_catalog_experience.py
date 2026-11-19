@@ -50,6 +50,10 @@ class ExperienceTests(unittest.TestCase):
         self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
         self.assertIn('id="reset-filters"', page)
         self.assertIn(
+            '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>',
+            page,
+        )
+        self.assertIn(
             '<a href="#repo-audit-concurrency">repo-audit-concurrency</a>', page
         )
         self.assertIn('<article class="finding" id="repo-audit-concurrency"', page)
@@ -64,6 +68,16 @@ class ExperienceTests(unittest.TestCase):
         select_html = page[select_start:select_end]
         for suite in suites:
             self.assertIn(f'<option value="{suite["name"]}">', select_html)
+        packs = read_json(ROOT / "catalog/packs.json")["packs"]
+        self.assertEqual(len(packs), 11)
+        for pack_name in packs:
+            self.assertIn(f'id="pack-{pack_name}"', page)
+            self.assertIn(f"--pack {pack_name}", page)
+        hosts = read_json(ROOT / "catalog/hosts.json")["hosts"]
+        for host_name, host_cfg in hosts.items():
+            self.assertIn(f'data-host="{host_name}"', page)
+            self.assertIn(host_cfg["project_path"], page)
+            self.assertIn(host_cfg["behavior_test"], page)
 
     def test_experience_detects_drift(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

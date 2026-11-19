@@ -1,4 +1,14 @@
 interface:
-  display_name: "Security Boundary Review"
-  short_description: "Review diffs for auth bypass, injection, and trust boundary gaps"
-  default_prompt: "Use $review-security-boundaries on this pull request diff and trust perimeter."
+  display_name: Security Boundary Review
+  short_description: Review diffs for auth bypass, injection, and trust boundary gaps
+  default_prompt: Use $review-security-boundaries on this pull request diff and trust
+    perimeter.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
