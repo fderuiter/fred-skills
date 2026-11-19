@@ -88,26 +88,24 @@ EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
 )
 
 
-def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]:
-    if not isinstance(raw_value, str) or not raw_value.strip():
-        return [f"Missing or invalid UI {field}"]
-    if (
+_NON_AUDIT_NOTE_SUITES = frozenset(
+    {"software-architecture", "code-review", "automated-testing"}
+)
+_NO_EXPECTED_FINDINGS_SUITES = frozenset(
+    {"software-architecture", "automated-testing", "repository-workflows"}
+)
+
+
+def _is_relative_icon_path(raw_value: str) -> bool:
+    return not (
         "\\" in raw_value
         or raw_value.startswith("/")
         or Path(raw_value).is_absolute()
         or PureWindowsPath(raw_value).is_absolute()
-    ):
-        return [f"UI {field} must be a relative package-local SVG path: {raw_value}"]
-    candidate = package / raw_value
-    resolved_package = package.resolve()
-    try:
-        resolved_candidate = candidate.resolve()
-    except OSError as exc:
-        return [f"UI {field} could not be resolved ({raw_value}): {exc}"]
-    if not resolved_candidate.is_relative_to(resolved_package):
-        return [f"UI {field} escapes standalone package: {raw_value}"]
-    if candidate.is_symlink():
-        return [f"UI {field} must not be a symlink: {raw_value}"]
+    )
+
+
+def _validate_svg_file(candidate: Path, field: str, raw_value: str) -> list[str]:
     if candidate.suffix.lower() != ".svg":
         return [f"UI {field} must point to an .svg file: {raw_value}"]
     if not candidate.is_file():
@@ -122,31 +120,145 @@ def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]
     return []
 
 
+def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]:
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return [f"Missing or invalid UI {field}"]
+    if not _is_relative_icon_path(raw_value):
+        return [f"UI {field} must be a relative package-local SVG path: {raw_value}"]
+    candidate = package / raw_value
+    resolved_package = package.resolve()
+    try:
+        resolved_candidate = candidate.resolve()
+    except OSError as exc:
+        return [f"UI {field} could not be resolved ({raw_value}): {exc}"]
+    if not resolved_candidate.is_relative_to(resolved_package):
+        return [f"UI {field} escapes standalone package: {raw_value}"]
+    if candidate.is_symlink():
+        return [f"UI {field} must not be a symlink: {raw_value}"]
+    return _validate_svg_file(candidate, field, raw_value)
+
+
+def _fallback_suite_name(skill_name: str) -> str:
+    if skill_name.startswith("arch-"):
+        return "software-architecture"
+    if skill_name.startswith("review-"):
+        return "code-review"
+    if skill_name.startswith("test-"):
+        return "automated-testing"
+    if skill_name.startswith("repo-") and not skill_name.startswith("repo-audit-"):
+        return "repository-workflows"
+    return "repository-audits"
+
+
+def _lookup_catalog_siblings(
+    candidate_root: Path, skill_name: str
+) -> tuple[str, set[str]] | None:
+    try:
+        members = suite_members(candidate_root)
+        if skill_name not in members:
+            return None
+        suite_name = str(members[skill_name]["suite"])
+        siblings = {
+            s
+            for s, info in members.items()
+            if info.get("suite") == suite_name and s != skill_name
+        }
+        return suite_name, siblings
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def _infer_suite_and_siblings(package: Path, skill_name: str) -> tuple[str, set[str]]:
     candidate_root = package.parent.parent
-    suites_file = candidate_root / "catalog/suites.json"
-    if suites_file.is_file():
-        try:
-            members = suite_members(candidate_root)
-            if skill_name in members:
-                suite_name = str(members[skill_name]["suite"])
-                siblings = {
-                    s
-                    for s, info in members.items()
-                    if info.get("suite") == suite_name and s != skill_name
-                }
-                return suite_name, siblings
-        except (OSError, ValueError, TypeError, KeyError):
-            pass
-    if skill_name.startswith("arch-"):
-        return "software-architecture", set()
-    if skill_name.startswith("review-"):
-        return "code-review", set()
-    if skill_name.startswith("test-"):
-        return "automated-testing", set()
-    if skill_name.startswith("repo-") and not skill_name.startswith("repo-audit-"):
-        return "repository-workflows", set()
-    return "repository-audits", set()
+    if (candidate_root / "catalog/suites.json").is_file():
+        catalog_match = _lookup_catalog_siblings(candidate_root, skill_name)
+        if catalog_match is not None:
+            return catalog_match
+    return _fallback_suite_name(skill_name), set()
+
+
+def _check_scenario_note_terminology(sid: str, suite_name: str, note: str) -> list[str]:
+    problems: list[str] = []
+    if LEGACY_AUDIT_ACTIVATION_NOTE_PATTERN.search(note):
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): legacy audit activation note must be replaced with a suite-accurate sibling routing note"
+        )
+    if suite_name in _NON_AUDIT_NOTE_SUITES and AUDIT_WORD_PATTERN.search(note):
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): misplaced audit terminology in {suite_name} evaluation_note"
+        )
+    elif (
+        suite_name == "repository-workflows"
+        and WORKFLOW_MISPLACED_AUDIT_NOTE_PATTERN.search(note)
+    ):
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): misplaced audit activation note in repository-workflows evaluation_note"
+        )
+    if (
+        suite_name in _NO_EXPECTED_FINDINGS_SUITES
+        and EXPECTED_FINDINGS_NOTE_PATTERN.search(note)
+    ):
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): misplaced 'expected findings' note in {suite_name}; reference the suite contract instead"
+        )
+    return problems
+
+
+def _validate_single_scenario_entry(
+    item: Mapping[str, Any], suite_name: str
+) -> list[str]:
+    sid = str(item.get("id", ""))
+    prompt = str(item.get("prompt", ""))
+    note = str(item.get("evaluation_note", ""))
+    problems: list[str] = []
+    if GENERIC_ROUTING_PROMPT_PATTERN.search(prompt):
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): generic typo or proofreading prompt is disallowed; use a near-neighbor sibling prompt"
+        )
+    problems.extend(_check_scenario_note_terminology(sid, suite_name, note))
+    return problems
+
+
+def _routing_mentions_sibling(r_item: Mapping[str, Any], sibling: str) -> bool:
+    r_note = str(r_item.get("evaluation_note", ""))
+    raw_behaviors = r_item.get("expected_behavior", [])
+    r_behaviors = " ".join(b for b in raw_behaviors if isinstance(b, str))
+    return sibling in r_note or sibling in r_behaviors
+
+
+def _validate_routing_scenario(
+    r_item: Mapping[str, Any],
+    skill_name: str,
+    *,
+    suite_name: str,
+    siblings: set[str],
+    non_routing_prompts: set[str],
+) -> list[str]:
+    sid = str(r_item.get("id", ""))
+    sibling = r_item.get("sibling_skill")
+    if not isinstance(sibling, str) or not sibling.strip():
+        return [
+            f"references/evaluation-scenarios.json ({sid}): routing scenario requires sibling_skill"
+        ]
+    problems: list[str] = []
+    if sibling == skill_name:
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): sibling_skill '{sibling}' must differ from '{skill_name}'"
+        )
+    elif siblings and sibling not in siblings:
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): sibling_skill '{sibling}' is not a member of suite '{suite_name}'"
+        )
+    r_prompt = str(r_item.get("prompt", "")).strip()
+    if r_prompt in non_routing_prompts:
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): routing prompt must target a sibling boundary rather than repeating the skill's own prompt"
+        )
+    if not _routing_mentions_sibling(r_item, sibling):
+        problems.append(
+            f"references/evaluation-scenarios.json ({sid}): routing evaluation_note or expected_behavior must reference sibling_skill '{sibling}'"
+        )
+    return problems
 
 
 def _validate_scenario_semantics(
@@ -155,85 +267,30 @@ def _validate_scenario_semantics(
     problems: list[str] = []
     suite_name, siblings = _infer_suite_and_siblings(package, skill_name)
     non_routing_prompts: set[str] = set()
-    routing_scenarios: list[dict] = []
+    routing_scenarios: list[dict[str, Any]] = []
 
     for item in scenarios:
         if not isinstance(item, dict):
             continue
+        problems.extend(_validate_single_scenario_entry(item, suite_name))
         sid = str(item.get("id", ""))
         prompt = str(item.get("prompt", ""))
-        note = str(item.get("evaluation_note", ""))
         kind = sid.rsplit("-", 1)[-1] if "-" in sid else ""
-
-        if GENERIC_ROUTING_PROMPT_PATTERN.search(prompt):
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): generic typo or proofreading prompt is disallowed; use a near-neighbor sibling prompt"
-            )
-
-        if LEGACY_AUDIT_ACTIVATION_NOTE_PATTERN.search(note):
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): legacy audit activation note must be replaced with a suite-accurate sibling routing note"
-            )
-
-        if suite_name in {
-            "software-architecture",
-            "code-review",
-            "automated-testing",
-        } and AUDIT_WORD_PATTERN.search(note):
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): misplaced audit terminology in {suite_name} evaluation_note"
-            )
-        elif (
-            suite_name == "repository-workflows"
-            and WORKFLOW_MISPLACED_AUDIT_NOTE_PATTERN.search(note)
-        ):
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): misplaced audit activation note in repository-workflows evaluation_note"
-            )
-
-        if suite_name in {
-            "software-architecture",
-            "automated-testing",
-            "repository-workflows",
-        } and EXPECTED_FINDINGS_NOTE_PATTERN.search(note):
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): misplaced 'expected findings' note in {suite_name}; reference the suite contract instead"
-            )
-
         if kind == "routing":
             routing_scenarios.append(item)
         elif prompt.strip():
             non_routing_prompts.add(prompt.strip())
 
     for r_item in routing_scenarios:
-        sid = str(r_item.get("id", ""))
-        r_prompt = str(r_item.get("prompt", "")).strip()
-        sibling = r_item.get("sibling_skill")
-        r_note = str(r_item.get("evaluation_note", ""))
-        r_behaviors = " ".join(
-            str(b) for b in r_item.get("expected_behavior", []) if isinstance(b, str)
+        problems.extend(
+            _validate_routing_scenario(
+                r_item,
+                skill_name,
+                suite_name=suite_name,
+                siblings=siblings,
+                non_routing_prompts=non_routing_prompts,
+            )
         )
-        if not isinstance(sibling, str) or not sibling.strip():
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): routing scenario requires sibling_skill"
-            )
-            continue
-        if sibling == skill_name:
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): sibling_skill '{sibling}' must differ from '{skill_name}'"
-            )
-        elif siblings and sibling not in siblings:
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): sibling_skill '{sibling}' is not a member of suite '{suite_name}'"
-            )
-        if r_prompt in non_routing_prompts:
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): routing prompt must target a sibling boundary rather than repeating the skill's own prompt"
-            )
-        if sibling not in r_note and sibling not in r_behaviors:
-            problems.append(
-                f"references/evaluation-scenarios.json ({sid}): routing evaluation_note or expected_behavior must reference sibling_skill '{sibling}'"
-            )
 
     return problems
 
@@ -321,6 +378,87 @@ def _prompt_mentions_schema(prompt_content: str, output_schemas: list[Path]) -> 
     return False
 
 
+_SCHEMA_MAP_KEYS = (
+    "$defs",
+    "definitions",
+    "patternProperties",
+    "dependentSchemas",
+)
+_SCHEMA_SINGLE_KEYS = (
+    "items",
+    "additionalProperties",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contains",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
+_SCHEMA_LIST_KEYS = ("allOf", "anyOf", "oneOf", "prefixItems")
+
+
+def _check_node_properties(
+    node: Mapping[str, Any],
+    json_path: str,
+    schema_rel: str,
+    schema_errors: list[str],
+) -> list[tuple[object, str]]:
+    props = node.get("properties")
+    if not isinstance(props, dict):
+        return []
+    if node.get("additionalProperties") is not False:
+        schema_errors.append(
+            f"{schema_rel}: structured object at {json_path} with 'properties' "
+            "must set 'additionalProperties': false"
+        )
+    return [
+        (prop_schema, f"{json_path}.properties.{prop_name}")
+        for prop_name, prop_schema in props.items()
+    ]
+
+
+def _collect_map_subschemas(
+    node: Mapping[str, Any], json_path: str
+) -> list[tuple[object, str]]:
+    children: list[tuple[object, str]] = []
+    for map_key in _SCHEMA_MAP_KEYS:
+        sub_map = node.get(map_key)
+        if isinstance(sub_map, dict):
+            for sub_name, sub_schema in sub_map.items():
+                children.append((sub_schema, f"{json_path}.{map_key}.{sub_name}"))
+    return children
+
+
+def _collect_keyword_subschemas(
+    node: Mapping[str, Any], json_path: str
+) -> list[tuple[object, str]]:
+    children: list[tuple[object, str]] = []
+    for single_key in _SCHEMA_SINGLE_KEYS:
+        sub_node = node.get(single_key)
+        if isinstance(sub_node, dict):
+            children.append((sub_node, f"{json_path}.{single_key}"))
+    for list_key in _SCHEMA_LIST_KEYS:
+        sub_list = node.get(list_key)
+        if isinstance(sub_list, list):
+            for idx, item_schema in enumerate(sub_list):
+                children.append((item_schema, f"{json_path}.{list_key}[{idx}]"))
+    return children
+
+
+def _walk_closed_schema(
+    node: object, json_path: str, schema_rel: str, schema_errors: list[str]
+) -> None:
+    if not isinstance(node, dict):
+        return
+    children = _check_node_properties(node, json_path, schema_rel, schema_errors)
+    children.extend(_collect_map_subschemas(node, json_path))
+    children.extend(_collect_keyword_subschemas(node, json_path))
+    for child_node, child_path in children:
+        _walk_closed_schema(child_node, child_path, schema_rel, schema_errors)
+
+
 def _validate_closed_schema(data: object, schema_rel: str) -> list[str]:
     """Reject empty/open schemas and require additionalProperties: false on objects with properties."""
     if not isinstance(data, dict) or not data:
@@ -333,53 +471,7 @@ def _validate_closed_schema(data: object, schema_rel: str) -> list[str]:
             f"{schema_rel}: root schema must define non-empty 'properties'"
         )
 
-    def _walk(node: object, json_path: str) -> None:
-        if not isinstance(node, dict):
-            return
-        props = node.get("properties")
-        if isinstance(props, dict):
-            if node.get("additionalProperties") is not False:
-                schema_errors.append(
-                    f"{schema_rel}: structured object at {json_path} with 'properties' "
-                    "must set 'additionalProperties': false"
-                )
-            for prop_name, prop_schema in props.items():
-                _walk(prop_schema, f"{json_path}.properties.{prop_name}")
-
-        for map_key in (
-            "$defs",
-            "definitions",
-            "patternProperties",
-            "dependentSchemas",
-        ):
-            sub_map = node.get(map_key)
-            if isinstance(sub_map, dict):
-                for sub_name, sub_schema in sub_map.items():
-                    _walk(sub_schema, f"{json_path}.{map_key}.{sub_name}")
-
-        for single_key in (
-            "items",
-            "additionalProperties",
-            "not",
-            "if",
-            "then",
-            "else",
-            "contains",
-            "propertyNames",
-            "unevaluatedItems",
-            "unevaluatedProperties",
-        ):
-            sub_node = node.get(single_key)
-            if isinstance(sub_node, dict):
-                _walk(sub_node, f"{json_path}.{single_key}")
-
-        for list_key in ("allOf", "anyOf", "oneOf", "prefixItems"):
-            sub_list = node.get(list_key)
-            if isinstance(sub_list, list):
-                for idx, item_schema in enumerate(sub_list):
-                    _walk(item_schema, f"{json_path}.{list_key}[{idx}]")
-
-    _walk(data, "$")
+    _walk_closed_schema(data, "$", schema_rel, schema_errors)
     return schema_errors
 
 
@@ -400,19 +492,58 @@ def _discover_output_schemas(package: Path) -> tuple[list[Path], list[Path]]:
     return assets_schemas, fallback_schemas
 
 
-def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[str]:
-    errors = []
-    try:
-        metadata, body = read_frontmatter(package / "SKILL.md")
-    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
-        return [str(exc)]
+class _ParsedSkillPackage:
+    """Single-pass validation errors and parsed metadata for one skill package."""
+
+    __slots__ = (
+        "description",
+        "deterministic_constraint_coverage",
+        "errors",
+        "has_boundary_sections",
+        "has_output_schema",
+        "has_prompt_constraints",
+        "output_schemas",
+        "short_description",
+    )
+
+    def __init__(
+        self,
+        *,
+        errors: list[str],
+        output_schemas: list[str] | None = None,
+        has_output_schema: bool = False,
+        has_prompt_constraints: bool = False,
+        has_boundary_sections: bool = False,
+        description: str | None = None,
+        short_description: str | None = None,
+    ) -> None:
+        self.errors = errors
+        self.output_schemas = output_schemas if output_schemas is not None else []
+        self.has_output_schema = has_output_schema
+        self.has_prompt_constraints = has_prompt_constraints
+        self.has_boundary_sections = has_boundary_sections
+        self.deterministic_constraint_coverage = (
+            has_output_schema and has_prompt_constraints and has_boundary_sections
+        )
+        self.description = description
+        self.short_description = short_description
+
+
+def _is_valid_skill_name(name: object, package_name: str) -> bool:
+    return (
+        isinstance(name, str)
+        and bool(NAME.fullmatch(name))
+        and len(name) <= 64
+        and name == package_name
+    )
+
+
+def _validate_frontmatter_metadata(
+    package_name: str, metadata: Mapping[str, Any]
+) -> list[str]:
+    errors: list[str] = []
     name = metadata.get("name")
-    if (
-        not isinstance(name, str)
-        or not NAME.fullmatch(name)
-        or len(name) > 64
-        or name != package.name
-    ):
+    if not _is_valid_skill_name(name, package_name):
         errors.append("Invalid name or directory mismatch")
     description = metadata.get("description")
     if not isinstance(description, str) or not 1 <= len(description.strip()) <= 1024:
@@ -426,6 +557,11 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                 f"SKILL.md: frontmatter metadata exceeds token budget "
                 f"({metadata_tokens} > {MAX_METADATA_TOKENS} estimated tokens)"
             )
+    return errors
+
+
+def _validate_skill_body(body: str) -> tuple[list[str], bool]:
+    errors: list[str] = []
     if not body.strip() or len(body.splitlines()) >= 500:
         errors.append("Skill body must be nonempty and under 500 lines")
     body_tokens = estimate_tokens(body)
@@ -434,230 +570,428 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
             f"SKILL.md: skill body exceeds token budget "
             f"({body_tokens} >= {MAX_BODY_TOKENS} estimated tokens; must be under {MAX_BODY_TOKENS})"
         )
-    errors.extend(_check_skill_guardrails(body))
+    guardrail_errors = _check_skill_guardrails(body)
+    errors.extend(guardrail_errors)
+    has_boundary_sections = bool(body.strip() and not guardrail_errors)
+    return errors, has_boundary_sections
 
-    assets_schemas, output_schemas = _discover_output_schemas(package)
+
+def _validate_schema_links(
+    package: Path,
+    body: str,
+    assets_schemas: Sequence[Path],
+    output_schemas: Sequence[Path],
+) -> list[str]:
     if not output_schemas:
-        errors.append(
+        return [
             f"Missing output schema: {package.name} must define an output schema (*.schema.json in assets/)"
-        )
-    else:
-        resolved_skill_links = {
-            resolved
-            for target in extract_relative_links(body)
-            if (resolved := resolve_relative_link_target(target, package)) is not None
-        }
-        for schema_file in assets_schemas:
-            if schema_file.resolve() not in resolved_skill_links:
-                errors.append(
-                    f"SKILL.md: missing markdown link to output schema "
-                    f"{schema_file.relative_to(package).as_posix()}"
-                )
+        ]
+    resolved_skill_links = {
+        resolved
+        for target in extract_relative_links(body)
+        if (resolved := resolve_relative_link_target(target, package)) is not None
+    }
+    errors: list[str] = []
+    for schema_file in assets_schemas:
+        if schema_file.resolve() not in resolved_skill_links:
+            errors.append(
+                f"SKILL.md: missing markdown link to output schema "
+                f"{schema_file.relative_to(package).as_posix()}"
+            )
+    return errors
 
+
+def _check_prompt_placeholders(prompt_content: str, prompt_rel: str) -> list[str]:
+    placeholders = PLACEHOLDER_PATTERN.findall(prompt_content)
+    unauthorized = sorted(
+        {p for p in placeholders if p not in ALLOWED_PROMPT_PLACEHOLDERS}
+    )
+    if not unauthorized:
+        return []
+    allowed_str = ", ".join(sorted(ALLOWED_PROMPT_PLACEHOLDERS))
+    return [
+        f"{prompt_rel}: unauthorized placeholder '{bad}' (allowed: {allowed_str})"
+        for bad in unauthorized
+    ]
+
+
+def _check_prompt_format(prompt_content: str, prompt_rel: str) -> list[str]:
+    errors: list[str] = []
+    if len(prompt_content) > MAX_PROMPT_CHARS:
+        errors.append(
+            f"{prompt_rel}: prompt template exceeds budget "
+            f"({len(prompt_content)} > {MAX_PROMPT_CHARS} characters)"
+        )
+    lines = prompt_content.splitlines()
+    if len(lines) > MAX_PROMPT_LINES:
+        errors.append(
+            f"{prompt_rel}: prompt template exceeds line budget "
+            f"({len(lines)} > {MAX_PROMPT_LINES} lines)"
+        )
+    if PROMPT_HEADING_PATTERN.search(prompt_content):
+        errors.append(
+            f"{prompt_rel}: prompt template must not contain Markdown headings"
+        )
+    if "```" in prompt_content:
+        errors.append(
+            f"{prompt_rel}: prompt template must not contain triple-backtick code fences"
+        )
+    errors.extend(_check_prompt_placeholders(prompt_content, prompt_rel))
+    return errors
+
+
+def _validate_prompt_template(
+    package: Path,
+    output_schemas: list[Path],
+    cached_texts: dict[Path, str],
+) -> tuple[list[str], bool]:
     prompt_path = package / "assets/prompt.md"
     prompt_rel = prompt_path.relative_to(package).as_posix()
     if not prompt_path.is_file():
-        errors.append(f"Missing prompt template: {prompt_rel}")
-    else:
-        try:
-            prompt_content = prompt_path.read_text(encoding="utf-8")
-            if len(prompt_content) > MAX_PROMPT_CHARS:
-                errors.append(
-                    f"{prompt_rel}: prompt template exceeds budget "
-                    f"({len(prompt_content)} > {MAX_PROMPT_CHARS} characters)"
-                )
-            lines = prompt_content.splitlines()
-            if len(lines) > MAX_PROMPT_LINES:
-                errors.append(
-                    f"{prompt_rel}: prompt template exceeds line budget "
-                    f"({len(lines)} > {MAX_PROMPT_LINES} lines)"
-                )
-            if PROMPT_HEADING_PATTERN.search(prompt_content):
-                errors.append(
-                    f"{prompt_rel}: prompt template must not contain Markdown headings"
-                )
-            if "```" in prompt_content:
-                errors.append(
-                    f"{prompt_rel}: prompt template must not contain triple-backtick code fences"
-                )
-            placeholders = PLACEHOLDER_PATTERN.findall(prompt_content)
-            unauthorized = sorted(
-                {p for p in placeholders if p not in ALLOWED_PROMPT_PLACEHOLDERS}
-            )
-            if unauthorized:
-                allowed_str = ", ".join(sorted(ALLOWED_PROMPT_PLACEHOLDERS))
-                for bad in unauthorized:
-                    errors.append(
-                        f"{prompt_rel}: unauthorized placeholder '{bad}' "
-                        f"(allowed: {allowed_str})"
-                    )
-            if not NEGATIVE_CONSTRAINT_PATTERN.search(prompt_content):
-                errors.append(
-                    f"{prompt_rel}: prompt template lacks negative constraints or boundary guardrails "
-                    "(explicit negative prohibitions required)"
-                )
-            if output_schemas and not _prompt_mentions_schema(
-                prompt_content, output_schemas
-            ):
-                example_schema = output_schemas[0].relative_to(package).as_posix()
-                errors.append(
-                    f"{prompt_rel}: prompt template must mention the output schema contract "
-                    f"(e.g. {example_schema})"
-                )
-        except OSError as exc:
-            errors.append(f"{prompt_rel}: {exc}")
+        return [f"Missing prompt template: {prompt_rel}"], False
+    try:
+        prompt_content = prompt_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"{prompt_rel}: {exc}"], False
 
+    if not prompt_path.is_symlink():
+        cached_texts[prompt_path] = prompt_content
+
+    errors = _check_prompt_format(prompt_content, prompt_rel)
+    has_neg = bool(NEGATIVE_CONSTRAINT_PATTERN.search(prompt_content))
+    if not has_neg:
+        errors.append(
+            f"{prompt_rel}: prompt template lacks negative constraints or boundary guardrails "
+            "(explicit negative prohibitions required)"
+        )
+    mentions_schema = _prompt_mentions_schema(prompt_content, output_schemas)
+    if output_schemas and not mentions_schema:
+        example_schema = output_schemas[0].relative_to(package).as_posix()
+        errors.append(
+            f"{prompt_rel}: prompt template must mention the output schema contract "
+            f"(e.g. {example_schema})"
+        )
+    return errors, has_neg and mentions_schema
+
+
+def _check_scenarios_against_schema(
+    scenarios_data: object, active_schema: dict[str, Any]
+) -> list[str]:
+    validator = jsonschema.Draft202012Validator(active_schema)
+    schema_errors = sorted(
+        validator.iter_errors(scenarios_data),
+        key=lambda e: str(e.path),
+    )
+    if schema_errors:
+        return [
+            f"references/evaluation-scenarios.json schema error: {err.message}"
+            for err in schema_errors
+        ]
+    scenarios = (
+        scenarios_data.get("scenarios", []) if isinstance(scenarios_data, dict) else []
+    )
+    types = {
+        s["id"].rsplit("-", 1)[-1]
+        for s in scenarios
+        if isinstance(s, dict) and isinstance(s.get("id"), str)
+    }
+    if not {"failure", "safe", "routing"}.issubset(types):
+        return [
+            "references/evaluation-scenarios.json must include failure, safe, and routing scenarios"
+        ]
+    return []
+
+
+def _validate_evaluation_scenarios(
+    package: Path,
+    skill_name: str,
+    scenario_schema: dict | None,
+    cached_texts: dict[Path, str],
+) -> list[str]:
     scenarios_path = package / "references/evaluation-scenarios.json"
     if not scenarios_path.is_file():
-        errors.append(
-            "Missing evaluation scenarios: references/evaluation-scenarios.json"
-        )
-    else:
-        try:
-            scenarios_data = json.loads(scenarios_path.read_text(encoding="utf-8"))
-            active_schema = scenario_schema or get_scenario_schema()
-            if active_schema is not None:
-                validator = jsonschema.Draft202012Validator(active_schema)
-                schema_errors = sorted(
-                    validator.iter_errors(scenarios_data),
-                    key=lambda e: str(e.path),
-                )
-                for err in schema_errors:
-                    errors.append(
-                        f"references/evaluation-scenarios.json schema error: {err.message}"
-                    )
-                if not schema_errors:
-                    scenarios = scenarios_data.get("scenarios", [])
-                    types = {
-                        s.get("id", "").rsplit("-", 1)[-1]
-                        for s in scenarios
-                        if isinstance(s, dict) and isinstance(s.get("id"), str)
-                    }
-                    if not {"failure", "safe", "routing"}.issubset(types):
-                        errors.append(
-                            "references/evaluation-scenarios.json must include failure, safe, and routing scenarios"
-                        )
-                if isinstance(scenarios_data, dict) and isinstance(
-                    scenarios_data.get("scenarios"), list
-                ):
-                    errors.extend(
-                        _validate_scenario_semantics(
-                            package,
-                            name if isinstance(name, str) else package.name,
-                            scenarios_data["scenarios"],
-                        )
-                    )
-        except (OSError, ValueError):
-            pass  # Malformed JSON or read error is caught during package file traversal below
+        return ["Missing evaluation scenarios: references/evaluation-scenarios.json"]
+    try:
+        raw_scenarios = scenarios_path.read_text(encoding="utf-8")
+        if not scenarios_path.is_symlink():
+            cached_texts[scenarios_path] = raw_scenarios
+        scenarios_data = json.loads(raw_scenarios)
+    except (OSError, ValueError):
+        return []  # Malformed JSON or read error is caught during package file traversal
 
+    active_schema = scenario_schema or get_scenario_schema()
+    if active_schema is None:
+        return []
+
+    errors = _check_scenarios_against_schema(scenarios_data, active_schema)
+    if isinstance(scenarios_data, dict) and isinstance(
+        scenarios_data.get("scenarios"), list
+    ):
+        errors.extend(
+            _validate_scenario_semantics(
+                package, skill_name, scenarios_data["scenarios"]
+            )
+        )
+    return errors
+
+
+def _inspect_json_file(
+    path: Path,
+    rel_posix: str,
+    cached_texts: Mapping[Path, str],
+    valid_closed_schemas: set[Path],
+) -> list[str]:
+    raw_json = (
+        cached_texts[path] if path in cached_texts else path.read_text(encoding="utf-8")
+    )
+    data = json.loads(raw_json)
+    if not path.name.endswith(".schema.json"):
+        return []
+    _check_draft202012_schema(raw_json, data)
+    if path.name.startswith("evaluation-scenarios"):
+        return []
+    closed_errors = _validate_closed_schema(data, rel_posix)
+    if not closed_errors:
+        valid_closed_schemas.add(path)
+    return closed_errors
+
+
+def _check_markdown_links(
+    md_text: str, base_dir: Path, package_resolved: Path
+) -> list[str]:
+    errors: list[str] = []
+    for target in extract_relative_links(md_text):
+        resolved = resolve_relative_link_target(target, base_dir)
+        if resolved is None:
+            continue
+        if not resolved.is_relative_to(package_resolved):
+            errors.append(f"Reference escapes standalone package: {target}")
+        elif not resolved.is_file():
+            errors.append(f"Missing relative reference: {target}")
+    return errors
+
+
+def _inspect_markdown_file(
+    path: Path,
+    rel_posix: str,
+    *,
+    package_resolved: Path,
+    references_dir: Path,
+    cached_texts: Mapping[Path, str],
+) -> list[str]:
+    md_text = (
+        cached_texts[path] if path in cached_texts else path.read_text(encoding="utf-8")
+    )
+    errors: list[str] = []
+    if path.resolve().is_relative_to(references_dir):
+        ref_tokens = estimate_tokens(md_text)
+        if ref_tokens >= MAX_REFERENCE_TOKENS:
+            errors.append(
+                f"{rel_posix}: reference markdown exceeds token budget "
+                f"({ref_tokens} >= {MAX_REFERENCE_TOKENS} estimated tokens; "
+                f"must be under {MAX_REFERENCE_TOKENS})"
+            )
+    errors.extend(_check_markdown_links(md_text, path.parent, package_resolved))
+    return errors
+
+
+def _inspect_package_entry(
+    path: Path,
+    package: Path,
+    *,
+    package_resolved: Path,
+    references_dir: Path,
+    cached_texts: Mapping[Path, str],
+    valid_closed_schemas: set[Path],
+) -> list[str]:
+    if path.is_symlink():
+        return [
+            f"Symlink breaks standalone packaging: {path.relative_to(package).as_posix()}"
+        ]
+    if not path.is_file():
+        return []
+    rel_posix = path.relative_to(package).as_posix()
+    errors: list[str] = []
+    if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
+        errors.append(f"Generated Python cache in package: {rel_posix}")
+    try:
+        if path.suffix == ".json":
+            errors.extend(
+                _inspect_json_file(path, rel_posix, cached_texts, valid_closed_schemas)
+            )
+        elif path.suffix == ".md":
+            errors.extend(
+                _inspect_markdown_file(
+                    path,
+                    rel_posix,
+                    package_resolved=package_resolved,
+                    references_dir=references_dir,
+                    cached_texts=cached_texts,
+                )
+            )
+    except (ValueError, OSError, jsonschema.SchemaError) as exc:
+        errors.append(f"{rel_posix}: {exc}")
+    return errors
+
+
+def _scan_package_files(
+    package: Path, cached_texts: Mapping[Path, str]
+) -> tuple[list[str], set[Path]]:
+    errors: list[str] = []
+    valid_closed_schemas: set[Path] = set()
     package_resolved = package.resolve()
     references_dir = (package / "references").resolve()
     for path in sorted(package.rglob("*")):
-        if path.is_symlink():
-            errors.append(
-                f"Symlink breaks standalone packaging: {path.relative_to(package).as_posix()}"
+        errors.extend(
+            _inspect_package_entry(
+                path,
+                package,
+                package_resolved=package_resolved,
+                references_dir=references_dir,
+                cached_texts=cached_texts,
+                valid_closed_schemas=valid_closed_schemas,
             )
-            continue
-        if not path.is_file():
-            continue
-        rel_posix = path.relative_to(package).as_posix()
-        if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
-            errors.append(f"Generated Python cache in package: {rel_posix}")
-        try:
-            if path.suffix == ".json":
-                raw_json = path.read_text(encoding="utf-8")
-                data = json.loads(raw_json)
-                if path.name.endswith(".schema.json"):
-                    _check_draft202012_schema(raw_json, data)
-                    if not path.name.startswith("evaluation-scenarios"):
-                        errors.extend(_validate_closed_schema(data, rel_posix))
-            if path.suffix == ".md":
-                md_text = path.read_text(encoding="utf-8")
-                if path.resolve().is_relative_to(references_dir):
-                    ref_tokens = estimate_tokens(md_text)
-                    if ref_tokens >= MAX_REFERENCE_TOKENS:
-                        errors.append(
-                            f"{rel_posix}: reference markdown exceeds token budget "
-                            f"({ref_tokens} >= {MAX_REFERENCE_TOKENS} estimated tokens; "
-                            f"must be under {MAX_REFERENCE_TOKENS})"
-                        )
-                for target in extract_relative_links(md_text):
-                    resolved = resolve_relative_link_target(target, path.parent)
-                    if resolved is None:
-                        continue
-                    if not resolved.is_relative_to(package_resolved):
-                        errors.append(f"Reference escapes standalone package: {target}")
-                    elif not resolved.is_file():
-                        errors.append(f"Missing relative reference: {target}")
-        except (ValueError, OSError, jsonschema.SchemaError) as exc:
-            errors.append(f"{rel_posix}: {exc}")
-
+        )
     for chain in find_deep_reference_chains(package, max_hops=1):
         errors.append(
             f"Reference chain exceeds 1-hop depth limit from SKILL.md: {chain}"
         )
+    return errors, valid_closed_schemas
 
-    ui_path = package / "agents/openai.yaml"
-    if ui_path.exists():
-        try:
-            ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
-            if not isinstance(ui_doc, dict):
-                errors.append("Invalid optional UI metadata: expected mapping")
-            else:
-                ui = ui_doc.get("interface")
-                if not isinstance(ui, dict):
-                    errors.append("Invalid optional UI metadata: missing interface")
-                else:
-                    if (
-                        not isinstance(ui.get("display_name"), str)
-                        or not ui["display_name"].strip()
-                    ):
-                        errors.append("Missing display name")
-                    short = ui.get("short_description")
-                    if not isinstance(short, str) or not 25 <= len(short) <= 64:
-                        errors.append(
-                            "UI short_description must contain 25–64 characters"
-                        )
-                    elif REPEATED_WORD_PATTERN.search(short):
-                        errors.append(
-                            "UI short_description contains repeated adjacent words"
-                        )
-                    prompt = ui.get("default_prompt")
-                    if not isinstance(prompt, str) or f"${name}" not in prompt:
-                        errors.append("UI default_prompt must name the skill")
-                    errors.extend(
-                        _validate_ui_icon(package, "icon_small", ui.get("icon_small"))
-                    )
-                    errors.extend(
-                        _validate_ui_icon(package, "icon_large", ui.get("icon_large"))
-                    )
-                policy = ui_doc.get("policy")
-                if not isinstance(policy, dict):
-                    errors.append(
-                        "Missing UI policy: policy.allow_implicit_invocation must be a boolean"
-                    )
-                else:
-                    allow_implicit = policy.get("allow_implicit_invocation")
-                    if not isinstance(allow_implicit, bool):
-                        errors.append(
-                            "UI policy.allow_implicit_invocation must be a boolean"
-                        )
-                    if "products" in policy:
-                        products = policy.get("products")
-                        if (
-                            not isinstance(products, list)
-                            or not products
-                            or not all(
-                                isinstance(item, str) and bool(item.strip())
-                                for item in products
-                            )
-                        ):
-                            errors.append(
-                                "UI policy.products must be a nonempty list of strings"
-                            )
-        except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
-            errors.append(f"Invalid optional UI metadata: {exc}")
+
+def _validate_ui_short_description(short: object) -> tuple[list[str], str | None]:
+    if not isinstance(short, str):
+        return ["UI short_description must contain 25–64 characters"], None
+    normalized = short.strip() or None
+    if not 25 <= len(short) <= 64:
+        return ["UI short_description must contain 25–64 characters"], normalized
+    if REPEATED_WORD_PATTERN.search(short):
+        return ["UI short_description contains repeated adjacent words"], normalized
+    return [], normalized
+
+
+def _validate_ui_interface(
+    package: Path, name: object, ui: object
+) -> tuple[list[str], str | None]:
+    if not isinstance(ui, dict):
+        return ["Invalid optional UI metadata: missing interface"], None
+    errors: list[str] = []
+    display_name = ui.get("display_name")
+    if not isinstance(display_name, str) or not display_name.strip():
+        errors.append("Missing display name")
+    short_errors, normalized_short = _validate_ui_short_description(
+        ui.get("short_description")
+    )
+    errors.extend(short_errors)
+    prompt = ui.get("default_prompt")
+    if not isinstance(prompt, str) or f"${name}" not in prompt:
+        errors.append("UI default_prompt must name the skill")
+    errors.extend(_validate_ui_icon(package, "icon_small", ui.get("icon_small")))
+    errors.extend(_validate_ui_icon(package, "icon_large", ui.get("icon_large")))
+    return errors, normalized_short
+
+
+def _is_nonempty_str_list(value: object) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    return all(isinstance(item, str) and bool(item.strip()) for item in value)
+
+
+def _validate_ui_policy(policy: object) -> list[str]:
+    if not isinstance(policy, dict):
+        return ["Missing UI policy: policy.allow_implicit_invocation must be a boolean"]
+    errors: list[str] = []
+    if not isinstance(policy.get("allow_implicit_invocation"), bool):
+        errors.append("UI policy.allow_implicit_invocation must be a boolean")
+    if "products" in policy and not _is_nonempty_str_list(policy.get("products")):
+        errors.append("UI policy.products must be a nonempty list of strings")
     return errors
+
+
+def _validate_ui_metadata(package: Path, name: object) -> tuple[list[str], str | None]:
+    ui_path = package / "agents/openai.yaml"
+    if ui_path.is_symlink() or not ui_path.exists():
+        return [], None
+    try:
+        ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
+        return [f"Invalid optional UI metadata: {exc}"], None
+    if not isinstance(ui_doc, dict):
+        return ["Invalid optional UI metadata: expected mapping"], None
+    errors, short_description = _validate_ui_interface(
+        package, name, ui_doc.get("interface")
+    )
+    errors.extend(_validate_ui_policy(ui_doc.get("policy")))
+    return errors, short_description
+
+
+def _inspect_skill_package(
+    package: Path, scenario_schema: dict | None = None
+) -> _ParsedSkillPackage:
+    skill_md_path = package / "SKILL.md"
+    try:
+        metadata, body = read_frontmatter(skill_md_path)
+    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
+        _, fallback_schemas = _discover_output_schemas(package)
+        return _ParsedSkillPackage(
+            errors=[str(exc)],
+            output_schemas=[
+                p.relative_to(package).as_posix() for p in fallback_schemas
+            ],
+        )
+
+    cached_texts: dict[Path, str] = {}
+    if not skill_md_path.is_symlink():
+        cached_texts[skill_md_path] = body
+
+    errors = _validate_frontmatter_metadata(package.name, metadata)
+    body_errors, has_boundary_sections = _validate_skill_body(body)
+    errors.extend(body_errors)
+
+    assets_schemas, output_schemas = _discover_output_schemas(package)
+    schema_link_errors = _validate_schema_links(
+        package, body, assets_schemas, output_schemas
+    )
+    errors.extend(schema_link_errors)
+
+    prompt_errors, has_prompt_constraints = _validate_prompt_template(
+        package, output_schemas, cached_texts
+    )
+    errors.extend(prompt_errors)
+
+    name = metadata.get("name")
+    skill_name = name if isinstance(name, str) else package.name
+    errors.extend(
+        _validate_evaluation_scenarios(
+            package, skill_name, scenario_schema, cached_texts
+        )
+    )
+
+    scan_errors, valid_closed_schemas = _scan_package_files(package, cached_texts)
+    errors.extend(scan_errors)
+
+    ui_errors, short_description = _validate_ui_metadata(package, name)
+    errors.extend(ui_errors)
+
+    has_output_schema = (
+        bool(output_schemas)
+        and not schema_link_errors
+        and all(p in valid_closed_schemas for p in output_schemas)
+    )
+    raw_description = metadata.get("description")
+    return _ParsedSkillPackage(
+        errors=errors,
+        output_schemas=[p.relative_to(package).as_posix() for p in output_schemas],
+        has_output_schema=has_output_schema,
+        has_prompt_constraints=has_prompt_constraints,
+        has_boundary_sections=has_boundary_sections,
+        description=raw_description if isinstance(raw_description, str) else None,
+        short_description=short_description,
+    )
+
+
+def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[str]:
+    return _inspect_skill_package(package, scenario_schema=scenario_schema).errors
 
 
 DEFAULT_ATTEMPT_LEDGER_REL = ".fred-skills/validation-attempts.json"
@@ -726,6 +1060,72 @@ def _skills_at_commit(root: Path, commit_sha: str) -> set[str]:
     return skills
 
 
+def _resolve_explicit_base_commit(
+    root: Path, head_sha: str, explicit_ref: str
+) -> tuple[str | None, str, list[str]]:
+    if not explicit_ref or explicit_ref == ZERO_GIT_SHA:
+        parent_sha = _resolve_commit_sha(root, "HEAD~1")
+        if parent_sha is None:
+            return None, "initial-commit", []
+        return parent_sha, "git-diff", []
+
+    target_sha = _resolve_commit_sha(root, explicit_ref)
+    if target_sha is None:
+        return (
+            None,
+            "git-diff",
+            [f"Could not resolve git base ref '{explicit_ref}'"],
+        )
+    merge_base = _git_output(root, "merge-base", target_sha, head_sha)
+    if not merge_base or not re.fullmatch(r"[0-9a-f]{40,64}", merge_base):
+        return (
+            None,
+            "git-diff",
+            [f"Could not resolve git merge-base between '{explicit_ref}' and HEAD"],
+        )
+    return merge_base, "git-diff", []
+
+
+def _resolve_default_base_commit(root: Path, head_sha: str) -> str:
+    for candidate_branch in ("origin/main", "main"):
+        branch_sha = _resolve_commit_sha(root, candidate_branch)
+        if branch_sha is None:
+            continue
+        mb = _git_output(root, "merge-base", branch_sha, head_sha)
+        if mb and re.fullmatch(r"[0-9a-f]{40,64}", mb):
+            return mb
+    return head_sha
+
+
+def _resolve_diff_base(
+    root: Path, explicit_ref: str | None
+) -> tuple[str | None, str, list[str]]:
+    has_non_zero_ref = bool(explicit_ref and explicit_ref != ZERO_GIT_SHA)
+    if not _is_git_worktree_root(root):
+        if has_non_zero_ref:
+            return (
+                None,
+                "unversioned",
+                [f"Cannot resolve git base ref '{explicit_ref}': not a git repository"],
+            )
+        return None, "unversioned", []
+
+    head_sha = _resolve_commit_sha(root, "HEAD")
+    if head_sha is None:
+        if has_non_zero_ref:
+            return (
+                None,
+                "unborn-head",
+                [f"Cannot resolve git merge-base for '{explicit_ref}': unborn HEAD"],
+            )
+        return None, "unborn-head", []
+
+    if explicit_ref is not None:
+        return _resolve_explicit_base_commit(root, head_sha, explicit_ref)
+
+    return _resolve_default_base_commit(root, head_sha), "git-diff", []
+
+
 def resolve_new_skills(
     root: Path,
     current_packages: Sequence[str],
@@ -737,66 +1137,13 @@ def resolve_new_skills(
     """
     current_set = set(current_packages)
     explicit_ref = base_ref.strip() if base_ref is not None else None
-
-    if not _is_git_worktree_root(root):
-        if explicit_ref and explicit_ref != ZERO_GIT_SHA:
-            return (
-                set(),
-                None,
-                "unversioned",
-                [f"Cannot resolve git base ref '{explicit_ref}': not a git repository"],
-            )
-        return current_set, None, "unversioned", []
-
-    head_sha = _resolve_commit_sha(root, "HEAD")
-    if head_sha is None:
-        if explicit_ref and explicit_ref != ZERO_GIT_SHA:
-            return (
-                set(),
-                None,
-                "unborn-head",
-                [f"Cannot resolve git merge-base for '{explicit_ref}': unborn HEAD"],
-            )
-        return current_set, None, "unborn-head", []
-
-    if explicit_ref is not None:
-        if not explicit_ref or explicit_ref == ZERO_GIT_SHA:
-            parent_sha = _resolve_commit_sha(root, "HEAD~1")
-            if parent_sha is None:
-                return current_set, None, "initial-commit", []
-            baseline = _skills_at_commit(root, parent_sha)
-            return current_set - baseline, parent_sha, "git-diff", []
-
-        target_sha = _resolve_commit_sha(root, explicit_ref)
-        if target_sha is None:
-            return (
-                set(),
-                None,
-                "git-diff",
-                [f"Could not resolve git base ref '{explicit_ref}'"],
-            )
-        merge_base = _git_output(root, "merge-base", target_sha, head_sha)
-        if not merge_base or not re.fullmatch(r"[0-9a-f]{40,64}", merge_base):
-            return (
-                set(),
-                None,
-                "git-diff",
-                [f"Could not resolve git merge-base between '{explicit_ref}' and HEAD"],
-            )
-        baseline = _skills_at_commit(root, merge_base)
-        return current_set - baseline, merge_base, "git-diff", []
-
-    base_commit = head_sha
-    for candidate_branch in ("origin/main", "main"):
-        branch_sha = _resolve_commit_sha(root, candidate_branch)
-        if branch_sha is not None:
-            mb = _git_output(root, "merge-base", branch_sha, head_sha)
-            if mb and re.fullmatch(r"[0-9a-f]{40,64}", mb):
-                base_commit = mb
-                break
-
+    base_commit, diff_scope, errors = _resolve_diff_base(root, explicit_ref)
+    if errors:
+        return set(), None, diff_scope, errors
+    if base_commit is None:
+        return current_set, None, diff_scope, []
     baseline = _skills_at_commit(root, base_commit)
-    return current_set - baseline, base_commit, "git-diff", []
+    return current_set - baseline, base_commit, diff_scope, []
 
 
 def _load_attempt_ledger(ledger_path: Path) -> dict[str, dict[str, Any]]:
@@ -883,32 +1230,225 @@ def format_telemetry_markdown(telemetry: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _schemas_closed_and_linked(
-    package: Path,
-    skill_body: str,
-    assets_schemas: list[Path],
-    output_schemas: list[Path],
-) -> bool:
-    if not output_schemas:
-        return False
-    resolved_links = {
-        resolved
-        for target in extract_relative_links(skill_body)
-        if (resolved := resolve_relative_link_target(target, package)) is not None
+def _load_validated_scenario_schema(
+    root: Path,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    schema_path = root / "schemas/evaluation-scenarios.schema.json"
+    rel_schema = schema_path.relative_to(root).as_posix()
+    if not schema_path.is_file():
+        return None, [f"Missing evaluation scenario schema: {rel_schema}"]
+    try:
+        scenario_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.Draft202012Validator.check_schema(scenario_schema)
+        return scenario_schema, []
+    except (ValueError, OSError, jsonschema.SchemaError) as exc:
+        return None, [f"{rel_schema}: {exc}"]
+
+
+def _discover_skill_packages(root: Path) -> tuple[list[Path], list[str]]:
+    skills_dir = root / "skills"
+    packages = (
+        sorted(path for path in skills_dir.iterdir() if path.is_dir())
+        if skills_dir.is_dir()
+        else []
+    )
+    if not packages:
+        return [], ["No skill packages found"]
+    return packages, []
+
+
+def _record_package_attempt(
+    skill_name: str,
+    *,
+    is_new: bool,
+    pkg_valid: bool,
+    pkg_errors: Sequence[str],
+    record_attempts: bool,
+    now_iso: str,
+    ledger_entries: dict[str, dict[str, Any]],
+) -> tuple[bool | None, int, bool]:
+    if not is_new:
+        return None, 0, False
+    existing_entry = ledger_entries.get(skill_name)
+    if existing_entry is None:
+        if record_attempts:
+            ledger_entries[skill_name] = {
+                "first_seen_at": now_iso,
+                "last_checked_at": now_iso,
+                "attempts": 1,
+                "first_pass_valid": pkg_valid,
+                "current_valid": pkg_valid,
+                "initial_errors": list(pkg_errors),
+            }
+        return pkg_valid, 1, record_attempts
+
+    first_pass_valid = bool(existing_entry.get("first_pass_valid", pkg_valid))
+    prev_attempts = existing_entry.get("attempts", 1)
+    attempts_count = (prev_attempts + 1) if isinstance(prev_attempts, int) else 2
+    if record_attempts:
+        existing_entry["last_checked_at"] = now_iso
+        existing_entry["attempts"] = attempts_count
+        existing_entry["current_valid"] = pkg_valid
+        existing_entry["first_pass_valid"] = first_pass_valid
+    return first_pass_valid, attempts_count, record_attempts
+
+
+def _record_unique_descriptions(
+    pkg_name: str,
+    parsed: _ParsedSkillPackage,
+    descriptions: dict[str, str],
+    short_descriptions: dict[str, str],
+) -> list[str]:
+    problems: list[str] = []
+    if parsed.description is not None:
+        if parsed.description in descriptions:
+            problems.append(
+                f"Duplicate activation description: {pkg_name} and {descriptions[parsed.description]}"
+            )
+        descriptions[parsed.description] = pkg_name
+
+    if parsed.short_description is not None:
+        if parsed.short_description in short_descriptions:
+            problems.append(
+                f"Duplicate UI short_description: {pkg_name} and {short_descriptions[parsed.short_description]}"
+            )
+        else:
+            short_descriptions[parsed.short_description] = pkg_name
+    return problems
+
+
+def _build_package_telemetry_entry(
+    pkg_name: str,
+    parsed: _ParsedSkillPackage,
+    *,
+    is_new: bool,
+    first_pass_valid: bool | None,
+    attempts_count: int,
+) -> dict[str, Any]:
+    return {
+        "name": pkg_name,
+        "valid": len(parsed.errors) == 0,
+        "is_new": is_new,
+        "first_pass_valid": first_pass_valid,
+        "validation_attempts": attempts_count,
+        "has_output_schema": parsed.has_output_schema,
+        "output_schemas": parsed.output_schemas,
+        "has_prompt_constraints": parsed.has_prompt_constraints,
+        "has_boundary_sections": parsed.has_boundary_sections,
+        "deterministic_constraint_coverage": parsed.deterministic_constraint_coverage,
+        "errors": parsed.errors,
     }
-    if any(s.resolve() not in resolved_links for s in assets_schemas):
-        return False
-    for schema_path in output_schemas:
-        try:
-            raw_json = schema_path.read_text(encoding="utf-8")
-            data = json.loads(raw_json)
-            _check_draft202012_schema(raw_json, data)
-        except (OSError, ValueError, jsonschema.SchemaError):
-            return False
-        rel_posix = schema_path.relative_to(package).as_posix()
-        if _validate_closed_schema(data, rel_posix):
-            return False
-    return True
+
+
+def _validate_suite_manifest(root: Path) -> list[str]:
+    if not (root / "catalog/suites.json").is_file():
+        return []
+    problems: list[str] = []
+    try:
+        for name in suite_members(root):
+            skill_dir = root / "skills" / name
+            ui_path = skill_dir / "agents/openai.yaml"
+            if not (skill_dir / "SKILL.md").is_file():
+                problems.append(f"Suite references absent skill: {name}")
+            elif ui_path.is_symlink() or not ui_path.is_file():
+                problems.append(
+                    f"{name}: Suite skill missing required UI metadata: agents/openai.yaml"
+                )
+    except (OSError, ValueError, KeyError) as exc:
+        problems.append(f"Invalid suite manifest: {exc}")
+    return problems
+
+
+def _rate_pair(numerator: int, denominator: int) -> tuple[float, float]:
+    raw = (numerator / denominator) if denominator > 0 else 0.0
+    return round(raw, 4), round(raw * 100.0, 2)
+
+
+def _compute_first_pass_rates(
+    new_pkgs_telemetry: Sequence[Mapping[str, Any]],
+    repo_pass_rate: float,
+    repo_pass_rate_pct: float,
+) -> tuple[int, int, int, float | None, float | None, float, float]:
+    new_skills_count = len(new_pkgs_telemetry)
+    new_skills_passed = sum(1 for p in new_pkgs_telemetry if p["valid"])
+    new_skills_first_pass_count = sum(
+        1 for p in new_pkgs_telemetry if p["first_pass_valid"] is True
+    )
+    if new_skills_count == 0:
+        return (
+            0,
+            0,
+            0,
+            None,
+            None,
+            repo_pass_rate,
+            repo_pass_rate_pct,
+        )
+    new_rate, new_pct = _rate_pair(new_skills_first_pass_count, new_skills_count)
+    return (
+        new_skills_count,
+        new_skills_passed,
+        new_skills_first_pass_count,
+        new_rate,
+        new_pct,
+        new_rate,
+        new_pct,
+    )
+
+
+def _build_telemetry_summary(
+    *,
+    now_iso: str,
+    diff_scope: str,
+    diff_base: str | None,
+    package_telemetry: list[dict[str, Any]],
+    duration: float,
+) -> dict[str, Any]:
+    total_pkgs = len(package_telemetry)
+    passed_pkgs = sum(1 for p in package_telemetry if p["valid"])
+    covered_pkgs = sum(
+        1 for p in package_telemetry if p["deterministic_constraint_coverage"]
+    )
+    schema_pkgs = sum(1 for p in package_telemetry if p["has_output_schema"])
+
+    repo_rate, repo_pct = _rate_pair(passed_pkgs, total_pkgs)
+    constraint_rate, constraint_pct = _rate_pair(covered_pkgs, total_pkgs)
+    schema_rate, schema_pct = _rate_pair(schema_pkgs, total_pkgs)
+
+    new_pkgs_telemetry = [p for p in package_telemetry if p["is_new"]]
+    (
+        new_skills_count,
+        new_skills_passed,
+        new_skills_first_pass_count,
+        new_first_pass_rate,
+        new_first_pass_pct,
+        effective_first_pass_rate,
+        effective_first_pass_pct,
+    ) = _compute_first_pass_rates(new_pkgs_telemetry, repo_rate, repo_pct)
+
+    return {
+        "timestamp": now_iso,
+        "diff_scope": diff_scope,
+        "diff_base": diff_base,
+        "total_packages": total_pkgs,
+        "passed_packages": passed_pkgs,
+        "failed_packages": total_pkgs - passed_pkgs,
+        "repository_guardrail_pass_rate": repo_rate,
+        "repository_guardrail_pass_rate_percentage": repo_pct,
+        "new_skills_count": new_skills_count,
+        "new_skills_passed": new_skills_passed,
+        "new_skills_first_pass_count": new_skills_first_pass_count,
+        "new_skills_first_pass_rate": new_first_pass_rate,
+        "new_skills_first_pass_percentage": new_first_pass_pct,
+        "first_pass_guardrail_pass_rate": effective_first_pass_rate,
+        "first_pass_guardrail_pass_rate_percentage": effective_first_pass_pct,
+        "deterministic_constraint_coverage": constraint_rate,
+        "deterministic_constraint_coverage_percentage": constraint_pct,
+        "output_schema_coverage": schema_rate,
+        "output_schema_coverage_percentage": schema_pct,
+        "execution_time_seconds": duration,
+        "packages": package_telemetry,
+    }
 
 
 def validate_with_telemetry(
@@ -920,31 +1460,9 @@ def validate_with_telemetry(
 ) -> tuple[list[str], dict[str, Any]]:
     start_time = time.perf_counter()
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    problems: list[str] = []
-    descriptions: dict[str, str] = {}
-    short_descriptions: dict[str, str] = {}
-    scenario_schema = None
-    schema_path = root / "schemas/evaluation-scenarios.schema.json"
-    if not schema_path.is_file():
-        problems.append(
-            f"Missing evaluation scenario schema: {schema_path.relative_to(root).as_posix()}"
-        )
-    else:
-        try:
-            scenario_schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            jsonschema.Draft202012Validator.check_schema(scenario_schema)
-        except (ValueError, OSError, jsonschema.SchemaError) as exc:
-            problems.append(f"{schema_path.relative_to(root).as_posix()}: {exc}")
-            scenario_schema = None
-
-    skills_dir = root / "skills"
-    packages = (
-        sorted(path for path in skills_dir.iterdir() if path.is_dir())
-        if skills_dir.is_dir()
-        else []
-    )
-    if not packages:
-        problems.append("No skill packages found")
+    scenario_schema, problems = _load_validated_scenario_schema(root)
+    packages, pkg_problems = _discover_skill_packages(root)
+    problems.extend(pkg_problems)
 
     pkg_names = [pkg.name for pkg in packages]
     diff_new_skills, diff_base, diff_scope, diff_errors = resolve_new_skills(
@@ -960,213 +1478,56 @@ def validate_with_telemetry(
     ledger_entries = (
         _load_attempt_ledger(effective_ledger_path) if record_attempts else {}
     )
-    ledger_dirty = False
-
     new_skill_names = set(diff_new_skills)
     if base_ref is None and record_attempts:
         new_skill_names |= set(ledger_entries.keys()) & set(pkg_names)
 
+    descriptions: dict[str, str] = {}
+    short_descriptions: dict[str, str] = {}
     package_telemetry: list[dict[str, Any]] = []
+    ledger_dirty = False
+
     for package in packages:
-        pkg_errors = validate_skill(package, scenario_schema=scenario_schema)
-        problems.extend(f"{package.name}: {error}" for error in pkg_errors)
-
-        assets_schema_paths, output_schema_paths = _discover_output_schemas(package)
-        output_schemas = [
-            p.relative_to(package).as_posix() for p in output_schema_paths
-        ]
-
-        skill_body = ""
-        skill_path = package / "SKILL.md"
-        if skill_path.is_file():
-            try:
-                _, skill_body = read_frontmatter(skill_path)
-            except (OSError, ValueError, TypeError, yaml.YAMLError):
-                skill_body = ""
-
-        has_schema = _schemas_closed_and_linked(
-            package, skill_body, assets_schema_paths, output_schema_paths
-        )
-
-        prompt_path = package / "assets/prompt.md"
-        prompt_text = (
-            prompt_path.read_text(encoding="utf-8") if prompt_path.is_file() else ""
-        )
-        has_prompt_constraints = bool(
-            NEGATIVE_CONSTRAINT_PATTERN.search(prompt_text)
-            and _prompt_mentions_schema(prompt_text, output_schema_paths)
-        )
-
-        has_boundary_sections = bool(
-            skill_body.strip() and not _check_skill_guardrails(skill_body)
-        )
-
-        pkg_valid = len(pkg_errors) == 0
-        deterministic_coverage = (
-            has_schema and has_prompt_constraints and has_boundary_sections
-        )
-
+        parsed = _inspect_skill_package(package, scenario_schema=scenario_schema)
+        problems.extend(f"{package.name}: {error}" for error in parsed.errors)
         is_new = package.name in new_skill_names
-        first_pass_valid: bool | None = None
-        attempts_count = 0
-
-        if is_new:
-            existing_entry = ledger_entries.get(package.name)
-            if existing_entry is None:
-                first_pass_valid = pkg_valid
-                attempts_count = 1
-                if record_attempts:
-                    ledger_entries[package.name] = {
-                        "first_seen_at": now_iso,
-                        "last_checked_at": now_iso,
-                        "attempts": 1,
-                        "first_pass_valid": pkg_valid,
-                        "current_valid": pkg_valid,
-                        "initial_errors": list(pkg_errors),
-                    }
-                    ledger_dirty = True
-            else:
-                first_pass_valid = bool(
-                    existing_entry.get("first_pass_valid", pkg_valid)
-                )
-                prev_attempts = existing_entry.get("attempts", 1)
-                attempts_count = (
-                    (prev_attempts + 1) if isinstance(prev_attempts, int) else 2
-                )
-                if record_attempts:
-                    existing_entry["last_checked_at"] = now_iso
-                    existing_entry["attempts"] = attempts_count
-                    existing_entry["current_valid"] = pkg_valid
-                    existing_entry["first_pass_valid"] = first_pass_valid
-                    ledger_dirty = True
-
-        package_telemetry.append(
-            {
-                "name": package.name,
-                "valid": pkg_valid,
-                "is_new": is_new,
-                "first_pass_valid": first_pass_valid,
-                "validation_attempts": attempts_count,
-                "has_output_schema": has_schema,
-                "output_schemas": output_schemas,
-                "has_prompt_constraints": has_prompt_constraints,
-                "has_boundary_sections": has_boundary_sections,
-                "deterministic_constraint_coverage": deterministic_coverage,
-                "errors": pkg_errors,
-            }
+        first_pass_valid, attempts_count, updated = _record_package_attempt(
+            package.name,
+            is_new=is_new,
+            pkg_valid=len(parsed.errors) == 0,
+            pkg_errors=parsed.errors,
+            record_attempts=record_attempts,
+            now_iso=now_iso,
+            ledger_entries=ledger_entries,
         )
-
-        try:
-            meta, _ = read_frontmatter(package / "SKILL.md")
-            description = meta.get("description")
-            if isinstance(description, str):
-                if description in descriptions:
-                    problems.append(
-                        f"Duplicate activation description: {package.name} and {descriptions[description]}"
-                    )
-                descriptions[description] = package.name
-        except (OSError, ValueError, TypeError, yaml.YAMLError):
-            pass  # The package-level validator already reports this failure.
-
-        ui_path = package / "agents/openai.yaml"
-        if ui_path.is_file() and not ui_path.is_symlink():
-            try:
-                ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
-                if isinstance(ui_doc, dict) and isinstance(
-                    ui_doc.get("interface"), dict
-                ):
-                    short_desc = ui_doc["interface"].get("short_description")
-                    if isinstance(short_desc, str) and short_desc.strip():
-                        normalized_short = short_desc.strip()
-                        if normalized_short in short_descriptions:
-                            problems.append(
-                                f"Duplicate UI short_description: {package.name} and {short_descriptions[normalized_short]}"
-                            )
-                        else:
-                            short_descriptions[normalized_short] = package.name
-            except (OSError, ValueError, TypeError, yaml.YAMLError):
-                pass  # The package-level validator already reports this failure.
+        ledger_dirty = ledger_dirty or updated
+        package_telemetry.append(
+            _build_package_telemetry_entry(
+                package.name,
+                parsed,
+                is_new=is_new,
+                first_pass_valid=first_pass_valid,
+                attempts_count=attempts_count,
+            )
+        )
+        problems.extend(
+            _record_unique_descriptions(
+                package.name, parsed, descriptions, short_descriptions
+            )
+        )
 
     if record_attempts and ledger_dirty:
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
 
-    try:
-        if (root / "catalog/suites.json").is_file():
-            for name in suite_members(root):
-                skill_dir = root / "skills" / name
-                if not (skill_dir / "SKILL.md").is_file():
-                    problems.append(f"Suite references absent skill: {name}")
-                elif (skill_dir / "agents/openai.yaml").is_symlink() or not (
-                    skill_dir / "agents/openai.yaml"
-                ).is_file():
-                    problems.append(
-                        f"{name}: Suite skill missing required UI metadata: agents/openai.yaml"
-                    )
-    except (OSError, ValueError, KeyError) as exc:
-        problems.append(f"Invalid suite manifest: {exc}")
-
-    total_pkgs = len(packages)
-    passed_pkgs = sum(1 for p in package_telemetry if p["valid"])
-    failed_pkgs = total_pkgs - passed_pkgs
-    covered_pkgs = sum(
-        1 for p in package_telemetry if p["deterministic_constraint_coverage"]
-    )
-    schema_pkgs = sum(1 for p in package_telemetry if p["has_output_schema"])
-
-    repo_pass_rate = (passed_pkgs / total_pkgs) if total_pkgs > 0 else 0.0
-    repo_pass_rate_pct = round(repo_pass_rate * 100.0, 2)
-    constraint_cov = (covered_pkgs / total_pkgs) if total_pkgs > 0 else 0.0
-    constraint_cov_pct = round(constraint_cov * 100.0, 2)
-    schema_cov = (schema_pkgs / total_pkgs) if total_pkgs > 0 else 0.0
-    schema_cov_pct = round(schema_cov * 100.0, 2)
-
-    new_pkgs_telemetry = [p for p in package_telemetry if p["is_new"]]
-    new_skills_count = len(new_pkgs_telemetry)
-    new_skills_passed = sum(1 for p in new_pkgs_telemetry if p["valid"])
-    new_skills_first_pass_count = sum(
-        1 for p in new_pkgs_telemetry if p["first_pass_valid"] is True
-    )
-
-    new_first_pass_rate: float | None
-    new_first_pass_pct: float | None
-    if new_skills_count > 0:
-        raw_new_rate = new_skills_first_pass_count / new_skills_count
-        new_first_pass_rate = round(raw_new_rate, 4)
-        new_first_pass_pct = round(raw_new_rate * 100.0, 2)
-        effective_first_pass_rate = new_first_pass_rate
-        effective_first_pass_pct = new_first_pass_pct
-    else:
-        new_first_pass_rate = None
-        new_first_pass_pct = None
-        effective_first_pass_rate = round(repo_pass_rate, 4)
-        effective_first_pass_pct = repo_pass_rate_pct
-
+    problems.extend(_validate_suite_manifest(root))
     duration = round(time.perf_counter() - start_time, 4)
-
-    telemetry: dict[str, Any] = {
-        "timestamp": now_iso,
-        "diff_scope": diff_scope,
-        "diff_base": diff_base,
-        "total_packages": total_pkgs,
-        "passed_packages": passed_pkgs,
-        "failed_packages": failed_pkgs,
-        "repository_guardrail_pass_rate": round(repo_pass_rate, 4),
-        "repository_guardrail_pass_rate_percentage": repo_pass_rate_pct,
-        "new_skills_count": new_skills_count,
-        "new_skills_passed": new_skills_passed,
-        "new_skills_first_pass_count": new_skills_first_pass_count,
-        "new_skills_first_pass_rate": new_first_pass_rate,
-        "new_skills_first_pass_percentage": new_first_pass_pct,
-        "first_pass_guardrail_pass_rate": effective_first_pass_rate,
-        "first_pass_guardrail_pass_rate_percentage": effective_first_pass_pct,
-        "deterministic_constraint_coverage": round(constraint_cov, 4),
-        "deterministic_constraint_coverage_percentage": constraint_cov_pct,
-        "output_schema_coverage": round(schema_cov, 4),
-        "output_schema_coverage_percentage": schema_cov_pct,
-        "execution_time_seconds": duration,
-        "packages": package_telemetry,
-    }
-
+    telemetry = _build_telemetry_summary(
+        now_iso=now_iso,
+        diff_scope=diff_scope,
+        diff_base=diff_base,
+        package_telemetry=package_telemetry,
+        duration=duration,
+    )
     return problems, telemetry
 
 
@@ -1175,7 +1536,7 @@ def validate(root: Path = ROOT) -> list[str]:
     return errors
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--telemetry",
@@ -1224,17 +1585,12 @@ def main(argv: list[str] | None = None) -> int:
         default=ROOT,
         help="Root directory of the skill repository",
     )
-    args = parser.parse_args(argv)
+    return parser
 
-    errors, telemetry = validate_with_telemetry(
-        root=args.root,
-        base_ref=args.base_ref,
-        ledger_path=args.ledger,
-        record_attempts=not args.no_ledger,
-    )
-    for error in errors:
-        print(error)
 
+def _write_telemetry_outputs(
+    args: argparse.Namespace, telemetry: Mapping[str, Any]
+) -> None:
     telemetry_path = args.export_telemetry or args.telemetry
     if telemetry_path:
         out_file = Path(telemetry_path)
@@ -1246,20 +1602,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Exported validation telemetry to {out_file.as_posix()}")
 
-    if args.step_summary is not None:
-        summary_target = args.step_summary or os.environ.get("GITHUB_STEP_SUMMARY", "")
-        if summary_target:
-            summary_path = Path(summary_target)
-            summary_path.parent.mkdir(parents=True, exist_ok=True)
-            with summary_path.open("a", encoding="utf-8", newline="\n") as fh:
-                fh.write(format_telemetry_markdown(telemetry))
+    if args.step_summary is None:
+        return
+    summary_target = args.step_summary or os.environ.get("GITHUB_STEP_SUMMARY", "")
+    if summary_target:
+        summary_path = Path(summary_target)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with summary_path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(format_telemetry_markdown(telemetry))
 
+
+def _print_telemetry_report(
+    errors: Sequence[str], telemetry: Mapping[str, Any]
+) -> None:
     new_rate_display = (
         f"{telemetry['new_skills_first_pass_percentage']}%"
         if telemetry["new_skills_first_pass_percentage"] is not None
         else "N/A (0 new skills)"
     )
-
     print("=" * 60)
     print("Validation Telemetry:")
     print(f"  Total Packages: {telemetry['total_packages']}")
@@ -1276,9 +1636,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"  Execution Time: {telemetry['execution_time_seconds']}s")
     print("=" * 60)
-
     if not errors:
         print("PASS: skill metadata, schemas, and standalone references")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    errors, telemetry = validate_with_telemetry(
+        root=args.root,
+        base_ref=args.base_ref,
+        ledger_path=args.ledger,
+        record_attempts=not args.no_ledger,
+    )
+    for error in errors:
+        print(error)
+
+    _write_telemetry_outputs(args, telemetry)
+    _print_telemetry_report(errors, telemetry)
     return 1 if errors else 0
 
 
