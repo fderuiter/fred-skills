@@ -1,12 +1,7 @@
-Use repo-audit-lifecycle to conduct a comprehensive ownership and lifecycle boundaries audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-lifecycle to audit resource ownership, acquisition, and disposal lifecycles in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while reviewing issue <issue-number>.
+Inventory file descriptors, network sockets, DB connections/transactions, timers, event subscriptions, worker handles, temp directories, and cancellation scopes.
+Build an ownership ledger mapping creator, borrower, transfer, close authority, and disposal ordering across normal completion, early return, and partial-init failure.
+Pinpoint resource leaks, use-after-close hazards, double-close bugs, and unjoined background tasks with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

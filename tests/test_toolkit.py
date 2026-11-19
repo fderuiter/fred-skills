@@ -1,10 +1,14 @@
 import copy
+import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -2488,6 +2492,203 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
         self.assertNotIn("<details", json_doc["title"])
         self.assertIn("`@everyone`", json_doc["title"])
         self.assertEqual(["octocat"], json_doc["assignees"])
+
+    def test_preflight_parses_manifests_offline_handles_malformed_files_and_detects_gh(
+        self,
+    ) -> None:
+        manifest_repo = self.root / "polyglot-repo"
+        manifest_repo.mkdir()
+        (manifest_repo / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "web-client",
+                    "dependencies": {"react": "19.0.0", "zod": "^3.23.8"},
+                    "devDependencies": {"typescript": "~5.6.2"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (manifest_repo / "pyproject.toml").write_text(
+            '[project]\nname = "svc"\ndependencies = [\n'
+            '  "fastapi==0.115.0",\n'
+            "  \"pydantic[email]>=2.9,<3; python_version >= '3.12'\",\n"
+            "]\n"
+            '[dependency-groups]\ndev = ["ruff==0.17.2", {include-group = "lint"}]\n'
+            '[tool.poetry.dependencies]\npython = "^3.12"\nhttpx = {version = "^0.27.2"}\n',
+            encoding="utf-8",
+        )
+        (manifest_repo / "Cargo.toml").write_text(
+            '[workspace.dependencies]\ntokio = { version = "1.40.0", features = ["full"] }\n'
+            '[dependencies]\nserde = "1.0.210"\ntokio = { workspace = true }\n'
+            'renamed = { package = "reqwest", version = "0.12.7" }\n',
+            encoding="utf-8",
+        )
+        (manifest_repo / "go.mod").write_text(
+            "module example.com/demo\n\ngo 1.23\n\n"
+            "require golang.org/x/text v0.18.0 // indirect\n"
+            "require (\n"
+            "    github.com/spf13/cobra v1.8.1\n"
+            "    golang.org/x/sync v0.8.0 // async helpers\n"
+            ")\n",
+            encoding="utf-8",
+        )
+
+        real_run = subprocess.run
+        gh_subprocesses: list[object] = []
+
+        def guard_subprocess_run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(cmd, list) and cmd and Path(str(cmd[0])).name == "gh":
+                gh_subprocesses.append(cmd)
+            return real_run(cmd, *args, **kwargs)
+
+        with (
+            unittest.mock.patch(
+                "fredlib.repository.subprocess.run", side_effect=guard_subprocess_run
+            ),
+            unittest.mock.patch(
+                "fredlib.repository.shutil.which",
+                side_effect=lambda name: "/usr/bin/gh" if name == "gh" else None,
+            ),
+        ):
+            detected = repository.preflight(manifest_repo)
+
+        self.assertEqual([], gh_subprocesses)
+        self.assertTrue(detected["capabilities"]["gh"])
+        self.assertTrue(detected["capabilities"]["tool_binaries"]["gh"])
+        self.assertEqual("not-probed", detected["capabilities"]["github_access"])
+
+        deps = detected["dependencies"]
+        self.assertEqual({}, deps["errors"])
+        self.assertEqual(4, len(deps["manifests"]))
+        pkgs = deps["packages"]
+        self.assertEqual("19.0.0", pkgs["react"])
+        self.assertEqual("^3.23.8", pkgs["zod"])
+        self.assertEqual("~5.6.2", pkgs["typescript"])
+        self.assertEqual("0.115.0", pkgs["fastapi"])
+        self.assertEqual(">=2.9,<3", pkgs["pydantic"])
+        self.assertEqual("0.17.2", pkgs["ruff"])
+        self.assertEqual("^0.27.2", pkgs["httpx"])
+        self.assertNotIn("python", pkgs)
+        self.assertEqual("1.0.210", pkgs["serde"])
+        self.assertEqual("1.40.0", pkgs["tokio"])
+        self.assertEqual("0.12.7", pkgs["reqwest"])
+        self.assertEqual("v1.8.1", pkgs["github.com/spf13/cobra"])
+        self.assertEqual("v0.8.0", pkgs["golang.org/x/sync"])
+        self.assertEqual("v0.18.0", pkgs["golang.org/x/text"])
+
+        # Malformed manifests must never crash preflight() or runs.initialize().
+        broken_repo = self.root / "broken-manifests"
+        broken_repo.mkdir()
+        (broken_repo / "package.json").write_text("{unterminated", encoding="utf-8")
+        (broken_repo / "pyproject.toml").write_text("[[bad toml", encoding="utf-8")
+        (broken_repo / "Cargo.toml").write_text(
+            "[dependencies]\nserde = 12345\n", encoding="utf-8"
+        )
+        (broken_repo / "go.mod").write_text(
+            "module example.com/bad\nrequire (\nmissing-version-token\n",
+            encoding="utf-8",
+        )
+        with unittest.mock.patch("fredlib.repository.shutil.which", return_value=None):
+            broken_preflight = repository.preflight(broken_repo)
+        self.assertFalse(broken_preflight["capabilities"]["gh"])
+        self.assertEqual(
+            {"Cargo.toml", "go.mod", "package.json", "pyproject.toml"},
+            set(broken_preflight["dependencies"]["errors"].keys()),
+        )
+        self.assertEqual({}, broken_preflight["dependencies"]["packages"])
+        self.assertTrue(
+            any(
+                "Skipped malformed dependency manifest(s)" in note
+                for note in broken_preflight["limitations"]
+            )
+        )
+
+        broken_ws = self.root / "broken-manifests-ws"
+        run_record = runs.initialize(broken_repo, broken_ws, "investigate-bug")
+        self.assertEqual([], runs.validate_run(broken_ws))
+        rendered_broken_prompt = runs.prompt(run_record)
+        self.assertIn("Malformed manifests skipped safely", rendered_broken_prompt)
+
+    def test_tactical_scope_prompt_interpolates_templates_and_renders_all_sections(
+        self,
+    ) -> None:
+        scoped_repo = self.root / "scoped-repo"
+        (scoped_repo / "src/payments").mkdir(parents=True)
+        (scoped_repo / "src/legacy").mkdir(parents=True)
+        (scoped_repo / "src/payments/ledger.py").write_text(
+            "def settle_invoice(amount: int) -> int:\n    return amount\n",
+            encoding="utf-8",
+        )
+        (scoped_repo / "src/legacy/frozen.py").write_text(
+            "LEGACY = True\n", encoding="utf-8"
+        )
+        (scoped_repo / "package.json").write_text(
+            json.dumps({"dependencies": {"stripe": "16.12.0"}}),
+            encoding="utf-8",
+        )
+
+        ws = self.root / "tactical-ws"
+        run_record = runs.initialize(
+            scoped_repo,
+            ws,
+            "investigate-bug",
+            budget="brief",
+            allow_fixes=True,
+            directory="./src/payments/",
+            symbol="settle_invoice",
+            allowed_paths=["src/payments", "tests/payments"],
+            do_not_modify_paths=["src/legacy/frozen.py"],
+            issue_number=142,
+        )
+        self.assertEqual([], runs.validate_run(ws))
+        self.assertEqual("src/payments", run_record["plan"]["directory"])
+        self.assertEqual("settle_invoice", run_record["plan"]["symbol"])
+        self.assertEqual(
+            ["src/payments", "tests/payments"], run_record["plan"]["allowed_paths"]
+        )
+        self.assertEqual(
+            ["src/legacy/frozen.py"], run_record["plan"]["do_not_modify_paths"]
+        )
+        self.assertEqual(142, run_record["plan"]["issue_number"])
+        self.assertEqual("16.12.0", run_record["dependencies"]["packages"]["stripe"])
+
+        prompt_text = (ws / "prompt.md").read_text(encoding="utf-8")
+        # 1. Dependency versions rendered into prompt.
+        self.assertIn("`stripe` (16.12.0)", prompt_text)
+        # 2. Selected skill prompt templates loaded and interpolated with zero raw placeholders left.
+        for selected_skill in run_record["plan"]["skills"]:
+            self.assertIn(f"### `{selected_skill}`", prompt_text)
+        self.assertEqual([], re.findall(r"<[a-z][a-z0-9/ ,_-]*>", prompt_text))
+        # 3. Read-only directory map focused on target directory.
+        self.assertIn("## Read-only directory map", prompt_text)
+        self.assertIn("./src/payments/ledger.py", prompt_text)
+        # 4. Symbol blast radius and caller migration order.
+        self.assertIn("## Symbol blast radius and caller migration order", prompt_text)
+        self.assertIn("`settle_invoice`", prompt_text)
+        self.assertIn("Downstream caller migration order", prompt_text)
+        # 5. Verified facts vs. assumptions and path guards.
+        self.assertIn("## Verified facts, assumptions, and path guards", prompt_text)
+        self.assertIn(
+            "Verified facts (established offline during preflight):", prompt_text
+        )
+        self.assertIn("Assumptions requiring verification", prompt_text)
+        self.assertIn("`./src/payments`", prompt_text)
+        self.assertIn("`./src/legacy/frozen.py`", prompt_text)
+        # 6. Live read-only gh CLI queries referencing issue number and forbidding mutations.
+        self.assertIn("## Live read-only GitHub CLI queries", prompt_text)
+        self.assertIn("gh issue view 142", prompt_text)
+        self.assertIn("NEVER execute mutating commands", prompt_text)
+
+        # Validate rejection of unsafe tactical scope inputs.
+        with self.assertRaises(FredCliError) as bad_dir:
+            runs.plan(scoped_repo, "investigate-bug", directory="../outside")
+        self.assertEqual("invalid_scope_path", bad_dir.exception.code)
+        with self.assertRaises(FredCliError) as bad_sym:
+            runs.plan(scoped_repo, "investigate-bug", symbol="   ")
+        self.assertEqual("invalid_symbol", bad_sym.exception.code)
+        with self.assertRaises(FredCliError) as bad_issue:
+            runs.plan(scoped_repo, "investigate-bug", issue_number=0)
+        self.assertEqual("invalid_issue_number", bad_issue.exception.code)
 
 
 if __name__ == "__main__":

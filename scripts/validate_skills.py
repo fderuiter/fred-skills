@@ -37,17 +37,22 @@ MAX_REFERENCE_TOKENS = 5000
 PLACEHOLDER_PATTERN = re.compile(r"<[^>]+>")
 ALLOWED_PROMPT_PLACEHOLDERS = frozenset(
     {
+        "<allowed-paths>",
         "<audit workspace/reports>",
         "<critical workflows>",
+        "<directory>",
+        "<do-not-modify-paths>",
         "<existing audit workspace, if any>",
         "<existing audit workspace>",
         "<finding/run artifacts>",
+        "<issue-number>",
         "<path-to-diagnostic-bundle-output>",
         "<path-to-run-workspace-directory>",
         "<path-to-session-transcript>",
         "<repository/revision>",
         "<repository>",
         "<revision>",
+        "<symbol>",
     }
 )
 ALLOWED_PLACEHOLDERS = ALLOWED_PROMPT_PLACEHOLDERS
@@ -698,6 +703,7 @@ class _ParsedSkillPackage:
         "has_output_schema",
         "has_prompt_constraints",
         "output_schemas",
+        "prompt_body",
         "short_description",
     )
 
@@ -711,6 +717,7 @@ class _ParsedSkillPackage:
         has_boundary_sections: bool = False,
         description: str | None = None,
         short_description: str | None = None,
+        prompt_body: str | None = None,
     ) -> None:
         self.errors = errors
         self.output_schemas = output_schemas if output_schemas is not None else []
@@ -722,6 +729,7 @@ class _ParsedSkillPackage:
         )
         self.description = description
         self.short_description = short_description
+        self.prompt_body = prompt_body
 
 
 def _is_valid_skill_name(name: object, package_name: str) -> bool:
@@ -846,21 +854,33 @@ def _check_prompt_format(prompt_content: str, prompt_rel: str) -> list[str]:
     return errors
 
 
+def _normalize_prompt_body(prompt_content: str) -> str | None:
+    lines = prompt_content.splitlines()
+    if len(lines) <= 1:
+        return None
+    collapsed = " ".join(" ".join(lines[1:]).split())
+    return collapsed or None
+
+
 def _validate_prompt_template(
     package: Path,
     output_schemas: list[Path],
     cached_texts: dict[Path, str],
-) -> tuple[list[str], bool]:
+) -> tuple[list[str], bool, str | None]:
     prompt_path = package / "assets/prompt.md"
     prompt_rel = prompt_path.relative_to(package).as_posix()
     if not prompt_path.is_file():
-        return [f"Missing prompt template: {prompt_rel}"], False
+        return [f"Missing prompt template: {prompt_rel}"], False, None
     try:
         prompt_content = prompt_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return [f"Binary or non-UTF-8 file in skill package: {prompt_rel}"], False
+        return (
+            [f"Binary or non-UTF-8 file in skill package: {prompt_rel}"],
+            False,
+            None,
+        )
     except OSError as exc:
-        return [f"{prompt_rel}: {exc}"], False
+        return [f"{prompt_rel}: {exc}"], False, None
 
     if not prompt_path.is_symlink():
         cached_texts[prompt_path] = prompt_content
@@ -879,7 +899,11 @@ def _validate_prompt_template(
             f"{prompt_rel}: prompt template must mention the output schema contract "
             f"(e.g. {example_schema})"
         )
-    return errors, has_neg and mentions_schema
+    return (
+        errors,
+        has_neg and mentions_schema,
+        _normalize_prompt_body(prompt_content),
+    )
 
 
 def _check_scenarios_against_schema(
@@ -1216,7 +1240,7 @@ def _inspect_skill_package(
     )
     errors.extend(schema_link_errors)
 
-    prompt_errors, has_prompt_constraints = _validate_prompt_template(
+    prompt_errors, has_prompt_constraints, prompt_body = _validate_prompt_template(
         package, output_schemas, cached_texts
     )
     errors.extend(prompt_errors)
@@ -1249,6 +1273,7 @@ def _inspect_skill_package(
         has_boundary_sections=has_boundary_sections,
         description=raw_description if isinstance(raw_description, str) else None,
         short_description=short_description,
+        prompt_body=prompt_body,
     )
 
 
@@ -1579,6 +1604,21 @@ def _record_unique_descriptions(
     return problems
 
 
+def _record_unique_prompt_body(
+    pkg_name: str,
+    parsed: _ParsedSkillPackage,
+    prompt_bodies: dict[str, str],
+) -> list[str]:
+    if parsed.prompt_body is None:
+        return []
+    if parsed.prompt_body in prompt_bodies:
+        return [
+            f"Duplicate prompt template body: {pkg_name} and {prompt_bodies[parsed.prompt_body]}"
+        ]
+    prompt_bodies[parsed.prompt_body] = pkg_name
+    return []
+
+
 def _build_package_telemetry_entry(
     pkg_name: str,
     parsed: _ParsedSkillPackage,
@@ -1746,6 +1786,7 @@ def validate_with_telemetry(
 
     descriptions: dict[str, str] = {}
     short_descriptions: dict[str, str] = {}
+    prompt_bodies: dict[str, str] = {}
     package_telemetry: list[dict[str, Any]] = []
     ledger_dirty = False
 
@@ -1777,6 +1818,7 @@ def validate_with_telemetry(
                 package.name, parsed, descriptions, short_descriptions
             )
         )
+        problems.extend(_record_unique_prompt_body(package.name, parsed, prompt_bodies))
 
     if record_attempts and ledger_dirty:
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
