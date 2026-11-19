@@ -3024,6 +3024,7 @@ def _validate_contributing_doc(
         *_require_doc_tokens(
             rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
         ),
+        *_require_doc_tokens(rel_path, text, ("--phase format",), "check phase"),
     ]
 
 
@@ -3035,7 +3036,6 @@ def _validate_agents_doc(rel_path: str, text: str, _exp: _DocExpectations) -> li
         *_require_doc_tokens(
             rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
         ),
-        *_require_doc_tokens(rel_path, text, ("--phase format",), "check phase"),
     ]
 
 
