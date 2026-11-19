@@ -25,9 +25,9 @@ class EvaluationTests(unittest.TestCase):
             "{output_file}",
         ]
         manifest = json.loads((ROOT / "evals/cases.json").read_text(encoding="utf-8"))
-        self.assertEqual(60, len(manifest["cases"]))
+        self.assertEqual(69, len(manifest["cases"]))
         skills_covered = {case["skill"] for case in manifest["cases"]}
-        self.assertEqual(20, len(skills_covered))
+        self.assertEqual(23, len(skills_covered))
 
         suites_doc = json.loads(
             (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
@@ -46,19 +46,20 @@ class EvaluationTests(unittest.TestCase):
                 "software-architecture",
                 "code-review",
                 "automated-testing",
+                "spec-driven-development",
             },
             suites_covered,
         )
         non_audit_skills = {
             s for s, st in skill_to_suite.items() if st != "repository-audits"
         }
-        self.assertEqual(15, len(non_audit_skills))
+        self.assertEqual(18, len(non_audit_skills))
         self.assertTrue(non_audit_skills.issubset(skills_covered))
 
         with tempfile.TemporaryDirectory() as temp:
             temp_path = Path(temp)
             result = evaluations.evaluate(temp_path, argv)
-            self.assertEqual(120, len(result["runs"]))
+            self.assertEqual(138, len(result["runs"]))
             self.assertTrue(
                 all(
                     row["state"] == "executed" and row["exact_match"]
@@ -72,14 +73,14 @@ class EvaluationTests(unittest.TestCase):
                 )
             )
 
-            # Verify all 15 non-audit skills recorded state=="executed" and exact_match==True
+            # Verify all 18 non-audit skills recorded state=="executed" and exact_match==True
             case_to_skill = {c["id"]: c["skill"] for c in manifest["cases"]}
             non_audit_runs = [
                 row
                 for row in result["runs"]
                 if case_to_skill[row["case"]] in non_audit_skills
             ]
-            self.assertEqual(90, len(non_audit_runs))
+            self.assertEqual(108, len(non_audit_runs))
             self.assertTrue(
                 all(
                     row["state"] == "executed" and row["exact_match"] is True
@@ -110,7 +111,7 @@ class EvaluationTests(unittest.TestCase):
                 self.assertIsNone(result["summary"][cfg]["total_tokens"])
                 self.assertIsNone(result["summary"][cfg]["mean_tokens"])
             lift = result["summary"]["skill_lift"]
-            self.assertEqual(60, lift["paired_runs"])
+            self.assertEqual(69, lift["paired_runs"])
             self.assertEqual(0.0, lift["exact_match_rate_delta"])
             self.assertEqual(0, lift["paired_token_runs"])
             self.assertIsNone(lift["total_tokens_delta"])
@@ -175,6 +176,38 @@ class EvaluationTests(unittest.TestCase):
 
     def test_writable_paths_allows_scoped_edits_and_blocks_unapproved_files(self):
         mutating_scenarios = [
+            (
+                "spec-authoring-a",
+                "source/SPEC.md",
+                "# Spec\n",
+                "source/exporter.py",
+                {
+                    "schema_version": "1.0",
+                    "title": "Tenant Export Streaming Specification",
+                    "status": "approved",
+                    "summary": "Approved specification for cursor-paginated NDJSON export.",
+                    "interview_decisions": [
+                        {
+                            "id": "DEC-EXPORT-001",
+                            "category": "architecture",
+                            "question": "How should pagination work?",
+                            "decision": "Cursor-based streaming.",
+                            "rationale": "Avoids unbounded memory.",
+                        }
+                    ],
+                    "requirements": [
+                        {
+                            "id": "REQ-001",
+                            "description": "Stream NDJSON batches bounded by 500 rows.",
+                            "priority": "must",
+                        }
+                    ],
+                    "new_file_scopes": ["exporter.py"],
+                    "out_of_scope": ["Multi-tenant exports"],
+                    "verification_commands": ["python -m unittest discover -s tests"],
+                    "convergence_checks": [],
+                },
+            ),
             (
                 "repo-apply-fix-a",
                 "source/retry_budget.py",

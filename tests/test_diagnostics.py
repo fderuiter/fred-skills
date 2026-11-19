@@ -1500,7 +1500,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
         )["skills"]
         expected_names = {item["name"] for item in catalog_skills}
-        self.assertEqual(52, len(expected_names))
+        self.assertEqual(55, len(expected_names))
         self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
 
         # Every single catalog skill correlates cleanly before any keyword fallback
@@ -1676,6 +1676,41 @@ Bearer sk-proj-1234567890abcdef1234567890
                 "Generating TC-1 in testing.json\n'oracle_type' is a required property\n",
                 ["test_cases:TC-1"],
             ),
+            (
+                "specify-feature",
+                None,
+                "spec-authoring",
+                "spec.json",
+                "shared/spec-driven-development/resources/assets/spec.schema.json",
+                {
+                    "schema_version": "1.0",
+                    "title": "Streaming Export Spec",
+                    "status": "draft",
+                    "summary": "Spec summary",
+                    "interview_decisions": [
+                        {
+                            "id": "DEC-1",
+                            "category": "architecture",
+                            "question": "Pagination?",
+                            "decision": "Cursor",
+                            "rationale": "Bounded memory",
+                        }
+                    ],
+                    "requirements": [
+                        {
+                            "id": "REQ-1",
+                            "description": "Stream batches",
+                            "priority": "must",
+                        }
+                    ],
+                    "new_file_scopes": [],
+                    "out_of_scope": [],
+                    "verification_commands": [],
+                    "convergence_checks": [],
+                },
+                "Authoring REQ-1 in spec.json after DEC-1\n'description' is a required property\n",
+                ["interview_decisions:DEC-1", "requirements:REQ-1"],
+            ),
         ]
 
         fred_cli = ROOT / "scripts/fred.py"
@@ -1765,7 +1800,7 @@ Bearer sk-proj-1234567890abcdef1234567890
                 )
                 self.assertEqual("schema_validation_error", failure["failure_type"])
 
-        # 2. Suite-prefix stripping for topic across all 5 suites
+        # 2. Suite-prefix stripping for topic across all 6 suites
         expected_topics = {
             "repo-audit-concurrency": "concurrency",
             "repo-verify-finding": "verify-finding",
@@ -1775,6 +1810,8 @@ Bearer sk-proj-1234567890abcdef1234567890
             "review-actionable-feedback": "actionable-feedback",
             "test-gap-analysis": "gap-analysis",
             "test-suite-verification": "suite-verification",
+            "spec-authoring": "authoring",
+            "spec-convergence": "convergence",
         }
         for skill_name, expected_topic in expected_topics.items():
             with self.subTest(skill=skill_name):
@@ -1797,6 +1834,10 @@ Bearer sk-proj-1234567890abcdef1234567890
             (
                 "Checking test-oracles and nondeterminism in testing.json\n",
                 "automated-testing",
+            ),
+            (
+                "Authoring requirements and interview decisions in spec.json\n",
+                "spec",
             ),
         ]:
             corr_domain = triage.correlate_audit_domain(domain_transcript)
@@ -1848,7 +1889,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertNotIn("architecture.json", audit_ws_blob)
 
         # 6. Workspace-file-only resolution (no run.json) resolves active domain deliverable
-        for fname in ("architecture.json", "review.json", "testing.json"):
+        for fname in ("architecture.json", "review.json", "testing.json", "spec.json"):
             file_only_ws = self.temp_path / f"ws_file_only_{fname}"
             file_only_ws.mkdir()
             (file_only_ws / fname).write_text("{}\n", encoding="utf-8")
@@ -1890,7 +1931,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         expected_suite_skills = skill_tools.suite_skills_by_suite(ROOT)
         self.assertIsNotNone(expected_suite_skills)
         assert expected_suite_skills is not None
-        self.assertEqual(5, len(expected_suite_skills))
+        self.assertEqual(6, len(expected_suite_skills))
         self.assertEqual(expected_suite_skills, triage._DEFAULT_SUITE_SKILLS)
         self.assertEqual(expected_suite_skills, triage._SUITE_SKILLS)
         self.assertEqual(common._skill_to_suite_map(ROOT), triage._SKILL_TO_SUITE)
@@ -1902,7 +1943,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             s["name"]: (s["artifact"]["filename"], s["artifact"]["schema"])
             for s in suites_doc["suites"]
         }
-        self.assertEqual(5, len(expected_suite_artifacts))
+        self.assertEqual(6, len(expected_suite_artifacts))
         self.assertEqual(expected_suite_artifacts, common.SUITE_DELIVERABLES)
         self.assertEqual(expected_suite_artifacts, triage._DEFAULT_SUITE_ARTIFACTS)
         self.assertEqual(expected_suite_artifacts, triage._SUITE_ARTIFACTS)
@@ -1915,7 +1956,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         )
 
         expected_tasks = common._task_to_suite_map(ROOT)
-        self.assertEqual(17, len(expected_tasks))
+        self.assertEqual(18, len(expected_tasks))
         self.assertEqual(expected_tasks, triage._DEFAULT_TASK_TO_SUITE)
         self.assertEqual(expected_tasks, triage._TASK_TO_SUITE)
 
@@ -1985,6 +2026,16 @@ Bearer sk-proj-1234567890abcdef1234567890
                 "testing_minimal",
                 {"component": "auth", "framework": "unittest"},
                 "automated-testing",
+            ),
+            (
+                "spec_starter",
+                suites_doc["suites"][5]["artifact"]["starter"],
+                "spec-driven-development",
+            ),
+            (
+                "spec_minimal",
+                {"interview_decisions": [], "new_file_scopes": []},
+                "spec-driven-development",
             ),
             (
                 "finding_verification",

@@ -171,6 +171,81 @@ def _render_architecture_html(doc: dict) -> str:
     return _page_shell(f"Software architecture — {text(doc['title'])}", body)
 
 
+def _render_spec_html(doc: dict) -> str:
+    status_badges = {
+        "converged": "low",
+        "approved": "low",
+        "interviewing": "info",
+        "draft": "info",
+        "diverged": "high",
+    }
+    status_tone = status_badges.get(doc["status"], "info")
+    decisions = doc.get("interview_decisions", [])
+    scopes = doc.get("new_file_scopes", [])
+    non_goals = doc.get("out_of_scope", [])
+    commands = doc.get("verification_commands", [])
+    checks = doc.get("convergence_checks", [])
+    scope_list = (
+        "<ul>" + "".join(f"<li><code>{text(s)}</code></li>" for s in scopes) + "</ul>"
+        if scopes
+        else '<p class="muted">No approved file scopes recorded.</p>'
+    )
+    non_goal_list = (
+        "<ul>" + "".join(f"<li>{text(ng)}</li>" for ng in non_goals) + "</ul>"
+        if non_goals
+        else '<p class="muted">No out-of-scope exclusions recorded.</p>'
+    )
+    cmd_list = (
+        "<ul>"
+        + "".join(f"<li><code>{text(cmd)}</code></li>" for cmd in commands)
+        + "</ul>"
+        if commands
+        else '<p class="muted">No verification commands recorded.</p>'
+    )
+    if decisions:
+        cards = [
+            f'<article class="finding" data-status="{text(doc["status"])}" id="{text(d["id"])}">'
+            f"<h3>{text(d['id'])} ({text(d['category'])}): {text(d['question'])}</h3>"
+            f"<p><b>Decision:</b> {text(d['decision'])}</p>"
+            + (
+                f"<details><summary>Rationale</summary><p>{text(d['rationale'])}</p></details>"
+                if d.get("rationale")
+                else ""
+            )
+            + "</article>"
+            for d in decisions
+        ]
+        decisions_body = (
+            '<label for="query">Search decisions <input id="query" type="search"></label>'
+            '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>'
+            '<p id="count" data-noun="decisions" role="status" aria-live="polite"></p>'
+            '<div id="empty-state" class="empty-state" hidden><p>No decisions match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
+            + "".join(cards)
+        )
+    else:
+        decisions_body = "<p>No interview decisions recorded.</p>"
+    check_rows = (
+        "".join(
+            f"<tr><td>{text(chk['id'])}</td><td><code>{text(chk['target'])}</code></td>"
+            f'<td><span class="badge badge-info info">{text(chk["status"])}</span></td>'
+            f"<td>{text(chk.get('evidence', ''))}</td></tr>"
+            for chk in checks
+        )
+        or '<tr><td colspan="4" class="empty-state">No convergence checks recorded.</td></tr>'
+    )
+    body = (
+        f'<header><p class="muted">fred-skills · spec-driven development report</p>'
+        f"<h1>{text(doc['title'])}</h1>"
+        f'<p><span class="badge badge-{status_tone} {status_tone}">{text(doc["status"])}</span> · schema {text(doc["schema_version"])}</p>'
+        f'<nav aria-label="Report views"><a href="#executive">Overview</a><a href="#decisions">Decisions</a><a href="#scopes">Scopes</a><a href="#convergence">Convergence</a></nav></header>\n'
+        f'<section id="executive"><h2>Specification overview</h2><p>{len(decisions)} interview decisions; {len(scopes)} file scopes; {len(commands)} verification commands; status: <code>{text(doc["status"])}</code>.</p></section>\n'
+        f'<section id="decisions"><h2>Interview decisions</h2>{decisions_body}</section>\n'
+        f'<section id="scopes"><h2>Scopes and verification</h2><h3>Approved file scopes</h3>{scope_list}<h3>Out of scope</h3>{non_goal_list}<h3>Verification commands</h3>{cmd_list}</section>\n'
+        f'<section id="convergence"><h2>Convergence checks</h2><div class="table-container"><table><thead><tr><th>ID</th><th>Target</th><th>Status</th><th>Evidence</th></tr></thead><tbody>{check_rows}</tbody></table></div></section>'
+    )
+    return _page_shell(f"Specification — {text(doc['title'])}", body)
+
+
 def _render_review_html(doc: dict) -> str:
     verdict_badges = {
         "approve": "low",
@@ -658,6 +733,7 @@ def render(
             "architecture": _render_architecture_html,
             "review": _render_review_html,
             "testing": _render_testing_html,
+            "spec": _render_spec_html,
         }
         if domain_kind not in renderers:
             raise FredCliError(

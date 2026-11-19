@@ -315,6 +315,11 @@ _DEFAULT_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "test-case-generation",
         "test-suite-verification",
     ),
+    "spec-driven-development": (
+        "spec-interview",
+        "spec-authoring",
+        "spec-convergence",
+    ),
 }
 
 _DEFAULT_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
@@ -338,6 +343,10 @@ _DEFAULT_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
         "testing.json",
         "shared/automated-testing/resources/assets/testing.schema.json",
     ),
+    "spec-driven-development": (
+        "spec.json",
+        "shared/spec-driven-development/resources/assets/spec.schema.json",
+    ),
 }
 
 _DEFAULT_TASK_TO_SUITE: dict[str, str] = {
@@ -358,6 +367,7 @@ _DEFAULT_TASK_TO_SUITE: dict[str, str] = {
     "design-architecture": "software-architecture",
     "review-code-changes": "code-review",
     "expand-automated-tests": "automated-testing",
+    "specify-feature": "spec-driven-development",
 }
 
 _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
@@ -432,6 +442,17 @@ _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
     ),
     ("review", frozenset({"verdict"})),
     ("testing", frozenset({"test_cases"})),
+    (
+        "spec",
+        frozenset(
+            {
+                "interview_decisions",
+                "new_file_scopes",
+                "out_of_scope",
+                "verification_commands",
+            }
+        ),
+    ),
     ("architecture", frozenset({"boundaries", "decisions"})),
     ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
 )
@@ -440,6 +461,7 @@ _DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "architecture": "software-architecture",
     "review": "code-review",
     "testing": "automated-testing",
+    "spec": "spec-driven-development",
     "remediation": "repository-workflows",
     "reconciliation": "repository-workflows",
     "finding-verification": "repository-workflows",
@@ -1585,7 +1607,7 @@ def detect_failures(transcript_text: str) -> dict[str, Any]:
 
 
 def _topic_for_specialist(specialist: str) -> str:
-    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-"):
+    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-", "spec-"):
         if specialist.startswith(prefix):
             return specialist[len(prefix) :]
     return specialist
@@ -1701,13 +1723,17 @@ def _detect_transcript_domain_suite(transcript_text: str) -> str | None:
         return "code-review"
     if re.search(r"\btesting\.(?:json|schema\.json)\b", transcript_text):
         return "automated-testing"
+    if re.search(r"\bspec\.(?:json|schema\.json)\b", transcript_text):
+        return "spec-driven-development"
     return None
 
 
 def _extract_artifact_references(
     transcript_text: str, audit_data: dict[str, Any] | None
 ) -> list[str]:
-    id_pattern = re.compile(r"\b((?:ADR|REV|TC|GAP|[FEICRT])-\d+|E-[a-z0-9_-]+)\b")
+    id_pattern = re.compile(
+        r"\b((?:ADR|REV|TC|GAP|SPEC|DEC|REQ|CHK|[FEICRT])-\d+|E-[a-z0-9_-]+)\b"
+    )
     if not audit_data:
         return sorted(set(id_pattern.findall(transcript_text)))
 
@@ -1720,6 +1746,9 @@ def _extract_artifact_references(
         "issues",
         "decisions",
         "test_cases",
+        "interview_decisions",
+        "requirements",
+        "convergence_checks",
     ):
         items = audit_data.get(section)
         if not isinstance(items, list):
@@ -1851,16 +1880,16 @@ def correlate_audit_domain(
                     specialist_found, topic_found = kw_match
                     break
 
+    _domain_suites = {
+        "software-architecture",
+        "code-review",
+        "automated-testing",
+        "spec-driven-development",
+    }
     effective_domain_suite = (
         artifact_suite
-        if artifact_suite
-        in {"software-architecture", "code-review", "automated-testing"}
-        else (
-            run_suite
-            if run_suite
-            in {"software-architecture", "code-review", "automated-testing"}
-            else None
-        )
+        if artifact_suite in _domain_suites
+        else (run_suite if run_suite in _domain_suites else None)
     )
     if specialist_found and not topic_found:
         topic_found = _topic_for_specialist(specialist_found)
@@ -1868,7 +1897,11 @@ def correlate_audit_domain(
         topic_found = (
             "architecture"
             if effective_domain_suite == "software-architecture"
-            else effective_domain_suite
+            else (
+                "spec"
+                if effective_domain_suite == "spec-driven-development"
+                else effective_domain_suite
+            )
         )
 
     ledger_refs = _extract_artifact_references(transcript_text, audit_data)

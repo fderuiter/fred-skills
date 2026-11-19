@@ -467,13 +467,13 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((one / "checksums.sha256").is_file())
 
         ver_result = releases.verify(manifest_path)
-        self.assertEqual(75, ver_result["verified_archives"])
+        self.assertEqual(80, ver_result["verified_archives"])
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
-        # Check all 11 canonical catalog packs (tar and zip) and archive skills lists
+        # Check all 12 canonical catalog packs (tar and zip) and archive skills lists
         packs_data = read_json(ROOT / "catalog/packs.json")["packs"]
         catalog_packs = list(packs_data.keys())
-        self.assertEqual(11, len(catalog_packs))
+        self.assertEqual(12, len(catalog_packs))
         self.assertNotIn("architecture", catalog_packs)
         self.assertEqual(37, len(packs_data["full-audit"]["skills"]))
         self.assertIn("repo-audit-diagnostics", packs_data["full-audit"]["skills"])
@@ -502,7 +502,7 @@ class InstallationTests(unittest.TestCase):
         # Check consolidated suite and standalone skills
         self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
         self.assertEqual(
-            52, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
+            55, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
         )
         self.assertTrue((one / "repo-audit-concurrency.tar.gz").is_file())
         self.assertEqual(

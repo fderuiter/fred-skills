@@ -1,0 +1,13 @@
+interface:
+  display_name: Pre-Code Spec Interview
+  short_description: Pause coding to surface UX, design, and edge-case choices
+  default_prompt: Use $spec-interview on this repository and feature request before writing code.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

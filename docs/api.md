@@ -185,7 +185,7 @@ def initialize(
 ) -> dict
 ```
 
-Initializes a new run workspace directory with `run.json`, `prompt.md`, and the active suite's primary artifact (`audit.json`, `architecture.json`, `review.json`, or `testing.json` declared in `catalog/suites.json`).
+Initializes a new run workspace directory with `run.json`, `prompt.md`, and the active suite's primary artifact (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json` declared in `catalog/suites.json`).
 
 - **Parameters:**
   - `repo` (`Path`): Path to the target Git repository.
@@ -236,7 +236,7 @@ Validates an audit ledger against `schemas/audit.schema.json` and suite structur
 def validate_run(directory: Path) -> list[str]
 ```
 
-Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, or `testing.json`) against its declarative suite schema (plus matching run IDs and snapshot consistency for `audit.json`).
+Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) against its declarative suite schema (plus matching run IDs and snapshot consistency for `audit.json`).
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
@@ -270,7 +270,7 @@ Appends a timestamped checkpoint record to `run.json` and updates the overall ru
 def revalidate(directory: Path) -> dict
 ```
 
-Compares the current repository state against the run's recorded snapshot, validating the active suite deliverable (`audit.json`, `architecture.json`, `review.json`, or `testing.json`) and identifying changed files and stale or impacted records.
+Compares the current repository state against the run's recorded snapshot, validating the active suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) and identifying changed files and stale or impacted records.
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
@@ -648,7 +648,7 @@ def evaluate(
 ) -> dict
 ```
 
-Runs a user-supplied adapter executable over evaluation test cases across all five suites (`audit`, `architecture`, `review`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
+Runs a user-supplied adapter executable over evaluation test cases across all six suites (`audit`, `architecture`, `review`, `spec`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
 
 - **Parameters:**
   - `output` (`Path`): Output directory for evaluation logs and `benchmark.json`. Must be a new or empty directory.

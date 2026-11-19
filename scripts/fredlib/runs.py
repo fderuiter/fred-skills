@@ -411,6 +411,12 @@ def _empty_deliverable(
         if seeded.get("component") in {None, "", "repository"}:
             seeded["component"] = repo_name
         return seeded
+    if deliverable == "spec.json":
+        task_name = run.get("plan", {}).get("task", "repository")
+        base_title = seeded.get("title", "Feature specification")
+        if base_title == "Feature specification" and task_name:
+            seeded["title"] = f"Feature specification for {task_name}"
+        return seeded
     return empty_audit(run)
 
 
@@ -487,6 +493,15 @@ uncovered gaps and ensure test gap specifications conform to {domain_schema_ref}
 Provide prioritized test scenarios with deterministic, independent assertion oracles
 (state, exception, output, or boundary). Stop with a precise checkpoint when the
 selected work cannot be completed. An empty test_cases list is valid.{fixes_guidance}"""
+    if deliverable == "spec.json":
+        return f"""Work in bounded slices. Pause application code generation during spec-interview and
+spec-authoring runs; do not create symlinks, make network calls, or modify application source
+files unless explicitly authorized. Author SPEC.md using assets/spec-template.md and update
+spec.json conforming to {domain_schema_ref} (schema_version, title, status,
+interview_decisions, new_file_scopes, out_of_scope, and verification_commands;
+additionalProperties is false). During spec-convergence, verify planned tasks and modified
+files against SPEC.md boundaries and record convergence_checks. Stop with a precise checkpoint
+when the selected work cannot be completed. Empty starter arrays are valid."""
     companions = _workflow_companions_for_run(run)
     companion_guidance = ""
     if companions:
@@ -1056,7 +1071,14 @@ def _validate_present_workflow_companions(directory: Path) -> list[str]:
 
 def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    for field in ("decisions", "findings", "test_cases"):
+    for field in (
+        "decisions",
+        "findings",
+        "test_cases",
+        "interview_decisions",
+        "requirements",
+        "convergence_checks",
+    ):
         items = deliverable.get(field)
         if not isinstance(items, list):
             continue
@@ -1087,6 +1109,19 @@ def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
             except ValueError as exc:
                 errors.append(
                     f"Finding file path must be repository-relative ({fid}): {exc}"
+                )
+    new_file_scopes = deliverable.get("new_file_scopes")
+    if isinstance(new_file_scopes, list):
+        for scope_path in new_file_scopes:
+            if not isinstance(scope_path, str):
+                continue
+            try:
+                checked = relative_path(scope_path)
+                if not checked.parts:
+                    raise ValueError(f"Unsafe relative path: {scope_path!r}")
+            except ValueError as exc:
+                errors.append(
+                    f"Specification file scope must be repository-relative ({scope_path!r}): {exc}"
                 )
     return errors
 
@@ -1202,6 +1237,18 @@ def _revalidate_domain_records(
     if expected_name == "testing.json":
         cases = deliverable.get("test_cases", [])
         ids = [tc["id"] for tc in cases if isinstance(tc, dict) and "id" in tc]
+        return (list(ids) if not complete else []), (list(ids) if changed else [])
+    if expected_name == "spec.json":
+        decisions = deliverable.get("interview_decisions", [])
+        reqs = deliverable.get("requirements", [])
+        checks = deliverable.get("convergence_checks", [])
+        ids = [
+            item["id"]
+            for group in (decisions, reqs, checks)
+            if isinstance(group, list)
+            for item in group
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
         return (list(ids) if not complete else []), (list(ids) if changed else [])
     return [], []
 

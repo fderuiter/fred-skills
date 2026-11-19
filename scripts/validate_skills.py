@@ -96,10 +96,20 @@ EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
 
 
 _NON_AUDIT_NOTE_SUITES = frozenset(
-    {"software-architecture", "code-review", "automated-testing"}
+    {
+        "software-architecture",
+        "code-review",
+        "automated-testing",
+        "spec-driven-development",
+    }
 )
 _NO_EXPECTED_FINDINGS_SUITES = frozenset(
-    {"software-architecture", "automated-testing", "repository-workflows"}
+    {
+        "software-architecture",
+        "automated-testing",
+        "spec-driven-development",
+        "repository-workflows",
+    }
 )
 
 

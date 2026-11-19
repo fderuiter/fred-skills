@@ -92,6 +92,14 @@
         "test-suite-verification"
       ]
     },
+    "spec-driven-development": {
+      "description": "Pre-code Socratic interviewing, SPEC.md authoring, and plan/implementation convergence verification.",
+      "skills": [
+        "spec-interview",
+        "spec-authoring",
+        "spec-convergence"
+      ]
+    },
     "full-audit": {
       "description": "All 34 specialist audits plus coordinator, diagnostics, and synthesis.",
       "skills": [
@@ -186,6 +194,9 @@
         "review-actionable-feedback",
         "review-diff-analysis",
         "review-invariant-violations",
+        "spec-authoring",
+        "spec-convergence",
+        "spec-interview",
         "test-case-generation",
         "test-gap-analysis",
         "test-suite-verification"

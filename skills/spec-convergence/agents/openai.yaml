@@ -1,0 +1,13 @@
+interface:
+  display_name: Specification Convergence
+  short_description: Verify plans and code match SPEC.md scopes and checks
+  default_prompt: Use $spec-convergence to verify plans and changes against SPEC.md and spec.json.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

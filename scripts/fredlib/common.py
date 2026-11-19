@@ -96,6 +96,19 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
             "test_cases": [],
         },
     },
+    "spec-driven-development": {
+        "filename": "spec.json",
+        "schema": "shared/spec-driven-development/resources/assets/spec.schema.json",
+        "starter": {
+            "schema_version": "1.0",
+            "title": "Feature specification",
+            "status": "draft",
+            "interview_decisions": [],
+            "new_file_scopes": [],
+            "out_of_scope": [],
+            "verification_commands": [],
+        },
+    },
 }
 
 

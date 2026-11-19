@@ -65,6 +65,9 @@
         "./skills/review-actionable-feedback",
         "./skills/review-diff-analysis",
         "./skills/review-invariant-violations",
+        "./skills/spec-authoring",
+        "./skills/spec-convergence",
+        "./skills/spec-interview",
         "./skills/test-case-generation",
         "./skills/test-gap-analysis",
         "./skills/test-suite-verification"
@@ -189,6 +192,17 @@
       ]
     },
     {
+      "name": "spec-driven-development",
+      "description": "Pre-code Socratic interviewing, SPEC.md authoring, and plan/implementation convergence verification.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/spec-interview",
+        "./skills/spec-authoring",
+        "./skills/spec-convergence"
+      ]
+    },
+    {
       "name": "full-audit",
       "description": "All 34 specialist audits plus coordinator, diagnostics, and synthesis.",
       "source": "./",
@@ -288,6 +302,9 @@
         "./skills/review-actionable-feedback",
         "./skills/review-diff-analysis",
         "./skills/review-invariant-violations",
+        "./skills/spec-authoring",
+        "./skills/spec-convergence",
+        "./skills/spec-interview",
         "./skills/test-case-generation",
         "./skills/test-gap-analysis",
         "./skills/test-suite-verification"
@@ -681,6 +698,30 @@
       "name": "review-invariant-violations",
       "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
       "source": "./skills/review-invariant-violations",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "spec-authoring",
+      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+      "source": "./skills/spec-authoring",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "spec-convergence",
+      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+      "source": "./skills/spec-convergence",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "spec-interview",
+      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "source": "./skills/spec-interview",
       "skills": [
         "."
       ]

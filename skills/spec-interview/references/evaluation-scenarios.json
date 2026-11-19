@@ -1,0 +1,38 @@
+{
+  "topic": "spec-interview",
+  "scenarios": [
+    {
+      "id": "spec-interview-failure",
+      "prompt": "Pause code generation and conduct a pre-code specification interview for a new webhook retry feature.",
+      "fixture_shape": "A vague feature request asks to add webhook delivery retries against an existing dispatcher without specifying backoff limits, dead-letter UX, idempotency keys, or database schema boundaries.",
+      "expected_behavior": [
+        "Pause code generation and inspect existing webhook dispatcher modules before asking questions.",
+        "Surface non-obvious questions across UX, architecture, trade-offs, and retry edge cases.",
+        "Record interview decisions and candidate scope boundaries in spec.json without modifying application files."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and an underspecified feature prompt without revealing expected specification decisions."
+    },
+    {
+      "id": "spec-interview-safe",
+      "prompt": "Pause code generation and conduct a pre-code specification interview for a new webhook retry feature.",
+      "fixture_shape": "All UX behaviors, backoff trade-offs, idempotency invariants, allowed file scopes, non-goals, and verification commands are already explicitly settled in the provided context.",
+      "expected_behavior": [
+        "Confirm repository context aligns with the settled decisions without asking redundant questions.",
+        "Record settled interview_decisions, new_file_scopes, out_of_scope, and verification_commands in spec.json.",
+        "Mark specification status ready for spec-authoring without editing application code."
+      ],
+      "evaluation_note": "Construct a complete pre-settled specification control; keep expected status and decision IDs out of the execution prompt."
+    },
+    {
+      "id": "spec-interview-routing",
+      "prompt": "Synthesize these settled interview decisions into a complete SPEC.md file and validate spec.json against the specification schema.",
+      "expected_behavior": [
+        "Recognize that writing SPEC.md from settled interview decisions belongs to spec-authoring rather than spec-interview.",
+        "Defer or route to spec-authoring instead of running another discovery interview pass."
+      ],
+      "evaluation_note": "Near-neighbor sibling routing check within spec-driven-development; verify routing to spec-authoring instead of spec-interview.",
+      "sibling_skill": "spec-authoring"
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}
