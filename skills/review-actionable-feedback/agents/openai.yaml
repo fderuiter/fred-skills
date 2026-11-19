@@ -1,4 +1,14 @@
 interface:
-  display_name: "Feedback Synthesis"
-  short_description: "Synthesize actionable code review feedback"
-  default_prompt: "Use $review-actionable-feedback on these review findings and diff context."
+  display_name: Feedback Synthesis
+  short_description: Synthesize actionable code review feedback
+  default_prompt: Use $review-actionable-feedback on these review findings and diff
+    context.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
