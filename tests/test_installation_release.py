@@ -467,13 +467,13 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((one / "checksums.sha256").is_file())
 
         ver_result = releases.verify(manifest_path)
-        self.assertEqual(75, ver_result["verified_archives"])
+        self.assertEqual(80, ver_result["verified_archives"])
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
-        # Check all 11 canonical catalog packs (tar and zip) and archive skills lists
+        # Check all 12 canonical catalog packs (tar and zip) and archive skills lists
         packs_data = read_json(ROOT / "catalog/packs.json")["packs"]
         catalog_packs = list(packs_data.keys())
-        self.assertEqual(11, len(catalog_packs))
+        self.assertEqual(12, len(catalog_packs))
         self.assertNotIn("architecture", catalog_packs)
         self.assertEqual(37, len(packs_data["full-audit"]["skills"]))
         self.assertIn("repo-audit-diagnostics", packs_data["full-audit"]["skills"])
@@ -502,7 +502,7 @@ class InstallationTests(unittest.TestCase):
         # Check consolidated suite and standalone skills
         self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
         self.assertEqual(
-            52, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
+            55, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
         )
         self.assertTrue((one / "repo-audit-concurrency.tar.gz").is_file())
         self.assertEqual(
@@ -1396,6 +1396,29 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaises(FredCliError) as miss_arch:
             releases.verify(rel_out)
         self.assertEqual("missing_archive", miss_arch.exception.code)
+
+    def test_install_rejects_disallowed_and_binary_skill_files(self):
+        sample_dir = self.source / "skills" / "sample"
+        bad_cases: list[tuple[str, bytes]] = [
+            ("README.md", b"# Readme clutter\n"),
+            ("CHANGELOG.md", b"# Changelog clutter\n"),
+            ("scripts/runner", b"#!/bin/sh\necho bad\n"),
+            ("assets/payload.bin", b"\x00\xff\xfe"),
+            ("scripts/bad.py", b"x = 1\x00\n"),
+        ]
+        for idx, (rel_path, raw_bytes) in enumerate(bad_cases):
+            bad_file = sample_dir / rel_path
+            bad_file.parent.mkdir(parents=True, exist_ok=True)
+            bad_file.write_bytes(raw_bytes)
+            dest = self.root / f"bad_install_{idx}"
+            try:
+                with self.subTest(rel_path=rel_path), self.assertRaises(ValueError):
+                    installation.install(
+                        dest, host="codex", skills=["sample"], root=self.source
+                    )
+                self.assertFalse((dest / ".agents/skills/sample").exists())
+            finally:
+                bad_file.unlink()
 
 
 if __name__ == "__main__":

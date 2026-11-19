@@ -12,6 +12,8 @@ from . import vetting
 from .common import (
     ROOT,
     FredCliError,
+    _copy_allowed_skill_package,
+    _scan_validated_skill_files,
     atomic_json,
     choose_skills,
     digest,
@@ -769,7 +771,7 @@ def _check_install_candidate(
 ) -> None:
     root, force = context
     source = root / "skills" / name
-    package_files(source)  # reject source symlinks before any writes
+    _scan_validated_skill_files(source, root=root)
     _require_vetted_skill(source, root)
     path = checked_target(target, name)
     _validate_managed_target(path, record, force)
@@ -807,10 +809,8 @@ def _stage_skills(
     backups.mkdir(parents=True)
     try:
         for name in selected:
-            shutil.copytree(
-                root / "skills" / name,
-                staged / name,
-                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".cursor-plugin"),
+            _copy_allowed_skill_package(
+                root / "skills" / name, staged / name, root=root
             )
             _require_vetted_skill(staged / name, root)
     except BaseException:

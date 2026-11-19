@@ -817,6 +817,154 @@
       "expected_assertions": {
         "unmapped_count": 0
       }
+    },
+    {
+      "id": "spec-interview-a",
+      "fixture": "fixtures/spec/interview/a",
+      "skill": "spec-interview",
+      "contract": "spec",
+      "schema": "skills/spec-interview/assets/spec.schema.json",
+      "prompt": "Pause code generation and conduct a pre-code interview from webhook_context.json. Record DEC-RETRY-001 with status interviewing when ambiguous is true, or return approved with empty decisions when already settled.",
+      "expected_keys": [
+        "DEC-RETRY-001"
+      ],
+      "expected_assertions": {
+        "status": "interviewing",
+        "interview_decision_ids": [
+          "DEC-RETRY-001"
+        ],
+        "new_file_scopes": [
+          "webhooks/dispatcher.py"
+        ]
+      }
+    },
+    {
+      "id": "spec-interview-b",
+      "fixture": "fixtures/spec/interview/b",
+      "skill": "spec-interview",
+      "contract": "spec",
+      "schema": "skills/spec-interview/assets/spec.schema.json",
+      "prompt": "Pause code generation and conduct a pre-code interview from webhook_context.json. Record DEC-RETRY-001 with status interviewing when ambiguous is true, or return approved with empty decisions when already settled.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "approved",
+        "interview_decision_ids": [],
+        "new_file_scopes": [
+          "webhooks/dispatcher.py"
+        ]
+      }
+    },
+    {
+      "id": "spec-interview-routing",
+      "fixture": "fixtures/spec/interview/a",
+      "skill": "spec-interview",
+      "contract": "spec",
+      "schema": "skills/spec-interview/assets/spec.schema.json",
+      "prompt": "Sibling routing request: synthesize settled decisions into SPEC.md rather than conducting a pre-code interview. Abstain with draft status and empty lists.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "interview_decision_ids": []
+      }
+    },
+    {
+      "id": "spec-authoring-a",
+      "fixture": "fixtures/spec/authoring/a",
+      "skill": "spec-authoring",
+      "contract": "spec",
+      "schema": "skills/spec-authoring/assets/spec.schema.json",
+      "writable_paths": [
+        "SPEC.md"
+      ],
+      "prompt": "Author SPEC.md and validate spec.json from spec_notes.json without modifying exporter.py. When ready is true, write SPEC.md and emit approved spec.json with DEC-EXPORT-001; otherwise keep status draft.",
+      "expected_keys": [
+        "DEC-EXPORT-001"
+      ],
+      "expected_assertions": {
+        "status": "approved",
+        "interview_decision_ids": [
+          "DEC-EXPORT-001"
+        ],
+        "new_file_scopes": [
+          "exporter.py"
+        ],
+        "generated_files": [
+          "SPEC.md"
+        ]
+      }
+    },
+    {
+      "id": "spec-authoring-b",
+      "fixture": "fixtures/spec/authoring/b",
+      "skill": "spec-authoring",
+      "contract": "spec",
+      "schema": "skills/spec-authoring/assets/spec.schema.json",
+      "prompt": "Author SPEC.md and validate spec.json from spec_notes.json without modifying exporter.py. When ready is true, write SPEC.md and emit approved spec.json with DEC-EXPORT-001; otherwise keep status draft.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "interview_decision_ids": []
+      }
+    },
+    {
+      "id": "spec-authoring-routing",
+      "fixture": "fixtures/spec/authoring/a",
+      "skill": "spec-authoring",
+      "contract": "spec",
+      "schema": "skills/spec-authoring/assets/spec.schema.json",
+      "prompt": "Sibling routing request: verify whether implemented diffs stay inside SPEC.md file scopes rather than authoring a specification. Abstain with draft status and empty lists.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "interview_decision_ids": []
+      }
+    },
+    {
+      "id": "spec-convergence-a",
+      "fixture": "fixtures/spec/convergence/a",
+      "skill": "spec-convergence",
+      "contract": "spec",
+      "schema": "skills/spec-convergence/assets/spec.schema.json",
+      "prompt": "Verify planned and touched files in convergence_inputs.json against spec_scopes and out_of_scope. Record CHK-SCOPE-001 out-of-scope and status diverged on scope drift, or CHK-ALIGNED-001 aligned and status converged when clean.",
+      "expected_keys": [
+        "CHK-SCOPE-001"
+      ],
+      "expected_assertions": {
+        "status": "diverged",
+        "convergence_check_ids": [
+          "CHK-SCOPE-001"
+        ]
+      }
+    },
+    {
+      "id": "spec-convergence-b",
+      "fixture": "fixtures/spec/convergence/b",
+      "skill": "spec-convergence",
+      "contract": "spec",
+      "schema": "skills/spec-convergence/assets/spec.schema.json",
+      "prompt": "Verify planned and touched files in convergence_inputs.json against spec_scopes and out_of_scope. Record CHK-SCOPE-001 out-of-scope and status diverged on scope drift, or CHK-ALIGNED-001 aligned and status converged when clean.",
+      "expected_keys": [
+        "CHK-ALIGNED-001"
+      ],
+      "expected_assertions": {
+        "status": "converged",
+        "convergence_check_ids": [
+          "CHK-ALIGNED-001"
+        ]
+      }
+    },
+    {
+      "id": "spec-convergence-routing",
+      "fixture": "fixtures/spec/convergence/a",
+      "skill": "spec-convergence",
+      "contract": "spec",
+      "schema": "skills/spec-convergence/assets/spec.schema.json",
+      "prompt": "Sibling routing request: pause implementation and interview the user on non-obvious UX and trade-off choices rather than checking specification convergence. Abstain with draft status and empty lists.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "convergence_check_ids": []
+      }
     }
   ]
 }

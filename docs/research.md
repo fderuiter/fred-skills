@@ -56,4 +56,6 @@ These files contain original instructions; third-party implementations are not b
 - [OpenTelemetry signals](https://opentelemetry.io/docs/concepts/signals/): Logs, metrics, traces, and contextual telemetry.
 - [Knip](https://knip.dev/): Unused JS/TS files, exports, dependencies, and configured entry points.
 - [Superpowers](https://github.com/obra/superpowers): Composable development workflows and behavior-driven skill evaluation.
+- [GitHub Spec Kit](https://github.com/github/spec-kit): Specification-first workflows and cross-artifact plan/implementation alignment checks.
+- [Matt Pocock skills](https://github.com/mattpocock/skills): Pre-implementation Socratic interviewing (`grill-me`) and concise specification drafting (`write-a-prd`).
 - [Skills directory](https://skills.sh/docs): Discovery and distribution; installation telemetry is not correctness evidence.

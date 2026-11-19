@@ -1,0 +1,38 @@
+{
+  "topic": "spec-authoring",
+  "scenarios": [
+    {
+      "id": "spec-authoring-failure",
+      "prompt": "Author SPEC.md and validate spec.json from the settled interview notes for this export endpoint.",
+      "fixture_shape": "Draft specification notes omit out_of_scope exclusions, leave verification_commands empty, and reference unresolved storage format choices while attempting to mark status approved.",
+      "expected_behavior": [
+        "Keep specification status in draft or interviewing when mandatory scope boundaries or decisions are incomplete.",
+        "Populate structured interview_decisions, new_file_scopes, out_of_scope, and verification_commands required by spec.schema.json.",
+        "Emit synchronized SPEC.md and spec.json artifacts without modifying application code."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and specification notes without revealing expected validation status."
+    },
+    {
+      "id": "spec-authoring-safe",
+      "prompt": "Author SPEC.md and validate spec.json from the settled interview notes for this export endpoint.",
+      "fixture_shape": "Complete interview decisions define streaming CSV behavior, repository-relative new_file_scopes, explicit out_of_scope CLI exclusions, and deterministic pytest verification_commands.",
+      "expected_behavior": [
+        "Generate SPEC.md following spec-template.md with traceable REQ-* requirements and settled DEC-* rationale.",
+        "Emit approved spec.json conforming strictly to Draft 2020-12 spec.schema.json.",
+        "Preserve read-only boundary over application source files, symlinks, and network access."
+      ],
+      "evaluation_note": "Construct a complete specification authoring control; keep expected decision and requirement identifiers out of the execution prompt."
+    },
+    {
+      "id": "spec-authoring-routing",
+      "prompt": "Verify whether the planned implementation tasks and modified source files stay within SPEC.md file scopes and pass all verification commands.",
+      "expected_behavior": [
+        "Recognize that checking planned tasks and implemented diffs against SPEC.md boundaries targets spec-convergence rather than spec-authoring.",
+        "Defer or route to spec-convergence instead of rewriting the specification contract."
+      ],
+      "evaluation_note": "Near-neighbor sibling routing check within spec-driven-development; verify routing to spec-convergence instead of spec-authoring.",
+      "sibling_skill": "spec-convergence"
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

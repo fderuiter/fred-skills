@@ -697,6 +697,138 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
     raise ValueError("Unsupported workflow contract in prompt")
 
 
+def _handle_spec(request: str, source: Path) -> dict[str, Any]:
+    if "Sibling routing request:" in request:
+        return {
+            "actor": ACTOR,
+            "schema_version": "1.0",
+            "title": "Specification routing abstention",
+            "status": "draft",
+            "interview_decisions": [],
+            "new_file_scopes": [],
+            "out_of_scope": [],
+            "verification_commands": [],
+        }
+    if (source / "webhook_context.json").exists():
+        ctx = json.loads((source / "webhook_context.json").read_text(encoding="utf-8"))
+        mod = str(ctx["existing_module"])
+        if ctx.get("ambiguous"):
+            return {
+                "actor": ACTOR,
+                "schema_version": "1.0",
+                "title": "Webhook delivery retry specification",
+                "status": "interviewing",
+                "interview_decisions": [
+                    {
+                        "id": "DEC-RETRY-001",
+                        "category": "edge-case",
+                        "question": "Should exhausted webhook retries move payloads to a dead-letter queue or drop after bounded backoff?",
+                        "decision": "Pending operator selection between durable DLQ and bounded drop.",
+                        "rationale": f"{mod}: existing dispatcher lacks retry persistence.",
+                    }
+                ],
+                "new_file_scopes": [mod],
+                "out_of_scope": ["CLI flags"],
+                "verification_commands": ["pytest tests/test_dispatcher.py"],
+            }
+        return {
+            "actor": ACTOR,
+            "schema_version": "1.0",
+            "title": "Webhook delivery retry specification",
+            "status": "approved",
+            "interview_decisions": [],
+            "new_file_scopes": [mod],
+            "out_of_scope": ["CLI flags"],
+            "verification_commands": ["pytest tests/test_dispatcher.py"],
+        }
+    if (source / "spec_notes.json").exists():
+        notes = json.loads((source / "spec_notes.json").read_text(encoding="utf-8"))
+        if notes.get("ready"):
+            scope = str(notes["scope"])
+            out_scope = str(notes["out_of_scope"])
+            (source / "SPEC.md").write_text(
+                f"# Feature Specification: {notes['title']}\n\n"
+                f"- Approved scope: `{scope}`\n"
+                f"- Out of scope: `{out_scope}`\n",
+                encoding="utf-8",
+            )
+            return {
+                "actor": ACTOR,
+                "schema_version": "1.0",
+                "title": str(notes["title"]),
+                "status": "approved",
+                "interview_decisions": [
+                    {
+                        "id": "DEC-EXPORT-001",
+                        "category": "architecture",
+                        "question": "Should CSV export stream row chunks or buffer full payloads in memory?",
+                        "decision": "Stream bounded row chunks from exporter.py.",
+                        "rationale": "exporter.py: keeps memory O(chunk) on large exports.",
+                    }
+                ],
+                "new_file_scopes": [scope],
+                "out_of_scope": [out_scope],
+                "verification_commands": ["pytest tests/test_exporter.py"],
+            }
+        return {
+            "actor": ACTOR,
+            "schema_version": "1.0",
+            "title": str(notes["title"]),
+            "status": "draft",
+            "interview_decisions": [],
+            "new_file_scopes": [],
+            "out_of_scope": [],
+            "verification_commands": [],
+        }
+    if (source / "convergence_inputs.json").exists():
+        cdata = json.loads(
+            (source / "convergence_inputs.json").read_text(encoding="utf-8")
+        )
+        allowed = set(cdata.get("spec_scopes", []))
+        excluded = set(cdata.get("out_of_scope", []))
+        touched = list(cdata.get("touched_files", []))
+        drifted = [p for p in touched if p in excluded or p not in allowed]
+        if drifted or not cdata.get("tests_verified"):
+            bad_target = drifted[0] if drifted else "verification_commands"
+            return {
+                "actor": ACTOR,
+                "schema_version": "1.0",
+                "title": "Webhook retry convergence check",
+                "status": "diverged",
+                "interview_decisions": [],
+                "new_file_scopes": sorted(allowed),
+                "out_of_scope": sorted(excluded),
+                "verification_commands": ["pytest tests/test_dispatcher.py"],
+                "convergence_checks": [
+                    {
+                        "id": "CHK-SCOPE-001",
+                        "target": bad_target,
+                        "status": "out-of-scope",
+                        "evidence": f"convergence_inputs.json: {bad_target} violates SPEC.md scope boundaries.",
+                    }
+                ],
+            }
+        return {
+            "actor": ACTOR,
+            "schema_version": "1.0",
+            "title": "Webhook retry convergence check",
+            "status": "converged",
+            "interview_decisions": [],
+            "new_file_scopes": sorted(allowed),
+            "out_of_scope": sorted(excluded),
+            "verification_commands": ["pytest tests/test_dispatcher.py"],
+            "convergence_checks": [
+                {
+                    "id": "CHK-ALIGNED-001",
+                    "target": touched[0],
+                    "status": "aligned",
+                    "evidence": f"convergence_inputs.json: {touched[0]} stays within SPEC.md scope and passes verification.",
+                }
+            ],
+        }
+    raise ValueError("Unsupported spec fixture")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", type=Path, required=True)
@@ -711,6 +843,8 @@ def main() -> None:
         payload = _handle_review(request, source)
     elif "conforming to testing.schema.json" in request:
         payload = _handle_testing(request, source)
+    elif "conforming to spec.schema.json" in request:
+        payload = _handle_spec(request, source)
     elif any(
         schema_name in request
         for schema_name in (

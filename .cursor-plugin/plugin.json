@@ -56,6 +56,9 @@
     "./skills/review-actionable-feedback",
     "./skills/review-diff-analysis",
     "./skills/review-invariant-violations",
+    "./skills/spec-authoring",
+    "./skills/spec-convergence",
+    "./skills/spec-interview",
     "./skills/test-case-generation",
     "./skills/test-gap-analysis",
     "./skills/test-suite-verification"

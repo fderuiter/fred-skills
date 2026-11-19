@@ -1272,18 +1272,18 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 files=["README.md", "docs/usage.md", "docs/release-notes-0.2.0.md"],
             )
             self.assertTrue(
-                any("README.md:L4:" in err and "51" in err for err in count_errors),
+                any("README.md:L4:" in err and "54" in err for err in count_errors),
                 f"Expected README.md:L4 count drift failure, got: {count_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L20:" in err and "51" in err for err in count_errors
+                    "docs/usage.md:L20:" in err and "54" in err for err in count_errors
                 ),
                 f"Expected docs/usage.md:L20 count drift failure, got: {count_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/release-notes-0.2.0.md:L6:" in err and "51" in err
+                    "docs/release-notes-0.2.0.md:L6:" in err and "54" in err
                     for err in count_errors
                 ),
                 f"Expected release-notes L6 count drift failure, got: {count_errors}",

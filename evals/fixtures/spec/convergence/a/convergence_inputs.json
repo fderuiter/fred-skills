@@ -1,0 +1,6 @@
+{
+  "spec_scopes": ["webhooks/dispatcher.py"],
+  "out_of_scope": ["cli/main.py"],
+  "touched_files": ["webhooks/dispatcher.py", "cli/main.py"],
+  "tests_verified": false
+}

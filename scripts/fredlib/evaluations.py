@@ -32,6 +32,7 @@ _SUITE_TO_CONTRACT: dict[str, str] = {
     "software-architecture": "architecture",
     "code-review": "review",
     "automated-testing": "testing",
+    "spec-driven-development": "spec",
     "repository-workflows": "workflow",
 }
 
@@ -130,6 +131,12 @@ def _build_prompt_request(
         contract_instruction = (
             f"Inspect ./source. Return result.json conforming to {schema_label} "
             "(schema_version, component, framework, and test_cases)."
+        )
+    elif contract == "spec":
+        schema_label = schema_path.name if schema_path else "spec.schema.json"
+        contract_instruction = (
+            f"Inspect ./source. Return result.json conforming to {schema_label} "
+            "(schema_version, title, status, interview_decisions, new_file_scopes, out_of_scope, and verification_commands)."
         )
     else:
         schema_label = schema_path.name if schema_path else "workflow.schema.json"
@@ -305,6 +312,8 @@ def _expected_keys_from_case(case: dict[str, Any]) -> set[str]:
             "decision_ids",
             "finding_ids",
             "test_case_ids",
+            "interview_decision_ids",
+            "convergence_check_ids",
             "changed_files",
         ):
             vals = assertions.get(list_field)
@@ -522,6 +531,77 @@ def _grade_testing(
                     assertions_ok = False
         if "verified" in assertions and any(
             tc.get("verified") is not assertions["verified"] for tc in test_cases
+        ):
+            assertions_ok = False
+        if isinstance(assertions.get("generated_files"), list):
+            for rel in assertions["generated_files"]:
+                if rel not in changed_paths or not (source_dir / rel).is_file():
+                    assertions_ok = False
+
+    return _GradeOutcome(
+        reported=reported,
+        grounded=grounded,
+        expected=expected,
+        uncertain_count=uncertain,
+        assertions_ok=assertions_ok,
+    )
+
+
+def _grade_spec(
+    payload: dict[str, Any],
+    case: dict[str, Any],
+    changed_paths: set[str],
+    source_dir: Path,
+) -> _GradeOutcome:
+    decisions = [
+        d for d in payload.get("interview_decisions", []) if isinstance(d, dict)
+    ]
+    checks = [c for c in payload.get("convergence_checks", []) if isinstance(c, dict)]
+    decision_ids = {str(d["id"]) for d in decisions if isinstance(d.get("id"), str)}
+    check_ids = {str(c["id"]) for c in checks if isinstance(c.get("id"), str)}
+    reported = decision_ids | check_ids
+
+    grounded: set[str] = set()
+    for d in decisions:
+        did = d.get("id")
+        if (
+            isinstance(did, str)
+            and isinstance(d.get("question"), str)
+            and d["question"].strip()
+            and isinstance(d.get("decision"), str)
+            and d["decision"].strip()
+        ):
+            grounded.add(did)
+    for c in checks:
+        cid = c.get("id")
+        if (
+            isinstance(cid, str)
+            and isinstance(c.get("target"), str)
+            and c["target"].strip()
+            and isinstance(c.get("evidence"), str)
+            and c["evidence"].strip()
+        ):
+            grounded.add(cid)
+
+    uncertain = int(
+        payload.get("status") in {"draft", "interviewing"} and bool(reported)
+    )
+    assertions = case.get("expected_assertions") or {}
+    expected = _expected_keys_from_case(case)
+    assertions_ok = True
+    if isinstance(assertions, dict):
+        if "status" in assertions and payload.get("status") != assertions["status"]:
+            assertions_ok = False
+        if "interview_decision_ids" in assertions and decision_ids != set(
+            assertions["interview_decision_ids"]
+        ):
+            assertions_ok = False
+        if "convergence_check_ids" in assertions and check_ids != set(
+            assertions["convergence_check_ids"]
+        ):
+            assertions_ok = False
+        if "new_file_scopes" in assertions and payload.get("new_file_scopes") != list(
+            assertions["new_file_scopes"]
         ):
             assertions_ok = False
         if isinstance(assertions.get("generated_files"), list):
@@ -758,6 +838,8 @@ def _dispatch_suite_grader(
         return _grade_review(payload, case)
     if contract == "testing":
         return _grade_testing(payload, case, changed_paths, source_dir)
+    if contract == "spec":
+        return _grade_spec(payload, case, changed_paths, source_dir)
     if contract == "workflow":
         return _grade_workflow(payload, case, changed_paths, source_dir)
     return _grade_audit(payload, case)

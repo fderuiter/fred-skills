@@ -10,9 +10,10 @@ import json
 import os
 import platform
 import re
+import shlex
 import sys
 from collections.abc import Collection, Iterable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
 REDACTION_TIERS: tuple[str, ...] = ("skeleton", "evidence", "full")
@@ -315,6 +316,11 @@ _DEFAULT_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "test-case-generation",
         "test-suite-verification",
     ),
+    "spec-driven-development": (
+        "spec-interview",
+        "spec-authoring",
+        "spec-convergence",
+    ),
 }
 
 _DEFAULT_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
@@ -338,6 +344,10 @@ _DEFAULT_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
         "testing.json",
         "shared/automated-testing/resources/assets/testing.schema.json",
     ),
+    "spec-driven-development": (
+        "spec.json",
+        "shared/spec-driven-development/resources/assets/spec.schema.json",
+    ),
 }
 
 _DEFAULT_TASK_TO_SUITE: dict[str, str] = {
@@ -358,6 +368,7 @@ _DEFAULT_TASK_TO_SUITE: dict[str, str] = {
     "design-architecture": "software-architecture",
     "review-code-changes": "code-review",
     "expand-automated-tests": "automated-testing",
+    "specify-feature": "spec-driven-development",
 }
 
 _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
@@ -432,6 +443,17 @@ _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
     ),
     ("review", frozenset({"verdict"})),
     ("testing", frozenset({"test_cases"})),
+    (
+        "spec",
+        frozenset(
+            {
+                "interview_decisions",
+                "new_file_scopes",
+                "out_of_scope",
+                "verification_commands",
+            }
+        ),
+    ),
     ("architecture", frozenset({"boundaries", "decisions"})),
     ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
 )
@@ -440,6 +462,7 @@ _DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "architecture": "software-architecture",
     "review": "code-review",
     "testing": "automated-testing",
+    "spec": "spec-driven-development",
     "remediation": "repository-workflows",
     "reconciliation": "repository-workflows",
     "finding-verification": "repository-workflows",
@@ -1585,7 +1608,7 @@ def detect_failures(transcript_text: str) -> dict[str, Any]:
 
 
 def _topic_for_specialist(specialist: str) -> str:
-    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-"):
+    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-", "spec-"):
         if specialist.startswith(prefix):
             return specialist[len(prefix) :]
     return specialist
@@ -1701,13 +1724,17 @@ def _detect_transcript_domain_suite(transcript_text: str) -> str | None:
         return "code-review"
     if re.search(r"\btesting\.(?:json|schema\.json)\b", transcript_text):
         return "automated-testing"
+    if re.search(r"\bspec\.(?:json|schema\.json)\b", transcript_text):
+        return "spec-driven-development"
     return None
 
 
 def _extract_artifact_references(
     transcript_text: str, audit_data: dict[str, Any] | None
 ) -> list[str]:
-    id_pattern = re.compile(r"\b((?:ADR|REV|TC|GAP|[FEICRT])-\d+|E-[a-z0-9_-]+)\b")
+    id_pattern = re.compile(
+        r"\b((?:ADR|REV|TC|GAP|SPEC|DEC|REQ|CHK|[FEICRT])-\d+|E-[a-z0-9_-]+)\b"
+    )
     if not audit_data:
         return sorted(set(id_pattern.findall(transcript_text)))
 
@@ -1720,6 +1747,9 @@ def _extract_artifact_references(
         "issues",
         "decisions",
         "test_cases",
+        "interview_decisions",
+        "requirements",
+        "convergence_checks",
     ):
         items = audit_data.get(section)
         if not isinstance(items, list):
@@ -1851,16 +1881,16 @@ def correlate_audit_domain(
                     specialist_found, topic_found = kw_match
                     break
 
+    _domain_suites = {
+        "software-architecture",
+        "code-review",
+        "automated-testing",
+        "spec-driven-development",
+    }
     effective_domain_suite = (
         artifact_suite
-        if artifact_suite
-        in {"software-architecture", "code-review", "automated-testing"}
-        else (
-            run_suite
-            if run_suite
-            in {"software-architecture", "code-review", "automated-testing"}
-            else None
-        )
+        if artifact_suite in _domain_suites
+        else (run_suite if run_suite in _domain_suites else None)
     )
     if specialist_found and not topic_found:
         topic_found = _topic_for_specialist(specialist_found)
@@ -1868,7 +1898,11 @@ def correlate_audit_domain(
         topic_found = (
             "architecture"
             if effective_domain_suite == "software-architecture"
-            else effective_domain_suite
+            else (
+                "spec"
+                if effective_domain_suite == "spec-driven-development"
+                else effective_domain_suite
+            )
         )
 
     ledger_refs = _extract_artifact_references(transcript_text, audit_data)
@@ -1882,14 +1916,14 @@ def correlate_audit_domain(
 
 def _resolve_recovery_suite(
     run_data: dict[str, Any] | None,
-    workspace_dir: Path | None,
+    workspace_dir: PurePath | None,
     specialist_skill: str | None,
 ) -> tuple[str, str, str]:
     if workspace_dir is None and run_data is None:
         fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
         return "repository-audits", fname, schema_rel
     if (
-        workspace_dir is not None
+        isinstance(workspace_dir, Path)
         and workspace_dir.is_dir()
         and (workspace_dir / "audit.json").is_file()
     ):
@@ -1901,7 +1935,7 @@ def _resolve_recovery_suite(
             run_suite, _SUITE_ARTIFACTS["repository-audits"]
         )
         return run_suite, fname, schema_rel
-    if workspace_dir is not None and workspace_dir.is_dir():
+    if isinstance(workspace_dir, Path) and workspace_dir.is_dir():
         for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
             if (workspace_dir / fname).is_file():
                 return sname, fname, schema_rel
@@ -1915,10 +1949,87 @@ def _resolve_recovery_suite(
     return "repository-audits", fname, schema_rel
 
 
+def _escape_inline_char(ch: str) -> str:
+    if ch == "\n":
+        return r"\n"
+    if ch == "\r":
+        return r"\r"
+    if ch == "\t":
+        return r"\t"
+    if ch == "\x00":
+        return r"\x00"
+    return ch
+
+
+def _inline_code_span(value: object) -> str:
+    sanitized = "".join(_escape_inline_char(ch) for ch in str(value))
+    if not sanitized:
+        return "` `"
+    max_ticks = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", sanitized)),
+        default=0,
+    )
+    fence = "`" * (max_ticks + 1)
+    needs_pad = (
+        sanitized.startswith("`")
+        or sanitized.endswith("`")
+        or (
+            sanitized.startswith(" ")
+            and sanitized.endswith(" ")
+            and bool(sanitized.strip(" "))
+        )
+    )
+    inner = f" {sanitized} " if needs_pad else sanitized
+    return f"{fence}{inner}{fence}"
+
+
+def _fenced_code_block(value: object) -> str:
+    raw = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    max_ticks = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", raw)),
+        default=0,
+    )
+    fence = "`" * max(3, max_ticks + 1)
+    return f"{fence}\n{raw}\n{fence}"
+
+
+def _sanitize_report_inline(value: object) -> str:
+    single = " ".join(str(value).splitlines())
+    single = single.replace("<", "&lt;").replace(">", "&gt;")
+    single = re.sub(r"^(\s*)(#+)", r"\1\\\2", single)
+    if "`" in single:
+        single = single.replace("`", r"\`")
+    if "~~~" in single:
+        single = single.replace("~~~", r"\~~~")
+    return single
+
+
+_SAFE_POSIX_ARG_RE = re.compile(r"\A[A-Za-z0-9_@%+=:,./-][A-Za-z0-9_@%+=:,./~-]*\Z")
+_SAFE_WINDOWS_ARG_RE = re.compile(
+    r"\A[A-Za-z0-9_@%+=:,./\\-][A-Za-z0-9_@%+=:,./\\~-]*\Z"
+)
+
+
+def _format_workspace_arg(
+    workspace_dir: PurePath | None, placeholder: str, subpath: str | None = None
+) -> str:
+    if workspace_dir is None:
+        return f"{placeholder}/{subpath}" if subpath else placeholder
+    raw = f"{workspace_dir}/{subpath}" if subpath else str(workspace_dir)
+    safe_re = (
+        _SAFE_WINDOWS_ARG_RE
+        if isinstance(workspace_dir, PureWindowsPath)
+        else _SAFE_POSIX_ARG_RE
+    )
+    if safe_re.match(raw):
+        return raw
+    return shlex.quote(raw)
+
+
 def formulate_recovery_instructions(
     failure: dict[str, Any],
     run_data: dict[str, Any] | None = None,
-    workspace_dir: Path | None = None,
+    workspace_dir: PurePath | None = None,
     specialist_skill: str | None = None,
 ) -> dict[str, Any]:
     """Generate concrete recovery steps to resume a run from the last valid checkpoint."""
@@ -1929,11 +2040,12 @@ def formulate_recovery_instructions(
         run_data, workspace_dir, specialist_skill
     )
     is_domain_suite = deliverable != "audit.json"
-    dir_str = (
-        str(workspace_dir)
-        if workspace_dir
-        else ("<run-dir>" if is_domain_suite else "<audit-run-dir>")
-    )
+    placeholder = "<run-dir>" if is_domain_suite else "<audit-run-dir>"
+    dir_str = _format_workspace_arg(workspace_dir, placeholder)
+    deliverable_arg = _format_workspace_arg(workspace_dir, placeholder, deliverable)
+    audit_arg = _format_workspace_arg(workspace_dir, placeholder, "audit.json")
+    run_json_arg = _format_workspace_arg(workspace_dir, placeholder, "run.json")
+    matched_span = _inline_code_span(failure.get("matched_line", ""))
 
     if run_data and run_data.get("checkpoints"):
         last_ckpt = run_data["checkpoints"][-1]
@@ -1944,7 +2056,7 @@ def formulate_recovery_instructions(
     ftype = failure.get("failure_type")
     if ftype == "tool_timeout":
         instructions.append(
-            f"1. Check the command that timed out at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
+            f"1. Check the command that timed out at line {failure.get('line_number')}: {matched_span}."
         )
         instructions.append(
             "2. Add file exclusion patterns or narrow the target scope in the tool arguments."
@@ -1963,21 +2075,21 @@ def formulate_recovery_instructions(
 
     elif ftype == "schema_validation_error":
         instructions.append(
-            f"1. Inspect the schema validation error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
+            f"1. Inspect the schema validation error at line {failure.get('line_number')}: {matched_span}."
         )
         if is_domain_suite:
             instructions.append(
                 f"2. Validate {deliverable} against {schema_rel}: python scripts/fred.py validate-run {dir_str}"
             )
             instructions.append(
-                f"3. Correct missing required properties, invalid enum values, duplicate IDs, unsafe relative paths, or undeclared keys in {dir_str}/{deliverable} (additionalProperties is false)."
+                f"3. Correct missing required properties, invalid enum values, duplicate IDs, unsafe relative paths, or undeclared keys in {deliverable_arg} (additionalProperties is false)."
             )
             instructions.append(
                 f"4. Re-verify {deliverable} conformance, then resume {suite_name} run: python scripts/fred.py resume {dir_str}"
             )
         else:
             instructions.append(
-                f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {dir_str}/audit.json"
+                f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {audit_arg}"
             )
             instructions.append(
                 "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json."
@@ -1995,7 +2107,7 @@ def formulate_recovery_instructions(
         )
         if is_domain_suite:
             instructions.append(
-                f"3. Persist completed entries in {dir_str}/{deliverable} and split remaining {suite_name} phases into smaller slices."
+                f"3. Persist completed entries in {deliverable_arg} and split remaining {suite_name} phases into smaller slices."
             )
         else:
             instructions.append(
@@ -2007,15 +2119,15 @@ def formulate_recovery_instructions(
 
     else:
         instructions.append(
-            f"1. Review the unclassified error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
+            f"1. Review the unclassified error at line {failure.get('line_number')}: {matched_span}."
         )
         if is_domain_suite:
             instructions.append(
-                f"2. Inspect {dir_str}/run.json and {dir_str}/{deliverable} (schema: {schema_rel}) for partial progress."
+                f"2. Inspect {run_json_arg} and {deliverable_arg} (schema: {schema_rel}) for partial progress."
             )
             if suite_name == "automated-testing":
                 instructions.append(
-                    f"3. Confirm `--allow-fixes` authority in {dir_str}/run.json if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                    f"3. Confirm `--allow-fixes` authority in {run_json_arg} if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
                 )
             else:
                 instructions.append(
@@ -2023,7 +2135,7 @@ def formulate_recovery_instructions(
                 )
         else:
             instructions.append(
-                f"2. Inspect {dir_str}/run.json and {dir_str}/audit.json for partial progress."
+                f"2. Inspect {run_json_arg} and {audit_arg} for partial progress."
             )
             instructions.append(
                 f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
@@ -2033,7 +2145,7 @@ def formulate_recovery_instructions(
         "--allow-fixes" in step for step in instructions
     ):
         instructions.append(
-            f"{len(instructions) + 1}. Confirm `--allow-fixes` authority in {dir_str}/run.json (`application_changes: true`) before writing runnable test files to the repository."
+            f"{len(instructions) + 1}. Confirm `--allow-fixes` authority in {run_json_arg} (`application_changes: true`) before writing runnable test files to the repository."
         )
 
     return {
@@ -2215,24 +2327,30 @@ def render_report(bundle: dict[str, Any]) -> str:
         rejected = disc.get("rejected_candidates", [])
         if rejected:
             rejected_md = "\n".join(
-                f"  - `{item.get('path', '')}` — {item.get('reason', '')}"
+                f"  - {_inline_code_span(item.get('path', ''))} — {_sanitize_report_inline(item.get('reason', ''))}"
                 for item in rejected
             )
         else:
             rejected_md = "  - None"
+        selected_span = _inline_code_span(disc.get("selected_transcript", "unknown"))
+        sel_reason = _sanitize_report_inline(disc.get("selection_reason", "unknown"))
         discovery_section = f"""
 ## Transcript discovery
 
-- **Source:** {disc.get("source", "unknown")}
-- **Selected Transcript:** `{disc.get("selected_transcript", "unknown")}`
-- **Selection Reason:** {disc.get("selection_reason", "unknown")}
+- **Source:** {_sanitize_report_inline(disc.get("source", "unknown"))}
+- **Selected Transcript:** {selected_span}
+- **Selection Reason:** {sel_reason}
 - **Rejected Candidates:**
 {rejected_md}
 """
 
+    matched_block = _fenced_code_block(fc.get("matched_line", ""))
+    summary_text = _sanitize_report_inline(fc.get("summary", ""))
+    session_id_text = _sanitize_report_inline(bundle.get("session_id", "unknown"))
+
     return f"""# Diagnostic Triage Report
 
-- **Session / Run ID:** {bundle.get("session_id", "unknown")}
+- **Session / Run ID:** {session_id_text}
 - **Timestamp:** {bundle.get("timestamp", "unknown")}
 - **Failure Classification:** {fc.get("failure_type", "unknown")}
 - **Root Cause Line:** {fc.get("line_number", "unknown")}
@@ -2240,11 +2358,9 @@ def render_report(bundle: dict[str, Any]) -> str:
 
 ## Summary of failure
 
-{fc.get("summary", "")}
+{summary_text}
 
-```
-{fc.get("matched_line", "")}
-```
+{matched_block}
 
 ## Audit domain and ledger correlation
 

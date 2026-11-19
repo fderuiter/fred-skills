@@ -1186,19 +1186,19 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(52, len(suite_skills))
+        self.assertEqual(55, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("52 total packages", arch_text)
+        self.assertIn("55 total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("52 total packages", val_text)
+        self.assertIn("55 total packages", val_text)
         self.assertIn(
-            "Each of the 52 skills in the suite includes three scenario specifications",
+            "Each of the 55 skills in the suite includes three scenario specifications",
             val_text,
         )
         self.assertIn(
-            "These 156 specifications are not 156 executed evaluations",
+            "These 165 specifications are not 165 executed evaluations",
             val_text,
         )
         self.assertNotIn("42 skills in the suite", val_text)
@@ -1207,14 +1207,14 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("52 total packages", impl_text)
+        self.assertIn("55 total packages", impl_text)
 
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 52-package pack", usage_text)
+        self.assertIn("complete 55-package pack", usage_text)
         self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
-            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 52 packages or `starter`)",
+            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 55 packages or `starter`)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
@@ -1231,7 +1231,7 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 52 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 55 skills or `starter` for 6 core audit skills)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
@@ -1267,7 +1267,7 @@ class PackageTests(unittest.TestCase):
         )
         self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 52 |",
+            "| `complete` | Every audit and engineering workflow. | 55 |",
             exp_text,
         )
 
@@ -1604,7 +1604,7 @@ class PackageTests(unittest.TestCase):
             suite_to_skills[suite["name"]] = skills_in_suite
             all_suite_skills.extend(skills_in_suite)
 
-        self.assertEqual(52, len(all_suite_skills))
+        self.assertEqual(55, len(all_suite_skills))
         self.assertEqual(
             {
                 "repository-audits",
@@ -1612,6 +1612,7 @@ class PackageTests(unittest.TestCase):
                 "software-architecture",
                 "code-review",
                 "automated-testing",
+                "spec-driven-development",
             },
             set(suite_to_skills),
         )
@@ -1688,7 +1689,7 @@ class PackageTests(unittest.TestCase):
                 self.assertIsNone(heading_re.search(prompt_text), skill_name)
 
         # Every skill has a distinct SVG and each suite uses one distinct palette color
-        self.assertEqual(52, len(svg_hashes))
+        self.assertEqual(55, len(svg_hashes))
         for suite_name, colors in suite_bg_colors.items():
             self.assertEqual(
                 1,
@@ -1696,7 +1697,7 @@ class PackageTests(unittest.TestCase):
                 f"{suite_name} must use a single suite palette: {colors}",
             )
         distinct_suite_colors = {next(iter(c)) for c in suite_bg_colors.values()}
-        self.assertEqual(5, len(distinct_suite_colors))
+        self.assertEqual(6, len(distinct_suite_colors))
 
         diagnostics_prompt = (
             ROOT / "skills/repo-audit-diagnostics/assets/prompt.md"
@@ -2025,8 +2026,8 @@ class PackageTests(unittest.TestCase):
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)
         self.assertEqual([], errors)
-        self.assertEqual(52, telemetry["total_packages"])
-        self.assertEqual(52, telemetry["passed_packages"])
+        self.assertEqual(55, telemetry["total_packages"])
+        self.assertEqual(55, telemetry["passed_packages"])
         self.assertEqual(0, telemetry["failed_packages"])
         self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
         self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
@@ -2051,7 +2052,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
         self.assertTrue(telemetry_file.is_file())
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
-        self.assertEqual(52, exported["total_packages"])
+        self.assertEqual(55, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
 
     def test_all_skills_have_output_format_schemas(self):
@@ -2059,7 +2060,7 @@ class PackageTests(unittest.TestCase):
         packages = sorted(
             p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
         )
-        self.assertEqual(len(packages), 52)
+        self.assertEqual(len(packages), 55)
         for package in packages:
             schemas = sorted(package.glob("assets/*.schema.json"))
             self.assertGreater(
@@ -2405,10 +2406,143 @@ class PackageTests(unittest.TestCase):
         self.assertTrue((installed_dir / "SKILL.md").is_file())
         self.assertFalse((installed_dir / ".cursor-plugin").exists())
 
+    def test_frontmatter_xml_tags_html_comments_and_hidden_unicode_are_rejected(
+        self,
+    ) -> None:
+        skill_md = self.skill / "SKILL.md"
+        baseline = skill_md.read_text(encoding="utf-8")
+
+        # XML tags in frontmatter name and description are rejected
+        skill_md.write_text(
+            '---\nname: "<script>sample-audit</script>"\n'
+            'description: "Audit <system>inject</system> instructions."\n---\n\n'
+            + baseline.split("---\n\n", 1)[1],
+            encoding="utf-8",
+        )
+        xml_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("frontmatter 'name'" in err for err in xml_errors), xml_errors
+        )
+        self.assertTrue(
+            any("frontmatter 'description'" in err for err in xml_errors), xml_errors
+        )
+
+        # HTML comments in SKILL.md and reference markdown are rejected
+        skill_md.write_text(
+            baseline + "\n<!-- hidden prompt instruction -->\n", encoding="utf-8"
+        )
+        comment_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("HTML comments are not allowed" in err for err in comment_errors),
+            comment_errors,
+        )
+        skill_md.write_text(baseline, encoding="utf-8")
+
+        ref_md = self.skill / "references/guide.md"
+        ref_md.write_text("# Guide\n\n<!-- hidden ref comment -->\n", encoding="utf-8")
+        try:
+            ref_comment_errors = validate_skill(self.skill)
+            self.assertTrue(
+                any(
+                    "references/guide.md: HTML comments are not allowed" in err
+                    for err in ref_comment_errors
+                ),
+                ref_comment_errors,
+            )
+        finally:
+            ref_md.unlink()
+
+        # Hidden Cf (U+200B ZWSP, U+202E RLO) and Cc (U+0007 BEL) Unicode are rejected
+        for bad_char, expected_hex in (
+            ("\u200b", "U+200B"),
+            ("\u202e", "U+202E"),
+            ("\x07", "U+0007"),
+        ):
+            with self.subTest(codepoint=expected_hex):
+                skill_md.write_text(
+                    baseline + f"\nHidden {bad_char} payload.\n", encoding="utf-8"
+                )
+                uni_errors = validate_skill(self.skill)
+                self.assertTrue(
+                    any(expected_hex in err for err in uni_errors),
+                    f"Expected {expected_hex} error, got: {uni_errors}",
+                )
+        skill_md.write_text(baseline, encoding="utf-8")
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_package_allowlist_rejects_readme_changelog_binaries_and_banned_ast_scripts(
+        self,
+    ) -> None:
+        # 1. README.md, CHANGELOG.md, disallowed extensions, and binaries are rejected
+        disallowed_files: list[tuple[str, bytes, str]] = [
+            ("README.md", b"# Extra readme\n", "README.md"),
+            ("CHANGELOG.md", b"# Changelog\n", "CHANGELOG.md"),
+            ("references/readme.md", b"# Nested readme\n", "references/readme.md"),
+            ("helper.py", b"x = 1\n", "helper.py"),
+            ("scripts/sub/nested.py", b"x = 1\n", "scripts/sub/nested.py"),
+            ("scripts/runner.sh", b"#!/bin/sh\necho hi\n", "scripts/runner.sh"),
+            ("assets/blob.bin", b"\x00\x01\x02\x03", "assets/blob.bin"),
+            ("scripts/nul.py", b"x = 1\x00\n", "scripts/nul.py"),
+            ("references/bad_utf8.md", b"\xff\xfe\xfd", "references/bad_utf8.md"),
+        ]
+        for rel_path, content, marker in disallowed_files:
+            target = self.skill / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            try:
+                errs = validate_skill(self.skill)
+                self.assertTrue(
+                    any(marker in e for e in errs),
+                    f"Expected rejection naming {marker}, got: {errs}",
+                )
+            finally:
+                target.unlink()
+
+        # 2. Safe offline stdlib script (including re.compile and shlex.quote) passes
+        scripts_dir = self.skill / "scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        script_file = scripts_dir / "offline_helper.py"
+        script_file.write_text(
+            "import json\nimport re\nimport shlex\n\n"
+            "PAT = re.compile(r'[a-z]+')\n"
+            "def quote_arg(val: str) -> str:\n"
+            "    return shlex.quote(json.dumps(bool(PAT.match(val))))\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # 3. Network, subprocess, pty, ctypes, importlib, os.system, and eval/exec/compile fail AST vetting
+        banned_snippets = [
+            "import urllib.request\n",
+            "from http.client import HTTPSConnection\n",
+            "import socket\n",
+            "import requests\n",
+            "import subprocess\n",
+            "import pty\n",
+            "import ctypes\n",
+            "import importlib\n",
+            "import os\nos.system('ls')\n",
+            "eval('1 + 1')\n",
+            "exec('x = 1')\n",
+            "compile('1', '<str>', 'eval')\n",
+            "__import__('socket')\n",
+        ]
+        try:
+            for snippet in banned_snippets:
+                with self.subTest(snippet=snippet.strip()):
+                    script_file.write_text(snippet, encoding="utf-8")
+                    ast_errs = validate_skill(self.skill)
+                    self.assertTrue(
+                        any("scripts/offline_helper.py" in e for e in ast_errs),
+                        f"Expected AST rejection for {snippet!r}, got: {ast_errs}",
+                    )
+        finally:
+            script_file.unlink()
+
     def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)
-        self.assertEqual(52, telemetry["total_packages"])
+        self.assertEqual(55, telemetry["total_packages"])
 
         bodies_by_skill: dict[str, str] = {}
         for prompt_path in sorted((ROOT / "skills").glob("*/assets/prompt.md")):
@@ -2420,7 +2554,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(normalized, f"{prompt_path} body after line 1 is empty")
             bodies_by_skill[prompt_path.parent.parent.name] = normalized
 
-        self.assertEqual(52, len(bodies_by_skill))
+        self.assertEqual(55, len(bodies_by_skill))
         self.assertEqual(
             len(bodies_by_skill),
             len(set(bodies_by_skill.values())),

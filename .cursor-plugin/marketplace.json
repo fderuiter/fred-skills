@@ -509,6 +509,36 @@
       "license": "MIT"
     },
     {
+      "name": "spec-authoring",
+      "source": "./skills/spec-authoring",
+      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
+    },
+    {
+      "name": "spec-convergence",
+      "source": "./skills/spec-convergence",
+      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
+    },
+    {
+      "name": "spec-interview",
+      "source": "./skills/spec-interview",
+      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
+    },
+    {
       "name": "test-case-generation",
       "source": "./skills/test-case-generation",
       "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",

@@ -523,6 +523,17 @@ _NON_AUDIT_ARTIFACT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
     ),
     ("review.json", frozenset({"verdict"})),
     ("testing.json", frozenset({"test_cases"})),
+    (
+        "spec.json",
+        frozenset(
+            {
+                "interview_decisions",
+                "new_file_scopes",
+                "out_of_scope",
+                "verification_commands",
+            }
+        ),
+    ),
     ("architecture.json", frozenset({"boundaries", "decisions"})),
     ("run.json", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
 )
@@ -531,6 +542,7 @@ _NON_AUDIT_ARTIFACT_NAMES: tuple[str, ...] = (
     "architecture.json",
     "review.json",
     "testing.json",
+    "spec.json",
     "finding-verification.json",
     "regression.json",
     "plan.json",

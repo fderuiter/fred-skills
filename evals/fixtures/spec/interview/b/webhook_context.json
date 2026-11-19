@@ -1,0 +1,5 @@
+{
+  "feature": "webhook delivery retries",
+  "ambiguous": false,
+  "existing_module": "webhooks/dispatcher.py"
+}
