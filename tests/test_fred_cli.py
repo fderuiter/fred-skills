@@ -295,6 +295,7 @@ class FredCLITests(unittest.TestCase):
             "copilot",
             "opencode",
             "windsurf",
+            "kiro",
         ]:
             self.assertIn(host, stdout)
 
@@ -311,6 +312,7 @@ class FredCLITests(unittest.TestCase):
             "copilot",
             "opencode",
             "windsurf",
+            "kiro",
         ]:
             self.assertIn(host, proc.stderr)
 
@@ -355,7 +357,7 @@ class FredCLITests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir)
-            for host in ["cursor", "copilot", "opencode", "windsurf"]:
+            for host in ["cursor", "copilot", "opencode", "windsurf", "kiro"]:
                 for scope in ["project", "user"]:
                     dest = base / f"{host}-{scope}"
                     proc = self.run_cli(
@@ -427,6 +429,7 @@ class FredCLITests(unittest.TestCase):
             "copilot",
             "opencode",
             "windsurf",
+            "kiro",
         ]:
             self.assertIn(host, stdout)
         self.assertIn(".agents/skills", stdout)
@@ -435,6 +438,7 @@ class FredCLITests(unittest.TestCase):
         self.assertIn(".github/skills", stdout)
         self.assertIn(".opencode/skills", stdout)
         self.assertIn(".windsurf/skills", stdout)
+        self.assertIn(".kiro/skills", stdout)
 
     def test_discovery_packs_and_tasks_table_in_terminal(self):
         packs_proc = self.run_cli("packs", isatty=True)

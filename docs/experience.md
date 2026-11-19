@@ -54,3 +54,4 @@ Paths are relative to the explicit project/home destination. Filesystem checks a
 | copilot | `.github/skills` | `.copilot/skills` | not-executed |
 | opencode | `.opencode/skills` | `.config/opencode/skills` | not-executed |
 | windsurf | `.windsurf/skills` | `.config/devin/skills` | not-executed |
+| kiro | `.kiro/skills` | `.kiro/skills` | not-executed |

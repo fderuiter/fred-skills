@@ -140,6 +140,7 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         "name": "fred-skills",
         "description": description,
         "version": extension_version,
+        "contextFileName": "AGENTS.md",
     }
     return {
         "catalog/skills.json": (

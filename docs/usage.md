@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`), or an individual skill, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, and Windsurf, see the [integration guide](integration.md).
+Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`), or an individual skill, use `npx skills add`, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, Windsurf, and Kiro, see the [integration guide](integration.md).
 
 ### Claude Code and Cursor
 
@@ -27,6 +27,16 @@ Register the marketplace catalog and install the `fred-skills` suite plugin, a c
 # Or install a curated pack:
 /plugin install starter@fred-skills
 /plugin install complete@fred-skills
+```
+
+### Skills CLI
+
+Install skills across supported agent hosts with the open [`skills`](https://skills.sh/docs) CLI:
+
+```sh
+npx skills add fderuiter/fred-skills
+# Or install a single specialist:
+npx skills add fderuiter/fred-skills --skill repo-audit-concurrency
 ```
 
 ### Codex
@@ -49,7 +59,7 @@ gemini extensions install https://github.com/fderuiter/fred-skills
 
 ### Toolkit CLI (Project and User Scopes)
 
-Run `install` without flags to install the `starter` pack across all detected workspace hosts (`.claude`, `.cursor`, `.agents`, `.gemini`, `.github`, `.opencode`, `.windsurf`, or `.devin`)—or bootstrap `.agents/skills/` when no markers exist—or pass `--host` explicitly:
+Run `install` without flags to install the `starter` pack across all detected workspace hosts (`.claude`, `.cursor`, `.agents`, `.gemini`, `.github`, `.opencode`, `.windsurf`, `.devin`, or `.kiro`)—or bootstrap `.agents/skills/` when no markers exist—or pass `--host` explicitly:
 
 ```sh
 # Install starter pack across detected workspace hosts (or bootstrap .agents/skills/)
@@ -60,6 +70,7 @@ python scripts/fred.py install --destination /path/to/project --host cursor --pa
 python scripts/fred.py install --destination /path/to/project --host copilot --pack starter
 python scripts/fred.py install --destination /path/to/project --host opencode --pack starter
 python scripts/fred.py install --destination /path/to/project --host windsurf --pack starter
+python scripts/fred.py install --destination /path/to/project --host kiro --pack starter
 python scripts/fred.py install --destination /path/to/project --host antigravity --pack starter
 python scripts/fred.py install --destination /path/to/project --host gemini-cli --pack starter
 ```
