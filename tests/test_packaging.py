@@ -1041,19 +1041,19 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(51, len(suite_skills))
+        self.assertEqual(54, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", arch_text)
+        self.assertIn("54 total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", val_text)
+        self.assertIn("54 total packages", val_text)
         self.assertIn(
-            "Each of the 51 skills in the suite includes three scenario specifications",
+            "Each of the 54 skills in the suite includes three scenario specifications",
             val_text,
         )
         self.assertIn(
-            "These 153 specifications are not 153 executed evaluations",
+            "These 162 specifications are not 162 executed evaluations",
             val_text,
         )
         self.assertNotIn("42 skills in the suite", val_text)
@@ -1062,14 +1062,14 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", impl_text)
+        self.assertIn("54 total packages", impl_text)
 
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 51-package pack", usage_text)
+        self.assertIn("complete 54-package pack", usage_text)
         self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
-            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`)",
+            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 54 packages or `starter`)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
@@ -1081,7 +1081,7 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 54 skills or `starter` for 6 core audit skills)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
@@ -1114,7 +1114,7 @@ class PackageTests(unittest.TestCase):
         )
         self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 51 |",
+            "| `complete` | Every audit and engineering workflow. | 54 |",
             exp_text,
         )
 
@@ -1451,7 +1451,7 @@ class PackageTests(unittest.TestCase):
             suite_to_skills[suite["name"]] = skills_in_suite
             all_suite_skills.extend(skills_in_suite)
 
-        self.assertEqual(51, len(all_suite_skills))
+        self.assertEqual(54, len(all_suite_skills))
         self.assertEqual(
             {
                 "repository-audits",
@@ -1459,6 +1459,7 @@ class PackageTests(unittest.TestCase):
                 "software-architecture",
                 "code-review",
                 "automated-testing",
+                "spec-driven-development",
             },
             set(suite_to_skills),
         )
@@ -1535,7 +1536,7 @@ class PackageTests(unittest.TestCase):
                 self.assertIsNone(heading_re.search(prompt_text), skill_name)
 
         # Every skill has a distinct SVG and each suite uses one distinct palette color
-        self.assertEqual(51, len(svg_hashes))
+        self.assertEqual(54, len(svg_hashes))
         for suite_name, colors in suite_bg_colors.items():
             self.assertEqual(
                 1,
@@ -1543,7 +1544,7 @@ class PackageTests(unittest.TestCase):
                 f"{suite_name} must use a single suite palette: {colors}",
             )
         distinct_suite_colors = {next(iter(c)) for c in suite_bg_colors.values()}
-        self.assertEqual(5, len(distinct_suite_colors))
+        self.assertEqual(6, len(distinct_suite_colors))
 
         diagnostics_prompt = (
             ROOT / "skills/repo-audit-diagnostics/assets/prompt.md"
@@ -1872,8 +1873,8 @@ class PackageTests(unittest.TestCase):
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)
         self.assertEqual([], errors)
-        self.assertEqual(51, telemetry["total_packages"])
-        self.assertEqual(51, telemetry["passed_packages"])
+        self.assertEqual(54, telemetry["total_packages"])
+        self.assertEqual(54, telemetry["passed_packages"])
         self.assertEqual(0, telemetry["failed_packages"])
         self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
         self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
@@ -1898,7 +1899,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
         self.assertTrue(telemetry_file.is_file())
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
-        self.assertEqual(51, exported["total_packages"])
+        self.assertEqual(54, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
 
     def test_all_skills_have_output_format_schemas(self):
@@ -1906,7 +1907,7 @@ class PackageTests(unittest.TestCase):
         packages = sorted(
             p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
         )
-        self.assertEqual(len(packages), 51)
+        self.assertEqual(len(packages), 54)
         for package in packages:
             schemas = sorted(package.glob("assets/*.schema.json"))
             self.assertGreater(

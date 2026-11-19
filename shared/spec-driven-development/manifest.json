@@ -1,0 +1,8 @@
+{
+  "suite": "spec-driven-development",
+  "files": [
+    "references/spec-protocol.md",
+    "assets/spec-template.md",
+    "assets/spec.schema.json"
+  ]
+}

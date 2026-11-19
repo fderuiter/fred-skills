@@ -144,6 +144,8 @@ def _infer_suite_and_siblings(package: Path, skill_name: str) -> tuple[str, set[
         return "code-review", set()
     if skill_name.startswith("test-"):
         return "automated-testing", set()
+    if skill_name.startswith("spec-"):
+        return "spec-driven-development", set()
     if skill_name.startswith("repo-") and not skill_name.startswith("repo-audit-"):
         return "repository-workflows", set()
     return "repository-audits", set()
@@ -179,6 +181,7 @@ def _validate_scenario_semantics(
             "software-architecture",
             "code-review",
             "automated-testing",
+            "spec-driven-development",
         } and AUDIT_WORD_PATTERN.search(note):
             problems.append(
                 f"references/evaluation-scenarios.json ({sid}): misplaced audit terminology in {suite_name} evaluation_note"
@@ -194,6 +197,7 @@ def _validate_scenario_semantics(
         if suite_name in {
             "software-architecture",
             "automated-testing",
+            "spec-driven-development",
             "repository-workflows",
         } and EXPECTED_FINDINGS_NOTE_PATTERN.search(note):
             problems.append(

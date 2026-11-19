@@ -804,6 +804,18 @@ class AuditToSarifTests(unittest.TestCase):
                 "framework": "unittest",
                 "test_cases": [],
             },
+            "spec.json": {
+                "schema_version": "1.0",
+                "title": "Feature spec",
+                "status": "draft",
+                "summary": "Summary",
+                "interview_decisions": [],
+                "requirements": [],
+                "new_file_scopes": [],
+                "out_of_scope": [],
+                "verification_commands": [],
+                "convergence_checks": [],
+            },
             "finding-verification.json": {
                 "finding_id": "F-1",
                 "reproduction_status": "supported",

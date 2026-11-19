@@ -271,6 +271,46 @@
           ]
         }
       ]
+    },
+    {
+      "name": "spec-driven-development",
+      "protocol_version": "1.0",
+      "artifact": {
+        "filename": "spec.json",
+        "schema": "shared/spec-driven-development/resources/assets/spec.schema.json",
+        "starter": {
+          "schema_version": "1.0",
+          "title": "Feature specification",
+          "status": "draft",
+          "interview_decisions": [],
+          "new_file_scopes": [],
+          "out_of_scope": [],
+          "verification_commands": []
+        }
+      },
+      "phases": [
+        {
+          "id": 0,
+          "title": "Pre-Code Interview",
+          "skills": [
+            "spec-interview"
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Specification Authoring",
+          "skills": [
+            "spec-authoring"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Convergence Verification",
+          "skills": [
+            "spec-convergence"
+          ]
+        }
+      ]
     }
   ]
 }

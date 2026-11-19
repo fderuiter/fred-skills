@@ -1017,6 +1017,63 @@
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "spec-interview": {
+      "maturity": "experimental",
+      "symptoms": [
+        "ambiguous feature request",
+        "clarify edge cases before coding",
+        "pre-implementation design trade-offs",
+        "underspecified ux behavior"
+      ],
+      "expected_inputs": [
+        "feature request",
+        "source snapshot",
+        "existing interfaces and tests"
+      ],
+      "outcomes": [
+        "Settled pre-code interview decisions and scope boundaries in spec.json"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "spec-authoring": {
+      "maturity": "experimental",
+      "symptoms": [
+        "write feature specification",
+        "define file scope boundaries",
+        "formalize acceptance criteria",
+        "draft spec contract"
+      ],
+      "expected_inputs": [
+        "settled interview decisions",
+        "source snapshot",
+        "verification commands"
+      ],
+      "outcomes": [
+        "Synchronized SPEC.md and schema-validated spec.json contract"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "spec-convergence": {
+      "maturity": "experimental",
+      "symptoms": [
+        "implementation drifted from spec",
+        "out of scope file changes",
+        "verify plan matches specification",
+        "missing spec requirement"
+      ],
+      "expected_inputs": [
+        "SPEC.md and spec.json",
+        "planned tasks or diff",
+        "verification command evidence"
+      ],
+      "outcomes": [
+        "Evidence-backed specification convergence verdict and drift checks"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     }
   }
 }

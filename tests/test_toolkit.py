@@ -871,6 +871,7 @@ class RunTests(unittest.TestCase):
                 "architecture.json": "shared/software-architecture/resources/assets/architecture.schema.json",
                 "review.json": "shared/code-review/resources/assets/review.schema.json",
                 "testing.json": "shared/automated-testing/resources/assets/testing.schema.json",
+                "spec.json": "shared/spec-driven-development/resources/assets/spec.schema.json",
             },
             DOMAIN_DELIVERABLE_SCHEMAS,
         )
@@ -886,6 +887,10 @@ class RunTests(unittest.TestCase):
             "automated-testing": (
                 "testing.json",
                 "shared/automated-testing/resources/assets/testing.schema.json",
+            ),
+            "spec-driven-development": (
+                "spec.json",
+                "shared/spec-driven-development/resources/assets/spec.schema.json",
             ),
         }.items():
             self.assertEqual(expected, SUITE_DELIVERABLES[suite_name])
@@ -937,6 +942,18 @@ class RunTests(unittest.TestCase):
                 ],
                 "testing.json",
                 ["testing-template.md", "testing.schema.json"],
+            ),
+            (
+                "specify-feature",
+                "spec-driven-development",
+                None,
+                [
+                    "spec-interview",
+                    "spec-authoring",
+                    "spec-convergence",
+                ],
+                "spec.json",
+                ["spec-template.md", "spec.schema.json"],
             ),
         ]
 
@@ -1166,6 +1183,41 @@ class RunTests(unittest.TestCase):
         atomic_json(ws_test / "testing.json", dup_test)
         test_errs = runs.validate_run(ws_test)
         self.assertIn("Duplicate IDs in test_cases: TC-1", test_errs)
+
+        ws_spec = self.root / "ws-sem-spec"
+        runs.initialize(self.repo, ws_spec, "specify-feature")
+        dup_spec = {
+            "schema_version": "1.0",
+            "title": "Feature Spec",
+            "status": "draft",
+            "interview_decisions": [
+                {
+                    "id": "DEC-1",
+                    "category": "ux",
+                    "question": "Format?",
+                    "decision": "NDJSON",
+                },
+                {
+                    "id": "DEC-1",
+                    "category": "scope",
+                    "question": "Batch?",
+                    "decision": "500",
+                },
+            ],
+            "new_file_scopes": ["../outside.py"],
+            "out_of_scope": [],
+            "verification_commands": [],
+        }
+        atomic_json(ws_spec / "spec.json", dup_spec)
+        spec_errs = runs.validate_run(ws_spec)
+        self.assertIn("Duplicate IDs in interview_decisions: DEC-1", spec_errs)
+        self.assertTrue(
+            any(
+                "Specification file scope must be repository-relative" in e
+                for e in spec_errs
+            ),
+            spec_errs,
+        )
 
         # 2. Unsafe relative paths in review.json findings[*].file are rejected
         for bad_path in (
@@ -1855,7 +1907,12 @@ class ReportTests(unittest.TestCase):
             )
 
             # Standalone directories containing domain deliverables
-            for name in ("architecture.json", "review.json", "testing.json"):
+            for name in (
+                "architecture.json",
+                "review.json",
+                "testing.json",
+                "spec.json",
+            ):
                 dom_dir = tmp_path / f"dir_{name}"
                 dom_dir.mkdir()
                 target = dom_dir / name
@@ -1930,6 +1987,31 @@ class ReportTests(unittest.TestCase):
                 }
             ],
         }
+        spc = {
+            "schema_version": "1.0",
+            "title": f"Streaming Spec {hostile}",
+            "status": "approved",
+            "interview_decisions": [
+                {
+                    "id": "DEC-1",
+                    "category": "architecture",
+                    "question": f"How to stream? {hostile}",
+                    "decision": f"Use cursor {hostile}",
+                    "rationale": f"Bounded memory {hostile}",
+                }
+            ],
+            "new_file_scopes": [f"pkg/stream.py {hostile}"],
+            "out_of_scope": [f"Multi-tenant {hostile}"],
+            "verification_commands": [f"pytest {hostile}"],
+            "convergence_checks": [
+                {
+                    "id": "CHK-1",
+                    "target": f"DEC-1 {hostile}",
+                    "status": "aligned",
+                    "evidence": f"Verified {hostile}",
+                }
+            ],
+        }
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -1937,6 +2019,7 @@ class ReportTests(unittest.TestCase):
                 ("arch", arch, "System boundaries"),
                 ("rev", rev, "Review summary"),
                 ("tst", tst, "Test suite scope"),
+                ("spec", spc, "Specification overview"),
             ]:
                 with self.subTest(kind=label):
                     out = reports.render(payload, tmp_path / f"{label}.html")
@@ -1947,7 +2030,7 @@ class ReportTests(unittest.TestCase):
                     self.assertIn("connect-src &#x27;none&#x27;", html)
                     self.assertIn(expected_heading, html)
                     self.assertIn('id="query"', html)
-                    if label == "arch":
+                    if label in ("arch", "spec"):
                         self.assertIn('id="toggle-details"', html)
                     else:
                         self.assertNotIn('id="toggle-details"', html)

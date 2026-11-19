@@ -79,6 +79,7 @@ def _infer_suite_name(name: str, available_suites: Sequence[str]) -> str:
         ("arch-", "software-architecture"),
         ("review-", "code-review"),
         ("test-", "automated-testing"),
+        ("spec-", "spec-driven-development"),
         ("repo-", "repository-workflows"),
     )
     for prefix, suite_name in prefix_map:
@@ -134,6 +135,10 @@ def _resolve_suite_and_sibling(
         "automated-testing": (
             "test-gap-analysis",
             "test-case-generation",
+        ),
+        "spec-driven-development": (
+            "spec-interview",
+            "spec-authoring",
         ),
         "repository-workflows": (
             "repo-verify-finding",
@@ -290,6 +295,7 @@ SUITE_ICON_PALETTE: dict[str, tuple[str, str]] = {
     "software-architecture": ("#4C1D95", "#C4B5FD"),
     "code-review": ("#9A3412", "#FDBA74"),
     "automated-testing": ("#881337", "#FDA4AF"),
+    "spec-driven-development": ("#0F766E", "#5EEAD4"),
 }
 
 
@@ -348,6 +354,7 @@ def _render_evaluation_scenarios(
         "software-architecture",
         "code-review",
         "automated-testing",
+        "spec-driven-development",
     }
     routing_note = (
         "Near-neighbor sibling routing check; verify routing to the designated "

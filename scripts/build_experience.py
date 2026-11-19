@@ -40,6 +40,7 @@ _SUITE_LABELS: dict[str, str] = {
     "software-architecture": "Software architecture",
     "code-review": "Code review",
     "automated-testing": "Automated testing",
+    "spec-driven-development": "Spec-driven development",
 }
 
 

@@ -3,7 +3,7 @@
 Adds task-based discovery, purpose packs, four explicit host installation locations,
 managed updates/removal/rollback, bounded run plans, source-freshness checks, offline
 reports, issue drafts, comparison, SARIF observations, and six correction workflows.
-Original 35 audit package names and audit schema 1.0 remain compatible. Total: 51 skills.
+Original 35 audit package names and audit schema 1.0 remain compatible. Total: 54 skills.
 
 Includes 15 executable evaluation cases, a deterministic harness adapter, and a runnable
 synthetic original/corrected walkthrough. Fixture scores do not establish LLM quality.

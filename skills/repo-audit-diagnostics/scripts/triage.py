@@ -314,6 +314,11 @@ _SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "test-case-generation",
         "test-suite-verification",
     ),
+    "spec-driven-development": (
+        "spec-interview",
+        "spec-authoring",
+        "spec-convergence",
+    ),
 }
 
 KNOWN_SPECIALISTS: list[str] = [
@@ -347,6 +352,10 @@ _SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
         "testing.json",
         "skills/test-case-generation/assets/testing.schema.json",
     ),
+    "spec-driven-development": (
+        "spec.json",
+        "skills/spec-authoring/assets/spec.schema.json",
+    ),
 }
 
 _DOMAIN_ARTIFACTS: dict[str, tuple[str, str]] = {
@@ -359,6 +368,7 @@ _TASK_TO_SUITE: dict[str, str] = {
     "design-architecture": "software-architecture",
     "review-code-changes": "code-review",
     "expand-automated-tests": "automated-testing",
+    "specify-feature": "spec-driven-development",
     "verify-fix": "repository-workflows",
     "apply-fix": "repository-workflows",
 }
@@ -1356,7 +1366,7 @@ def detect_failures(transcript_text: str) -> dict[str, Any]:
 
 
 def _topic_for_specialist(specialist: str) -> str:
-    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-"):
+    for prefix in ("repo-audit-", "repo-", "arch-", "review-", "test-", "spec-"):
         if specialist.startswith(prefix):
             return specialist[len(prefix) :]
     return specialist
@@ -1413,6 +1423,16 @@ def _detect_artifact_suite(audit_data: dict[str, Any] | None) -> str | None:
         "component" in audit_data and "framework" in audit_data
     ):
         return "automated-testing"
+    if any(
+        key in audit_data
+        for key in (
+            "interview_decisions",
+            "new_file_scopes",
+            "out_of_scope",
+            "verification_commands",
+        )
+    ):
+        return "spec-driven-development"
     if (
         "boundaries" in audit_data
         or "decisions" in audit_data
@@ -1465,13 +1485,17 @@ def _detect_transcript_domain_suite(transcript_text: str) -> str | None:
         return "code-review"
     if re.search(r"\btesting\.(?:json|schema\.json)\b", transcript_text):
         return "automated-testing"
+    if re.search(r"\bspec\.(?:json|schema\.json)\b", transcript_text):
+        return "spec-driven-development"
     return None
 
 
 def _extract_artifact_references(
     transcript_text: str, audit_data: dict[str, Any] | None
 ) -> list[str]:
-    id_pattern = re.compile(r"\b((?:ADR|REV|TC|GAP|[FEICRT])-\d+|E-[a-z0-9_-]+)\b")
+    id_pattern = re.compile(
+        r"\b((?:ADR|REV|TC|GAP|SPEC|DEC|REQ|CHK|[FEICRT])-\d+|E-[a-z0-9_-]+)\b"
+    )
     if not audit_data:
         return sorted(set(id_pattern.findall(transcript_text)))
 
@@ -1484,6 +1508,9 @@ def _extract_artifact_references(
         "issues",
         "decisions",
         "test_cases",
+        "interview_decisions",
+        "requirements",
+        "convergence_checks",
     ):
         items = audit_data.get(section)
         if not isinstance(items, list):
@@ -1617,7 +1644,13 @@ def correlate_audit_domain(
 
     effective_domain_suite = artifact_suite or (
         run_suite
-        if run_suite in {"software-architecture", "code-review", "automated-testing"}
+        if run_suite
+        in {
+            "software-architecture",
+            "code-review",
+            "automated-testing",
+            "spec-driven-development",
+        }
         else None
     )
     if specialist_found and not topic_found:
@@ -1626,7 +1659,11 @@ def correlate_audit_domain(
         topic_found = (
             "architecture"
             if effective_domain_suite == "software-architecture"
-            else effective_domain_suite
+            else (
+                "spec"
+                if effective_domain_suite == "spec-driven-development"
+                else effective_domain_suite
+            )
         )
 
     ledger_refs = _extract_artifact_references(transcript_text, audit_data)

@@ -438,7 +438,7 @@ with tempfile.TemporaryDirectory() as temporary:
         count = page.locator("article.finding").count()
         assert count >= 41
         assert page.locator("details.task:visible").count() == len(recipes)
-        assert page.locator("article.pack-card").count() == len(expected_packs) == 11
+        assert page.locator("article.pack-card").count() == len(expected_packs) == 12
         assert page.locator("#hosts tbody tr").count() == len(expected_hosts)
         assert page.locator("#hosts tbody tr").count() >= 4
         page.set_viewport_size({"width": 375, "height": 812})
@@ -479,6 +479,9 @@ with tempfile.TemporaryDirectory() as temporary:
         exp_toggle.click()
         assert exp_toggle.get_attribute("aria-expanded") == "false"
         assert page.locator("article.finding details[open]").count() == 0
+        page.get_by_label("Family").select_option("spec-driven-development")
+        assert page.locator("article.finding:visible").count() == 3
+        assert page.locator("details#task-specify-feature").is_visible()
         page.get_by_label("Family").select_option("")
         assert page.locator("article.finding:visible").count() == count
 
@@ -489,7 +492,7 @@ with tempfile.TemporaryDirectory() as temporary:
         page.emulate_media(media="screen")
         expect(page.locator("details[open]")).to_have_count(0)
 
-        # Verify all 17 tasks match their task block and member skills
+        # Verify all 18 tasks match their task block and member skills
         for task_name, recipe in recipes.items():
             query_input.fill(task_name)
             assert page.locator(f"details#task-{task_name}").is_visible(), task_name
@@ -605,7 +608,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert (
                 web_page.locator("article.pack-card").count()
                 == len(expected_packs)
-                == 11
+                == 12
             )
             packs_text = web_page.locator("section#packs").inner_text()
             for pack_name in expected_packs:

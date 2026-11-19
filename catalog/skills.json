@@ -1298,6 +1298,84 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "spec-authoring",
+      "title": "Specification Authoring",
+      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+      "path": "skills/spec-authoring/SKILL.md",
+      "suite": "spec-driven-development",
+      "phase": 1,
+      "phase_title": "Specification Authoring",
+      "maturity": "experimental",
+      "symptoms": [
+        "write feature specification",
+        "define file scope boundaries",
+        "formalize acceptance criteria",
+        "draft spec contract"
+      ],
+      "expected_inputs": [
+        "settled interview decisions",
+        "source snapshot",
+        "verification commands"
+      ],
+      "outcomes": [
+        "Synchronized SPEC.md and schema-validated spec.json contract"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "spec-convergence",
+      "title": "Specification Convergence Verification",
+      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+      "path": "skills/spec-convergence/SKILL.md",
+      "suite": "spec-driven-development",
+      "phase": 2,
+      "phase_title": "Convergence Verification",
+      "maturity": "experimental",
+      "symptoms": [
+        "implementation drifted from spec",
+        "out of scope file changes",
+        "verify plan matches specification",
+        "missing spec requirement"
+      ],
+      "expected_inputs": [
+        "SPEC.md and spec.json",
+        "planned tasks or diff",
+        "verification command evidence"
+      ],
+      "outcomes": [
+        "Evidence-backed specification convergence verdict and drift checks"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "spec-interview",
+      "title": "Pre-Code Specification Interview",
+      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "path": "skills/spec-interview/SKILL.md",
+      "suite": "spec-driven-development",
+      "phase": 0,
+      "phase_title": "Pre-Code Interview",
+      "maturity": "experimental",
+      "symptoms": [
+        "ambiguous feature request",
+        "clarify edge cases before coding",
+        "pre-implementation design trade-offs",
+        "underspecified ux behavior"
+      ],
+      "expected_inputs": [
+        "feature request",
+        "source snapshot",
+        "existing interfaces and tests"
+      ],
+      "outcomes": [
+        "Settled pre-code interview decisions and scope boundaries in spec.json"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "test-case-generation",
       "title": "Test Case Generation",
       "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",

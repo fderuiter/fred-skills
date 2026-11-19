@@ -344,6 +344,25 @@
         "validation record",
         "continuation or implementation handoff"
       ]
+    },
+    "specify-feature": {
+      "outcome": "Interview on non-obvious design choices, author SPEC.md and spec.json, and verify plan/code convergence.",
+      "skills": [
+        "spec-interview",
+        "spec-authoring",
+        "spec-convergence"
+      ],
+      "requires_base": false,
+      "workflows": [
+        "Pre-code trade-off interview, scoped SPEC.md contract, and implementation convergence"
+      ],
+      "outputs": [
+        "spec.json",
+        "SPEC.md",
+        "topic report",
+        "validation record",
+        "continuation or implementation handoff"
+      ]
     }
   }
 }

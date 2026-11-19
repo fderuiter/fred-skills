@@ -1500,7 +1500,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
         )["skills"]
         expected_names = {item["name"] for item in catalog_skills}
-        self.assertEqual(51, len(expected_names))
+        self.assertEqual(54, len(expected_names))
         self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
 
         # Every single catalog skill correlates cleanly before any keyword fallback
@@ -1675,6 +1675,41 @@ Bearer sk-proj-1234567890abcdef1234567890
                 },
                 "Generating TC-1 in testing.json\n'oracle_type' is a required property\n",
                 ["test_cases:TC-1"],
+            ),
+            (
+                "specify-feature",
+                None,
+                "spec-authoring",
+                "spec.json",
+                "skills/spec-authoring/assets/spec.schema.json",
+                {
+                    "schema_version": "1.0",
+                    "title": "Streaming Export Spec",
+                    "status": "draft",
+                    "summary": "Spec summary",
+                    "interview_decisions": [
+                        {
+                            "id": "DEC-1",
+                            "category": "architecture",
+                            "question": "Pagination?",
+                            "decision": "Cursor",
+                            "rationale": "Bounded memory",
+                        }
+                    ],
+                    "requirements": [
+                        {
+                            "id": "REQ-1",
+                            "description": "Stream batches",
+                            "priority": "must",
+                        }
+                    ],
+                    "new_file_scopes": [],
+                    "out_of_scope": [],
+                    "verification_commands": [],
+                    "convergence_checks": [],
+                },
+                "Authoring REQ-1 in spec.json after DEC-1\n'description' is a required property\n",
+                ["interview_decisions:DEC-1", "requirements:REQ-1"],
             ),
         ]
 

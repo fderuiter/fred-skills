@@ -84,13 +84,13 @@ class BuildSiteTests(unittest.TestCase):
                 )
 
         skill_dirs = sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(51, len(skill_dirs))
+        self.assertEqual(54, len(skill_dirs))
         for skill_name in skill_dirs:
             skill_html_path = self.site_dir / "skills" / skill_name / "SKILL.html"
             self.assertTrue(skill_html_path.is_file(), skill_name)
 
     def test_compiled_skill_pages_strip_frontmatter_and_render_metadata(self) -> None:
-        """All 51 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
+        """All 54 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
         for skill_html_path in sorted((self.site_dir / "skills").glob("*/SKILL.html")):
             skill_name = skill_html_path.parent.name
             html_text = skill_html_path.read_text(encoding="utf-8")
@@ -169,7 +169,7 @@ class BuildSiteTests(unittest.TestCase):
         """Offline explorer uses .md links, web explorer uses .html links, and both render all packs and hosts."""
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
         hosts = read_json(ROOT / "catalog/hosts.json")["hosts"]
-        self.assertEqual(11, len(packs))
+        self.assertEqual(12, len(packs))
         self.assertGreaterEqual(len(hosts), 4)
 
         offline_explorer = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")

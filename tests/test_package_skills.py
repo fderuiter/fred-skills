@@ -47,7 +47,7 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_get_suite_skills_returns_audit_skills(self):
         skills = get_suite_skills(ROOT)
-        self.assertEqual(51, len(skills))
+        self.assertEqual(54, len(skills))
         for skill in skills:
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
@@ -75,12 +75,18 @@ class PackageSkillsTests(unittest.TestCase):
             self.assertTrue(skill.startswith("test-"))
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
+        spec_skills = get_suite_skills(ROOT, suite_name="spec-driven-development")
+        self.assertEqual(3, len(spec_skills))
+        for skill in spec_skills:
+            self.assertTrue(skill.startswith("spec-"))
+            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
+
     def test_package_skills_creates_all_archives_and_checksums(self):
         suite_skills = get_suite_skills(ROOT)
-        self.assertEqual(51, len(suite_skills))
+        self.assertEqual(54, len(suite_skills))
         checksums = package_skills(self.output_dir, root=ROOT)
         expected_archive_count = len(suite_skills) + 1
-        self.assertEqual(52, expected_archive_count)
+        self.assertEqual(55, expected_archive_count)
         self.assertEqual(expected_archive_count, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)
@@ -88,6 +94,7 @@ class PackageSkillsTests(unittest.TestCase):
         self.assertIn("arch-decision-record.tar.gz", checksums)
         self.assertIn("review-diff-analysis.tar.gz", checksums)
         self.assertIn("test-gap-analysis.tar.gz", checksums)
+        self.assertIn("spec-interview.tar.gz", checksums)
 
         manifest_file = self.output_dir / "checksums.sha256"
         self.assertTrue(manifest_file.is_file())

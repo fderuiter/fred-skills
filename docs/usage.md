@@ -17,7 +17,7 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`), or an individual skill, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, and Windsurf, see the [integration guide](integration.md).
+Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 54 packages or `starter`), or an individual skill, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, and Windsurf, see the [integration guide](integration.md).
 
 ### Claude Code and Cursor
 
@@ -117,7 +117,7 @@ fixable causes remain separate even if symptoms overlap.
 
 ## Download and verify release archives
 
-Official releases publish versioned pack archives (such as `starter`, `full-audit`, or the complete 51-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file.
+Official releases publish versioned pack archives (such as `starter`, `full-audit`, or the complete 54-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file.
 
 ### Download
 
@@ -129,7 +129,7 @@ curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/manifest.json
 
-# Or download the complete 51-package pack
+# Or download the complete 54-package pack
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-complete.tar
 ```
 
@@ -155,7 +155,7 @@ mkdir -p /path/to/project/.agents/skills/
 # Deploy starter pack
 tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/
 
-# Deploy complete pack (creates all 51 skill directories)
+# Deploy complete pack (creates all 54 skill directories)
 tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agents/skills/
 ```
 
