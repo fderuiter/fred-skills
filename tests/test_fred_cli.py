@@ -1,5 +1,6 @@
 """Tests for scripts/fred.py CLI lifecycle grouping, parameter guidance, and table formatting."""
 
+import errno
 import json
 import os
 import struct
@@ -31,6 +32,21 @@ ROOT = Path(__file__).resolve().parents[1]
 FRED_PY = ROOT / "scripts/fred.py"
 
 
+def _drain_pty_master(master: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = os.read(master, 4096)
+        except OSError as exc:
+            if exc.errno != errno.EIO:
+                raise
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 class FredCLITests(unittest.TestCase):
     def run_cli(
         self,
@@ -52,35 +68,32 @@ class FredCLITests(unittest.TestCase):
         if pty is None:
             self.skipTest("pty module is not available on this platform")
         master, slave = pty.openpty()
-        run_env = dict(os.environ if env is None else env)
-        if columns is not None:
-            run_env["COLUMNS"] = str(columns)
-            if fcntl is not None and termios is not None:
-                winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
-        proc = subprocess.run(
-            [sys.executable, str(FRED_PY), *args],
-            stdin=subprocess.DEVNULL,
-            stdout=slave,
-            stderr=slave,
-            check=False,
-            cwd=cwd,
-            env=run_env,
-        )
-        os.close(slave)
-        output = b""
-        while True:
-            try:
-                chunk = os.read(master, 4096)
-                if not chunk:
-                    break
-                output += chunk
-            except OSError:
-                break
-        os.close(master)
+        try:
+            run_env = dict(os.environ if env is None else env)
+            if columns is not None:
+                run_env["COLUMNS"] = str(columns)
+                if fcntl is not None and termios is not None:
+                    winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
+            with subprocess.Popen(
+                [sys.executable, str(FRED_PY), *args],
+                stdin=subprocess.DEVNULL,
+                stdout=slave,
+                stderr=slave,
+                cwd=cwd,
+                env=run_env,
+            ) as proc:
+                os.close(slave)
+                slave = -1
+                output = _drain_pty_master(master)
+                returncode = proc.wait()
+        finally:
+            if slave >= 0:
+                os.close(slave)
+            os.close(master)
         return subprocess.CompletedProcess(
             args=[sys.executable, str(FRED_PY), *args],
-            returncode=proc.returncode,
+            returncode=returncode,
             stdout=output.decode("utf-8", errors="replace"),
             stderr="",
         )
@@ -566,6 +579,11 @@ class FredCLITests(unittest.TestCase):
             )
             self.assertEqual(0, narrow_proc.returncode)
             self.assertIn("repo-audit-behavioral-contracts", narrow_proc.stdout)
+
+        large_pty_proc = self.run_cli("search", "audit", "--json", isatty=True)
+        self.assertEqual(0, large_pty_proc.returncode)
+        self.assertGreater(len(large_pty_proc.stdout.encode("utf-8")), 16384)
+        self.assertIsInstance(json.loads(large_pty_proc.stdout), list)
 
     def test_format_table_unit_width_and_below_forty_column_clamping(self):
         sys.path.insert(0, str(ROOT / "scripts"))

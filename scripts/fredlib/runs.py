@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import copy
+import functools
 import importlib.util
-import os
 import re
 import sys
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
-from urllib.parse import unquote, urlsplit
+from types import ModuleType
+from typing import Any, Protocol, cast
 
 import jsonschema
 import yaml
 
+from . import _sarif_import
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
@@ -152,6 +154,197 @@ def _validate_tactical_scope(
     return norm_directory, norm_symbol, norm_allowed, norm_denied, issue_number
 
 
+def _validate_project_config_fields(
+    settings: dict[str, Any], config_path: Path, profile_list: str
+) -> None:
+    if "exclude" in settings and (
+        not isinstance(settings["exclude"], list)
+        or any(not isinstance(s, str) or not s.strip() for s in settings["exclude"])
+    ):
+        raise FredCliError(
+            "Project config exclude must be a list of nonempty strings",
+            code="invalid_config",
+            hint=f"Set 'exclude' to a YAML list of nonempty strings in '{config_path}'.",
+        )
+    if "critical_workflows" in settings and (
+        not isinstance(settings["critical_workflows"], list)
+        or any(not _is_single_line_text(s) for s in settings["critical_workflows"])
+    ):
+        raise FredCliError(
+            "Project config critical_workflows must be a list of single-line nonempty strings",
+            code="invalid_config",
+            hint=f"Set 'critical_workflows' to a YAML list of single-line nonempty strings in '{config_path}'.",
+        )
+    if "profile" in settings and not isinstance(settings["profile"], str):
+        raise FredCliError(
+            f"Project profile must be a string (available profiles: {profile_list})",
+            code="invalid_profile",
+            hint=f"Set 'profile' to one of: {profile_list}.",
+        )
+
+
+def _load_project_config(config: Path | None, profile_list: str) -> dict[str, Any]:
+    if not config:
+        return {}
+    config_path = Path(config)
+    if not config_path.exists():
+        raise FredCliError(
+            f"Project config file not found: {config_path}",
+            code="missing_config",
+            hint="Pass an existing YAML file path to --config (see examples/project-config.yaml).",
+        )
+    if config_path.is_dir():
+        raise FredCliError(
+            f"Expected a YAML config file at '{config_path}', got a directory",
+            code="invalid_config_path",
+            hint="Pass a YAML file path to --config instead of a directory.",
+        )
+    try:
+        raw_yaml = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FredCliError(
+            f"Unable to read project config '{config_path}': {exc}",
+            code="io_error",
+            hint=f"Check file permissions for '{config_path}'.",
+        ) from exc
+    try:
+        loaded = yaml.safe_load(raw_yaml)
+    except yaml.YAMLError as exc:
+        raise _format_yaml_error(config_path, exc) from exc
+    if not isinstance(loaded, dict) or set(loaded) - {
+        "profile",
+        "exclude",
+        "critical_workflows",
+    }:
+        raise FredCliError(
+            "Project config supports only profile, exclude, and critical_workflows; commands and authority are not read from repository config",
+            code="invalid_config",
+            hint="Provide a YAML mapping containing only 'profile', 'exclude', and/or 'critical_workflows'.",
+        )
+    _validate_project_config_fields(loaded, config_path, profile_list)
+    return loaded
+
+
+def _validate_plan_inputs(
+    task: str,
+    mode: str,
+    budget: str,
+    profile: str | None,
+    recipes: Mapping[str, Any],
+    profiles: Mapping[str, Any],
+    profile_list: str,
+) -> None:
+    if task not in recipes:
+        raise FredCliError(
+            f"Unknown task {task!r}; use fred.py tasks",
+            code="unknown_task",
+            hint=f"Available tasks: {', '.join(sorted(recipes))}.",
+        )
+    if mode not in {
+        "explore",
+        "changes",
+        "investigate",
+        "comprehensive",
+    } or budget not in {"brief", "balanced", "deep"}:
+        raise FredCliError(
+            "Invalid execution mode or budget",
+            code="invalid_mode_or_budget",
+            hint="Choose --mode from explore, changes, investigate, comprehensive and --budget from brief, balanced, deep.",
+        )
+    if profile and profile not in profiles:
+        raise FredCliError(
+            f"Unknown profile: {profile} (available profiles: {profile_list})",
+            code="invalid_profile",
+            hint=f"Choose one of the catalog profiles: {profile_list}.",
+        )
+
+
+def _comprehensive_suite_skills(
+    suite_name: str, recipe_skills: Sequence[str]
+) -> list[str]:
+    selected = list((_suite_skills_by_suite(ROOT) or {})[suite_name])
+    if suite_name == "repository-audits":
+        # The coordinator is an entry point, not a second pass over every specialist.
+        # Standard comprehensive plans exclude diagnostics, but recovery planning allows explicit selection.
+        excluded_specialists = {"repo-audit-program"}
+        if "repo-audit-diagnostics" not in recipe_skills:
+            excluded_specialists.add("repo-audit-diagnostics")
+        return [name for name in selected if name not in excluded_specialists]
+    if suite_name == "repository-workflows":
+        # Standalone session-hygiene utilities are invoked on demand rather than as remediation phases.
+        standalone_hygiene = {
+            name
+            for name in ("session-handoff", "terse-output-commit")
+            if name not in recipe_skills
+        }
+        return [name for name in selected if name not in standalone_hygiene]
+    return selected
+
+
+def _assemble_skill_list(
+    recipe: Mapping[str, Any],
+    suite_name: str,
+    mode: str,
+    profile: str | None,
+    profiles: Mapping[str, Any],
+) -> tuple[list[str], list[str]]:
+    recipe_skills: list[str] = list(recipe["skills"])
+    selected = list(recipe_skills)
+    notes = [
+        str(recipe["outcome"]),
+        "Selected by task; installation and execution are separate actions.",
+    ]
+    if mode == "comprehensive":
+        selected = _comprehensive_suite_skills(suite_name, recipe_skills)
+        notes.append(
+            "Comprehensive scope still requires workflow slices and explicit remaining coverage."
+        )
+    if profile:
+        skill_suites = {
+            row["name"]: row.get("suite")
+            for row in read_json(ROOT / "catalog/skills.json")["skills"]
+        }
+        priorities = [
+            name
+            for name in profiles[profile]["priorities"]
+            if skill_suites.get(name) == suite_name
+        ]
+        selected = list(dict.fromkeys(priorities + selected))
+        notes.append(
+            "Profile assumptions must be checked against this checkout: "
+            + profiles[profile]["description"]
+        )
+    return selected, notes
+
+
+def _order_and_bound_specialists(
+    selected: Sequence[str], recipe_skills: Sequence[str], budget: str
+) -> tuple[list[str], list[str]]:
+    limit = {"brief": 3, "balanced": 8, "deep": len(selected)}[budget]
+    deferred = list(selected[limit:])
+    bounded = list(selected[:limit])
+    if (
+        "repo-audit-diagnostics" in recipe_skills
+        and "repo-audit-diagnostics" not in bounded
+        and deferred
+    ):
+        deferred = [name for name in deferred if name != "repo-audit-diagnostics"] + [
+            bounded[-1]
+        ]
+        bounded[-1] = "repo-audit-diagnostics"
+    if (
+        "repo-audit-synthesis" in recipe_skills
+        and "repo-audit-synthesis" not in bounded
+        and deferred
+    ):
+        idx = -1 if bounded[-1] != "repo-audit-diagnostics" else -2
+        deferred = [name for name in deferred if name != "repo-audit-synthesis"] + [
+            bounded[idx]
+        ]
+        bounded[idx] = "repo-audit-synthesis"
+    return bounded, deferred
+
+
 def plan(
     repo: Path,
     task: str,
@@ -179,94 +372,11 @@ def plan(
     )
     profiles = read_json(ROOT / "catalog/profiles.json")["profiles"]
     profile_list = ", ".join(sorted(profiles))
-    settings: dict[str, Any] = {}
-    if config:
-        config_path = Path(config)
-        if not config_path.exists():
-            raise FredCliError(
-                f"Project config file not found: {config_path}",
-                code="missing_config",
-                hint="Pass an existing YAML file path to --config (see examples/project-config.yaml).",
-            )
-        if config_path.is_dir():
-            raise FredCliError(
-                f"Expected a YAML config file at '{config_path}', got a directory",
-                code="invalid_config_path",
-                hint="Pass a YAML file path to --config instead of a directory.",
-            )
-        try:
-            raw_yaml = config_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise FredCliError(
-                f"Unable to read project config '{config_path}': {exc}",
-                code="io_error",
-                hint=f"Check file permissions for '{config_path}'.",
-            ) from exc
-        try:
-            loaded = yaml.safe_load(raw_yaml)
-        except yaml.YAMLError as exc:
-            raise _format_yaml_error(config_path, exc) from exc
-        if not isinstance(loaded, dict) or set(loaded) - {
-            "profile",
-            "exclude",
-            "critical_workflows",
-        }:
-            raise FredCliError(
-                "Project config supports only profile, exclude, and critical_workflows; commands and authority are not read from repository config",
-                code="invalid_config",
-                hint="Provide a YAML mapping containing only 'profile', 'exclude', and/or 'critical_workflows'.",
-            )
-        settings = loaded
-        if "exclude" in settings and (
-            not isinstance(settings["exclude"], list)
-            or any(not isinstance(s, str) or not s.strip() for s in settings["exclude"])
-        ):
-            raise FredCliError(
-                "Project config exclude must be a list of nonempty strings",
-                code="invalid_config",
-                hint=f"Set 'exclude' to a YAML list of nonempty strings in '{config_path}'.",
-            )
-        if "critical_workflows" in settings and (
-            not isinstance(settings["critical_workflows"], list)
-            or any(not _is_single_line_text(s) for s in settings["critical_workflows"])
-        ):
-            raise FredCliError(
-                "Project config critical_workflows must be a list of single-line nonempty strings",
-                code="invalid_config",
-                hint=f"Set 'critical_workflows' to a YAML list of single-line nonempty strings in '{config_path}'.",
-            )
-        if "profile" in settings and not isinstance(settings["profile"], str):
-            raise FredCliError(
-                f"Project profile must be a string (available profiles: {profile_list})",
-                code="invalid_profile",
-                hint=f"Set 'profile' to one of: {profile_list}.",
-            )
+    settings = _load_project_config(config, profile_list)
     profile = profile or settings.get("profile")
     exclude = list(dict.fromkeys(list(exclude or []) + settings.get("exclude", [])))
     recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
-    if task not in recipes:
-        raise FredCliError(
-            f"Unknown task {task!r}; use fred.py tasks",
-            code="unknown_task",
-            hint=f"Available tasks: {', '.join(sorted(recipes))}.",
-        )
-    if mode not in {
-        "explore",
-        "changes",
-        "investigate",
-        "comprehensive",
-    } or budget not in {"brief", "balanced", "deep"}:
-        raise FredCliError(
-            "Invalid execution mode or budget",
-            code="invalid_mode_or_budget",
-            hint="Choose --mode from explore, changes, investigate, comprehensive and --budget from brief, balanced, deep.",
-        )
-    if profile and profile not in profiles:
-        raise FredCliError(
-            f"Unknown profile: {profile} (available profiles: {profile_list})",
-            code="invalid_profile",
-            hint=f"Choose one of the catalog profiles: {profile_list}.",
-        )
+    _validate_plan_inputs(task, mode, budget, profile, recipes, profiles, profile_list)
     recipe = recipes[task]
     detected = preflight(repo, exclude)
     changed: list[str] = []
@@ -279,73 +389,15 @@ def plan(
                 hint="Pass --base <branch-or-commit> (for example, --base main).",
             )
         changed, resolved_base = changed_files(repo, base)
-    selected = list(recipe["skills"])
     suite_name = _suite_for_skills(recipe["skills"])
-    notes = [
-        recipe["outcome"],
-        "Selected by task; installation and execution are separate actions.",
-    ]
-    if mode == "comprehensive":
-        selected = list((_suite_skills_by_suite(ROOT) or {})[suite_name])
-        if suite_name == "repository-audits":
-            # The coordinator is an entry point, not a second pass over every specialist.
-            # Standard comprehensive plans exclude diagnostics, but recovery planning allows explicit selection.
-            excluded_specialists = {"repo-audit-program"}
-            if "repo-audit-diagnostics" not in recipe["skills"]:
-                excluded_specialists.add("repo-audit-diagnostics")
-            selected = [name for name in selected if name not in excluded_specialists]
-        elif suite_name == "repository-workflows":
-            # Standalone session-hygiene utilities are invoked on demand rather than as remediation phases.
-            standalone_hygiene = {
-                name
-                for name in ("session-handoff", "terse-output-commit")
-                if name not in recipe["skills"]
-            }
-            selected = [name for name in selected if name not in standalone_hygiene]
-        notes.append(
-            "Comprehensive scope still requires workflow slices and explicit remaining coverage."
-        )
-    if profile:
-        skill_suites = {
-            row["name"]: row.get("suite")
-            for row in read_json(ROOT / "catalog/skills.json")["skills"]
-        }
-        priorities = [
-            name
-            for name in profiles[profile]["priorities"]
-            if skill_suites.get(name) == suite_name
-        ]
-        selected = list(dict.fromkeys(priorities + selected))
-        notes.append(
-            "Profile assumptions must be checked against this checkout: "
-            + profiles[profile]["description"]
-        )
+    selected, notes = _assemble_skill_list(recipe, suite_name, mode, profile, profiles)
     if changed:
         notes.append(
             "Inspect callers, consumers, configuration, and contracts affected by the changed paths, not just changed lines."
         )
-    limit = {"brief": 3, "balanced": 8, "deep": len(selected)}[budget]
-    deferred = selected[limit:]
-    selected = selected[:limit]
-    if (
-        "repo-audit-diagnostics" in recipe["skills"]
-        and "repo-audit-diagnostics" not in selected
-        and deferred
-    ):
-        deferred = [name for name in deferred if name != "repo-audit-diagnostics"] + [
-            selected[-1]
-        ]
-        selected[-1] = "repo-audit-diagnostics"
-    if (
-        "repo-audit-synthesis" in recipe["skills"]
-        and "repo-audit-synthesis" not in selected
-        and deferred
-    ):
-        idx = -1 if selected[-1] != "repo-audit-diagnostics" else -2
-        deferred = [name for name in deferred if name != "repo-audit-synthesis"] + [
-            selected[idx]
-        ]
-        selected[idx] = "repo-audit-synthesis"
+    selected, deferred = _order_and_bound_specialists(
+        selected, recipe["skills"], budget
+    )
     if deferred:
         notes.append(
             "Budget bounds selected investigations; deferred topics remain unreviewed, not implicitly safe."
@@ -1081,21 +1133,46 @@ commands before running them; record actual outcomes and unavailable capabilitie
 """
 
 
-def audit_errors(audit: dict) -> list[str]:
+class _AuditValidator(Protocol):
+    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
+
+
+_AUDIT_VALIDATOR_MODULE_NAME = "fred_audit_validator"
+
+
+def _load_audit_validator() -> _AuditValidator:
+    cached = sys.modules.get(_AUDIT_VALIDATOR_MODULE_NAME)
+    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
+        return cast(_AuditValidator, cached)
     script = ROOT / "skills/repo-audit-program/scripts/validate_audit.py"
-    spec = importlib.util.spec_from_file_location("fred_audit_validator", script)
+    spec = importlib.util.spec_from_file_location(_AUDIT_VALIDATOR_MODULE_NAME, script)
     if spec is None or spec.loader is None:
         raise ValueError(f"Unable to load audit validator from {script}")
     module = importlib.util.module_from_spec(spec)
     previous = sys.dont_write_bytecode
+    sys.modules[spec.name] = module
     try:
         sys.dont_write_bytecode = True
         spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     finally:
         sys.dont_write_bytecode = previous
-    return module.validate(
-        audit, read_json(ROOT / "shared/repo-audit/resources/assets/audit.schema.json")
+    return cast(_AuditValidator, module)
+
+
+@functools.lru_cache(maxsize=1)
+def _load_audit_schema() -> dict[str, Any]:
+    return read_json_object(
+        ROOT / "shared/repo-audit/resources/assets/audit.schema.json",
+        label="Audit schema 'audit.schema.json'",
     )
+
+
+def audit_errors(audit: dict) -> list[str]:
+    validator = _load_audit_validator()
+    return validator.validate(audit, _load_audit_schema())
 
 
 def _schema_errors(payload: object, schema_rel: str) -> list[str]:
@@ -2059,706 +2136,5 @@ def memory(directory: Path) -> dict:
     }
 
 
-_ROOT_BASE_ID_KEYS = (
-    "%SRCROOT%",
-    "SRCROOT",
-    "%ROOTPATH%",
-    "ROOTPATH",
-    "%PROJECTROOT%",
-    "PROJECTROOT",
-    "PROJECT_ROOT",
-    "%WORKSPACE%",
-    "WORKSPACE",
-    "REPOROOT",
-    "REPO_ROOT",
-)
-
-
-def _canonicalize_abs_posix(raw_path: str) -> str | None:
-    if (
-        len(raw_path) >= 3
-        and raw_path[0] == "/"
-        and raw_path[1].isalpha()
-        and raw_path[2] == ":"
-    ):
-        raw_path = raw_path[1].upper() + raw_path[2:]
-    elif len(raw_path) >= 2 and raw_path[0].isalpha() and raw_path[1] == ":":
-        raw_path = raw_path[0].upper() + raw_path[1:]
-
-    is_win_drive = len(raw_path) >= 2 and raw_path[0].isalpha() and raw_path[1] == ":"
-    if is_win_drive:
-        drive = raw_path[:2]
-        rest = raw_path[2:]
-        if rest and not rest.startswith("/"):
-            return None
-        parts = [seg for seg in rest.split("/") if seg and seg != "."]
-        return f"{drive}/{'/'.join(parts)}" if parts else f"{drive}/"
-
-    if not raw_path.startswith("/"):
-        return None
-    parts = [seg for seg in raw_path.split("/") if seg and seg != "."]
-    return "/" + "/".join(parts) if parts else "/"
-
-
-def _parse_sarif_uri(
-    raw_uri: object, *, allow_empty_rel: bool = False
-) -> tuple[str, str] | None:
-    if not isinstance(raw_uri, str) or "\x00" in raw_uri or "\\" in raw_uri:
-        return None
-    if not raw_uri:
-        return ("rel", "") if allow_empty_rel else None
-
-    if len(raw_uri) >= 2 and raw_uri[0].isalpha() and raw_uri[1] == ":":
-        segments = raw_uri[2:].split("/")
-        if ".." in segments or ".git" in segments:
-            return None
-        canon = _canonicalize_abs_posix(raw_uri)
-        return ("abs", canon) if canon else None
-
-    parsed = urlsplit(raw_uri)
-    if parsed.query or parsed.fragment:
-        return None
-
-    if parsed.scheme:
-        if parsed.scheme.lower() != "file":
-            return None
-        if parsed.netloc.lower() not in {"", "localhost"}:
-            return None
-        decoded = unquote(parsed.path)
-        if not decoded or "\x00" in decoded or "\\" in decoded:
-            return None
-        segments = decoded.split("/")
-        if ".." in segments or ".git" in segments:
-            return None
-        canon = _canonicalize_abs_posix(decoded)
-        return ("abs", canon) if canon else None
-
-    if parsed.netloc:
-        return None
-
-    decoded = unquote(parsed.path)
-    if "\x00" in decoded or "\\" in decoded:
-        return None
-    segments = decoded.split("/")
-    if ".." in segments or ".git" in segments:
-        return None
-    if decoded.startswith("/"):
-        canon = _canonicalize_abs_posix(decoded)
-        return ("abs", canon) if canon else None
-
-    pure = PurePosixPath(decoded)
-    if not pure.parts or pure.parts == (".",):
-        return ("rel", "") if allow_empty_rel else None
-    try:
-        checked = relative_path(decoded)
-    except ValueError:
-        return None
-    return ("rel", checked.as_posix())
-
-
-def _normalize_fs_roots(root: Path) -> list[str]:
-    expanded = Path(root).expanduser()
-    candidates = [
-        Path(os.path.abspath(os.fspath(expanded))).as_posix(),
-        expanded.resolve().as_posix(),
-    ]
-    normalized: list[str] = []
-    for item in candidates:
-        canon = _canonicalize_abs_posix(item)
-        if canon and canon not in normalized:
-            normalized.append(canon)
-    return normalized
-
-
-def _is_usable_abs_root(path_str: str) -> bool:
-    if not path_str or path_str == "/":
-        return False
-    return not (len(path_str) == 3 and path_str[1:] == ":/")
-
-
-def _resolve_base_map(original_base_ids: object) -> dict[str, tuple[str, str] | None]:
-    if not isinstance(original_base_ids, dict):
-        return {}
-    resolved: dict[str, tuple[str, str] | None] = {}
-    visiting: set[str] = set()
-
-    def _resolve_one(key: str) -> tuple[str, str] | None:
-        if key in resolved:
-            return resolved[key]
-        if key in visiting:
-            return None
-        entry = original_base_ids.get(key)
-        if not isinstance(entry, dict):
-            resolved[key] = None
-            return None
-        visiting.add(key)
-        try:
-            raw_uri = entry.get("uri")
-            parent_id = entry.get("uriBaseId")
-            if raw_uri is None or raw_uri == "":
-                if isinstance(parent_id, str) and parent_id in original_base_ids:
-                    res = _resolve_one(parent_id)
-                else:
-                    res = ("root_marker", "")
-                resolved[key] = res
-                return res
-
-            parsed = _parse_sarif_uri(raw_uri, allow_empty_rel=True)
-            if parsed is None:
-                resolved[key] = None
-                return None
-            kind, val = parsed
-            if kind == "abs":
-                res = ("abs", val) if _is_usable_abs_root(val) else None
-                resolved[key] = res
-                return res
-
-            if isinstance(parent_id, str) and parent_id:
-                if parent_id not in original_base_ids:
-                    res = ("rel", val)
-                    resolved[key] = res
-                    return res
-                parent = _resolve_one(parent_id)
-                if parent is None:
-                    resolved[key] = None
-                    return None
-                p_kind, p_val = parent
-                if p_kind == "abs":
-                    joined = f"{p_val.rstrip('/')}/{val}" if val else p_val
-                    canon = _canonicalize_abs_posix(joined)
-                    res = (
-                        ("abs", canon) if canon and _is_usable_abs_root(canon) else None
-                    )
-                elif p_kind == "rel":
-                    joined = (
-                        f"{p_val}/{val}".strip("/") if p_val and val else (p_val or val)
-                    )
-                    res = ("rel", joined)
-                else:
-                    res = ("rel", val)
-                resolved[key] = res
-                return res
-
-            resolved[key] = ("rel", val)
-            return resolved[key]
-        finally:
-            visiting.discard(key)
-
-    for base_key in original_base_ids:
-        if isinstance(base_key, str):
-            _resolve_one(base_key)
-    return resolved
-
-
-def _extract_location_abs_dir(
-    loc_obj: object, base_map: dict[str, tuple[str, str] | None]
-) -> str | None:
-    if not isinstance(loc_obj, dict):
-        return None
-    raw_uri = loc_obj.get("uri")
-    base_id = loc_obj.get("uriBaseId")
-    if not raw_uri and isinstance(base_id, str) and base_id in base_map:
-        mapped = base_map[base_id]
-        if mapped and mapped[0] == "abs" and _is_usable_abs_root(mapped[1]):
-            return mapped[1]
-        return None
-    parsed = _parse_sarif_uri(raw_uri, allow_empty_rel=True)
-    if parsed is None:
-        return None
-    kind, val = parsed
-    if kind == "abs":
-        return val if _is_usable_abs_root(val) else None
-    if isinstance(base_id, str) and base_id in base_map:
-        mapped = base_map[base_id]
-        if mapped and mapped[0] == "abs":
-            joined = f"{mapped[1].rstrip('/')}/{val}" if val else mapped[1]
-            canon = _canonicalize_abs_posix(joined)
-            if canon and _is_usable_abs_root(canon):
-                return canon
-    return None
-
-
-def _collect_sarif_roots(
-    run: dict,
-    base_map: dict[str, tuple[str, str] | None],
-    invocation_index: object = None,
-) -> list[str]:
-    roots: list[str] = []
-
-    def _add(candidate: str | None) -> None:
-        if candidate and _is_usable_abs_root(candidate) and candidate not in roots:
-            roots.append(candidate)
-
-    upper_to_key = {k.upper(): k for k in base_map}
-    for well_known in _ROOT_BASE_ID_KEYS:
-        matched_key = upper_to_key.get(well_known)
-        if matched_key is not None:
-            entry = base_map[matched_key]
-            if entry and entry[0] == "abs":
-                _add(entry[1])
-
-    vc_list = run.get("versionControlProvenance")
-    if isinstance(vc_list, list):
-        for vc in vc_list:
-            if isinstance(vc, dict):
-                _add(_extract_location_abs_dir(vc.get("mappedTo"), base_map))
-
-    invocations = run.get("invocations")
-    if isinstance(invocations, list):
-        if isinstance(invocation_index, int) and 0 <= invocation_index < len(
-            invocations
-        ):
-            inv = invocations[invocation_index]
-            if isinstance(inv, dict):
-                _add(_extract_location_abs_dir(inv.get("workingDirectory"), base_map))
-        for inv in invocations:
-            if isinstance(inv, dict):
-                _add(_extract_location_abs_dir(inv.get("workingDirectory"), base_map))
-
-    special = run.get("specialLocations")
-    if isinstance(special, dict):
-        _add(_extract_location_abs_dir(special.get("displayBase"), base_map))
-
-    if not roots:
-        raw_bases = run.get("originalUriBaseIds")
-        if isinstance(raw_bases, dict):
-            for key, entry in base_map.items():
-                raw_entry = raw_bases.get(key)
-                if (
-                    isinstance(raw_entry, dict)
-                    and not raw_entry.get("uriBaseId")
-                    and entry
-                    and entry[0] == "abs"
-                ):
-                    _add(entry[1])
-    return roots
-
-
-def _relativize_against_roots(
-    target_abs: str, candidate_roots: list[str]
-) -> str | None:
-    for base_abs in candidate_roots:
-        if not _is_usable_abs_root(base_abs):
-            continue
-        prefix = base_abs.rstrip("/") + "/"
-        if target_abs.startswith(prefix):
-            rel = target_abs[len(prefix) :]
-            try:
-                checked = relative_path(rel)
-            except ValueError:
-                return None
-            if checked.parts:
-                return checked.as_posix()
-    return None
-
-
-def _resolve_artifact_location_dict(artifact_loc: object, run: dict) -> dict | None:
-    if not isinstance(artifact_loc, dict):
-        return None
-    if artifact_loc.get("uri"):
-        return artifact_loc
-    idx = artifact_loc.get("index")
-    artifacts = run.get("artifacts")
-    if (
-        isinstance(idx, int)
-        and isinstance(artifacts, list)
-        and 0 <= idx < len(artifacts)
-    ):
-        art = artifacts[idx]
-        if isinstance(art, dict) and isinstance(art.get("location"), dict):
-            return art["location"]
-    return artifact_loc
-
-
-def _normalize_sarif_artifact_path(
-    artifact_loc: object,
-    run: dict,
-    base_map: dict[str, tuple[str, str] | None],
-    explicit_roots: list[str] | None,
-    sarif_roots: list[str],
-) -> str | None:
-    resolved_loc = _resolve_artifact_location_dict(artifact_loc, run)
-    if not isinstance(resolved_loc, dict):
-        return None
-    parsed = _parse_sarif_uri(resolved_loc.get("uri"))
-    if parsed is None:
-        return None
-    kind, val = parsed
-    if kind == "abs":
-        allowed_roots = explicit_roots if explicit_roots is not None else sarif_roots
-        return _relativize_against_roots(val, allowed_roots)
-
-    base_id = resolved_loc.get("uriBaseId")
-    if isinstance(base_id, str) and base_id:
-        raw_bases = run.get("originalUriBaseIds")
-        if isinstance(raw_bases, dict) and base_id in raw_bases:
-            mapped = base_map.get(base_id)
-            if mapped is None:
-                return None
-            b_kind, b_val = mapped
-            if b_kind == "abs":
-                joined = f"{b_val.rstrip('/')}/{val}"
-                canon = _canonicalize_abs_posix(joined)
-                if not canon:
-                    return None
-                candidate_roots = list(explicit_roots or [])
-                for r in sarif_roots:
-                    if r not in candidate_roots:
-                        candidate_roots.append(r)
-                return _relativize_against_roots(canon, candidate_roots)
-            if b_kind == "rel" and b_val:
-                val = f"{b_val.rstrip('/')}/{val}"
-
-    try:
-        checked = relative_path(val)
-    except ValueError:
-        return None
-    return checked.as_posix() if checked.parts else None
-
-
-def _select_tool_component(
-    tc_ref: object, driver: dict, extensions: list[dict]
-) -> dict | None:
-    if not isinstance(tc_ref, dict):
-        return None
-    idx = tc_ref.get("index")
-    if isinstance(idx, int) and 0 <= idx < len(extensions):
-        return extensions[idx]
-    guid = tc_ref.get("guid")
-    if isinstance(guid, str) and guid:
-        if driver.get("guid") == guid:
-            return driver
-        for ext in extensions:
-            if ext.get("guid") == guid:
-                return ext
-    name = tc_ref.get("name")
-    if isinstance(name, str) and name:
-        if driver.get("name") == name:
-            return driver
-        for ext in extensions:
-            if ext.get("name") == name:
-                return ext
-    return None
-
-
-def _lookup_rule_in_component(
-    component: dict,
-    rule_id: str | None,
-    rule_guid: str | None,
-    rule_index: int | None,
-) -> dict | None:
-    rules = component.get("rules")
-    if not isinstance(rules, list):
-        return None
-    if isinstance(rule_index, int) and 0 <= rule_index < len(rules):
-        candidate = rules[rule_index]
-        if isinstance(candidate, dict) and (
-            not rule_id or not candidate.get("id") or candidate.get("id") == rule_id
-        ):
-            return candidate
-    if rule_guid:
-        for item in rules:
-            if isinstance(item, dict) and item.get("guid") == rule_guid:
-                return item
-    if rule_id:
-        for item in rules:
-            if isinstance(item, dict) and item.get("id") == rule_id:
-                return item
-    return None
-
-
-def _find_sarif_rule(result: dict, driver: dict, extensions: list[dict]) -> dict | None:
-    raw_rule_ref = result.get("rule")
-    rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
-    raw_rule_id = result.get("ruleId") or rule_ref.get("id")
-    rule_id = raw_rule_id if isinstance(raw_rule_id, str) and raw_rule_id else None
-    raw_guid = rule_ref.get("guid")
-    rule_guid = raw_guid if isinstance(raw_guid, str) and raw_guid else None
-
-    ref_idx = rule_ref.get("index")
-    res_idx = result.get("ruleIndex")
-    idx = (
-        ref_idx
-        if isinstance(ref_idx, int) and ref_idx >= 0
-        else (res_idx if isinstance(res_idx, int) and res_idx >= 0 else None)
-    )
-
-    target_comp = _select_tool_component(
-        rule_ref.get("toolComponent"), driver, extensions
-    )
-    if target_comp is not None:
-        matched = _lookup_rule_in_component(target_comp, rule_id, rule_guid, idx)
-        if matched is not None:
-            return matched
-
-    matched = _lookup_rule_in_component(
-        driver, rule_id, rule_guid, idx if target_comp is None else None
-    )
-    if matched is not None:
-        return matched
-
-    for ext in extensions:
-        matched = _lookup_rule_in_component(ext, rule_id, rule_guid, None)
-        if matched is not None:
-            return matched
-    return None
-
-
-def _find_override_level(result: dict, run: dict, rule_id: str | None) -> str | None:
-    invocations = run.get("invocations")
-    if not isinstance(invocations, list):
-        return None
-    inv_idx = result.get("invocationIndex")
-    ordered = (
-        [invocations[inv_idx]]
-        if isinstance(inv_idx, int) and 0 <= inv_idx < len(invocations)
-        else invocations
-    )
-    raw_rule_ref = result.get("rule")
-    rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
-    ref_index = rule_ref.get("index")
-    res_idx = ref_index if isinstance(ref_index, int) else result.get("ruleIndex")
-
-    for inv in ordered:
-        if not isinstance(inv, dict):
-            continue
-        overrides = inv.get("ruleConfigurationOverrides")
-        if not isinstance(overrides, list):
-            continue
-        for ov in overrides:
-            if not isinstance(ov, dict):
-                continue
-            desc = ov.get("descriptor")
-            cfg = ov.get("configuration")
-            if not isinstance(desc, dict) or not isinstance(cfg, dict):
-                continue
-            level = cfg.get("level")
-            if not isinstance(level, str) or not level:
-                continue
-            if (rule_id and desc.get("id") == rule_id) or (
-                isinstance(res_idx, int)
-                and res_idx >= 0
-                and desc.get("index") == res_idx
-                and not desc.get("id")
-            ):
-                return level
-    return None
-
-
-def _resolve_sarif_level(
-    result: dict, matched_rule: dict | None, run: dict, rule_id: str | None
-) -> str:
-    explicit = result.get("level")
-    if isinstance(explicit, str) and explicit:
-        return explicit
-    kind = result.get("kind")
-    if isinstance(kind, str) and kind in {
-        "pass",
-        "open",
-        "review",
-        "notApplicable",
-        "informational",
-    }:
-        return "none"
-    override_level = _find_override_level(result, run, rule_id)
-    if override_level:
-        return override_level
-    if isinstance(matched_rule, dict):
-        default_cfg = matched_rule.get("defaultConfiguration")
-        if isinstance(default_cfg, dict):
-            rule_level = default_cfg.get("level")
-            if isinstance(rule_level, str) and rule_level:
-                return rule_level
-    return "warning"
-
-
-def _extract_logical_symbol(location_item: dict, run: dict) -> str | None:
-    logical_list = location_item.get("logicalLocations")
-    if not isinstance(logical_list, list):
-        return None
-    run_logical = run.get("logicalLocations")
-    for entry in logical_list:
-        if not isinstance(entry, dict):
-            continue
-        for field in ("name", "fullyQualifiedName", "decoratedName"):
-            val = entry.get(field)
-            if isinstance(val, str) and val:
-                return val
-        idx = entry.get("index")
-        if (
-            isinstance(idx, int)
-            and isinstance(run_logical, list)
-            and 0 <= idx < len(run_logical)
-            and isinstance(run_logical[idx], dict)
-        ):
-            target = run_logical[idx]
-            for field in ("name", "fullyQualifiedName", "decoratedName"):
-                val = target.get(field)
-                if isinstance(val, str) and val:
-                    return val
-    return None
-
-
-def _extract_security_severity(
-    result: dict, matched_rule: dict | None
-) -> str | float | int | None:
-    for obj in (result, matched_rule):
-        if isinstance(obj, dict):
-            props = obj.get("properties")
-            if isinstance(props, dict):
-                sec_sev = props.get("security-severity")
-                if (
-                    isinstance(sec_sev, (str, int, float))
-                    and not isinstance(sec_sev, bool)
-                    and sec_sev != ""
-                ):
-                    return sec_sev
-    return None
-
-
-def _clean_fingerprint_map(raw_map: object) -> dict[str, str] | None:
-    if not isinstance(raw_map, dict):
-        return None
-    cleaned = {
-        k: v
-        for k, v in raw_map.items()
-        if isinstance(k, str) and k and isinstance(v, str) and v
-    }
-    return cleaned or None
-
-
 def import_sarif(path: Path, root: Path | None = None) -> dict:
-    document = read_json_object(
-        path,
-        label="SARIF file",
-        hint="Pass a valid SARIF 2.1.0 JSON object containing a 'runs' array.",
-    )
-    raw_runs = document.get("runs", [])
-    if not isinstance(raw_runs, list):
-        raise FredCliError(
-            f"Malformed SARIF file '{path}': 'runs' must be a JSON array",
-            code="invalid_sarif",
-            hint="Ensure the SARIF document conforms to SARIF 2.1.0 with a top-level 'runs' array.",
-        )
-    observations = []
-    explicit_roots = _normalize_fs_roots(Path(root)) if root is not None else None
-    for run in raw_runs:
-        if not isinstance(run, dict):
-            continue
-        raw_tool = run.get("tool")
-        tool_obj: dict[str, Any] = raw_tool if isinstance(raw_tool, dict) else {}
-        raw_driver = tool_obj.get("driver")
-        driver: dict[str, Any] = raw_driver if isinstance(raw_driver, dict) else {}
-        raw_exts = tool_obj.get("extensions")
-        extensions = (
-            [ext for ext in raw_exts if isinstance(ext, dict)]
-            if isinstance(raw_exts, list)
-            else []
-        )
-        base_map = _resolve_base_map(run.get("originalUriBaseIds"))
-        default_sarif_roots = _collect_sarif_roots(run, base_map)
-
-        raw_results = run.get("results", [])
-        if not isinstance(raw_results, list):
-            raise FredCliError(
-                f"Malformed SARIF file '{path}': 'results' in run must be a JSON array",
-                code="invalid_sarif",
-                hint="Ensure each SARIF run's 'results' property is a JSON array.",
-            )
-        for result in raw_results:
-            if not isinstance(result, dict):
-                continue
-            inv_idx = result.get("invocationIndex")
-            sarif_roots = (
-                _collect_sarif_roots(run, base_map, inv_idx)
-                if isinstance(inv_idx, int) and inv_idx >= 0
-                else default_sarif_roots
-            )
-            matched_rule = _find_sarif_rule(result, driver, extensions)
-            raw_rule_ref = result.get("rule")
-            rule_ref: dict[str, Any] = (
-                raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
-            )
-            rule_id = (
-                result.get("ruleId")
-                or rule_ref.get("id")
-                or (matched_rule.get("id") if isinstance(matched_rule, dict) else None)
-                or "unknown"
-            )
-            reported_level = _resolve_sarif_level(
-                result,
-                matched_rule,
-                run,
-                rule_id if isinstance(rule_id, str) and rule_id != "unknown" else None,
-            )
-
-            raw_locations = result.get("locations", [])
-            if not isinstance(raw_locations, list):
-                raise FredCliError(
-                    f"Malformed SARIF file '{path}': 'locations' in result must be a JSON array",
-                    code="invalid_sarif",
-                    hint="Ensure each SARIF result's 'locations' property is a JSON array.",
-                )
-            locations = []
-            for item in raw_locations:
-                if not isinstance(item, dict):
-                    continue
-                raw_physical = item.get("physicalLocation")
-                physical: dict[str, Any] = (
-                    raw_physical if isinstance(raw_physical, dict) else {}
-                )
-                norm_path = _normalize_sarif_artifact_path(
-                    physical.get("artifactLocation"),
-                    run,
-                    base_map,
-                    explicit_roots,
-                    sarif_roots,
-                )
-                if not norm_path:
-                    continue
-                raw_region = physical.get("region")
-                region: dict[str, Any] = (
-                    raw_region if isinstance(raw_region, dict) else {}
-                )
-                loc_record: dict = {
-                    "path": norm_path,
-                    "line": region.get("startLine"),
-                }
-                if region.get("endLine") is not None:
-                    loc_record["end_line"] = region.get("endLine")
-                symbol = _extract_logical_symbol(item, run)
-                if symbol:
-                    loc_record["symbol"] = symbol
-                locations.append(loc_record)
-
-            raw_msg = result.get("message")
-            msg_obj: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else {}
-            observation: dict = {
-                "tool": driver.get("name", "unknown"),
-                "tool_version": driver.get("version")
-                or driver.get("semanticVersion")
-                or "unknown",
-                "rule": rule_id,
-                "reported_level": reported_level,
-                "message": msg_obj.get("text", "No text message"),
-                "locations": locations,
-                "evidence_state": "scanner-reported; agent verification not performed",
-            }
-            sec_severity = _extract_security_severity(result, matched_rule)
-            if sec_severity is not None:
-                observation["security_severity"] = sec_severity
-            fps = _clean_fingerprint_map(result.get("fingerprints"))
-            if fps:
-                observation["fingerprints"] = fps
-            partial_fps = _clean_fingerprint_map(result.get("partialFingerprints"))
-            if partial_fps:
-                observation["partial_fingerprints"] = partial_fps
-            observations.append(observation)
-
-    return {
-        "schema_version": "1.0",
-        "observations": observations,
-        "limitations": [
-            "Imported scanner claims are not confirmed audit findings; original source revision and modeling scope require verification."
-        ],
-    }
+    return _sarif_import.import_sarif(path, root=root)

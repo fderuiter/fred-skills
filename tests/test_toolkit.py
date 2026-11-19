@@ -3307,6 +3307,110 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             fred_common._suite_shared_assets("code-review", root=empty_root)
         self.assertEqual("invalid_json", shared_err.exception.code)
 
+    def test_sarif_importer_module_boundary_and_parsed_uri_dataclass(self):
+        import dataclasses
+
+        import fredlib
+        from fredlib import _sarif_import
+
+        self.assertNotIn("_sarif_import", fredlib.__all__)
+        self.assertEqual("fredlib.runs", runs.import_sarif.__module__)
+        self.assertEqual("fredlib._sarif_import", _sarif_import.import_sarif.__module__)
+        for helper_name in (
+            "_parse_sarif_uri",
+            "_resolve_base_map",
+            "_collect_sarif_roots",
+            "_normalize_sarif_artifact_path",
+            "_select_tool_component",
+            "_find_sarif_rule",
+        ):
+            self.assertFalse(
+                hasattr(runs, helper_name),
+                f"SARIF helper {helper_name} should not remain inline in fredlib.runs",
+            )
+
+        self.assertTrue(dataclasses.is_dataclass(_sarif_import.ParsedSarifUri))
+        abs_uri = _sarif_import._parse_sarif_uri("file:///workspace/repo/src/app.py")
+        self.assertEqual(
+            _sarif_import.ParsedSarifUri(
+                kind="abs", value="/workspace/repo/src/app.py"
+            ),
+            abs_uri,
+        )
+        assert abs_uri is not None
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            abs_uri.kind = "rel"  # type: ignore[misc]
+
+        rel_uri = _sarif_import._parse_sarif_uri("src/app.py")
+        self.assertEqual(
+            _sarif_import.ParsedSarifUri(kind="rel", value="src/app.py"),
+            rel_uri,
+        )
+        win_uri = _sarif_import._parse_sarif_uri("c:/workspace/repo/src/app.py")
+        self.assertEqual(
+            _sarif_import.ParsedSarifUri(
+                kind="abs", value="C:/workspace/repo/src/app.py"
+            ),
+            win_uri,
+        )
+        self.assertIsNone(_sarif_import._parse_sarif_uri("c:/workspace/../escape.py"))
+
+        base_map = _sarif_import._resolve_base_map(
+            {
+                "%SRCROOT%": {"uri": ""},
+                "SUB": {"uri": "pkg/", "uriBaseId": "%SRCROOT%"},
+                "CYCLE_A": {"uri": "a", "uriBaseId": "CYCLE_B"},
+                "CYCLE_B": {"uri": "b", "uriBaseId": "CYCLE_A"},
+            }
+        )
+        self.assertEqual(
+            _sarif_import.ParsedSarifUri(kind="root_marker", value=""),
+            base_map["%SRCROOT%"],
+        )
+        self.assertEqual(
+            _sarif_import.ParsedSarifUri(kind="rel", value="pkg"),
+            base_map["SUB"],
+        )
+        self.assertIsNone(base_map["CYCLE_A"])
+        self.assertIsNone(base_map["CYCLE_B"])
+
+    def test_audit_errors_caches_validator_module_and_schema(self):
+        import importlib.util
+
+        valid_audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        invalid_audit = {**copy.deepcopy(valid_audit), "schema_version": "999.0"}
+
+        sys.modules.pop("fred_audit_validator", None)
+        runs._load_audit_schema.cache_clear()
+        prev_no_bytecode = sys.dont_write_bytecode
+        try:
+            sys.dont_write_bytecode = False
+            with (
+                unittest.mock.patch(
+                    "fredlib.runs.importlib.util.spec_from_file_location",
+                    wraps=importlib.util.spec_from_file_location,
+                ) as spec_spy,
+                unittest.mock.patch(
+                    "fredlib.runs.read_json_object",
+                    wraps=runs.read_json_object,
+                ) as schema_spy,
+            ):
+                self.assertEqual([], runs.audit_errors(valid_audit))
+                self.assertFalse(sys.dont_write_bytecode)
+                self.assertTrue(runs.audit_errors(invalid_audit))
+                self.assertEqual([], runs.audit_errors(valid_audit))
+
+                self.assertEqual(1, spec_spy.call_count)
+                self.assertEqual(1, schema_spy.call_count)
+        finally:
+            sys.dont_write_bytecode = prev_no_bytecode
+
+        self.assertIn("fred_audit_validator", sys.modules)
+        self.assertTrue(callable(sys.modules["fred_audit_validator"].validate))
+        self.assertFalse(
+            (ROOT / "skills/repo-audit-program/scripts/__pycache__").exists()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
