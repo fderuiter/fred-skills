@@ -737,13 +737,13 @@ Builds reproducible release distribution archives containing selected standalone
 def verify(manifest: Path) -> dict
 ```
 
-Validates the integrity of release archives against a committed or generated `manifest.json`.
+Validates the integrity of release archives (and adjacent `SHA256SUMS` and `checksums.sha256` files when present) against a committed or generated `manifest.json`.
 
 - **Parameters:**
   - `manifest` (`Path`): Path to `manifest.json`.
 - **Returns:** `dict` — Verification summary dictionary containing `"verified_archives"`, `"version"`, and `"authenticity"`.
 - **Exceptions:**
-  - `ValueError`: Raised if an archive path escapes the manifest directory, or if an archive file's SHA-256 checksum does not match the manifest.
+  - `ValueError`: Raised if an archive path escapes the manifest directory or is missing; if an archive's byte count or SHA-256 checksum does not match `manifest.json`; or if a present `SHA256SUMS` or `checksums.sha256` file is a symlink, contains malformed lines, or disagrees with `manifest.json`.
 
 ---
 
