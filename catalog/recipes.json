@@ -36,6 +36,7 @@
       ],
       "outputs": [
         "audit.json",
+        "finding-verification.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -95,6 +96,8 @@
       ],
       "outputs": [
         "audit.json",
+        "finding-verification.json",
+        "plan.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -114,6 +117,11 @@
       ],
       "outputs": [
         "audit.json",
+        "finding-verification.json",
+        "regression.json",
+        "verification.json",
+        "reconciliation.json",
+        "remediation.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -193,6 +201,7 @@
       ],
       "outputs": [
         "audit.json",
+        "finding-verification.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -253,6 +262,13 @@
       ],
       "outputs": [
         "audit.json",
+        "finding-verification.json",
+        "regression.json",
+        "plan.json",
+        "fix.json",
+        "verification.json",
+        "reconciliation.json",
+        "remediation.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"

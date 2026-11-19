@@ -1993,6 +1993,220 @@ class ReportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reports.render(bad_testing, tmp_path / "bad.html")
 
+    def test_workflow_companions_validation_reconcile_and_rejection(self):
+        import jsonschema
+        from fredlib.common import ROOT, WORKFLOW_DELIVERABLE_SCHEMAS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("value = 1\n", encoding="utf-8")
+            ws = root / "ws-apply-fix"
+            run = runs.initialize(repo, ws, "apply-fix", budget="deep")
+
+            # Primary deliverable is audit.json; companion files are not pre-seeded
+            self.assertTrue((ws / "audit.json").is_file())
+            for companion_name in WORKFLOW_DELIVERABLE_SCHEMAS:
+                self.assertFalse((ws / companion_name).exists(), companion_name)
+            self.assertEqual([], runs.validate_run(ws))
+
+            prompt_text = (ws / "prompt.md").read_text(encoding="utf-8")
+            for companion_name, schema_rel in WORKFLOW_DELIVERABLE_SCHEMAS.items():
+                self.assertIn(companion_name, prompt_text)
+                self.assertIn(schema_rel, prompt_text)
+
+            # Populate finding F-1 in audit.json so reconcile can record verified-fixed
+            audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+            audit["run_id"] = run["run_id"]
+            audit["repository"] = runs.empty_audit(run)["repository"]
+            audit["evidence"][0]["path"] = "app.py"
+            atomic_json(ws / "audit.json", audit)
+
+            valid_companions = {
+                "finding-verification.json": {
+                    "schema_version": "1.0",
+                    "finding_id": "F-1",
+                    "reproduction_status": "supported",
+                    "safe_control_outcomes": [
+                        {"control": "update(1) succeeds", "passed": True}
+                    ],
+                    "confidence_rating": "high",
+                    "commands": ["pytest -q"],
+                    "result": "Supported by static trace and control check",
+                },
+                "regression.json": {
+                    "schema_version": "1.0",
+                    "finding_id": "F-1",
+                    "test_file": "tests/test_app.py",
+                    "failure_boundaries": ["Negative value accepted"],
+                    "test_command_traces": ["pytest -q tests/test_app.py"],
+                    "assertion_expectations": ["assertRaises(ValueError)"],
+                },
+                "plan.json": {
+                    "schema_version": "1.0",
+                    "plan_id": "PLAN-1",
+                    "title": "Guard value assignment",
+                    "task_breakdowns": [
+                        {
+                            "task_id": "T-1",
+                            "title": "Add boundary check",
+                            "file_scopes": ["app.py"],
+                            "acceptance_criteria": ["Negative inputs raise ValueError"],
+                        }
+                    ],
+                    "dependency_order": ["T-1"],
+                    "file_scopes": ["app.py"],
+                    "acceptance_criteria": ["Negative inputs raise ValueError"],
+                },
+                "fix.json": {
+                    "schema_version": "1.0",
+                    "finding_id": "F-1",
+                    "file_changes": [{"path": "app.py", "action": "modified"}],
+                    "diff_summaries": [
+                        {
+                            "path": "app.py",
+                            "summary": "Reject negative values at boundary",
+                        }
+                    ],
+                    "execution_results": [
+                        {"command": "pytest -q", "exit_code": 0, "passed": True}
+                    ],
+                    "compatibility_limits": [],
+                },
+                "verification.json": {
+                    "schema_version": "1.0",
+                    "finding_id": "F-1",
+                    "before_revision": "aaa1111",
+                    "after_revision": "bbb2222",
+                    "original_reproduced": True,
+                    "regression_passed": True,
+                    "safe_controls_passed": True,
+                    "commands": ["pytest -q"],
+                    "result": "1 passed",
+                    "notes": "Verified on clean worktree",
+                },
+                "reconciliation.json": {
+                    "schema_version": "1.0",
+                    "run_id": run["run_id"],
+                    "finding_fingerprint_matches": [
+                        {
+                            "fingerprint": runs.fingerprint(
+                                audit["findings"][0], audit
+                            ),
+                            "finding_id": "F-1",
+                            "match_status": "exact",
+                        }
+                    ],
+                    "remediation_state_transitions": [
+                        {
+                            "finding_id": "F-1",
+                            "previous_state": "open",
+                            "new_state": "verified-fixed",
+                            "reason": "Regression and safe controls passed",
+                        }
+                    ],
+                    "unmapped_records": [],
+                },
+            }
+            for fname, payload in valid_companions.items():
+                atomic_json(ws / fname, payload)
+
+            # Reconcile accepts verification.json with optional schema_version, finding_id, notes
+            rec = runs.reconcile(
+                ws,
+                "F-1",
+                "verified-fixed",
+                "Verified with regression test",
+                verification=ws / "verification.json",
+            )
+            self.assertEqual(
+                {"at", "finding_id", "fingerprint", "state", "note", "verification"},
+                set(rec.keys()),
+            )
+            self.assertEqual("F-1", rec["verification"]["finding_id"])
+            self.assertEqual("1.0", rec["verification"]["schema_version"])
+            self.assertEqual("Verified on clean worktree", rec["verification"]["notes"])
+
+            # Written remediation.json conforms to reconciliation.schema.json and validate_run succeeds
+            reconcile_schema = read_json(
+                ROOT
+                / "skills/repo-reconcile-findings/assets/reconciliation.schema.json"
+            )
+            remediation_doc = read_json(ws / "remediation.json")
+            self.assertEqual(
+                [],
+                list(
+                    jsonschema.Draft202012Validator(reconcile_schema).iter_errors(
+                        remediation_doc
+                    )
+                ),
+            )
+            self.assertEqual([], runs.validate_run(ws))
+            self.assertEqual(ws / "audit.json", resolve_audit_path(ws))
+
+            # Corrupting any companion file causes validate_run to report an error naming that file
+            invalid_overrides = {
+                "finding-verification.json": {
+                    **valid_companions["finding-verification.json"],
+                    "reproduction_status": "statically-supported",
+                },
+                "regression.json": {"schema_version": "1.0"},
+                "plan.json": {**valid_companions["plan.json"], "task_breakdowns": []},
+                "fix.json": {**valid_companions["fix.json"], "extra": 1},
+                "verification.json": {
+                    **valid_companions["verification.json"],
+                    "finding_id": "",
+                },
+                "reconciliation.json": {"schema_version": "1.0"},
+                "remediation.json": {"schema_version": "1.0", "records": [{"bad": 1}]},
+            }
+            for fname, bad_payload in invalid_overrides.items():
+                saved = read_json(ws / fname)
+                try:
+                    atomic_json(ws / fname, bad_payload)
+                    errs = runs.validate_run(ws)
+                    self.assertTrue(
+                        any(fname in e for e in errs),
+                        f"Expected {fname} in {errs}",
+                    )
+                finally:
+                    atomic_json(ws / fname, saved)
+
+            # Audit-only Python APIs reject companion workflow payloads and run.json naming 'audit.json'
+            non_audit_payloads = {
+                **valid_companions,
+                "remediation.json": remediation_doc,
+                "run.json": run,
+            }
+            for fname, payload in non_audit_payloads.items():
+                with self.subTest(rejected=fname):
+                    with self.assertRaises(ValueError) as rep_ctx:
+                        reports.render(payload, root / f"rep-{fname}.html")
+                    self.assertIn("audit.json", str(rep_ctx.exception))
+                    self.assertIn(fname, str(rep_ctx.exception))
+
+                    with self.assertRaises(ValueError) as iss_ctx:
+                        reports.issue_drafts(payload, root / f"iss-{fname}")
+                    self.assertIn("audit.json", str(iss_ctx.exception))
+                    self.assertIn(fname, str(iss_ctx.exception))
+
+                    with self.assertRaises(ValueError) as cmp_ctx:
+                        runs.compare(payload, audit)
+                    self.assertIn("audit.json", str(cmp_ctx.exception))
+                    self.assertIn(fname, str(cmp_ctx.exception))
+
+            # Standalone directory containing only a companion file fails resolve_audit_path naming 'audit.json'
+            only_wf = root / "only-wf"
+            only_wf.mkdir()
+            atomic_json(
+                only_wf / "verification.json", valid_companions["verification.json"]
+            )
+            with self.assertRaises(ValueError) as res_ctx:
+                resolve_audit_path(only_wf)
+            self.assertIn("audit.json", str(res_ctx.exception))
+            self.assertIn("verification.json", str(res_ctx.exception))
+
 
 class BoundaryGuardAndContractTests(unittest.TestCase):
     def setUp(self):

@@ -1,7 +1,7 @@
 Use repo-plan-fix on <repository/revision> with <finding/run artifacts>.
 Inspect the exact source and supported contract. Trace preconditions and safeguards,
 use independent validation and safe controls, and preserve uncertainty and source
-identity. Return a standalone handoff and plan conforming to assets/plan.schema.json
-with actual commands/results and next action.
+identity. Write plan.json validated against assets/plan.schema.json and return a
+standalone handoff with actual commands/results and next action.
 Honor the current user-authorized mutation scope; draft external changes otherwise.
 Do not modify application code, invent issue metadata, or publish external changes without authorization.

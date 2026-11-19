@@ -804,6 +804,63 @@ class AuditToSarifTests(unittest.TestCase):
                 "framework": "unittest",
                 "test_cases": [],
             },
+            "finding-verification.json": {
+                "finding_id": "F-1",
+                "reproduction_status": "supported",
+                "safe_control_outcomes": [{"control": "ok", "passed": True}],
+                "confidence_rating": "high",
+            },
+            "regression.json": {
+                "finding_id": "F-1",
+                "failure_boundaries": ["race"],
+                "test_command_traces": ["pytest"],
+                "assertion_expectations": ["assert ok"],
+            },
+            "plan.json": {
+                "task_breakdowns": [
+                    {
+                        "task_id": "T-1",
+                        "title": "Fix",
+                        "file_scopes": ["app.py"],
+                        "acceptance_criteria": ["ok"],
+                    }
+                ],
+                "dependency_order": ["T-1"],
+                "file_scopes": ["app.py"],
+                "acceptance_criteria": ["ok"],
+            },
+            "fix.json": {
+                "file_changes": ["app.py"],
+                "diff_summaries": ["fix"],
+                "execution_results": [
+                    {"command": "pytest", "exit_code": 0, "passed": True}
+                ],
+                "compatibility_limits": [],
+            },
+            "verification.json": {
+                "before_revision": "aaa",
+                "after_revision": "bbb",
+                "original_reproduced": True,
+                "regression_passed": True,
+                "safe_controls_passed": True,
+                "commands": ["pytest"],
+                "result": "passed",
+            },
+            "reconciliation.json": {
+                "run_id": "run-123",
+                "finding_fingerprint_matches": [],
+                "remediation_state_transitions": [],
+                "unmapped_records": [],
+            },
+            "remediation.json": {
+                "schema_version": "1.0",
+                "records": [],
+            },
+            "run.json": {
+                "schema_version": "1.0",
+                "run_id": "run-123",
+                "plan": {"task": "review-pr"},
+            },
         }
         for filename, payload in payloads.items():
             with self.subTest(artifact=filename):
@@ -814,11 +871,21 @@ class AuditToSarifTests(unittest.TestCase):
 
                 dom_dir = self.temp_path / f"dom_{filename}"
                 dom_dir.mkdir()
-                (dom_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+                explicit_file = dom_dir / filename
+                explicit_file.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaises(ValueError) as file_ctx:
+                    convert_file(explicit_file)
+                self.assertIn("audit.json", str(file_ctx.exception))
+                self.assertIn(filename, str(file_ctx.exception))
+
                 with self.assertRaises(ValueError) as dir_ctx:
                     convert_file(dom_dir)
                 self.assertIn("audit.json", str(dir_ctx.exception))
                 self.assertIn(filename, str(dir_ctx.exception))
+
+        with self.assertRaises(ValueError) as empty_ctx:
+            audit_to_sarif({})
+        self.assertIn("audit.json", str(empty_ctx.exception))
 
 
 class AuditToSarifSyncTests(unittest.TestCase):

@@ -613,7 +613,7 @@ def _grade_workflow(
     if "reproduction_status" in payload:
         fid = str(payload.get("finding_id", ""))
         status = payload.get("reproduction_status")
-        if status in {"confirmed", "statically-supported"} and fid and fid != "none":
+        if status in {"confirmed", "supported"} and fid and fid != "none":
             reported.add(fid)
         has_evidence = (
             bool(payload.get("safe_control_outcomes"))

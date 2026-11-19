@@ -16,6 +16,8 @@ import yaml
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
+    WORKFLOW_DELIVERABLE_SCHEMAS,
+    WORKFLOW_SKILL_DELIVERABLES,
     FredCliError,
     _artifact_contract_for_run,
     _deliverable_for_run,
@@ -307,6 +309,31 @@ def _empty_deliverable(
     return empty_audit(run)
 
 
+def _workflow_companions_for_run(run: dict | None) -> list[tuple[str, str]]:
+    if not isinstance(run, dict):
+        return []
+    plan_data = run.get("plan")
+    if not isinstance(plan_data, dict):
+        return []
+    names: list[str] = []
+    skills = plan_data.get("skills")
+    if isinstance(skills, list):
+        for skill in skills:
+            if isinstance(skill, str):
+                names.extend(WORKFLOW_SKILL_DELIVERABLES.get(skill, ()))
+    outputs = plan_data.get("expected_outputs")
+    if isinstance(outputs, list):
+        for output in outputs:
+            if isinstance(output, str) and output in WORKFLOW_DELIVERABLE_SCHEMAS:
+                names.append(output)
+    ordered = list(dict.fromkeys(names))
+    return [
+        (name, WORKFLOW_DELIVERABLE_SCHEMAS[name])
+        for name in ordered
+        if name in WORKFLOW_DELIVERABLE_SCHEMAS
+    ]
+
+
 def _deliverable_prompt_rules(
     deliverable: str, schema_rel: str, run: dict | None = None
 ) -> str:
@@ -355,12 +382,20 @@ uncovered gaps and ensure test gap specifications conform to {domain_schema_ref}
 Provide prioritized test scenarios with deterministic, independent assertion oracles
 (state, exception, output, or boundary). Stop with a precise checkpoint when the
 selected work cannot be completed. An empty test_cases list is valid.{fixes_guidance}"""
+    companions = _workflow_companions_for_run(run)
+    companion_guidance = ""
+    if companions:
+        pairs = ", ".join(f"{name} ({schema})" for name, schema in companions)
+        companion_guidance = (
+            f"\nWhen workflow steps produce companion deliverables, write and validate "
+            f"them against their schemas: {pairs}."
+        )
     return f"""Work in bounded slices. Validate the ledger against {schema_rel} and maintain the existing
 audit schema and IDs, evidence, coverage, counterevidence, uncertainty, and independent
 acceptance criteria. Keep remediation state in remediation.json, distinct from evidence
 certainty. A missing finding on a later run is not proof of resolution. Preserve unrelated
 records and stop with a precise checkpoint when the selected work cannot be completed.
-An empty findings list is valid."""
+An empty findings list is valid.{companion_guidance}"""
 
 
 def _copy_domain_assets(run: dict, contract: dict[str, Any], output: Path) -> None:
@@ -554,18 +589,40 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
                 code="unsupported_domain_artifact",
                 hint="Use a repository-audits run directory containing 'audit.json'.",
             )
-    for domain_name in DOMAIN_DELIVERABLE_SCHEMAS:
+    for domain_name in (*DOMAIN_DELIVERABLE_SCHEMAS, *WORKFLOW_DELIVERABLE_SCHEMAS):
         if (p / domain_name).is_file():
             raise FredCliError(
                 f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{domain_name}' is not supported",
                 code="unsupported_domain_artifact",
                 hint="Use a repository-audits run directory containing 'audit.json'.",
             )
+    if run_path.is_file():
+        raise FredCliError(
+            f"Audit ledger 'audit.json' not found in directory: {p}; 'run.json' is run metadata, not an 'audit.json' ledger",
+            code="missing_audit_ledger",
+            hint="Ensure the run directory contains 'audit.json'.",
+        )
     raise FredCliError(
         f"Audit ledger 'audit.json' not found in directory: {p}",
         code="missing_audit_ledger",
         hint="Ensure the run directory contains 'audit.json'.",
     )
+
+
+def _validate_present_workflow_companions(directory: Path) -> list[str]:
+    errors: list[str] = []
+    for name, companion_schema in WORKFLOW_DELIVERABLE_SCHEMAS.items():
+        companion_path = directory / name
+        if not companion_path.is_file():
+            continue
+        try:
+            companion_payload = read_json(companion_path)
+        except (OSError, ValueError) as exc:
+            errors.append(f"{name}: invalid JSON ({exc})")
+            continue
+        for msg in _schema_errors(companion_payload, companion_schema):
+            errors.append(f"{name}: {msg}")
+    return errors
 
 
 def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
@@ -655,6 +712,7 @@ def validate_run(directory: Path) -> list[str]:
             != run["snapshot"]["digest"]
         ):
             errors.append("Audit evidence is not tied to the current run snapshot")
+    errors.extend(_validate_present_workflow_companions(directory))
     return errors
 
 
@@ -1002,6 +1060,8 @@ def reconcile(
             code="invalid_remediation_ledger",
             hint="Inspect 'remediation.json' and ensure 'records' is an array.",
         )
+    records = copy.deepcopy(records)
+    records.setdefault("schema_version", "1.0")
     record: dict[str, Any] = {
         "at": now(),
         "finding_id": finding_id,
@@ -1011,6 +1071,16 @@ def reconcile(
         "verification": proof,
     }
     records["records"].append(record)
+    remediation_errors = _schema_errors(
+        records, WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
+    )
+    if remediation_errors:
+        raise FredCliError(
+            "Remediation ledger does not satisfy reconciliation.schema.json: "
+            + remediation_errors[0],
+            code="invalid_remediation_ledger",
+            hint="Ensure verification evidence conforms to 'skills/repo-verify-fix/assets/verification.schema.json'.",
+        )
     atomic_json(path, records)
     return record
 

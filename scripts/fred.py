@@ -17,6 +17,7 @@ sys.dont_write_bytecode = True
 from fredlib import evaluations, installation, releases, reports, repository, runs
 from fredlib.common import (
     ROOT,
+    WORKFLOW_DELIVERABLE_SCHEMAS,
     FredCliError,
     _detect_domain_kind,
     atomic_json,
@@ -1369,12 +1370,18 @@ def handle_installation(a: argparse.Namespace) -> Any:
 
 
 def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
-    resolved = resolve_audit_path(target)
     if target.is_dir():
         runs._require_audit_directory(target, command_name)
-    if (
-        resolved.name != "audit.json"
-        and resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+    resolved = resolve_audit_path(target)
+    if resolved.name == "run.json":
+        raise FredCliError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; 'run.json' is run metadata and is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger from a repository-audits run.",
+        )
+    if resolved.name != "audit.json" and (
+        resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+        or resolved.name in WORKFLOW_DELIVERABLE_SCHEMAS
     ):
         raise FredCliError(
             f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported",
@@ -1399,6 +1406,15 @@ def handle_reporting(a: argparse.Namespace) -> Any:
             audit_path = _resolve_audit_only_input(a.audit, "report --remediation")
         else:
             audit_path = resolve_audit_path(a.audit)
+            if (
+                audit_path.name == "run.json"
+                or audit_path.name in WORKFLOW_DELIVERABLE_SCHEMAS
+            ):
+                raise FredCliError(
+                    f"Report rendering ('report') requires an 'audit.json' ledger; artifact '{audit_path.name}' is not supported",
+                    code="unsupported_domain_artifact",
+                    hint="Pass an 'audit.json' ledger or primary suite deliverable.",
+                )
         audit_data = read_json_object(audit_path, label="Audit ledger")
         remediation_data = None
         if explicit_remediation is not None:

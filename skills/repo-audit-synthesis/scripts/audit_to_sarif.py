@@ -451,20 +451,115 @@ def _build_sarif_run(
     return run
 
 
+_NON_AUDIT_ARTIFACT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("remediation.json", frozenset({"records"})),
+    (
+        "reconciliation.json",
+        frozenset(
+            {
+                "finding_fingerprint_matches",
+                "fingerprint_matches",
+                "remediation_state_transitions",
+                "state_transitions",
+                "unmapped_records",
+            }
+        ),
+    ),
+    (
+        "finding-verification.json",
+        frozenset(
+            {
+                "reproduction_status",
+                "safe_control_outcomes",
+                "confidence_rating",
+            }
+        ),
+    ),
+    (
+        "regression.json",
+        frozenset(
+            {
+                "failure_boundaries",
+                "failure_boundary",
+                "test_command_traces",
+                "assertion_expectations",
+            }
+        ),
+    ),
+    (
+        "plan.json",
+        frozenset(
+            {
+                "task_breakdowns",
+                "dependency_order",
+                "file_scopes",
+                "plan_id",
+            }
+        ),
+    ),
+    (
+        "fix.json",
+        frozenset(
+            {
+                "file_changes",
+                "diff_summaries",
+                "diff_summary",
+                "execution_results",
+                "compatibility_limits",
+            }
+        ),
+    ),
+    (
+        "verification.json",
+        frozenset(
+            {
+                "original_reproduced",
+                "regression_passed",
+                "before_revision",
+                "after_revision",
+                "safe_controls_passed",
+            }
+        ),
+    ),
+    ("review.json", frozenset({"verdict"})),
+    ("testing.json", frozenset({"test_cases"})),
+    ("architecture.json", frozenset({"boundaries", "decisions"})),
+    ("run.json", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
+)
+
+_NON_AUDIT_ARTIFACT_NAMES: tuple[str, ...] = (
+    "architecture.json",
+    "review.json",
+    "testing.json",
+    "finding-verification.json",
+    "regression.json",
+    "plan.json",
+    "fix.json",
+    "verification.json",
+    "reconciliation.json",
+    "remediation.json",
+    "run.json",
+)
+
+
 def _detect_domain_artifact(data: dict[str, Any]) -> str | None:
-    """Identify non-audit domain payloads so SARIF export fails with clear guidance."""
-    if "run_id" in data:
-        return None
-    if "verdict" in data or ("summary" in data and "findings" in data):
-        return "review.json"
-    if "test_cases" in data or ("component" in data and "framework" in data):
-        return "testing.json"
-    if (
-        "boundaries" in data
-        or "decisions" in data
-        or ("title" in data and "status" in data and "findings" not in data)
+    """Identify non-audit domain or workflow payloads so SARIF export fails with clear guidance."""
+    if "findings" in data and any(
+        key in data for key in ("evidence", "coverage", "contracts", "run_id")
     ):
+        return None
+    keys = set(data)
+    for artifact_name, markers in _NON_AUDIT_ARTIFACT_MARKERS:
+        if keys & markers:
+            return artifact_name
+    if "summary" in data and "findings" in data:
+        return "review.json"
+    if "component" in data and "framework" in data:
+        return "testing.json"
+    if "title" in data and "status" in data and "findings" not in data:
         return "architecture.json"
+    if "run_id" in data and "findings" not in data:
+        return "run.json"
     return None
 
 
@@ -482,13 +577,21 @@ def audit_to_sarif(
         raise ValueError(
             f"SARIF export ('export-sarif') requires an 'audit.json' ledger; domain artifact '{domain_artifact}' is not supported"
         )
+    if "findings" not in data:
+        raise ValueError(
+            "SARIF export ('export-sarif') requires an 'audit.json' ledger containing a 'findings' array"
+        )
+    if not isinstance(data["findings"], list):
+        raise TypeError(
+            "SARIF export ('export-sarif') requires 'findings' in 'audit.json' to be a JSON array"
+        )
 
     evidence_map = _build_evidence_map(data.get("evidence", []))
     rules: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     rule_indices: dict[str, int] = {}
 
-    for finding in data.get("findings", []):
+    for finding in data["findings"]:
         if _should_skip_finding(finding, filter_refuted, filter_info):
             continue
 
@@ -528,7 +631,7 @@ def _load_audit_file(input_path: Path) -> dict[str, Any]:
     if target.is_dir():
         ledger_path = target / "audit.json"
         if not ledger_path.is_file():
-            for domain_name in ("architecture.json", "review.json", "testing.json"):
+            for domain_name in _NON_AUDIT_ARTIFACT_NAMES:
                 if (target / domain_name).is_file():
                     raise ValueError(
                         f"Audit ledger 'audit.json' not found in directory: {input_path}; SARIF export ('export-sarif') requires 'audit.json' and does not support domain artifact '{domain_name}'"
@@ -550,6 +653,10 @@ def _load_audit_file(input_path: Path) -> dict[str, Any]:
 
     if not isinstance(data, dict):
         raise TypeError(f"Input file '{input_path}' must contain a JSON object")
+    if target.name in _NON_AUDIT_ARTIFACT_NAMES:
+        raise ValueError(
+            f"SARIF export ('export-sarif') requires an 'audit.json' ledger; domain artifact '{target.name}' is not supported"
+        )
     return data
 
 

@@ -175,10 +175,49 @@ def _load_suite_contracts(root: Path = ROOT) -> dict[str, dict[str, Any]]:
     return contracts
 
 
+_DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS: dict[str, str] = {
+    "finding-verification.json": "skills/repo-verify-finding/assets/finding-verification.schema.json",
+    "regression.json": "skills/repo-specify-regression/assets/regression.schema.json",
+    "plan.json": "skills/repo-plan-fix/assets/plan.schema.json",
+    "fix.json": "skills/repo-apply-fix/assets/fix.schema.json",
+    "verification.json": "skills/repo-verify-fix/assets/verification.schema.json",
+    "reconciliation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+    "remediation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+}
+
+WORKFLOW_SKILL_DELIVERABLES: dict[str, tuple[str, ...]] = {
+    "repo-verify-finding": ("finding-verification.json",),
+    "repo-specify-regression": ("regression.json",),
+    "repo-plan-fix": ("plan.json",),
+    "repo-apply-fix": ("fix.json",),
+    "repo-verify-fix": ("verification.json",),
+    "repo-reconcile-findings": ("reconciliation.json", "remediation.json"),
+}
+
+
+def _load_workflow_companions(root: Path = ROOT) -> dict[str, str]:
+    companions = dict(_DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS)
+    suites_path = root / "catalog/suites.json"
+    if suites_path.is_file():
+        try:
+            suites_doc = read_json(suites_path)
+            for suite in suites_doc.get("suites", []):
+                raw = suite.get("companions")
+                if isinstance(raw, dict):
+                    for filename, schema_rel in raw.items():
+                        if isinstance(filename, str) and isinstance(schema_rel, str):
+                            companions[filename] = schema_rel
+        except (OSError, ValueError, TypeError):
+            pass
+    return companions
+
+
 SUITE_DELIVERABLES: dict[str, tuple[str, str]] = {
     name: (contract["filename"], contract["schema"])
     for name, contract in _load_suite_contracts(ROOT).items()
 }
+
+WORKFLOW_DELIVERABLE_SCHEMAS: dict[str, str] = _load_workflow_companions(ROOT)
 
 DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
     contract["filename"]: contract["schema"]
@@ -289,19 +328,104 @@ def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path,
     return assets
 
 
+_DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("remediation", frozenset({"records"})),
+    (
+        "reconciliation",
+        frozenset(
+            {
+                "finding_fingerprint_matches",
+                "fingerprint_matches",
+                "remediation_state_transitions",
+                "state_transitions",
+                "unmapped_records",
+            }
+        ),
+    ),
+    (
+        "finding-verification",
+        frozenset(
+            {
+                "reproduction_status",
+                "safe_control_outcomes",
+                "confidence_rating",
+            }
+        ),
+    ),
+    (
+        "regression",
+        frozenset(
+            {
+                "failure_boundaries",
+                "failure_boundary",
+                "test_command_traces",
+                "assertion_expectations",
+            }
+        ),
+    ),
+    (
+        "plan",
+        frozenset(
+            {
+                "task_breakdowns",
+                "dependency_order",
+                "file_scopes",
+                "plan_id",
+            }
+        ),
+    ),
+    (
+        "fix",
+        frozenset(
+            {
+                "file_changes",
+                "diff_summaries",
+                "diff_summary",
+                "execution_results",
+                "compatibility_limits",
+            }
+        ),
+    ),
+    (
+        "verification",
+        frozenset(
+            {
+                "original_reproduced",
+                "regression_passed",
+                "before_revision",
+                "after_revision",
+                "safe_controls_passed",
+            }
+        ),
+    ),
+    ("review", frozenset({"verdict"})),
+    ("testing", frozenset({"test_cases"})),
+    ("architecture", frozenset({"boundaries", "decisions"})),
+    ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
+)
+
+
+def _is_audit_ledger_shape(data: dict[str, Any]) -> bool:
+    return "findings" in data and any(
+        key in data for key in ("evidence", "coverage", "contracts", "run_id")
+    )
+
+
 def _detect_domain_kind(data: object) -> str | None:
-    if not isinstance(data, dict) or "run_id" in data:
+    if not isinstance(data, dict) or _is_audit_ledger_shape(data):
         return None
-    if "verdict" in data or ("summary" in data and "findings" in data):
+    keys = set(data)
+    for kind, markers in _DOMAIN_KIND_KEY_SETS:
+        if keys & markers:
+            return kind
+    if "summary" in data and "findings" in data:
         return "review"
-    if "test_cases" in data or ("component" in data and "framework" in data):
+    if "component" in data and "framework" in data:
         return "testing"
-    if (
-        "boundaries" in data
-        or "decisions" in data
-        or ("title" in data and "status" in data and "findings" not in data)
-    ):
+    if "title" in data and "status" in data and "findings" not in data:
         return "architecture"
+    if "run_id" in data:
+        return "run"
     return None
 
 
@@ -331,18 +455,25 @@ def resolve_audit_path(path: Path | str | None = None) -> Path:
         audit_file = p / "audit.json"
         if audit_file.is_file():
             return audit_file
-        domain_files = [
+        suite_files = [
             p / name for name in DOMAIN_DELIVERABLE_SCHEMAS if (p / name).is_file()
         ]
-        if len(domain_files) == 1:
-            return domain_files[0]
-        if len(domain_files) > 1:
-            names = ", ".join(f.name for f in domain_files)
+        if len(suite_files) == 1:
+            return suite_files[0]
+        if len(suite_files) > 1:
+            names = ", ".join(f.name for f in suite_files)
             raise FredCliError(
                 f"Multiple suite deliverables ({names}) found in directory {p}; specify an explicit file path",
                 code="ambiguous_deliverable",
                 hint="Pass an explicit deliverable JSON file path instead of the directory.",
             )
+        for wf_name in WORKFLOW_DELIVERABLE_SCHEMAS:
+            if (p / wf_name).is_file():
+                raise FredCliError(
+                    f"Audit ledger 'audit.json' not found in directory: {p}; workflow artifact '{wf_name}' is a companion deliverable, not a standalone audit ledger",
+                    code="unsupported_domain_artifact",
+                    hint="Pass an audit run directory containing 'audit.json' or an explicit 'audit.json' file path.",
+                )
         raise FredCliError(
             f"Audit ledger 'audit.json' not found in directory: {p}",
             code="missing_audit_ledger",

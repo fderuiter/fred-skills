@@ -654,12 +654,18 @@ def render(
                 code="unsupported_domain_artifact",
                 hint="Omit --remediation when rendering a domain report, or pass an 'audit.json' ledger.",
             )
-        _validate_domain_payload(audit, domain_kind)
         renderers = {
             "architecture": _render_architecture_html,
             "review": _render_review_html,
             "testing": _render_testing_html,
         }
+        if domain_kind not in renderers:
+            raise FredCliError(
+                f"Report rendering ('report') requires an 'audit.json' ledger; artifact '{domain_kind}.json' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Pass an 'audit.json' ledger or primary suite deliverable.",
+            )
+        _validate_domain_payload(audit, domain_kind)
         html = renderers[domain_kind](audit)
     else:
         html = _render_audit_html(audit, prior=prior, remediation=remediation)

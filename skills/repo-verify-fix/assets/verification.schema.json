@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fix Verification Output Format Schema",
   "type": "object",
   "required": [
     "before_revision",
@@ -11,6 +12,14 @@
     "result"
   ],
   "properties": {
+    "schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finding_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "before_revision": {
       "type": "string",
       "minLength": 1
@@ -39,6 +48,9 @@
     "result": {
       "type": "string",
       "minLength": 1
+    },
+    "notes": {
+      "type": "string"
     }
   },
   "additionalProperties": false
