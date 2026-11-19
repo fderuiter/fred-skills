@@ -1,4 +1,14 @@
 interface:
-  display_name: "Diff Analysis"
-  short_description: "Analyze pull request diffs and affected contracts"
-  default_prompt: "Use $review-diff-analysis on this pull request diff and its change context."
+  display_name: Diff Analysis
+  short_description: Analyze pull request diffs and affected contracts
+  default_prompt: Use $review-diff-analysis on this pull request diff and its change
+    context.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

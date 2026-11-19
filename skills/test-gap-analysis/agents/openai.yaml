@@ -1,4 +1,13 @@
 interface:
-  display_name: "Test Gap Analysis"
-  short_description: "Discover test gaps and unexercised error paths"
-  default_prompt: "Use $test-gap-analysis on this codebase and its existing test suite."
+  display_name: Test Gap Analysis
+  short_description: Discover test gaps and unexercised error paths
+  default_prompt: Use $test-gap-analysis on this codebase and its existing test suite.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -1,4 +1,13 @@
 interface:
-  display_name: "Audit Session Diagnostics"
-  short_description: "Triage stalled audit sessions and generate scrubbed bundles"
-  default_prompt: "Diagnose this stalled audit run using $repo-audit-diagnostics."
+  display_name: Audit Session Diagnostics
+  short_description: Triage stalled audit sessions and generate scrubbed bundles
+  default_prompt: Diagnose this stalled audit run using $repo-audit-diagnostics.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
