@@ -11,10 +11,11 @@
       "phase_title": "Boundary Specification",
       "maturity": "experimental",
       "symptoms": [
-        "boundary",
-        "isolation",
-        "trust",
-        "modules"
+        "trust boundary",
+        "service isolation",
+        "fuzzy module boundary",
+        "cross-service coupling",
+        "interface ownership"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -37,10 +38,10 @@
       "phase_title": "System Decomposition",
       "maturity": "experimental",
       "symptoms": [
-        "decomposition",
-        "components",
-        "interfaces",
-        "modularity"
+        "monolith decomposition",
+        "service split",
+        "component interface design",
+        "tangled subsystem"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -63,10 +64,10 @@
       "phase_title": "Decision Records",
       "maturity": "experimental",
       "symptoms": [
-        "architecture",
-        "adr",
-        "decisions",
-        "tradeoffs"
+        "undocumented design choice",
+        "architecture decision record",
+        "evaluate system tradeoffs",
+        "supersede legacy adr"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -89,8 +90,10 @@
       "phase_title": "Scoped Correction",
       "maturity": "experimental",
       "symptoms": [
-        "apply",
-        "fix"
+        "bounded bug fix",
+        "surgical defect patch",
+        "minimal safe change",
+        "implement verified fix"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -113,8 +116,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "accessibility",
-        "state"
+        "focus trap broken",
+        "aria state mismatch",
+        "keyboard navigation failure",
+        "missing screen reader announcement",
+        "hidden interactive element"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -137,8 +143,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "api",
-        "consistency"
+        "inconsistent pagination",
+        "mismatched error format",
+        "divergent endpoint semantics",
+        "breaking change",
+        "inconsistent return type"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -161,7 +170,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "architecture"
+        "circular dependency",
+        "layer violation",
+        "boundary erosion",
+        "forbidden import",
+        "inverted dependency"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -184,8 +197,11 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "behavioral",
-        "contracts"
+        "undocumented assumption",
+        "broken caller contract",
+        "implicit precondition",
+        "violated postcondition",
+        "ambiguous behavior"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -208,8 +224,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "boundary",
-        "conditions"
+        "off-by-one error",
+        "integer overflow",
+        "empty input crash",
+        "unicode truncation",
+        "zero length boundary"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -232,8 +251,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "cache",
-        "coherence"
+        "stale cache read",
+        "cache invalidation race",
+        "cross-tenant cache leak",
+        "cache stampede",
+        "key collision"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -256,7 +278,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "cancellation"
+        "aborted request keeps running",
+        "zombie background task",
+        "missing abort propagation",
+        "stale publication after cancel",
+        "unclean shutdown drain"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -279,7 +305,12 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "canonicalization"
+        "xss",
+        "ssrf",
+        "path traversal",
+        "unicode normalization bypass",
+        "allowlist bypass",
+        "double encoding"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -302,7 +333,12 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "capacity"
+        "memory leak",
+        "unbounded queue",
+        "missing backpressure",
+        "retry storm",
+        "out of memory",
+        "resource exhaustion"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -325,7 +361,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "cohesion"
+        "god object",
+        "mixed responsibilities",
+        "tangled module",
+        "low cohesion",
+        "shotgun surgery"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -348,7 +388,12 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "compatibility"
+        "breaking change",
+        "database migration",
+        "schema migration",
+        "rollback failure",
+        "rolling deploy mismatch",
+        "backward incompatibility"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -371,7 +416,12 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "complexity"
+        "quadratic blowup",
+        "regex denial of service",
+        "redos",
+        "excessive allocations",
+        "n+1 query",
+        "slow hot path"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -394,11 +444,12 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "concurrency",
+        "deadlock",
+        "race condition",
         "stale response",
-        "race",
+        "lost update",
         "reentrancy",
-        "lost update"
+        "lock ordering"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -421,7 +472,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "configuration"
+        "conflicting feature flags",
+        "env var override bug",
+        "environment drift",
+        "missing config validation",
+        "unsafe default setting"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -444,8 +499,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "data",
-        "integrity"
+        "silent data truncation",
+        "floating point precision loss",
+        "lossy serialization",
+        "corrupted payload",
+        "encoding mismatch"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -468,8 +526,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "dead",
-        "code"
+        "unreachable branch",
+        "stale feature flag",
+        "unused export",
+        "orphaned handler",
+        "obsolete shim"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -492,12 +553,11 @@
       "phase_title": "Coordinator",
       "maturity": "experimental",
       "symptoms": [
-        "stalled",
-        "timeout",
-        "schema",
-        "triage",
-        "diagnostics",
-        "transcript"
+        "stalled audit",
+        "session timeout",
+        "schema validation failure",
+        "corrupted transcript",
+        "interrupted run triage"
       ],
       "expected_inputs": [
         "session transcript",
@@ -520,8 +580,11 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "domain",
-        "models"
+        "primitive obsession",
+        "unit mismatch",
+        "unvalidated domain state",
+        "ambiguous identifier",
+        "anemic domain model"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -544,8 +607,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "error",
-        "semantics"
+        "swallowed exception",
+        "silent failure",
+        "wrong status code",
+        "masked root cause",
+        "unhandled error path"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -568,8 +634,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "failure",
-        "modes"
+        "partial failure",
+        "incomplete rollback",
+        "unhandled timeout",
+        "interrupted workflow",
+        "missing fallback"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -592,7 +661,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "idempotency"
+        "duplicate webhook processing",
+        "double charge on retry",
+        "unsafe retry",
+        "missing idempotency key",
+        "replay bug"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -615,7 +688,11 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "invariants"
+        "broken invariant",
+        "impossible state",
+        "unenforced business rule",
+        "negative balance bug",
+        "corrupted invariant"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -638,12 +715,12 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "lifecycle",
-        "leak",
-        "listener",
-        "camera",
-        "worker",
-        "cleanup"
+        "memory leak",
+        "resource leak",
+        "dangling listener",
+        "unclosed file handle",
+        "use after close",
+        "orphaned worker"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -666,7 +743,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "nondeterminism"
+        "flaky test",
+        "timezone dependent bug",
+        "unseeded randomness",
+        "shared mutable globals",
+        "dict iteration order"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -689,7 +770,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "observability"
+        "missing trace id",
+        "silent drop without logs",
+        "blind spot in metrics",
+        "uncorrelated error logs",
+        "undiagnosable outage"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -712,7 +797,11 @@
       "phase_title": "Coordinator",
       "maturity": "experimental",
       "symptoms": [
-        "program"
+        "full repository audit",
+        "deep codebase review",
+        "hidden systemic risks",
+        "pre-launch health check",
+        "multi-pass audit"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -735,8 +824,11 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "protocol",
-        "drift"
+        "wire format mismatch",
+        "api version skew",
+        "breaking change",
+        "client server disagreement",
+        "contract drift"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -759,8 +851,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "side",
-        "effects"
+        "unexpected state mutation",
+        "effectful getter",
+        "hidden network call",
+        "render loop mutation",
+        "impure helper"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -783,9 +878,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "sources",
-        "of",
-        "truth"
+        "split brain state",
+        "out-of-sync state",
+        "conflicting state stores",
+        "stale derived field",
+        "divergent replica"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -808,8 +905,11 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "state",
-        "machines"
+        "invalid state transition",
+        "stuck workflow state",
+        "boolean flag tangle",
+        "skipped lifecycle step",
+        "unhandled state"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -832,7 +932,11 @@
       "phase_title": "Findings and issue planning",
       "maturity": "experimental",
       "symptoms": [
-        "synthesis"
+        "deduplicate findings",
+        "prioritize audit backlog",
+        "root cause grouping",
+        "remediation roadmap",
+        "issue draft triage"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -855,8 +959,11 @@
       "phase_title": "Behavioral discovery",
       "maturity": "experimental",
       "symptoms": [
-        "temporal",
-        "coupling"
+        "init before configure crash",
+        "call order bug",
+        "startup race",
+        "shutdown sequence bug",
+        "uninitialized dependency"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -879,8 +986,11 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "test",
-        "contracts"
+        "untested behavior",
+        "missing negative test",
+        "unverified edge case",
+        "missing recovery test",
+        "contract coverage gap"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -903,12 +1013,12 @@
       "phase_title": "Architecture and maintainability",
       "maturity": "experimental",
       "symptoms": [
-        "test",
-        "oracles",
         "circular test",
-        "mock",
-        "mutation",
-        "false assurance"
+        "false assurance",
+        "tautological mock",
+        "weak assertion",
+        "surviving mutation",
+        "green test on broken code"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -931,7 +1041,12 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "transactions"
+        "partial commit",
+        "missing rollback",
+        "dual write inconsistency",
+        "dirty read",
+        "broken saga compensation",
+        "rollback"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -954,12 +1069,13 @@
       "phase_title": "Correctness and resilience",
       "maturity": "experimental",
       "symptoms": [
-        "trust",
-        "boundaries",
-        "permission",
-        "tenant",
-        "authorization",
-        "untrusted"
+        "trust boundary",
+        "ssrf",
+        "xss",
+        "authorization bypass",
+        "tenant isolation",
+        "privilege escalation",
+        "untrusted input"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -982,8 +1098,10 @@
       "phase_title": "Scoped Implementation Planning",
       "maturity": "experimental",
       "symptoms": [
-        "plan",
-        "fix"
+        "remediation plan",
+        "scoped fix design",
+        "blast radius assessment",
+        "safe patch strategy"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -1006,8 +1124,10 @@
       "phase_title": "Remediation Reconciliation",
       "maturity": "experimental",
       "symptoms": [
-        "reconcile",
-        "findings"
+        "stale finding status",
+        "track fix closure",
+        "audit ledger drift",
+        "verify remediation state"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -1030,8 +1150,10 @@
       "phase_title": "Regression Specification",
       "maturity": "experimental",
       "symptoms": [
-        "specify",
-        "regression"
+        "missing reproduction test",
+        "failing test specification",
+        "lock down bug behavior",
+        "pre-fix regression check"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -1054,8 +1176,11 @@
       "phase_title": "Finding Verification",
       "maturity": "experimental",
       "symptoms": [
-        "verify",
-        "finding"
+        "unconfirmed bug report",
+        "false positive triage",
+        "reproduce defect",
+        "disputed audit finding",
+        "narrow reproduction"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -1078,8 +1203,10 @@
       "phase_title": "Fix Verification",
       "maturity": "experimental",
       "symptoms": [
-        "verify",
-        "fix"
+        "incomplete bug fix",
+        "patch regression check",
+        "before and after verification",
+        "fix validation"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -1102,10 +1229,10 @@
       "phase_title": "Feedback Synthesis",
       "maturity": "experimental",
       "symptoms": [
-        "feedback",
-        "code-review",
-        "actionable-guidance",
-        "verdict"
+        "vague review comments",
+        "prioritize pr feedback",
+        "merge readiness verdict",
+        "constructive fix guidance"
       ],
       "expected_inputs": [
         "review findings",
@@ -1128,10 +1255,10 @@
       "phase_title": "Diff Analysis",
       "maturity": "experimental",
       "symptoms": [
-        "diff",
-        "review",
-        "pull-request",
-        "impact"
+        "large pull request",
+        "change blast radius",
+        "unintended diff impact",
+        "caller breakage risk"
       ],
       "expected_inputs": [
         "diff hunk or pull request",
@@ -1154,10 +1281,10 @@
       "phase_title": "Invariant Verification",
       "maturity": "experimental",
       "symptoms": [
-        "invariants",
-        "regressions",
-        "concurrency",
-        "state-machine"
+        "regression in diff",
+        "violated invariant",
+        "subtle concurrency bug",
+        "broken state transition"
       ],
       "expected_inputs": [
         "diff hunk or pull request",
@@ -1180,10 +1307,10 @@
       "phase_title": "Test Generation",
       "maturity": "experimental",
       "symptoms": [
-        "test-generation",
-        "regression-tests",
-        "unit-tests",
-        "oracles"
+        "missing unit tests",
+        "generate regression suite",
+        "automate edge case tests",
+        "new test scaffolding"
       ],
       "expected_inputs": [
         "untested behavioral contracts",
@@ -1206,10 +1333,10 @@
       "phase_title": "Gap Analysis",
       "maturity": "experimental",
       "symptoms": [
-        "testing",
-        "coverage",
-        "test-gaps",
-        "untested-paths"
+        "low test coverage",
+        "untested error path",
+        "missing boundary check",
+        "blind spot in suite"
       ],
       "expected_inputs": [
         "source snapshot",
@@ -1232,10 +1359,10 @@
       "phase_title": "Test Verification",
       "maturity": "experimental",
       "symptoms": [
-        "test-verification",
-        "oracle-validation",
-        "flakiness",
-        "regression-runner"
+        "flaky test suite",
+        "verify generated tests",
+        "false positive test failure",
+        "oracle validation"
       ],
       "expected_inputs": [
         "test suite execution results",
