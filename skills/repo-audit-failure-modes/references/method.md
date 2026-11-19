@@ -1,48 +1,135 @@
-# Investigation method: Failure-Mode Completeness
+# Failure-Mode Completeness: Specialist Method and Examples
 
-## Scope selection
+## Probing Mid-Flight Timeouts, Lost Acknowledgements, and Partial Recovery
 
-Review one critical workflow end to end, then expand by resource/actor/data ownership.
-For each inventory class, record concrete instances, relevant source paths, existing
-enforcement, and coverage. Do not mark an entire class reviewed from one example.
+1. Decompose each critical multi-step operation (charge card -> persist order -> decrement inventory -> send receipt) and ask what durable state remains if the process crashes, times out, or drops the network response *between* any two steps.
+2. Check whether client or worker retries after an ambiguous timeout (`504 Gateway Timeout`, `ECONNRESET`) detect an already-applied remote effect via an idempotency key or reconciliation query before charging or mutating twice.
+3. Separate non-critical best-effort side effects (such as analytics telemetry whose failure is intentionally logged and ignored) from uncompensated core state divergence.
 
-## Contract worksheet
+## Failure Trace vs. Safe Control: Ambiguous Gateway Timeout Triggering Double Charge
 
-Record the exact predicate or guarantee, independent requirement basis, scope/lifetime,
-establishing operation, invalidating operations, observers, enforcing authority, and
-existing tests. If intended semantics are unknown, record the question and keep the
-finding at needs-validation or hardening until a supported requirement exists.
+```python
+# Defect: fresh UUID generated inside retry loop charges card again when first ACK timed out
+def charge_subscription(gateway, invoice_id: str, cents: int) -> str:
+    for _ in range(3):
+        try:
+            return gateway.create_charge(
+                amount_cents=cents,
+                idempotency_key=str(uuid.uuid4()),  # new key per retry!
+            )
+        except TimeoutError:
+            continue
+    raise RuntimeError("charge failed")
 
-## Topic-specific discovery probes
 
-Apply the five topic-specific investigation steps in SKILL.md to each inventoried boundary. Record both passing safeguards and unresolved cases.
+# Safe control: deterministic idempotency key derived from invoice_id + billing_attempt
+def charge_subscription_safe(gateway, invoice_id: str, attempt: int, cents: int) -> str:
+    stable_key = f"invoice:{invoice_id}:attempt:{attempt}"
+    for _ in range(3):
+        try:
+            return gateway.create_charge(
+                amount_cents=cents,
+                idempotency_key=stable_key,
+            )
+        except TimeoutError:
+            continue
+    raise RuntimeError("charge outcome ambiguous; queued for reconciliation")
+```
 
-## Adversarial case
+## Failure-Mode `audit.json` Deliverable Example
 
-A write commits but its acknowledgement is lost; retry repeats the side effect while the UI reports the first attempt failed.
+Validate this retry-storm ledger locally using `python3 <this-skill>/scripts/validate_audit.py failure-modes-audit.json` (`assets/audit.schema.json`):
 
-Find matching reachable code, name the actors and boundaries, and write exact numbered
-steps. Inspect the strongest prevention mechanism. If no real path matches, report
-that this illustrative failure was not established; do not turn the example into evidence.
-
-## Safe control
-
-An explicitly best-effort secondary notification need not roll back a successful primary transaction.
-
-Preserve the safe control while selecting a correction. Compare mechanisms, not syntax.
-
-## Independent validation
-
-Inject faults at each effect/acknowledgement boundary in an isolated harness and verify postconditions, cleanup, and restart recovery.
-
-Derive expected results from the contract. Use a bounded deterministic local harness
-where practical, record actual commands/results, and retain limitations. An unavailable
-tool changes the validation plan, not the claimed certainty. Record the smallest missing
-piece of evidence that would resolve each open finding.
-
-## Cross-topic boundary
-
-Keep this topic's inventory complete but hand off a different root cause to the specialist
-named in SKILL.md. Preserve the same evidence IDs and avoid issuing duplicate defect
-reports for one underlying contract violation. Distinct independently fixable causes
-remain separate even when they produce the same observed symptom.
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "failure-modes-sample",
+  "repository": {
+    "identity": "acme/subscription-renewer",
+    "revision": "f09c312",
+    "dirty": false,
+    "snapshot": "git-tree:f09c312"
+  },
+  "scope": [
+    "src/renewals/charger.py"
+  ],
+  "coverage": [
+    {
+      "topic": "failure-modes",
+      "scope": "src/renewals/charger.py",
+      "status": "inspected",
+      "evidence_ids": [
+        "E-801"
+      ],
+      "notes": "Audited timeout, retry, and crash recovery boundaries in subscription renewal loop.",
+      "next_action": "Cross-reference dedup key lifecycle with repo-audit-idempotency."
+    }
+  ],
+  "contracts": [
+    {
+      "id": "C-801",
+      "dimension": "failure-modes",
+      "scope": "charge_subscription",
+      "intended": "Network read timeouts after gateway capture do not bill the customer twice on retry.",
+      "observed": "Retry loop mints a fresh uuid4() idempotency_key on every TimeoutError iteration.",
+      "enforcement": "per-attempt random UUID in src/renewals/charger.py",
+      "evidence_ids": [
+        "E-801"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-801",
+      "path": "src/renewals/charger.py",
+      "line_start": 27,
+      "line_end": 38,
+      "symbol": "charge_subscription",
+      "context": "Calls uuid.uuid4() inside for _ in range(3) retry loop on TimeoutError."
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-801",
+      "topic": "failure-modes",
+      "tags": [
+        "idempotency"
+      ],
+      "title": "Regenerating idempotency_key inside TimeoutError retry loop double-charges invoices",
+      "status": "supported",
+      "severity": "critical",
+      "confidence": "high",
+      "contract_ids": [
+        "C-801"
+      ],
+      "evidence_ids": [
+        "E-801"
+      ],
+      "preconditions": "Payment gateway captures charge on attempt 1, but response socket times out before client reads HTTP 200.",
+      "sequence": [
+        "Attempt 1 sends idempotency_key K1; gateway captures funds; socket raises TimeoutError.",
+        "Retry loop catches TimeoutError and generates distinct idempotency_key K2.",
+        "Attempt 2 sends K2 and captures a second charge for the same invoice."
+      ],
+      "expected": "Retries reuse one deterministic key per invoice renewal cycle and mark exhausted timeouts pending reconciliation.",
+      "actual": "Customer card is billed up to 3 times during transient gateway latency.",
+      "impact": "Direct duplicate customer charges and chargeback liability.",
+      "root_cause": "Idempotency key is scoped to network socket attempt instead of logical invoice operation.",
+      "counterevidence": "Immediate HTTP 4xx card-decline errors do not raise TimeoutError and are not retried.",
+      "remedy": "Persist or deterministically derive idempotency_key outside the retry loop from invoice_id and renewal cycle.",
+      "acceptance": [
+        "Simulated TimeoutError on attempt 1 followed by HTTP 200 on attempt 2 passes identical idempotency_key to both gateway calls."
+      ],
+      "validation": {
+        "state": "not-run",
+        "commands": [],
+        "result": "Static trace of retry loop in charger.py."
+      },
+      "related_findings": []
+    }
+  ],
+  "issues": [],
+  "limitations": [],
+  "checks": []
+}
+```

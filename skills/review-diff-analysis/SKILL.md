@@ -19,6 +19,6 @@ Focus on change impact surfaces, API compatibility, and contract modifications.
 ## Deliver
 
 Structure change findings with the [review template](assets/review-template.md).
-Validate findings format against the [review schema](assets/review.schema.json).
+Validate findings format against the [review schema](assets/review.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_review.py <artifact.json>`.
 Report change impact surfaces with precise file paths and line ranges.
 Do not modify application code or claim unexecuted tests ran; preserve the audit-only review default unless explicitly authorized.

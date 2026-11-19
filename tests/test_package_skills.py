@@ -288,9 +288,16 @@ class PackageSkillsTests(unittest.TestCase):
     def test_release_archives_preserve_0755_script_modes_and_shebang_fallback(self):
         expected_scripts = {
             "repo-audit-diagnostics/scripts/triage.py",
+            "repo-audit-diagnostics/scripts/validate_audit.py",
             "repo-audit-program/scripts/validate_audit.py",
             "repo-audit-synthesis/scripts/audit_to_sarif.py",
+            "repo-audit-synthesis/scripts/validate_audit.py",
         }
+        expected_suite_scripts = {
+            p.relative_to(ROOT / "skills").as_posix()
+            for p in (ROOT / "skills").glob("*/scripts/*.py")
+        }
+        self.assertGreaterEqual(len(expected_suite_scripts), 53)
         rel_out = self.output_dir / "modes_bundle"
         manifest = releases.build(
             rel_out,
@@ -329,8 +336,12 @@ class PackageSkillsTests(unittest.TestCase):
         tgz_out = self.output_dir / "standalone_tgz"
         package_skills(tgz_out, root=ROOT)
         with tarfile.open(tgz_out / "fred-skills-suite.tar.gz", "r:gz") as suite_tf:
+            suite_names = {m.name for m in suite_tf.getmembers()}
+            self.assertTrue(expected_suite_scripts.issubset(suite_names))
             for member in suite_tf.getmembers():
-                expected_mode = 0o755 if member.name in expected_scripts else 0o644
+                expected_mode = (
+                    0o755 if member.name in expected_suite_scripts else 0o644
+                )
                 self.assertEqual(
                     expected_mode,
                     member.mode,

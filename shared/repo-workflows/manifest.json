@@ -4,5 +4,8 @@
   "files": [
     "references/workflow-protocol.md",
     "assets/handoff.md"
+  ],
+  "scripts": [
+    "scripts/validate_workflow.py"
   ]
 }

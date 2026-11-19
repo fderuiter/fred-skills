@@ -29,5 +29,5 @@ Use the [handoff](assets/handoff.md) and [starting prompt](assets/prompt.md). Re
 observed versus inferred behavior, actual validation state, compatibility limits, and
 next action. Resolve related workflow skills by name, without assuming a host API.
 
-Write structured proof using [verification schema](assets/verification.schema.json).
+Write structured proof using [verification schema](assets/verification.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_workflow.py <artifact.json>`.
 Do not modify application code, publish remote updates, or mark verification passed unless the checks actually executed under explicit user authorization.

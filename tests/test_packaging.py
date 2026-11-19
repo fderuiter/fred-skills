@@ -37,8 +37,9 @@ class PackageTests(unittest.TestCase):
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
             '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
-            "# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\n"
-            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json).\n"
+            "# Sample\n\nInspect the supplied contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json) "
+            "and verify with [audit validator](scripts/validate_audit.py).\n"
             "Do not modify application code without explicit user authorization.\n",
             encoding="utf-8",
         )
@@ -67,6 +68,29 @@ class PackageTests(unittest.TestCase):
         )
         self.scenarios_file = self.skill / "references/evaluation-scenarios.json"
         self.scenarios_file.parent.mkdir(parents=True, exist_ok=True)
+        self.examples_file = self.skill / "references/examples.md"
+        self.examples_file.write_text(
+            "# Worked Examples\n\n"
+            "```python\n"
+            "def check_contract(value: int) -> bool:\n"
+            "    return value >= 0\n"
+            "```\n\n"
+            "```json\n"
+            '{\n  "schema_version": "1.0"\n}\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        scripts_dir = self.skill / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        self.validator_script = scripts_dir / "validate_audit.py"
+        self.validator_script.write_text(
+            "#!/usr/bin/env python3\n"
+            '"""Minimal synthetic validator fixture."""\n'
+            "import sys\n"
+            "sys.exit(0)\n",
+            encoding="utf-8",
+        )
+        self.validator_script.chmod(0o755)
         self.scenarios_file.write_text(
             json.dumps(
                 {
@@ -1409,7 +1433,7 @@ class PackageTests(unittest.TestCase):
         shutil.copytree(self.skill, second_skill)
         (second_skill / "SKILL.md").write_text(
             '---\nname: second-audit\ndescription: "Audit secondary contracts when explicitly requested."\n---\n\n'
-            "# Second\n\nInspect the secondary contract.\n\n## Deliver\n\n"
+            "# Second\n\nInspect the secondary contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
             "Deliver the audit output conforming to [audit schema](assets/audit.schema.json).\n"
             "Do not modify application code without explicit user authorization.\n",
             encoding="utf-8",
@@ -1667,7 +1691,8 @@ class PackageTests(unittest.TestCase):
         # Dedicated ## Guardrails section with explicit prohibition and linked schema is accepted
         self.entry.write_text(
             '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
-            "# Sample\n\n## Guardrails\n\n- Never modify application code without authorization.\n\n"
+            "# Sample\n\nSee [worked examples](references/examples.md).\n\n"
+            "## Guardrails\n\n- Never modify application code without authorization.\n\n"
             "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
             encoding="utf-8",
         )
@@ -1759,6 +1784,11 @@ class PackageTests(unittest.TestCase):
                     },
                 }
             ),
+            encoding="utf-8",
+        )
+        self.examples_file.write_text(
+            "# Worked Examples\n\n```python\nx = 1\n```\n\n```json\n"
+            '{"by_category": {"auth": 2}, "details": {"scope": "api"}}\n```\n',
             encoding="utf-8",
         )
         self.assertEqual([], validate_skill(self.skill))
@@ -2043,6 +2073,243 @@ class PackageTests(unittest.TestCase):
         (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
         snap = repository.snapshot(repo_dir)
         self.assertEqual(list(snap["files"].keys()), ["app.py"])
+
+    def test_worked_examples_count_link_and_json_schema_validation(self) -> None:
+        # 1. Missing worked examples file is rejected
+        self.examples_file.unlink()
+        missing_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Missing worked examples" in e for e in missing_errors),
+            missing_errors,
+        )
+
+        # 2. Fewer than 2 fenced blocks is rejected
+        self.examples_file.write_text(
+            '# Examples\n\n```json\n{"schema_version": "1.0"}\n```\n',
+            encoding="utf-8",
+        )
+        count_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("at least 2 fenced code blocks" in e for e in count_errors),
+            count_errors,
+        )
+
+        # 3. Missing JSON block is rejected
+        self.examples_file.write_text(
+            "# Examples\n\n```python\nx = 1\n```\n\n```python\ny = 2\n```\n",
+            encoding="utf-8",
+        )
+        no_json_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("at least 1 fenced json output example" in e for e in no_json_errors),
+            no_json_errors,
+        )
+
+        # 4. Schema-invalid JSON worked example is rejected
+        self.examples_file.write_text(
+            '# Examples\n\n```python\nx = 1\n```\n\n```json\n{"schema_version": "9.9"}\n```\n',
+            encoding="utf-8",
+        )
+        bad_schema_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("fails output schema validation" in e for e in bad_schema_errors),
+            bad_schema_errors,
+        )
+
+        # 5. Unlinked worked examples file is rejected
+        self.examples_file.write_text(
+            '# Examples\n\n```python\nx = 1\n```\n\n```json\n{"schema_version": "1.0"}\n```\n',
+            encoding="utf-8",
+        )
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Deliver\n\nDeliver [audit schema](assets/audit.schema.json). "
+            "Do not modify application code.\n",
+            encoding="utf-8",
+        )
+        unlinked_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "missing markdown link to worked examples references/examples.md" in e
+                for e in unlinked_errors
+            ),
+            unlinked_errors,
+        )
+
+    def test_protocol_depth_rejects_reference_inversion(self) -> None:
+        proto = self.skill / "references/review-protocol.md"
+        proto.write_text("# Shallow Protocol\n\nToo short.\n", encoding="utf-8")
+        inv_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("reference inversion detected" in e for e in inv_errors),
+            inv_errors,
+        )
+
+        deep_lines = ["# Deep Review Protocol", ""] + [
+            f"- Rule {i}: Verify boundary precondition and evidence line spans before promotion."
+            for i in range(1, 25)
+        ]
+        proto.write_text("\n".join(deep_lines) + "\n", encoding="utf-8")
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_method_uniqueness_rejects_boilerplate_duplication_and_skill_copying(
+        self,
+    ) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self.examples_file.unlink()
+        method_a = self.skill / "references/method.md"
+        method_a.write_text(
+            "# Specialist Method A\n\n"
+            "Do not modify application code without explicit user authorization.\n\n"
+            "```python\nx = 1\n```\n\n"
+            '```json\n{"schema_version": "1.0"}\n```\n',
+            encoding="utf-8",
+        )
+        self.entry.write_text(
+            self.entry.read_text(encoding="utf-8").replace(
+                "references/examples.md", "references/method.md"
+            ),
+            encoding="utf-8",
+        )
+        verbatim_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("repeats SKILL.md prose verbatim" in e for e in verbatim_errors),
+            verbatim_errors,
+        )
+
+        shared_boilerplate = "Shared boilerplate sentence copied across specialists."
+        method_a.write_text(
+            f"# Specialist Method A\n\n{shared_boilerplate}\n\n"
+            "```python\nx = 1\n```\n\n"
+            '```json\n{"schema_version": "1.0"}\n```\n',
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        second = self.root / "skills/second-specialist"
+        shutil.copytree(self.skill, second)
+        (second / "SKILL.md").write_text(
+            '---\nname: second-specialist\ndescription: "Audit second specialist domain."\n---\n\n'
+            "# Second Specialist\n\nRead [method](references/method.md).\n\n## Deliver\n\n"
+            "Emit [audit schema](assets/audit.schema.json). Do not modify application code.\n",
+            encoding="utf-8",
+        )
+        (second / "references/method.md").write_text(
+            f"# Specialist Method B\n\n{shared_boilerplate}\n\n"
+            "```python\ny = 2\n```\n\n"
+            '```json\n{"schema_version": "1.0"}\n```\n',
+            encoding="utf-8",
+        )
+        dup_errors, dup_tel = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertTrue(
+            any(
+                "Specialist references/method.md boilerplate duplication detected" in e
+                for e in dup_errors
+            ),
+            dup_errors,
+        )
+        self.assertGreater(dup_tel["method_boilerplate_duplication_percentage"], 0.0)
+
+    def test_bundled_validator_script_presence_shebang_and_permissions(self) -> None:
+        import os
+
+        # Missing shebang
+        self.validator_script.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+        shebang_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Python shebang" in e for e in shebang_errors), shebang_errors
+        )
+
+        # Restore shebang, drop execute bit on POSIX
+        self.validator_script.write_text(
+            "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n", encoding="utf-8"
+        )
+        if os.name != "nt":
+            self.validator_script.chmod(0o644)
+            perm_errors = validate_skill(self.skill)
+            self.assertTrue(
+                any("executable permissions" in e for e in perm_errors), perm_errors
+            )
+            self.validator_script.chmod(0o755)
+
+        # Missing validator script
+        self.validator_script.unlink()
+        missing_script_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Missing bundled validator script" in e for e in missing_script_errors),
+            missing_script_errors,
+        )
+
+    def test_all_51_skills_worked_examples_protocols_and_validators_parity(
+        self,
+    ) -> None:
+        import re
+        import tomllib
+
+        errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
+        self.assertEqual([], errors)
+        self.assertEqual(100.0, telemetry["skill_worked_example_coverage_percentage"])
+        self.assertEqual(100.0, telemetry["validator_script_coverage_percentage"])
+        self.assertEqual(0.0, telemetry["method_boilerplate_duplication_percentage"])
+
+        self.assertEqual([], sync(ROOT, check=True))
+
+        suites_doc = json.loads(
+            (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
+        )
+        non_audit_skills: list[str] = []
+        for s_obj in suites_doc["suites"]:
+            members = [sk for p in s_obj["phases"] for sk in p["skills"]]
+            if s_obj["name"] != "repository-audits":
+                non_audit_skills.extend(members)
+        self.assertEqual(15, len(non_audit_skills))
+
+        for skill_name in non_audit_skills:
+            pkg = ROOT / "skills" / skill_name
+            skill_text = (pkg / "SKILL.md").read_text(encoding="utf-8")
+            protos = list((pkg / "references").glob("*-protocol.md"))
+            self.assertEqual(
+                1, len(protos), f"Expected 1 *-protocol.md in {skill_name}"
+            )
+            proto_text = protos[0].read_text(encoding="utf-8")
+            self.assertGreater(
+                len(proto_text.splitlines()),
+                len(skill_text.splitlines()),
+                f"{skill_name} protocol lines must exceed SKILL.md lines",
+            )
+            self.assertGreater(len(proto_text), len(skill_text))
+
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        excludes = pyproject["tool"]["mypy"]["exclude"]
+        for synced_sample in (
+            "skills/repo-audit-concurrency/scripts/validate_audit.py",
+            r"skills\repo-audit-concurrency\scripts\validate_audit.py",
+            "skills/repo-plan-fix/scripts/validate_workflow.py",
+            r"skills\repo-plan-fix\scripts\validate_workflow.py",
+            "skills/arch-decision-record/scripts/validate_architecture.py",
+            "skills/review-diff-analysis/scripts/validate_review.py",
+            "skills/test-gap-analysis/scripts/validate_testing.py",
+        ):
+            self.assertTrue(
+                any(re.search(pat, synced_sample) for pat in excludes),
+                f"Synced validator {synced_sample} must be excluded from duplicate mypy module discovery",
+            )
+        for canonical_sample in (
+            "scripts/validate_audit.py",
+            "scripts/validate_workflow.py",
+            "scripts/validate_architecture.py",
+            "scripts/validate_review.py",
+            "scripts/validate_testing.py",
+        ):
+            self.assertFalse(
+                any(re.search(pat, canonical_sample) for pat in excludes),
+                f"Canonical validator {canonical_sample} must remain typechecked by mypy",
+            )
 
 
 if __name__ == "__main__":
