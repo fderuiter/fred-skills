@@ -1,6 +1,6 @@
 ---
 name: test-gap-analysis
-description: "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions."
+description: "Prioritize unexercised code branches, exception handlers, and edge-value ranges into a structured test backlog. Use when planning automated test expansion, ranking untested failure branches, or scoping regression scenarios for a module."
 ---
 
 # Test Gap Analysis

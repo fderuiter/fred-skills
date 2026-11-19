@@ -1,6 +1,6 @@
 ---
 name: repo-audit-invariants
-description: "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values."
+description: "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced aggregate rules, bypassed constructor guards, or illegal combinations of persisted fields."
 ---
 
 # Implicit Invariants

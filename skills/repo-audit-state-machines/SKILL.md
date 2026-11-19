@@ -1,6 +1,6 @@
 ---
 name: repo-audit-state-machines
-description: "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior."
+description: "Audit implicit state machines with code evidence and counterexamples. Use when investigating ad-hoc status flags, unreachable or missing transitions, unguarded mode switches, or illegal lifecycle combinations."
 ---
 
 # Implicit State Machines

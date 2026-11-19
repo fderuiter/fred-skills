@@ -1,6 +1,6 @@
 ---
 name: review-invariant-violations
-description: "Use when reviewing code changes against behavioral invariants, state machines, and system invariants."
+description: "Verify pull request patches for broken safety assumptions, rollback regressions, and unbalanced resource lifecycles. Use when inspecting proposed diff hunks for broken preconditions, race hazards, or corrupted state transitions before merge."
 ---
 
 # Invariant Verification
