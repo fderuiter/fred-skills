@@ -8,6 +8,14 @@
       "type": "string",
       "const": "1.0"
     },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "snapshot": {
+      "type": "string",
+      "minLength": 1
+    },
     "verdict": {
       "type": "string",
       "enum": ["approve", "request_changes", "comment"]
@@ -15,6 +23,32 @@
     "summary": {
       "type": "string",
       "minLength": 1
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "topic": { "type": "string", "minLength": 1 },
+          "scope": { "type": "string", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "enum": ["reviewed", "partial", "not-reviewed", "out-of-scope"]
+          },
+          "notes": { "type": "string" },
+          "next_action": { "type": "string" },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "required": ["topic", "scope", "status"]
+      }
+    },
+    "paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
     },
     "findings": {
       "type": "array",
@@ -29,6 +63,10 @@
             "enum": ["critical", "high", "medium", "low", "advisory"]
           },
           "file": { "type": "string", "minLength": 1 },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
           "line": { "type": "integer", "minimum": 1 },
           "description": { "type": "string", "minLength": 1 },
           "recommendation": { "type": "string" }

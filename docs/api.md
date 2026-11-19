@@ -183,11 +183,12 @@ def initialize(
     allow_fixes: bool = False,
     allow_publication: bool = False,
     single_task: bool = False,
+    source_audit: Path | None = None,
     **options,
 ) -> dict
 ```
 
-Initializes a new run workspace directory with `run.json`, `prompt.md`, and the active suite's primary artifact (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json` declared in `catalog/suites.json`).
+Initializes a new run workspace directory with `run.json`, a single-slice `prompt.md` (bounded to at most 3 active skills), and the active suite's primary artifact (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json` declared in `catalog/suites.json`).
 
 - **Parameters:**
   - `repo` (`Path`): Path to the target Git repository.
@@ -196,6 +197,7 @@ Initializes a new run workspace directory with `run.json`, `prompt.md`, and the 
   - `allow_fixes` (`bool`, default: `False`): Explicit authority granting permission for application code changes.
   - `allow_publication` (`bool`, default: `False`): Explicit authority granting permission for remote issue publication.
   - `single_task` (`bool`, default: `False`): When `True`, initializes `run["loop"]` with an ordered per-skill queue (`active_index=0`, empty `snapshot_history`) and emits only the active pass's skill in `prompt.md`.
+  - `source_audit` (`Path | None`, default: `None`): Optional path to an existing `audit.json` file or audit run directory used to seed confirmed findings and evidence into a workflow/audit workspace without modifying the source ledger.
   - `**options`: Additional keyword arguments forwarded to `plan()` (e.g., `mode`, `budget`, `base`, `profile`, `exclude`, `config`).
 - **Returns:** `dict` — The initialized `run` dictionary written to `run.json`.
 - **Exceptions:**
@@ -209,7 +211,7 @@ Initializes a new run workspace directory with `run.json`, `prompt.md`, and the 
 def prompt(run: dict) -> str
 ```
 
-Formats the composed tactical markdown instruction prompt for an agent or reviewer executing the planned run, interpolating selected `skills/*/assets/prompt.md` templates alongside declared dependency versions, a read-only directory map, symbol blast-radius migration ordering, verified facts versus assumptions, path guards, and read-only `gh` CLI queries. When `run["loop"]["single_task"]` is `True`, emits only the single active pass's skill instructions and companion deliverable contracts (or a completion notice once all passes finish).
+Formats the composed tactical markdown instruction prompt for an agent or reviewer executing the planned run, emitting a stateless phase-slice brief (at most 3 active skills per session) by interpolating only the active slice's `skills/*/assets/prompt.md` templates alongside declared dependency versions, a read-only directory map, symbol blast-radius migration ordering, verified facts versus assumptions, path guards, and read-only `gh` CLI queries. When `run["loop"]["single_task"]` is `True`, emits only the single active pass's skill instructions and companion deliverable contracts (or a completion notice once all passes finish).
 
 - **Parameters:**
   - `run` (`dict`): Run dictionary containing `"plan"`, `"repository"`, `"snapshot"`, `"authority"`, and optional `"dependencies"` / `"capabilities"`.
@@ -239,7 +241,7 @@ Validates an audit ledger against `schemas/audit.schema.json` and suite structur
 def validate_run(directory: Path) -> list[str]
 ```
 
-Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, optional `loop` task-queue invariants, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) against its declarative suite schema (plus matching run IDs and snapshot consistency for `audit.json`, accepting prior digests recorded in `loop["snapshot_history"]`).
+Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, optional `loop` task-queue invariants, present `repository-workflows` phase deliverables against their standalone skill schemas, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) against its declarative suite schema (plus matching `run_id` and snapshot provenance for `audit.json`, `architecture.json`, `review.json`, and `testing.json`, accepting prior digests recorded in `loop["snapshot_history"]`).
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
@@ -252,15 +254,21 @@ Validates the integrity of an entire run directory, verifying `run.json` against
 ### `checkpoint`
 
 ```python
-def checkpoint(directory: Path, state: str, note: str) -> dict
+def checkpoint(
+    directory: Path,
+    state: str,
+    note: str,
+    completed_skills: list[str] | None = None,
+) -> dict
 ```
 
-Appends a timestamped checkpoint record to `run.json` and updates the overall run state.
+Appends a timestamped checkpoint record (including `completed_skills`, `active_phase`, and `remaining_skills` cursor progress) to `run.json` and updates the overall run state.
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory.
   - `state` (`str`): New run state. Must be one of `"running"`, `"paused"`, or `"completed"`.
   - `note` (`str`): Non-empty explanation of continuation status, blockers, or completion notes.
+  - `completed_skills` (`list[str] | None`, default: `None`): Optional planned skill names completed in the current session slice, merged with prior checkpoint progress.
 - **Returns:** `dict` — The updated `run` record.
 - **Exceptions:**
   - `ValueError`: Raised if `state` is not in `{"running", "paused", "completed"}` or `note` is empty or whitespace.
@@ -273,11 +281,11 @@ Appends a timestamped checkpoint record to `run.json` and updates the overall ru
 def revalidate(directory: Path) -> dict
 ```
 
-Compares the current repository state against the run's recorded snapshot, validating the active suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) and identifying changed files and stale or impacted records.
+Compares the current repository state against the run's recorded snapshot, validating the active suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`), computing changed files and stale or impacted records across cited `paths`/`file` references, and advancing `prompt.md` to target only the next uncompleted phase slice without mutating historical audit evidence.
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
-- **Returns:** `dict` — Revalidation record written to `revalidation.json`, containing `"old_snapshot"`, `"new_snapshot"`, `"changed_files"`, `"stale_finding_ids"`, `"unreviewed_changed_files"`, `"needs_impact_review"`, `"reusable_evidence_is_not_proof_of_unchanged_behavior"`, `"complete"`, and `"next_action"`.
+- **Returns:** `dict` — Revalidation record written to `revalidation.json`, containing `"run_id"`, `"deliverable"`, `"old_snapshot"`, `"new_snapshot"`, `"changed_files"`, `"stale_finding_ids"`, `"unreviewed_changed_files"`, `"needs_impact_review"`, `"provenance_valid"`, `"active_phase"`, `"active_skills"`, `"completed_skills"`, `"remaining_skills"`, `"reusable_evidence_is_not_proof_of_unchanged_behavior"`, `"complete"`, and `"next_action"`.
 - **Exceptions:**
   - `ValueError`: Raised if the suite deliverable is missing or fails schema validation.
 

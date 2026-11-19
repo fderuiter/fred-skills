@@ -748,17 +748,33 @@ class RunTests(unittest.TestCase):
                 # Starter artifact validates immediately
                 self.assertEqual([], runs.validate_run(ws))
 
-                # Populated strict schema payload validates without audit provenance fields
+                # Unbound architecture/review/testing payloads fail run provenance checks
                 atomic_json(ws / filename, valid_payload)
+                if filename in {"architecture.json", "review.json", "testing.json"}:
+                    unbound_errs = runs.validate_run(ws)
+                    self.assertIn(f"Run and {filename} IDs differ", unbound_errs)
+                    self.assertIn(
+                        f"{filename} evidence is not tied to the current run snapshot",
+                        unbound_errs,
+                    )
+                    bound_payload = {
+                        **valid_payload,
+                        "run_id": run["run_id"],
+                        "snapshot": run["snapshot"]["digest"],
+                    }
+                else:
+                    bound_payload = dict(valid_payload)
+
+                atomic_json(ws / filename, bound_payload)
                 self.assertEqual([], runs.validate_run(ws))
 
-                # Injecting audit provenance fields violates strict additionalProperties: false
-                invalid_payload = {**valid_payload, "run_id": run["run_id"]}
+                # Injecting undeclared properties violates strict additionalProperties: false
+                invalid_payload = {**bound_payload, "undeclared_field": True}
                 atomic_json(ws / filename, invalid_payload)
                 self.assertTrue(runs.validate_run(ws))
 
-                # Restore valid payload and verify snapshot tampering is still caught
-                atomic_json(ws / filename, valid_payload)
+                # Restore valid bound payload and verify snapshot tampering is still caught
+                atomic_json(ws / filename, bound_payload)
                 tampered_run = copy.deepcopy(run)
                 tampered_run["snapshot"]["files"]["source.py"] = "tampered"
                 atomic_json(ws / "run.json", tampered_run)
@@ -1130,7 +1146,7 @@ class RunTests(unittest.TestCase):
 
         # 1. Duplicate IDs rejected across architecture.json, review.json, and testing.json
         ws_arch = self.root / "ws-sem-arch"
-        runs.initialize(self.repo, ws_arch, "design-architecture")
+        arch_run = runs.initialize(self.repo, ws_arch, "design-architecture")
         dup_arch = {
             "schema_version": "1.0",
             "title": "Architecture",
@@ -1145,7 +1161,7 @@ class RunTests(unittest.TestCase):
         self.assertIn("Duplicate IDs in decisions: ADR-001", arch_errs)
 
         ws_rev = self.root / "ws-sem-review"
-        runs.initialize(self.repo, ws_rev, "review-code-changes", base=base)
+        rev_run = runs.initialize(self.repo, ws_rev, "review-code-changes", base=base)
         dup_rev = {
             "schema_version": "1.0",
             "verdict": "request_changes",
@@ -1172,7 +1188,7 @@ class RunTests(unittest.TestCase):
         self.assertIn("Duplicate IDs in findings: REV-1", rev_errs)
 
         ws_test = self.root / "ws-sem-test"
-        runs.initialize(self.repo, ws_test, "expand-automated-tests")
+        test_run = runs.initialize(self.repo, ws_test, "expand-automated-tests")
         dup_test = {
             "schema_version": "1.0",
             "component": "pkg.helper",
@@ -1302,6 +1318,8 @@ class RunTests(unittest.TestCase):
         #    and populate needs_impact_review across review.json, architecture.json, and testing.json
         valid_arch = {
             "schema_version": "1.0",
+            "run_id": arch_run["run_id"],
+            "snapshot": arch_run["snapshot"]["digest"],
             "title": "Architecture",
             "status": "accepted",
             "decisions": [
@@ -1311,6 +1329,8 @@ class RunTests(unittest.TestCase):
         atomic_json(ws_arch / "architecture.json", valid_arch)
         valid_test = {
             "schema_version": "1.0",
+            "run_id": test_run["run_id"],
+            "snapshot": test_run["snapshot"]["digest"],
             "component": "pkg.helper",
             "framework": "unittest",
             "test_cases": [
@@ -1325,6 +1345,8 @@ class RunTests(unittest.TestCase):
         atomic_json(ws_test / "testing.json", valid_test)
         normalized_rev = {
             "schema_version": "1.0",
+            "run_id": rev_run["run_id"],
+            "snapshot": rev_run["snapshot"]["digest"],
             "verdict": "request_changes",
             "summary": "Review with non-canonical relative paths",
             "findings": [
@@ -3083,7 +3105,17 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
                     audit_doc["evidence"][0]["path"] = "source.py"
                     atomic_json(ws / "audit.json", audit_doc)
                 else:
-                    atomic_json(ws / deliv_name, payload)
+                    bound = (
+                        {
+                            **payload,
+                            "run_id": run["run_id"],
+                            "snapshot": run["snapshot"]["digest"],
+                        }
+                        if deliv_name
+                        in {"architecture.json", "review.json", "testing.json"}
+                        else payload
+                    )
+                    atomic_json(ws / deliv_name, bound)
                 self.assertEqual([], runs.validate_run(ws))
 
                 # Commit a change, advance, and verify both validate_run and memory provenance
@@ -3409,6 +3441,381 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
         self.assertTrue(callable(sys.modules["fred_audit_validator"].validate))
         self.assertFalse(
             (ROOT / "skills/repo-audit-program/scripts/__pycache__").exists()
+        )
+
+    def test_stateless_phase_slices_checkpoint_and_resume_progression(self):
+        import re
+
+        ws = self.root / "ws-stateless-slices"
+        run = runs.initialize(
+            self.repo,
+            ws,
+            "understand-repo",
+            mode="comprehensive",
+            budget="deep",
+        )
+        planned = run["plan"]["skills"]
+        self.assertGreaterEqual(len(planned), 10)
+
+        prompt_1 = (ws / "prompt.md").read_text(encoding="utf-8")
+        rendered_1 = re.findall(r"^### `([^`]+)`", prompt_1, flags=re.MULTILINE)
+        self.assertEqual(planned[:3], rendered_1)
+        self.assertLessEqual(len(rendered_1), 3)
+        self.assertIn("Phase slice 1 of", prompt_1)
+
+        # Checkpoint first 3 skills and verify run.json schema + fields
+        updated_run = runs.checkpoint(
+            ws,
+            state="paused",
+            note="Completed slice 1 reconnaissance",
+            completed_skills=planned[:3],
+        )
+        self.assertEqual([], runs.validate_run(ws))
+        cp = updated_run["checkpoints"][-1]
+        self.assertEqual(planned[:3], cp["completed_skills"])
+        self.assertEqual(1, cp["active_phase"])
+        self.assertEqual(planned[3:], cp["remaining_skills"])
+
+        audit_before_bytes = (ws / "audit.json").read_bytes()
+        rev = runs.revalidate(ws)
+        # Historical audit evidence is never mutated by resume
+        self.assertEqual(audit_before_bytes, (ws / "audit.json").read_bytes())
+
+        reval_disk = read_json(ws / "revalidation.json")
+        self.assertEqual(rev, reval_disk)
+        for key in (
+            "run_id",
+            "deliverable",
+            "old_snapshot",
+            "new_snapshot",
+            "changed_files",
+            "stale_finding_ids",
+            "unreviewed_changed_files",
+            "needs_impact_review",
+            "provenance_valid",
+            "active_phase",
+            "active_skills",
+            "completed_skills",
+            "remaining_skills",
+            "reusable_evidence_is_not_proof_of_unchanged_behavior",
+            "complete",
+            "next_action",
+        ):
+            self.assertIn(key, reval_disk)
+        self.assertEqual(1, rev["active_phase"])
+        self.assertEqual(planned[3:6], rev["active_skills"])
+        self.assertEqual(planned[:3], rev["completed_skills"])
+        self.assertEqual(planned[3:], rev["remaining_skills"])
+
+        prompt_2 = (ws / "prompt.md").read_text(encoding="utf-8")
+        rendered_2 = re.findall(r"^### `([^`]+)`", prompt_2, flags=re.MULTILINE)
+        self.assertEqual(planned[3:6], rendered_2)
+        for done_skill in planned[:3]:
+            self.assertNotIn(f"### `{done_skill}`", prompt_2)
+
+    def test_source_audit_seeding_workflow_phase_schemas_and_reconcile_html_report(
+        self,
+    ):
+        import re
+
+        ws_audit = self.root / "ws-source-audit"
+        audit_run = runs.initialize(self.repo, ws_audit, "investigate-bug")
+        source_ledger = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        source_ledger["run_id"] = audit_run["run_id"]
+        source_ledger["repository"] = runs.empty_audit(audit_run)["repository"]
+        source_ledger["evidence"][0]["path"] = "source.py"
+        atomic_json(ws_audit / "audit.json", source_ledger)
+        source_bytes_before = (ws_audit / "audit.json").read_bytes()
+
+        ws_fix = self.root / "ws-apply-fix"
+        fix_run = runs.initialize(
+            self.repo,
+            ws_fix,
+            "apply-fix",
+            allow_fixes=True,
+            source_audit=ws_audit,
+        )
+        # Original audit ledger is untouched
+        self.assertEqual(source_bytes_before, (ws_audit / "audit.json").read_bytes())
+
+        seeded_audit = read_json(ws_fix / "audit.json")
+        self.assertEqual(fix_run["run_id"], seeded_audit["run_id"])
+        self.assertEqual(
+            fix_run["snapshot"]["digest"], seeded_audit["repository"]["snapshot"]
+        )
+        self.assertEqual(source_ledger["findings"], seeded_audit["findings"])
+        self.assertEqual([], runs.validate_run(ws_fix))
+
+        # Workflow slice brief emits 1 phase skill at a time in phase order
+        p0_prompt = (ws_fix / "prompt.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            ["repo-verify-finding"],
+            re.findall(r"^### `([^`]+)`", p0_prompt, flags=re.MULTILINE),
+        )
+        self.assertIn("finding-verification.json", p0_prompt)
+
+        # Write all 6 standalone phase artifacts and validate them via validate_run
+        phase_payloads: dict[str, dict[str, Any]] = {
+            "finding-verification.json": {
+                "schema_version": "1.0",
+                "finding_id": "F-1",
+                "reproduction_status": "confirmed",
+                "reproduced": True,
+                "commands": ["python -m unittest"],
+                "safe_control_outcomes": [
+                    {"control": "valid input succeeds", "passed": True}
+                ],
+                "confidence_rating": "high",
+            },
+            "regression.json": {
+                "schema_version": "1.0",
+                "finding_id": "F-1",
+                "test_file": "tests/test_regression.py",
+                "failure_boundaries": ["negative limit boundary"],
+                "test_command_traces": [
+                    {
+                        "command": "python -m unittest",
+                        "exit_code": 1,
+                        "output": "AssertionError: ValueError not raised",
+                    }
+                ],
+                "assertion_expectations": ["assertRaises(ValueError)"],
+            },
+            "plan.json": {
+                "schema_version": "1.0",
+                "plan_id": "PLAN-1",
+                "title": "Validate limit parameter",
+                "file_scopes": ["source.py"],
+                "acceptance_criteria": ["Negative limit raises ValueError"],
+                "task_breakdowns": [
+                    {
+                        "task_id": "T-1",
+                        "title": "Add guard in source.py",
+                        "file_scopes": ["source.py"],
+                        "acceptance_criteria": ["Raises ValueError on < 0"],
+                        "blocked_by": [],
+                    }
+                ],
+                "dependency_order": ["T-1"],
+            },
+            "fix.json": {
+                "schema_version": "1.0",
+                "finding_id": "F-1",
+                "file_changes": [{"path": "source.py", "action": "modified"}],
+                "diff_summaries": [
+                    {
+                        "path": "source.py",
+                        "summary": "Added negative limit guard in source.py.",
+                    }
+                ],
+                "execution_results": [
+                    {
+                        "command": "python -m unittest",
+                        "passed": True,
+                        "exit_code": 0,
+                    }
+                ],
+                "compatibility_limits": ["Negative limits now raise ValueError"],
+            },
+            "verification.json": {
+                "schema_version": "1.0",
+                "finding_id": "F-1",
+                "before_revision": "rev-before",
+                "after_revision": "rev-after",
+                "original_reproduced": True,
+                "regression_passed": True,
+                "safe_controls_passed": True,
+                "commands": ["python -m unittest"],
+                "result": "verified-fixed",
+            },
+        }
+        for fname, payload in phase_payloads.items():
+            atomic_json(ws_fix / fname, payload)
+        self.assertEqual([], runs.validate_run(ws_fix))
+
+        # Invalid phase artifact fails validate_run against its standalone schema
+        bad_fv = {
+            **phase_payloads["finding-verification.json"],
+            "reproduced": False,
+        }
+        atomic_json(ws_fix / "finding-verification.json", bad_fv)
+        fv_errs = runs.validate_run(ws_fix)
+        self.assertTrue(
+            any("finding-verification.json" in err for err in fv_errs), fv_errs
+        )
+        atomic_json(
+            ws_fix / "finding-verification.json",
+            phase_payloads["finding-verification.json"],
+        )
+
+        # Reconcile finding to in-progress then verified-fixed and validate against reconciliation.schema.json
+        runs.reconcile(ws_fix, "F-1", "in-progress", "Implementing guard")
+        runs.reconcile(
+            ws_fix,
+            "F-1",
+            "verified-fixed",
+            "Regression and safe controls green",
+            verification=ws_fix / "verification.json",
+        )
+        remediation_doc = read_json(ws_fix / "remediation.json")
+        rec_schema_rel = (
+            "skills/repo-reconcile-findings/assets/reconciliation.schema.json"
+        )
+        self.assertEqual([], runs._schema_errors(remediation_doc, rec_schema_rel))
+        self.assertEqual(2, len(remediation_doc["remediation_state_transitions"]))
+        self.assertEqual(
+            "in-progress",
+            remediation_doc["remediation_state_transitions"][1]["previous_state"],
+        )
+        self.assertEqual(
+            "verified-fixed",
+            remediation_doc["remediation_state_transitions"][1]["new_state"],
+        )
+
+        # Copy as standalone reconciliation.json as well and confirm both validate_run and HTML report rendering
+        atomic_json(ws_fix / "reconciliation.json", remediation_doc)
+        self.assertEqual([], runs.validate_run(ws_fix))
+
+        html_with_rem = reports.render(
+            seeded_audit, self.root / "rem-report.html", remediation=remediation_doc
+        ).read_text(encoding="utf-8")
+        self.assertIn("verified-fixed", html_with_rem)
+        self.assertIn("Regression and safe controls green", html_with_rem)
+
+        # Transitions-only standalone reconciliation.json also renders in HTML reports
+        transitions_only = {
+            "schema_version": "1.0",
+            "finding_fingerprint_matches": remediation_doc[
+                "finding_fingerprint_matches"
+            ],
+            "remediation_state_transitions": remediation_doc[
+                "remediation_state_transitions"
+            ],
+            "unmapped_records": [],
+        }
+        self.assertEqual([], runs._schema_errors(transitions_only, rec_schema_rel))
+        html_transitions_only = reports.render(
+            seeded_audit, self.root / "trans-report.html", remediation=transitions_only
+        ).read_text(encoding="utf-8")
+        self.assertIn("verified-fixed", html_transitions_only)
+        self.assertIn("Regression and safe controls green", html_transitions_only)
+
+    @unittest.skipUnless(shutil.which("git"), "Git unavailable")
+    def test_domain_provenance_components_stale_ids_and_profile_suite_isolation(self):
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "fixture"],
+        ]:
+            subprocess.run(["git", "-C", str(self.repo), *argv], check=True)
+        base = repository.git(self.repo, "rev-parse", "HEAD", required=True)
+
+        # Criterion 7: Planning domain tasks with --profile modular-backend --budget brief retains all 3 domain skills
+        for task_name, base_rev, expected_suite_prefix in (
+            ("design-architecture", None, "arch-"),
+            ("review-code-changes", base, "review-"),
+            ("expand-automated-tests", None, "test-"),
+        ):
+            planned, _ = runs.plan(
+                self.repo,
+                task=task_name,
+                profile="modular-backend",
+                budget="brief",
+                base=base_rev,
+            )
+            self.assertEqual(3, len(planned["skills"]), planned)
+            self.assertTrue(
+                all(s.startswith(expected_suite_prefix) for s in planned["skills"]),
+                planned["skills"],
+            )
+            self.assertEqual([], planned["deferred_skills"])
+
+        # Criterion 6 + Req 8/9/10: Architecture components, provenance binding, and stale IDs during resume
+        (self.repo / "gateway.py").write_text("def route():\n    return 200\n")
+        ws_arch = self.root / "ws-arch-components"
+        arch_run = runs.initialize(self.repo, ws_arch, "design-architecture")
+        arch_doc = {
+            "schema_version": "1.0",
+            "run_id": arch_run["run_id"],
+            "snapshot": arch_run["snapshot"]["digest"],
+            "title": "Gateway Decomposition",
+            "status": "accepted",
+            "coverage": [
+                {
+                    "topic": "arch-component-decomposition",
+                    "scope": "design-architecture",
+                    "status": "reviewed",
+                    "paths": ["gateway.py"],
+                }
+            ],
+            "boundaries": [
+                {
+                    "name": "HTTP Edge",
+                    "type": "trust",
+                    "paths": ["gateway.py"],
+                }
+            ],
+            "components": [
+                {
+                    "id": "COMP-EDGE",
+                    "name": "Edge Router",
+                    "responsibility": "Terminate HTTP and dispatch validated requests.",
+                    "interfaces": ["route()"],
+                    "depends_on": ["COMP-CORE"],
+                    "paths": ["gateway.py"],
+                },
+                {
+                    "id": "COMP-CORE",
+                    "name": "Core Handler",
+                    "responsibility": "Execute domain logic.",
+                    "interfaces": ["execute()"],
+                    "depends_on": [],
+                    "paths": ["source.py"],
+                },
+            ],
+            "decisions": [
+                {
+                    "id": "ADR-10",
+                    "title": "Separate Edge Router from Core Handler",
+                    "decision": "Route requests through COMP-EDGE before COMP-CORE.",
+                    "paths": ["gateway.py"],
+                }
+            ],
+        }
+        atomic_json(ws_arch / "architecture.json", arch_doc)
+        self.assertEqual([], runs.validate_run(ws_arch))
+
+        arch_html = reports.render(
+            arch_doc, self.root / "arch-components-report.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn("2 components", arch_html)
+        self.assertIn("Component decomposition", arch_html)
+        self.assertIn("COMP-EDGE", arch_html)
+        self.assertIn("Edge Router", arch_html)
+
+        arch_mem = runs.memory(ws_arch)
+        self.assertEqual(2, len(arch_mem["components"]))
+        self.assertIn("gateway.py", arch_mem["components"][0]["referenced_file_hashes"])
+
+        # Modify gateway.py only -> COMP-EDGE and ADR-10 become stale while COMP-CORE stays fresh
+        (self.repo / "gateway.py").write_text("def route():\n    return 201\n")
+        rev_arch = runs.revalidate(ws_arch)
+        self.assertTrue(rev_arch["provenance_valid"])
+        self.assertEqual(["ADR-10", "COMP-EDGE"], rev_arch["stale_finding_ids"])
+
+        # Drifted snapshot on architecture.json, review.json, and testing.json fails validate_run and marks records stale
+        drifted_arch = {**arch_doc, "snapshot": "f" * 64}
+        atomic_json(ws_arch / "architecture.json", drifted_arch)
+        self.assertIn(
+            "architecture.json evidence is not tied to the current run snapshot",
+            runs.validate_run(ws_arch),
+        )
+        drifted_rev = runs.revalidate(ws_arch)
+        self.assertFalse(drifted_rev["provenance_valid"])
+        self.assertEqual(
+            ["ADR-10", "COMP-EDGE", "COMP-CORE"], drifted_rev["stale_finding_ids"]
         )
 
 

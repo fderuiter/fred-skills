@@ -61,8 +61,53 @@ Validate this decomposition plan locally using `python3 <this-skill>/scripts/val
       "name": "invoice-outbox-dispatch",
       "type": "storage",
       "description": "Persistence adapter in src/billing/repository.py committing invoices and queued email notifications atomically.",
+      "paths": [
+        "src/billing/repository.py"
+      ],
       "invariants": [
         "SMTP delivery runs asynchronously from committed outbox records rather than inside the SQL write loop."
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "COMP-INGEST",
+      "name": "usage-csv-ingestor",
+      "responsibility": "Parse and validate raw CSV usage rows into immutable UsageRecord values.",
+      "paths": [
+        "src/billing/ingest.py"
+      ],
+      "interfaces": [
+        "parse_usage_rows"
+      ],
+      "depends_on": [
+        "COMP-PRICING"
+      ]
+    },
+    {
+      "id": "COMP-PRICING",
+      "name": "invoice-pricing-core",
+      "responsibility": "Compute deterministic integer basis-point tax and invoice totals without I/O.",
+      "paths": [
+        "src/billing/pricing.py"
+      ],
+      "interfaces": [
+        "compute_invoice_total"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "COMP-OUTBOX",
+      "name": "invoice-outbox-dispatch",
+      "responsibility": "Persist InvoiceDraft rows and outbox notifications in one database transaction.",
+      "paths": [
+        "src/billing/repository.py"
+      ],
+      "interfaces": [
+        "commit_invoice_with_outbox"
+      ],
+      "depends_on": [
+        "COMP-PRICING"
       ]
     }
   ],

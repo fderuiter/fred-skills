@@ -534,8 +534,8 @@ _NON_AUDIT_ARTIFACT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
             }
         ),
     ),
-    ("architecture.json", frozenset({"boundaries", "decisions"})),
-    ("run.json", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
+    ("architecture.json", frozenset({"boundaries", "decisions", "components"})),
+    ("run.json", frozenset({"plan", "authority", "checkpoints"})),
 )
 
 _NON_AUDIT_ARTIFACT_NAMES: tuple[str, ...] = (
@@ -558,8 +558,29 @@ def _detect_domain_artifact(data: object) -> str | None:
     """Identify non-audit domain or workflow payloads so SARIF export fails with clear guidance."""
     if not isinstance(data, dict):
         return None
-    if "findings" in data and any(
-        key in data for key in ("evidence", "coverage", "contracts", "run_id")
+    if (
+        "findings" in data
+        and "verdict" not in data
+        and not any(
+            key in data
+            for key in (
+                "test_cases",
+                "boundaries",
+                "decisions",
+                "components",
+                "interview_decisions",
+            )
+        )
+        and not (
+            "summary" in data
+            and not any(
+                key in data for key in ("evidence", "contracts", "repository", "issues")
+            )
+        )
+        and any(
+            key in data
+            for key in ("evidence", "coverage", "contracts", "run_id", "repository")
+        )
     ):
         return None
     keys = set(data)

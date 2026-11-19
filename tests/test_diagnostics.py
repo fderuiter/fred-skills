@@ -2627,6 +2627,27 @@ Bearer sk-proj-1234567890abcdef1234567890
                     "discover_transcript_details must use CandidateScore attributes instead of [5]/[6]",
                 )
 
+    def test_detect_workflow_phase_and_component_schema_validation_errors(self) -> None:
+        samples = [
+            "finding-verification.json: 'reproduction_status' is a required property",
+            "Confirmed finding F-1 cannot set reproduced to false",
+            "regression.json: 'pre_fix_failure_proof' is a required property",
+            "plan.json: Task dependency cycle detected at T-1",
+            "fix.json: 'rollback_instructions' is a required property",
+            "verification.json: 'safe_controls_passed' is a required property",
+            "reconciliation.json: 'remediation_state_transitions' is a required property",
+            "Unknown component dependency COMP-MISSING in COMP-EDGE",
+            "Component dependency cycle: COMP-A",
+        ]
+        for line in samples:
+            with self.subTest(line=line):
+                failure = triage.detect_failures(f"[2026-11-19T12:00:00Z] {line}\n")
+                self.assertEqual(
+                    "schema_validation_error",
+                    failure["failure_type"],
+                    f"Failed to classify workflow/component schema line: {line}",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -285,6 +285,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "at",
           "state",
@@ -305,6 +306,26 @@
           "note": {
             "type": "string",
             "minLength": 1
+          },
+          "completed_skills": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "active_phase": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remaining_skills": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }

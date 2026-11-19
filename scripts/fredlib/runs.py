@@ -32,6 +32,7 @@ from .common import (
     _suite_for_skills,
     _suite_shared_assets,
     _suite_skills_by_suite,
+    _workflow_phase_order_map,
     atomic_json,
     digest,
     read_json,
@@ -300,20 +301,26 @@ def _assemble_skill_list(
             "Comprehensive scope still requires workflow slices and explicit remaining coverage."
         )
     if profile:
+        profile_entry = profiles[profile]
+        profile_suite = profile_entry.get("suite")
         skill_suites = {
             row["name"]: row.get("suite")
             for row in read_json(ROOT / "catalog/skills.json")["skills"]
         }
-        priorities = [
-            name
-            for name in profiles[profile]["priorities"]
-            if skill_suites.get(name) == suite_name
-        ]
-        selected = list(dict.fromkeys(priorities + selected))
-        notes.append(
-            "Profile assumptions must be checked against this checkout: "
-            + profiles[profile]["description"]
-        )
+        if profile_suite is None or profile_suite == suite_name:
+            priorities = [
+                name
+                for name in profile_entry["priorities"]
+                if (skill_suites.get(name) or _suite_for_skills([name])) == suite_name
+            ]
+        else:
+            priorities = []
+        if priorities:
+            selected = list(dict.fromkeys(priorities + selected))
+            notes.append(
+                "Profile assumptions must be checked against this checkout: "
+                + profile_entry["description"]
+            )
     return selected, notes
 
 
@@ -469,14 +476,24 @@ def _empty_deliverable(
         starter if isinstance(starter, dict) else by_filename.get(deliverable, {})
     )
     if deliverable == "architecture.json":
+        seeded["run_id"] = run["run_id"]
+        seeded["snapshot"] = run["snapshot"]["digest"]
+        seeded.setdefault("coverage", [])
+        seeded.setdefault("components", [])
         task_name = run.get("plan", {}).get("task", "repository")
         base_title = seeded.get("title", "Architecture specification")
         if base_title == "Architecture specification" and task_name:
             seeded["title"] = f"Architecture specification for {task_name}"
         return seeded
     if deliverable == "review.json":
+        seeded["run_id"] = run["run_id"]
+        seeded["snapshot"] = run["snapshot"]["digest"]
+        seeded.setdefault("coverage", [])
         return seeded
     if deliverable == "testing.json":
+        seeded["run_id"] = run["run_id"]
+        seeded["snapshot"] = run["snapshot"]["digest"]
+        seeded.setdefault("coverage", [])
         repo_name = Path(run["repository"]["path"]).name or "repository"
         if seeded.get("component") in {None, "", "repository"}:
             seeded["component"] = repo_name
@@ -649,6 +666,137 @@ def _copy_domain_assets(run: dict, contract: dict[str, Any], output: Path) -> No
                 target.write_bytes(schema_source.read_bytes())
 
 
+_MAX_SLICE_SKILLS = 3
+
+
+def _build_skill_slices(skills: Sequence[str], suite_name: str) -> list[list[str]]:
+    clean = [s for s in skills if isinstance(s, str) and s]
+    if not clean:
+        return []
+    if suite_name == "repository-workflows":
+        phase_orders = _workflow_phase_order_map()
+        grouped: list[list[str]] = []
+        current_group: list[str] = []
+        current_order: int | None = None
+        for idx, skill in enumerate(clean):
+            skill_order = phase_orders.get(skill, 1000 + idx)
+            if (
+                current_group
+                and skill_order == current_order
+                and len(current_group) < _MAX_SLICE_SKILLS
+            ):
+                current_group.append(skill)
+            else:
+                if current_group:
+                    grouped.append(current_group)
+                current_group = [skill]
+                current_order = skill_order
+        if current_group:
+            grouped.append(current_group)
+        return grouped
+    return [
+        clean[idx : idx + _MAX_SLICE_SKILLS]
+        for idx in range(0, len(clean), _MAX_SLICE_SKILLS)
+    ]
+
+
+def _completed_skills_from_run(run: Mapping[str, Any]) -> list[str]:
+    plan_data = run.get("plan")
+    planned = (
+        [s for s in plan_data.get("skills", []) if isinstance(s, str)]
+        if isinstance(plan_data, Mapping)
+        else []
+    )
+    seen: list[str] = []
+    checkpoints = run.get("checkpoints")
+    if isinstance(checkpoints, list):
+        for cp in checkpoints:
+            if not isinstance(cp, Mapping):
+                continue
+            raw_done = cp.get("completed_skills")
+            if isinstance(raw_done, list):
+                for item in raw_done:
+                    if isinstance(item, str) and item and item not in seen:
+                        seen.append(item)
+    if not planned:
+        return seen
+    seen_set = set(seen)
+    planned_set = set(planned)
+    return [s for s in planned if s in seen_set] + [
+        s for s in seen if s not in planned_set
+    ]
+
+
+def _resolve_slice_cursor(
+    run: Mapping[str, Any], extra_completed: Sequence[str] = ()
+) -> tuple[int, int, list[str], list[str], list[str]]:
+    plan_data = run.get("plan")
+    planned = (
+        [s for s in plan_data.get("skills", []) if isinstance(s, str)]
+        if isinstance(plan_data, Mapping)
+        else []
+    )
+    suite_name = _suite_for_run(dict(run))
+    slices = _build_skill_slices(planned, suite_name)
+    completed_set = set(_completed_skills_from_run(run)) | {
+        s for s in extra_completed if isinstance(s, str) and s
+    }
+    completed_skills = [s for s in planned if s in completed_set]
+    remaining_skills = [s for s in planned if s not in completed_set]
+    for idx, sl in enumerate(slices):
+        uncompleted = [s for s in sl if s not in completed_set]
+        if uncompleted:
+            return idx, len(slices), uncompleted, completed_skills, remaining_skills
+    return len(slices), len(slices), [], completed_skills, remaining_skills
+
+
+def _seed_audit_from_source(run: dict[str, Any], source_audit: Path) -> dict[str, Any]:
+    src_target = Path(source_audit).resolve()
+    src_path = src_target / "audit.json" if src_target.is_dir() else src_target
+    if not src_path.exists():
+        raise FredCliError(
+            f"Source audit ledger not found: {source_audit}",
+            code="missing_source_audit",
+            hint="Pass an existing audit.json file or audit run directory to --source-audit.",
+        )
+    raw_source = _require_audit_ledger(
+        read_json_object(src_path, label="Source audit ledger 'audit.json'"),
+        "init --source-audit",
+    )
+    src_errs = audit_errors(raw_source)
+    if src_errs:
+        raise FredCliError(
+            "Invalid source audit ledger: " + "; ".join(src_errs[:5]),
+            code="invalid_source_audit",
+            hint="Validate the source audit.json against audit.schema.json before linking it to a workflow run.",
+        )
+    seeded = copy.deepcopy(raw_source)
+    prior_run_id = seeded.get("run_id", "unknown")
+    seeded["run_id"] = run["run_id"]
+    seeded["repository"] = empty_audit(run)["repository"]
+    existing_topics = {
+        c.get("topic")
+        for c in seeded.get("coverage", [])
+        if isinstance(c, dict) and isinstance(c.get("topic"), str)
+    }
+    for skill_name in run.get("plan", {}).get("skills", []):
+        if isinstance(skill_name, str) and skill_name not in existing_topics:
+            seeded.setdefault("coverage", []).append(
+                {
+                    "topic": skill_name,
+                    "scope": run["plan"]["task"],
+                    "status": "not-reviewed",
+                    "evidence_ids": [],
+                    "notes": "Selected; agent workflow step has not run",
+                    "next_action": "Execute phase brief and record verification or remediation evidence",
+                }
+            )
+    run["plan"].setdefault("notes", []).append(
+        f"Seeded audit.json from source ledger {src_path} (original run_id={prior_run_id}) without modifying the source ledger."
+    )
+    return seeded
+
+
 def initialize(
     repo: Path,
     output: Path,
@@ -656,6 +804,7 @@ def initialize(
     allow_fixes: bool = False,
     allow_publication: bool = False,
     single_task: bool = False,
+    source_audit: Path | None = None,
     **options,
 ) -> dict:
     if not isinstance(single_task, bool):
@@ -717,14 +866,22 @@ def initialize(
         }
     contract = _artifact_contract_for_run(run)
     deliverable = str(contract["filename"])
+    if source_audit is not None and deliverable != "audit.json":
+        raise FredCliError(
+            f"Task {task!r} writes primary deliverable '{deliverable}'; --source-audit is only supported when the primary deliverable is 'audit.json'",
+            code="unsupported_source_audit",
+            hint="Use --source-audit with repository-workflows or repository-audits tasks.",
+        )
+    seeded_deliverable = (
+        _seed_audit_from_source(run, source_audit)
+        if source_audit is not None
+        else _empty_deliverable(run, deliverable, starter=contract.get("starter"))
+    )
     output.mkdir(parents=True, exist_ok=True)
     if deliverable != "audit.json":
         _copy_domain_assets(run, contract, output)
     atomic_json(output / "run.json", run)
-    atomic_json(
-        output / deliverable,
-        _empty_deliverable(run, deliverable, starter=contract.get("starter")),
-    )
+    atomic_json(output / deliverable, seeded_deliverable)
     (output / "prompt.md").write_text(prompt(run), encoding="utf-8")
     return run
 
@@ -790,7 +947,10 @@ def _render_skill_prompt_templates(run: dict) -> str:
             return "All planned single-task loop passes are completed; no active skill remains."
         skills: list[Any] = [active_skill]
     else:
-        skills = run.get("plan", {}).get("skills") or []
+        _, _, active_slice, _, _ = _resolve_slice_cursor(run)
+        if not active_slice and (run.get("plan", {}).get("skills") or []):
+            return "All planned phase slices are completed; no active skill remains for this session."
+        skills = list(active_slice)
     replacements = _placeholder_values_for_run(run)
     blocks: list[str] = []
     for skill_name in skills:
@@ -1076,9 +1236,36 @@ def prompt(run: dict) -> str:
                 "No active skill remains; review completed deliverables or initialize a new run."
             )
     else:
-        skill_directive = (
-            f"Use these skills in order: {', '.join(plan_data['skills'])}."
-        )
+        (
+            active_phase,
+            total_slices,
+            active_slice,
+            completed_skills,
+            remaining_skills,
+        ) = _resolve_slice_cursor(run)
+        planned_total = len(plan_data.get("skills") or [])
+        if not active_slice and planned_total > 0:
+            skill_directive = (
+                f"All {total_slices} phase slices completed ({len(completed_skills)} of {planned_total} skills finished).\n"
+                "No active skill remains in this session brief; review completed deliverables or initialize a new run."
+            )
+        elif total_slices > 1 or completed_skills:
+            queued_count = max(0, len(remaining_skills) - len(active_slice))
+            skill_directive = (
+                f"Phase slice {active_phase + 1} of {total_slices} (at most {_MAX_SLICE_SKILLS} skills per session brief) — "
+                f"use these skills in order: {', '.join(active_slice)}.\n"
+                f"Completed skills: {len(completed_skills)} of {planned_total}; "
+                f"remaining skills queued for later slices (do not execute in this session): {queued_count} recorded in run.json."
+            )
+        else:
+            skill_directive = f"Use these skills in order: {', '.join(active_slice)}."
+
+    deferred_list = plan_data.get("deferred_skills") or []
+    deferred_rendered = (
+        f"{len(deferred_list)} recorded in run.json (omitted from this session brief)"
+        if deferred_list
+        else "None in selected recipe"
+    )
 
     return f"""# Engineering task: {plan_data["task"]}
 
@@ -1096,7 +1283,7 @@ requirements separately from observed behavior and record healthy/refuted contro
 
 Critical workflows: {workflows_rendered}.
 Changed paths: {changed_rendered}.
-Deferred skills: {", ".join(plan_data["deferred_skills"]) or "None in selected recipe"}.
+Deferred skills: {deferred_rendered}.
 Expected outputs: {", ".join(plan_data["expected_outputs"])}.
 
 Application corrections authorized: {authority["application_changes"]}.
@@ -1140,14 +1327,13 @@ class _AuditValidator(Protocol):
 _AUDIT_VALIDATOR_MODULE_NAME = "fred_audit_validator"
 
 
-def _load_audit_validator() -> _AuditValidator:
-    cached = sys.modules.get(_AUDIT_VALIDATOR_MODULE_NAME)
+def _load_script_validator(module_name: str, script: Path) -> _AuditValidator:
+    cached = sys.modules.get(module_name)
     if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
         return cast(_AuditValidator, cached)
-    script = ROOT / "skills/repo-audit-program/scripts/validate_audit.py"
-    spec = importlib.util.spec_from_file_location(_AUDIT_VALIDATOR_MODULE_NAME, script)
+    spec = importlib.util.spec_from_file_location(module_name, script)
     if spec is None or spec.loader is None:
-        raise ValueError(f"Unable to load audit validator from {script}")
+        raise ValueError(f"Unable to load validator from {script}")
     module = importlib.util.module_from_spec(spec)
     previous = sys.dont_write_bytecode
     sys.modules[spec.name] = module
@@ -1160,6 +1346,25 @@ def _load_audit_validator() -> _AuditValidator:
     finally:
         sys.dont_write_bytecode = previous
     return cast(_AuditValidator, module)
+
+
+def _load_audit_validator() -> _AuditValidator:
+    return _load_script_validator(
+        _AUDIT_VALIDATOR_MODULE_NAME,
+        ROOT / "skills/repo-audit-program/scripts/validate_audit.py",
+    )
+
+
+_SUITE_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
+    "architecture.json": (
+        "fred_architecture_validator",
+        "scripts/validate_architecture.py",
+    ),
+    "review.json": ("fred_review_validator", "scripts/validate_review.py"),
+    "testing.json": ("fred_testing_validator", "scripts/validate_testing.py"),
+    "spec.json": ("fred_spec_validator", "scripts/validate_spec.py"),
+    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
+}
 
 
 @functools.lru_cache(maxsize=1)
@@ -1257,6 +1462,8 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
 
 def _validate_present_workflow_companions(directory: Path) -> list[str]:
     errors: list[str] = []
+    wf_mod_name, wf_script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
+    wf_validator = _load_script_validator(wf_mod_name, ROOT / wf_script_rel)
     for name, companion_schema in WORKFLOW_DELIVERABLE_SCHEMAS.items():
         companion_path = directory / name
         if not companion_path.is_file():
@@ -1266,15 +1473,35 @@ def _validate_present_workflow_companions(directory: Path) -> list[str]:
         except (OSError, ValueError) as exc:
             errors.append(f"{name}: invalid JSON ({exc})")
             continue
-        for msg in _schema_errors(companion_payload, companion_schema):
+        schema_errs = _schema_errors(companion_payload, companion_schema)
+        if schema_errs:
+            for msg in schema_errs:
+                errors.append(f"{name}: {msg}")
+            continue
+        schema_obj = read_json_object(
+            ROOT / companion_schema, label=f"Workflow schema '{companion_schema}'"
+        )
+        for msg in wf_validator.validate(companion_payload, schema_obj):
             errors.append(f"{name}: {msg}")
     return errors
+
+
+def _check_relative_path_entry(raw_path: object, label: str, errors: list[str]) -> None:
+    if not isinstance(raw_path, str):
+        return
+    try:
+        checked = relative_path(raw_path)
+        if not checked.parts:
+            raise ValueError(f"Unsafe relative path: {raw_path!r}")
+    except ValueError as exc:
+        errors.append(f"{label}: {exc}")
 
 
 def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     for field in (
         "decisions",
+        "components",
         "findings",
         "test_cases",
         "interview_decisions",
@@ -1302,29 +1529,107 @@ def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
                 continue
             fpath = finding.get("file")
             fid = finding.get("id", "unknown")
-            if not isinstance(fpath, str):
+            _check_relative_path_entry(
+                fpath,
+                f"Finding file path must be repository-relative ({fid})",
+                errors,
+            )
+            for p in finding.get("paths", []) or []:
+                _check_relative_path_entry(
+                    p,
+                    f"Finding path must be repository-relative ({fid})",
+                    errors,
+                )
+    for top_p in deliverable.get("paths", []) or []:
+        _check_relative_path_entry(
+            top_p, "Deliverable path must be repository-relative", errors
+        )
+    for cov in deliverable.get("coverage", []) or []:
+        if isinstance(cov, dict):
+            for cov_p in cov.get("paths", []) or []:
+                _check_relative_path_entry(
+                    cov_p,
+                    f"Coverage path must be repository-relative ({cov.get('topic', 'unknown')})",
+                    errors,
+                )
+    for boundary in deliverable.get("boundaries", []) or []:
+        if isinstance(boundary, dict):
+            for bp in boundary.get("paths", []) or []:
+                _check_relative_path_entry(
+                    bp,
+                    f"Boundary path must be repository-relative ({boundary.get('name', 'unknown')})",
+                    errors,
+                )
+    for dec in deliverable.get("decisions", []) or []:
+        if isinstance(dec, dict):
+            for dp in dec.get("paths", []) or []:
+                _check_relative_path_entry(
+                    dp,
+                    f"Decision path must be repository-relative ({dec.get('id', 'unknown')})",
+                    errors,
+                )
+    components = deliverable.get("components")
+    if isinstance(components, list):
+        comp_deps: dict[str, list[str]] = {}
+        comp_ids = {
+            c["id"]
+            for c in components
+            if isinstance(c, dict) and isinstance(c.get("id"), str)
+        }
+        for comp in components:
+            if not isinstance(comp, dict):
                 continue
-            try:
-                checked = relative_path(fpath)
-                if not checked.parts:
-                    raise ValueError(f"Unsafe relative path: {fpath!r}")
-            except ValueError as exc:
-                errors.append(
-                    f"Finding file path must be repository-relative ({fid}): {exc}"
+            cid = str(comp.get("id", "unknown"))
+            for cp in comp.get("paths", []) or []:
+                _check_relative_path_entry(
+                    cp,
+                    f"Component path must be repository-relative ({cid})",
+                    errors,
+                )
+            deps = [d for d in (comp.get("depends_on") or []) if isinstance(d, str)]
+            comp_deps[cid] = deps
+            for dep in deps:
+                if dep not in comp_ids:
+                    errors.append(f"Unknown component dependency {dep} in {cid}")
+        visiting: set[str] = set()
+        done: set[str] = set()
+
+        def _visit_comp(node: str) -> None:
+            if node in visiting:
+                errors.append(f"Component dependency cycle: {node}")
+                return
+            if node in done or node not in comp_deps:
+                return
+            visiting.add(node)
+            for dep in comp_deps[node]:
+                _visit_comp(dep)
+            visiting.remove(node)
+            done.add(node)
+
+        for cid in comp_deps:
+            _visit_comp(cid)
+    for tc in deliverable.get("test_cases", []) or []:
+        if isinstance(tc, dict):
+            tid = str(tc.get("id", "unknown"))
+            _check_relative_path_entry(
+                tc.get("file"),
+                f"Test case file path must be repository-relative ({tid})",
+                errors,
+            )
+            for tp in tc.get("paths", []) or []:
+                _check_relative_path_entry(
+                    tp,
+                    f"Test case path must be repository-relative ({tid})",
+                    errors,
                 )
     new_file_scopes = deliverable.get("new_file_scopes")
     if isinstance(new_file_scopes, list):
         for scope_path in new_file_scopes:
-            if not isinstance(scope_path, str):
-                continue
-            try:
-                checked = relative_path(scope_path)
-                if not checked.parts:
-                    raise ValueError(f"Unsafe relative path: {scope_path!r}")
-            except ValueError as exc:
-                errors.append(
-                    f"Specification file scope must be repository-relative ({scope_path!r}): {exc}"
-                )
+            _check_relative_path_entry(
+                scope_path,
+                f"Specification file scope must be repository-relative ({scope_path!r})",
+                errors,
+            )
     return errors
 
 
@@ -1336,7 +1641,17 @@ def _deliverable_errors(
     schema_errs = _schema_errors(deliverable, schema_rel)
     if schema_errs:
         return schema_errs
-    return _domain_deliverable_errors(deliverable)
+    domain_errs = _domain_deliverable_errors(deliverable)
+    if expected_name in _SUITE_VALIDATOR_SCRIPTS:
+        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS[expected_name]
+        suite_validator = _load_script_validator(mod_name, ROOT / script_rel)
+        schema_obj = read_json_object(
+            ROOT / schema_rel, label=f"Deliverable schema '{schema_rel}'"
+        )
+        for msg in suite_validator.validate(deliverable, schema_obj):
+            if msg not in domain_errs:
+                domain_errs.append(msg)
+    return domain_errs
 
 
 def validate_run(directory: Path) -> list[str]:
@@ -1398,23 +1713,38 @@ def validate_run(directory: Path) -> list[str]:
                     errors.append(
                         f"Loop task after active_index must be pending: {task_item['skill']}"
                     )
+    allowed_snapshots = {run["snapshot"]["digest"]}
+    if isinstance(loop_data, dict):
+        for entry in loop_data.get("snapshot_history", []):
+            if isinstance(entry, dict) and isinstance(
+                entry.get("snapshot_digest"), str
+            ):
+                allowed_snapshots.add(entry["snapshot_digest"])
     if expected_name == "audit.json" and not deliverable_errs:
         if run["run_id"] != deliverable.get("run_id"):
             errors.append("Run and audit IDs differ")
-        allowed_snapshots = {run["snapshot"]["digest"]}
-        if isinstance(loop_data, dict):
-            for entry in loop_data.get("snapshot_history", []):
-                if isinstance(entry, dict) and isinstance(
-                    entry.get("snapshot_digest"), str
-                ):
-                    allowed_snapshots.add(entry["snapshot_digest"])
         if deliverable.get("repository", {}).get("snapshot") not in allowed_snapshots:
             errors.append("Audit evidence is not tied to the current run snapshot")
+    elif (
+        expected_name in {"architecture.json", "review.json", "testing.json"}
+        and not deliverable_errs
+    ):
+        if run["run_id"] != deliverable.get("run_id"):
+            errors.append(f"Run and {expected_name} IDs differ")
+        if deliverable.get("snapshot") not in allowed_snapshots:
+            errors.append(
+                f"{expected_name} evidence is not tied to the current run snapshot"
+            )
     errors.extend(_validate_present_workflow_companions(run_dir))
     return errors
 
 
-def checkpoint(directory: Path, state: str, note: str) -> dict:
+def checkpoint(
+    directory: Path,
+    state: str,
+    note: str,
+    completed_skills: list[str] | None = None,
+) -> dict:
     if state not in {"running", "paused", "completed"} or not note.strip():
         raise FredCliError(
             "Checkpoint needs a valid state and a concrete continuation/completion note",
@@ -1430,8 +1760,46 @@ def checkpoint(directory: Path, state: str, note: str) -> dict:
             code="invalid_run_json",
             hint="Run 'python scripts/fred.py validate-run <dir>' to inspect schema errors in 'run.json'.",
         )
+    planned_skills = [
+        s for s in (run.get("plan", {}).get("skills") or []) if isinstance(s, str)
+    ]
+    extra_done: list[str] = []
+    if completed_skills is not None:
+        if not isinstance(completed_skills, list) or any(
+            not isinstance(item, str) or not item.strip() for item in completed_skills
+        ):
+            raise FredCliError(
+                "completed_skills must be a list of nonempty skill names",
+                code="invalid_checkpoint",
+                hint="Pass planned skill names to --completed-skill.",
+            )
+        for raw_skill in completed_skills:
+            for token in _COMMA_SPLIT_RE.split(raw_skill):
+                cleaned = token.strip()
+                if not cleaned:
+                    continue
+                if planned_skills and cleaned not in planned_skills:
+                    raise FredCliError(
+                        f"Completed skill {cleaned!r} is not in the run plan",
+                        code="invalid_checkpoint",
+                        hint=f"Planned skills: {', '.join(planned_skills)}.",
+                    )
+                if cleaned not in extra_done:
+                    extra_done.append(cleaned)
+    active_phase, _, _, merged_completed, remaining_skills = _resolve_slice_cursor(
+        run, extra_completed=extra_done
+    )
     run["state"] = state
-    checkpoints.append({"at": now(), "state": state, "note": note})
+    checkpoints.append(
+        {
+            "at": now(),
+            "state": state,
+            "note": note,
+            "completed_skills": merged_completed,
+            "active_phase": active_phase,
+            "remaining_skills": remaining_skills,
+        }
+    )
     atomic_json(run_dir / "run.json", run)
     return run
 
@@ -1447,31 +1815,102 @@ def _normalize_deliverable_path(raw_path: object) -> str | None:
     return checked.as_posix() if checked.parts else candidate
 
 
+def _normalized_path_list(raw_paths: object) -> list[str]:
+    if not isinstance(raw_paths, list):
+        return []
+    out: list[str] = []
+    for raw in raw_paths:
+        norm = _normalize_deliverable_path(raw)
+        if norm and norm not in out:
+            out.append(norm)
+    return out
+
+
 def _revalidate_domain_records(
     deliverable: dict[str, Any],
     expected_name: str,
     changed: list[str],
     skipped: dict[str, Any],
     complete: bool,
+    *,
+    provenance_drifted: bool = False,
 ) -> tuple[list[str], list[str]]:
     stale: list[str] = []
+    changed_set = set(changed)
+    top_paths = _normalized_path_list(deliverable.get("paths"))
     if expected_name == "review.json":
-        findings = deliverable.get("findings", [])
-        changed_set = set(changed)
+        findings = [
+            f
+            for f in deliverable.get("findings", [])
+            if isinstance(f, dict) and isinstance(f.get("id"), str)
+        ]
         for finding in findings:
-            norm_path = _normalize_deliverable_path(finding.get("file"))
-            if norm_path in changed_set or norm_path in skipped or not complete:
+            cited = list(top_paths)
+            norm_file = _normalize_deliverable_path(finding.get("file"))
+            if norm_file and norm_file not in cited:
+                cited.append(norm_file)
+            for extra in _normalized_path_list(finding.get("paths")):
+                if extra not in cited:
+                    cited.append(extra)
+            if (
+                provenance_drifted
+                or not complete
+                or any(p in changed_set or p in skipped for p in cited)
+            ):
                 stale.append(finding["id"])
-        impact = [f["id"] for f in findings] if changed else []
+        impact = [f["id"] for f in findings] if (changed or provenance_drifted) else []
         return stale, impact
     if expected_name == "architecture.json":
-        decisions = deliverable.get("decisions", [])
-        ids = [d["id"] for d in decisions if isinstance(d, dict) and "id" in d]
-        return (list(ids) if not complete else []), (list(ids) if changed else [])
+        decisions = [
+            d
+            for d in deliverable.get("decisions", [])
+            if isinstance(d, dict) and isinstance(d.get("id"), str)
+        ]
+        components = [
+            c
+            for c in deliverable.get("components", [])
+            if isinstance(c, dict) and isinstance(c.get("id"), str)
+        ]
+        all_ids: list[str] = []
+        for item in (*decisions, *components):
+            rec_id = item["id"]
+            if rec_id not in all_ids:
+                all_ids.append(rec_id)
+            cited = list(top_paths)
+            for extra in _normalized_path_list(item.get("paths")):
+                if extra not in cited:
+                    cited.append(extra)
+            if (
+                provenance_drifted
+                or not complete
+                or any(p in changed_set or p in skipped for p in cited)
+            ) and rec_id not in stale:
+                stale.append(rec_id)
+        impact = list(all_ids) if (changed or provenance_drifted) else []
+        return stale, impact
     if expected_name == "testing.json":
-        cases = deliverable.get("test_cases", [])
-        ids = [tc["id"] for tc in cases if isinstance(tc, dict) and "id" in tc]
-        return (list(ids) if not complete else []), (list(ids) if changed else [])
+        cases = [
+            tc
+            for tc in deliverable.get("test_cases", [])
+            if isinstance(tc, dict) and isinstance(tc.get("id"), str)
+        ]
+        ids = [tc["id"] for tc in cases]
+        for tc in cases:
+            cited = list(top_paths)
+            norm_file = _normalize_deliverable_path(tc.get("file"))
+            if norm_file and norm_file not in cited:
+                cited.append(norm_file)
+            for extra in _normalized_path_list(tc.get("paths")):
+                if extra not in cited:
+                    cited.append(extra)
+            if (
+                provenance_drifted
+                or not complete
+                or any(p in changed_set or p in skipped for p in cited)
+            ):
+                stale.append(tc["id"])
+        impact = list(ids) if (changed or provenance_drifted) else []
+        return stale, impact
     if expected_name == "spec.json":
         decisions = deliverable.get("interview_decisions", [])
         reqs = deliverable.get("requirements", [])
@@ -1510,8 +1949,18 @@ def revalidate(directory: Path) -> dict:
     changed = sorted(
         path
         for path in set(old["files"]) | set(new["files"])
+        for _ in (None,)
         if old["files"].get(path) != new["files"].get(path)
     )
+    allowed_snapshots = {old["digest"]}
+    loop_data = run.get("loop")
+    if isinstance(loop_data, dict):
+        for entry in loop_data.get("snapshot_history", []):
+            if isinstance(entry, dict) and isinstance(
+                entry.get("snapshot_digest"), str
+            ):
+                allowed_snapshots.add(entry["snapshot_digest"])
+    provenance_drifted = False
     if expected_name != "audit.json":
         target_path = resolve_audit_path(run_dir)
         domain_doc = read_json_object(
@@ -1524,8 +1973,18 @@ def revalidate(directory: Path) -> dict:
                 code="invalid_deliverable",
                 hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors in '{expected_name}'.",
             )
+        if expected_name in {"architecture.json", "review.json", "testing.json"}:
+            provenance_drifted = (
+                domain_doc.get("run_id") != run["run_id"]
+                or domain_doc.get("snapshot") not in allowed_snapshots
+            )
         stale, impact_ids = _revalidate_domain_records(
-            domain_doc, expected_name, changed, new["skipped"], new["complete"]
+            domain_doc,
+            expected_name,
+            changed,
+            new["skipped"],
+            new["complete"],
+            provenance_drifted=provenance_drifted,
         )
     else:
         audit = _require_audit_ledger(
@@ -1559,16 +2018,40 @@ def revalidate(directory: Path) -> dict:
             ):
                 stale.append(finding["id"])
         impact_ids = [finding["id"] for finding in audit["findings"]] if changed else []
+    (
+        active_phase,
+        total_slices,
+        active_slice,
+        completed_skills,
+        remaining_skills,
+    ) = _resolve_slice_cursor(run)
+    is_single_task, _, _, _ = _loop_state(run)
+    if not is_single_task:
+        (run_dir / "prompt.md").write_text(prompt(run), encoding="utf-8")
+    if active_slice:
+        slice_note = (
+            f"Prompt updated for phase slice {active_phase + 1} of {max(1, total_slices)} "
+            f"({', '.join(active_slice)}); review changed paths and affected callers/configuration and retain the original snapshot until a new run is established."
+        )
+    else:
+        slice_note = "All planned phase slices completed; review changed paths and affected callers/configuration and retain the original snapshot until a new run is established."
     result = {
+        "run_id": run["run_id"],
+        "deliverable": expected_name,
         "old_snapshot": old["digest"],
         "new_snapshot": new["digest"],
         "changed_files": changed,
         "stale_finding_ids": stale,
         "unreviewed_changed_files": changed,
         "needs_impact_review": impact_ids,
+        "provenance_valid": not provenance_drifted,
+        "active_phase": active_phase,
+        "active_skills": active_slice,
+        "completed_skills": completed_skills,
+        "remaining_skills": remaining_skills,
         "reusable_evidence_is_not_proof_of_unchanged_behavior": True,
         "complete": new["complete"],
-        "next_action": "Review changed paths and affected callers/configuration; retain the original snapshot until a new run is established.",
+        "next_action": slice_note,
     }
     atomic_json(run_dir / "revalidation.json", result)
     return result
@@ -1881,9 +2364,15 @@ def reconcile(
     records: dict[str, Any] = (
         read_json_object(path, label="Remediation ledger 'remediation.json'")
         if path.exists()
-        else {"schema_version": "1.0", "records": []}
+        else {
+            "schema_version": "1.0",
+            "records": [],
+            "finding_fingerprint_matches": [],
+            "remediation_state_transitions": [],
+            "unmapped_records": [],
+        }
     )
-    if not isinstance(records.get("records"), list):
+    if "records" in records and not isinstance(records.get("records"), list):
         raise FredCliError(
             f"Malformed remediation ledger '{path}': 'records' must be a JSON array",
             code="invalid_remediation_ledger",
@@ -1891,15 +2380,67 @@ def reconcile(
         )
     records = copy.deepcopy(records)
     records.setdefault("schema_version", "1.0")
+    records.setdefault("records", [])
+    records.setdefault("finding_fingerprint_matches", [])
+    records.setdefault("remediation_state_transitions", [])
+    records.setdefault("unmapped_records", [])
+    audit_run_id = audit.get("run_id")
+    if isinstance(audit_run_id, str) and audit_run_id:
+        records.setdefault("run_id", audit_run_id)
+    fp = fingerprint(finding, audit)
+    previous_state = "open"
+    for prior_tr in records["remediation_state_transitions"]:
+        if (
+            isinstance(prior_tr, dict)
+            and (
+                prior_tr.get("finding_id") == finding_id
+                or prior_tr.get("fingerprint") == fp
+            )
+            and isinstance(prior_tr.get("new_state"), str)
+        ):
+            previous_state = prior_tr["new_state"]
+    for prior_rec in records["records"]:
+        if (
+            isinstance(prior_rec, dict)
+            and (
+                prior_rec.get("finding_id") == finding_id
+                or prior_rec.get("fingerprint") == fp
+            )
+            and isinstance(prior_rec.get("state"), str)
+        ):
+            previous_state = prior_rec["state"]
     record: dict[str, Any] = {
         "at": now(),
         "finding_id": finding_id,
-        "fingerprint": fingerprint(finding, audit),
+        "fingerprint": fp,
         "state": state,
         "note": note,
         "verification": proof,
     }
     records["records"].append(record)
+    if not any(
+        isinstance(m, dict)
+        and m.get("finding_id") == finding_id
+        and m.get("fingerprint") == fp
+        for m in records["finding_fingerprint_matches"]
+    ):
+        records["finding_fingerprint_matches"].append(
+            {
+                "fingerprint": fp,
+                "finding_id": finding_id,
+                "match_status": "exact",
+            }
+        )
+    transition: dict[str, Any] = {
+        "finding_id": finding_id,
+        "fingerprint": fp,
+        "previous_state": previous_state,
+        "new_state": state,
+        "reason": note,
+    }
+    if verification is not None:
+        transition["verification_proof"] = str(verification)
+    records["remediation_state_transitions"].append(transition)
     remediation_errors = _schema_errors(
         records, WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
     )
@@ -1938,15 +2479,20 @@ def _lookup_location_sha256(
 
 
 def _referenced_snapshot_hashes(
-    text: str, snap_files: dict[str, str]
+    text: str,
+    snap_files: dict[str, str],
+    explicit_paths: Sequence[object] = (),
 ) -> dict[str, str]:
-    if not text:
-        return {}
     matched: dict[str, str] = {}
-    for rel_path, sha in sorted(snap_files.items()):
-        if rel_path in text:
-            matched[rel_path] = sha
-    return matched
+    for raw in explicit_paths:
+        norm = _normalize_deliverable_path(raw)
+        if norm and norm in snap_files:
+            matched[norm] = snap_files[norm]
+    if text:
+        for rel_path, sha in sorted(snap_files.items()):
+            if rel_path in text:
+                matched[rel_path] = sha
+    return dict(sorted(matched.items()))
 
 
 def memory(directory: Path) -> dict:
@@ -2037,6 +2583,7 @@ def memory(directory: Path) -> dict:
             "limitations": [_MEMORY_LIMITATION],
         }
     if expected_name == "architecture.json":
+        top_paths = deliverable.get("paths") or []
         return {
             "schema_version": "1.0",
             "source_run": run["run_id"],
@@ -2052,9 +2599,21 @@ def memory(directory: Path) -> dict:
                     "referenced_file_hashes": _referenced_snapshot_hashes(
                         f"{boundary.get('name', '')} {boundary.get('description', '')}",
                         snap_files,
+                        explicit_paths=[*top_paths, *(boundary.get("paths") or [])],
                     ),
                 }
                 for boundary in deliverable["boundaries"]
+            ],
+            "components": [
+                {
+                    **comp,
+                    "referenced_file_hashes": _referenced_snapshot_hashes(
+                        f"{comp.get('name', '')} {comp.get('responsibility', '')}",
+                        snap_files,
+                        explicit_paths=[*top_paths, *(comp.get("paths") or [])],
+                    ),
+                }
+                for comp in deliverable.get("components", [])
             ],
             "decisions": [
                 {
@@ -2062,6 +2621,7 @@ def memory(directory: Path) -> dict:
                     "referenced_file_hashes": _referenced_snapshot_hashes(
                         f"{decision.get('context', '')} {decision.get('decision', '')} {decision.get('rationale', '')}",
                         snap_files,
+                        explicit_paths=[*top_paths, *(decision.get("paths") or [])],
                     ),
                 }
                 for decision in deliverable["decisions"]
@@ -2090,6 +2650,7 @@ def memory(directory: Path) -> dict:
             "limitations": [_MEMORY_LIMITATION],
         }
     if expected_name == "testing.json":
+        top_paths = deliverable.get("paths") or []
         return {
             "schema_version": "1.0",
             "source_run": run["run_id"],
@@ -2105,6 +2666,11 @@ def memory(directory: Path) -> dict:
                     "referenced_file_hashes": _referenced_snapshot_hashes(
                         f"{deliverable.get('component', '')} {tc.get('name', '')} {tc.get('description', '')}",
                         snap_files,
+                        explicit_paths=[
+                            *top_paths,
+                            tc.get("file"),
+                            *(tc.get("paths") or []),
+                        ],
                     ),
                 }
                 for tc in deliverable["test_cases"]
