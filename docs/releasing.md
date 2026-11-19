@@ -30,9 +30,9 @@ history and tags to re-verify `origin/main` ancestry, nonempty `LICENSE`, and re
 publication per release tag, pushes `refs/tags/v<VERSION>` on `main` branch pushes if
 missing on `origin`, and performs zero-touch GitHub Release publication (`--verify-tag` and
 `--target`, without `--draft` or manual approval) using `docs/release-notes-<VERSION>.md`
-when present (or `--generate-notes` otherwise, marking pre-release tags with
-`--prerelease`). Subsequent `main` pushes with an already published `VERSION` skip
-validation, packaging, and publication cleanly.
+when present (such as [release-notes-0.2.0.md](release-notes-0.2.0.md), or `--generate-notes`
+otherwise, marking pre-release tags with `--prerelease`). Subsequent `main` pushes with an
+already published `VERSION` skip validation, packaging, and publication cleanly.
 
 Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
 `workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)

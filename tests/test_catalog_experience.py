@@ -369,6 +369,29 @@ class ExperienceTests(unittest.TestCase):
         self.assertNotIn("statically supported", skill_md)
         self.assertNotIn("statically-supported", skill_md)
 
+    def test_catalog_markdown_groups_skills_under_canonical_suite_headings(self):
+        import re
+
+        from build_catalog import build as build_cat
+
+        self.assertEqual([], build_cat(check=True))
+        suites = read_json(ROOT / "catalog/suites.json")["suites"]
+        expected_suite_order = [suite["name"] for suite in suites]
+        self.assertEqual("repository-audits", expected_suite_order[0])
+
+        catalog_md = (ROOT / "docs/catalog.md").read_text(encoding="utf-8")
+        headings = re.findall(r"^##\s+(.+)$", catalog_md, flags=re.MULTILINE)
+        self.assertEqual(expected_suite_order, headings)
+
+        linked_skills = re.findall(
+            r"\[([a-z0-9-]+)\]\(\.\./skills/\1/SKILL\.md\)", catalog_md
+        )
+        known_skills = [
+            item["name"] for item in read_json(ROOT / "catalog/skills.json")["skills"]
+        ]
+        self.assertEqual(len(known_skills), len(linked_skills))
+        self.assertEqual(set(known_skills), set(linked_skills))
+
 
 if __name__ == "__main__":
     unittest.main()
