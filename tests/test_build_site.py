@@ -205,7 +205,7 @@ class BuildSiteTests(unittest.TestCase):
         """Serving dist/site/ under /fred-skills/ returns HTTP 200 text/html for root and all explorer links."""
 
         class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-            def log_message(self, format: str, *args: object) -> None:
+            def log_message(self, _format: str, *_args: object) -> None:
                 return
 
         handler = functools.partial(_QuietHandler, directory=str(self.web_root))

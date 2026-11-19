@@ -13,10 +13,14 @@ Concise entry instructions and conditionally loaded references follow the
 
 ## Canonical shared resources and committed copies
 
-The audit family uses one protocol/schema/report/handoff contract. Canonical resources
-live under `shared/repo-audit/resources/`; `shared/repo-audit/manifest.json` lists them.
-`scripts/sync_audit_resources.py` writes identical copies into the family members
-defined in `catalog/suites.json`. Its `--check` mode only reports drift and exits nonzero.
+Canonical suite protocols, schemas, templates, and validator targets live across all 6
+`shared/` suites (`shared/repo-audit/`, `shared/repo-workflows/`,
+`shared/software-architecture/`, `shared/code-review/`, `shared/automated-testing/`, and
+`shared/spec-driven-development/`), each governed by its `manifest.json`.
+`scripts/sync_audit_resources.py` writes identical copies into the suite members defined in
+`catalog/suites.json` for their 5 structured JSON deliverables (`audit.json`,
+`architecture.json`, `review.json`, `testing.json`, and `spec.json`). Its `--check` mode
+only reports drift and exits nonzero.
 
 Committing these generated copies is intentional: it preserves independent installation
 while keeping one authoring source of truth. Symlinks and upward-relative links would
@@ -25,8 +29,12 @@ separately edited protocol/schema copies cannot silently diverge.
 
 ## Discovery and execution order
 
-`catalog/suites.json` defines membership and ordered passes. `scripts/build_catalog.py`
-reads actual skill metadata and emits `catalog/skills.json` and `docs/catalog.md`.
+`catalog/suites.json` defines membership and ordered passes across 6 suites, paired with 12
+packs in `catalog/packs.json` and 9 host adapters in `catalog/hosts.json`.
+`scripts/build_catalog.py` reads actual skill metadata and emits `catalog/skills.json`,
+`docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`,
+`.cursor-plugin/plugin.json` (plus `skills/*/.cursor-plugin/plugin.json`), and
+`gemini-extension.json`.
 These outputs contain stable relative paths and no generation timestamps or personal
 installation IDs. The generator rejects missing or multiply assigned suite members.
 
@@ -54,7 +62,8 @@ Tests use synthetic records and malformed packages, including known unsafe fixtu
 none constitute proof that all 34 specialists detect every defect on every host.
 
 CI runs on ordinary pull requests and main-branch pushes with read-only repository
-permissions, pinned action revisions, and checkout credential persistence disabled.
+permissions, pinned action revisions locked in `.github/action-pins.json`, and checkout
+credential persistence disabled.
 It validates the repository without invoking an external agent or requiring secrets.
 
 ## Optional local toolkit
