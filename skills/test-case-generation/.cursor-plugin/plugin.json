@@ -1,6 +1,6 @@
 {
   "name": "test-case-generation",
-  "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+  "description": "Author deterministic unit, integration, and regression tests with isolated fixtures and independent assertion oracles. Use when writing executable test suites from gap backlogs or turning reproduced bug specs into automated checks.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

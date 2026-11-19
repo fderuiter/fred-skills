@@ -2444,6 +2444,181 @@ Bearer sk-proj-1234567890abcdef1234567890
             host_nf.exception.rejected_candidates[0]["reason"],
         )
 
+    def test_triage_cyclomatic_complexity_nesting_and_candidate_score_model(
+        self,
+    ) -> None:
+        import ast
+
+        def mccabe_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.comprehension):
+                    complexity += len(child.ifs)
+                elif isinstance(child, ast.match_case) and (
+                    child.guard is not None
+                    or not isinstance(child.pattern, ast.MatchAs)
+                    or child.pattern.name is not None
+                ):
+                    complexity += 1
+            return complexity
+
+        def strict_ast_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+                elif isinstance(child, ast.comprehension):
+                    complexity += len(child.ifs)
+            return complexity
+
+        def max_nesting_depth(stmts: list[ast.stmt], depth: int = 0) -> int:
+            deepest = depth
+            for stmt in stmts:
+                if isinstance(
+                    stmt,
+                    (
+                        ast.If,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.While,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.Try,
+                        ast.TryStar,
+                    ),
+                ):
+                    orelse = getattr(stmt, "orelse", [])
+                    branches: list[tuple[list[ast.stmt], int]] = [
+                        (stmt.body, depth + 1),
+                        (getattr(stmt, "finalbody", []), depth + 1),
+                    ]
+                    for handler in getattr(stmt, "handlers", []):
+                        branches.append((handler.body, depth + 1))
+                    if orelse:
+                        is_elif = len(orelse) == 1 and isinstance(orelse[0], ast.If)
+                        branches.append((orelse, depth if is_elif else depth + 1))
+                    for branch_body, next_depth in branches:
+                        if branch_body:
+                            deepest = max(
+                                deepest, max_nesting_depth(branch_body, next_depth)
+                            )
+            return deepest
+
+        source_text = SCRIPT.read_text(encoding="utf-8")
+        tree = ast.parse(source_text)
+
+        # Ensure zero @dataclass decorators so spec_from_file_location without sys.modules works
+        for cls_node in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+            for dec in cls_node.decorator_list:
+                dec_name = (
+                    dec.id
+                    if isinstance(dec, ast.Name)
+                    else (dec.attr if isinstance(dec, ast.Attribute) else "")
+                )
+                self.assertNotEqual(
+                    "dataclass",
+                    dec_name,
+                    f"Class {cls_node.name} uses @dataclass in standalone triage.py",
+                )
+
+        functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        for item in tree.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions[item.name] = item
+                for sub in ast.walk(item):
+                    if sub is not item and isinstance(
+                        sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        functions[f"{item.name}.{sub.name}"] = sub
+            elif isinstance(item, ast.ClassDef):
+                for method in item.body:
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        functions[f"{item.name}.{method.name}"] = method
+
+        self.assertGreater(len(functions), 0)
+        for name, func_node in functions.items():
+            c901 = mccabe_complexity(func_node)
+            self.assertLessEqual(
+                c901,
+                10,
+                f"Function {name} exceeds C901 McCabe complexity limit of 10 (score: {c901})",
+            )
+            strict_score = strict_ast_complexity(func_node)
+            self.assertLessEqual(
+                strict_score,
+                10,
+                f"Function {name} exceeds AST complexity limit of 10 (score: {strict_score})",
+            )
+            nesting = max_nesting_depth(func_node.body)
+            self.assertLessEqual(
+                nesting,
+                3,
+                f"Function {name} exceeds control-flow nesting limit of 3 (depth: {nesting})",
+            )
+
+        # Verify CandidateScore NamedTuple attributes and unindexed loading
+        fresh_spec = importlib.util.spec_from_file_location(
+            "_ephemeral_unregistered_triage", SCRIPT
+        )
+        assert fresh_spec is not None and fresh_spec.loader is not None
+        fresh_mod = importlib.util.module_from_spec(fresh_spec)
+        self.assertNotIn("_ephemeral_unregistered_triage", sys.modules)
+        fresh_spec.loader.exec_module(fresh_mod)
+
+        score_primary = fresh_mod.CandidateScore(
+            match_tier=1,
+            is_workspace=0,
+            run_or_session_match=1,
+            workspace_or_cwd_match=1,
+            repo_or_slug_match=1,
+            primary_session=1,
+            mtime=200.0,
+            name_rank=0,
+            root_rank=0,
+        )
+        score_sidechain = score_primary._replace(primary_session=0, mtime=300.0)
+        self.assertIsInstance(score_primary, tuple)
+        self.assertGreater(score_primary, score_sidechain)
+        self.assertEqual(1, score_primary.primary_session)
+        self.assertEqual(200.0, score_primary.mtime)
+
+        discover_node = functions["discover_transcript_details"]
+        for sub_node in ast.walk(discover_node):
+            if isinstance(sub_node, ast.Subscript) and isinstance(
+                sub_node.slice, ast.Constant
+            ):
+                self.assertNotIn(
+                    sub_node.slice.value,
+                    (5, 6),
+                    "discover_transcript_details must use CandidateScore attributes instead of [5]/[6]",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

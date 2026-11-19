@@ -46,11 +46,28 @@ def _default_title(name: str) -> str:
     return " ".join(words) if words else name
 
 
+def _lower_preserving_acronyms(text: str) -> str:
+    return " ".join(
+        word if (len(word) >= 2 and word.isupper()) else word.lower()
+        for word in text.split()
+    )
+
+
+def _topic_phrase(title: str) -> str:
+    cased = _lower_preserving_acronyms(title)
+    for prefix in ("repo audit ", "arch ", "review ", "test ", "spec ", "repo "):
+        if cased.lower().startswith(prefix) and len(cased) > len(prefix):
+            return cased[len(prefix) :]
+    return cased
+
+
 def _default_description(name: str, title: str) -> str:
     """Construct a concise, unique activation description within 1..1024 characters."""
+    topic = _topic_phrase(title)
+    ref = topic[:24].rstrip() if len(topic) > 24 else topic
     desc = (
-        f"Use when executing {title.lower()} workflows or inspecting {name} "
-        "contracts and boundaries on explicit request."
+        f"Evaluate {topic}. Use when {ref} inputs, {ref} states, "
+        f"or {ref} outputs in {ref} change."
     )
     return desc[:1024]
 
@@ -122,16 +139,18 @@ def _resolve_suite_and_sibling(
     return target_suite, (secondary if name == primary else primary)
 
 
-def _discover_suite_synced_schemas(
+def _discover_suite_synced_companions(
     root: Path,
     suite_name: str,
+    skill_name: str,
     own_schema_filename: str,
-) -> list[str]:
-    """Return relative assets/*.schema.json paths synced into suite_name by shared manifests."""
+) -> tuple[list[str], list[str]]:
+    """Return (extra_schemas, extra_companions) synced into skill_name by shared manifests."""
     shared_dir = root / "shared"
     if not shared_dir.is_dir():
-        return []
-    synced: list[str] = []
+        return [], []
+    schemas: list[str] = []
+    companions: list[str] = []
     for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -139,15 +158,37 @@ def _discover_suite_synced_schemas(
             continue
         if manifest.get("suite", "repository-audits") != suite_name:
             continue
+        raw_exclude = manifest.get("exclude", {})
+        excluded = (
+            set(raw_exclude.get(skill_name, []))
+            if isinstance(raw_exclude, dict)
+            and isinstance(raw_exclude.get(skill_name), list)
+            else set()
+        )
         for rel in manifest.get("files", []):
+            if not isinstance(rel, str) or rel in excluded:
+                continue
             if (
-                isinstance(rel, str)
-                and rel.startswith("assets/")
+                rel.startswith("assets/")
                 and rel.endswith(".schema.json")
                 and Path(rel).name != own_schema_filename
             ):
-                synced.append(rel)
-    return sorted(set(synced))
+                schemas.append(rel)
+            elif rel.endswith(".md") and rel != "assets/prompt.md":
+                companions.append(rel)
+        scripts = manifest.get("scripts", [])
+        if isinstance(scripts, list):
+            for s_item in scripts:
+                if not isinstance(s_item, str) or s_item in excluded:
+                    continue
+                if (
+                    s_item == "scripts/audit_to_sarif.py"
+                    and skill_name != "repo-audit-synthesis"
+                ):
+                    continue
+                if s_item.startswith("scripts/") and s_item.endswith(".py"):
+                    companions.append(s_item)
+    return sorted(set(schemas)), sorted(set(companions))
 
 
 def _yaml_double_quoted(value: str) -> str:
@@ -167,11 +208,18 @@ def _render_skill_markdown(
     description: str,
     schema_filename: str,
     extra_schema_links: Sequence[str] = (),
+    extra_companion_links: Sequence[str] = (),
 ) -> str:
     extra_clause = ""
     if extra_schema_links:
         formatted = ", ".join(f"[suite schema]({rel})" for rel in extra_schema_links)
         extra_clause = f" and {formatted}"
+    companion_clause = ""
+    if extra_companion_links:
+        comp_formatted = ", ".join(
+            f"[suite resource]({rel})" for rel in extra_companion_links
+        )
+        companion_clause = f" Consult {comp_formatted} when applicable."
     return (
         "---\n"
         f"name: {name}\n"
@@ -180,7 +228,7 @@ def _render_skill_markdown(
         f"# {title}\n\n"
         f"Review the [starting prompt](assets/prompt.md), "
         f"[worked examples](references/examples.md), and "
-        f"[evaluation scenarios](references/evaluation-scenarios.json) when validating scope.\n"
+        f"[evaluation scenarios](references/evaluation-scenarios.json) when validating scope.{companion_clause}\n"
         "Ground every conclusion in observed repository evidence rather than unverified assumptions.\n\n"
         "## Workflow\n\n"
         "1. Establish the target scope, explicit user request, and concrete repository boundaries.\n"
@@ -744,10 +792,12 @@ def scaffold_skill(
         name=name,
         explicit_suite=suite,
     )
-    extra_schema_links = (
-        _discover_suite_synced_schemas(resolved_root, effective_suite, schema_filename)
+    extra_schema_links, extra_companion_links = (
+        _discover_suite_synced_companions(
+            resolved_root, effective_suite, name, schema_filename
+        )
         if sync_catalog
-        else []
+        else ([], [])
     )
     package_files: dict[str, str] = {
         "SKILL.md": _render_skill_markdown(
@@ -756,6 +806,7 @@ def scaffold_skill(
             description=effective_description,
             schema_filename=schema_filename,
             extra_schema_links=extra_schema_links,
+            extra_companion_links=extra_companion_links,
         ),
         "assets/icon.svg": _render_icon_svg(
             name=name,

@@ -17,12 +17,10 @@ Trapdoors:
 - Action pins: `.github/workflows/*.yml` 40-char SHAs and `# v...` tags must match `.github/action-pins.json`.
 - Doc line offsets: tests lock top lines in `README.md` (L1–L38), `docs/experience.md`, `docs/implementation-status.md`, `docs/releasing.md`, and `docs/runbooks.md` (and ban hosting provider names in Pages docs).
 
+Run checks or auto-fixes from the root (see [CONTRIBUTING.md](CONTRIBUTING.md) for phase and script commands):
+
 ```sh
 make check
 make fix
 python scripts/run_checks.py
-python scripts/run_checks.py --phase format
-python scripts/check_doc_links.py
-python scripts/verify_doc_snippets.py
-python scripts/package_skills.py --output /tmp/release-verify
 ```

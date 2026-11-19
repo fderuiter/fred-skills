@@ -1,6 +1,6 @@
 {
   "name": "arch-component-decomposition",
-  "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+  "description": "Partition software systems into cohesive modules, narrow collaboration interfaces, and staged monolith-splitting plans. Use when breaking apart tightly coupled packages, assigning component ownership, or planning modular restructuring.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"
