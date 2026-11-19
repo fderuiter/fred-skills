@@ -91,7 +91,7 @@ class ApiGuideTests(unittest.TestCase):
                         any(m in self.api_text for m in valid_markers),
                         f"Parameter {param.name} of {mod_name}.{fname} must be documented",
                     )
-        self.assertEqual(total_functions, 40, "Expected exactly 40 public functions")
+        self.assertEqual(total_functions, 41, "Expected exactly 41 public functions")
 
     def test_private_helpers_are_not_publicly_documented(self):
         self.assertNotIn("### `_receipt_identifies_host`", self.api_text)

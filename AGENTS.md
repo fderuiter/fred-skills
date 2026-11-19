@@ -4,7 +4,7 @@ Portable Agent Skills toolkit (audit-only default; require explicit user authori
 
 - `skills/<name>/SKILL.md`: standalone skill packages; keep references skill-local and host UI metadata in `agents/`.
 - `shared/<family>/`: canonical protocols, schemas, templates, and `manifest.json` targets synced into `skills/`.
-- `catalog/`: authoring inputs for 6 suites, 12 packs, 9 hosts, and 55 skills (`suites.json`, `recipes.json`, `packs.json`, `profiles.json`, `hosts.json`, `experience.json`).
+- `catalog/`: authoring inputs for 6 suites, 13 packs, 9 hosts, and 57 skills (`suites.json`, `recipes.json`, `packs.json`, `profiles.json`, `hosts.json`, `experience.json`).
 - `scripts/fredlib/`: local CLI and maintenance library; distributable skills never import it.
 - `evals/`: offline evaluation harness and synthetic fixtures; never treat fixture-adapter scores as model quality.
 

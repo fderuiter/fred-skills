@@ -54,6 +54,7 @@ LIFECYCLE_GROUPS = {
     "Run Management": [
         "validate-run",
         "resume",
+        "advance",
         "memory",
         "checkpoint",
         "report",
@@ -435,8 +436,27 @@ def _render_run_management_tty(command: str, data: dict[str, Any]) -> str:
                 f"Next action: {data.get('next_action', '')}",
             ]
         )
+    if command == "advance":
+        changed = data.get("changed_files", [])
+        old_snap = str(data.get("old_snapshot", ""))[:12]
+        new_snap = str(data.get("new_snapshot", ""))[:12]
+        active_skill = data.get("active_skill")
+        next_step = (
+            f"Next pass ({data.get('pass_index', 0) + 1}/{data.get('total_passes', 0)}): {active_skill}"
+            if active_skill
+            else f"Completed all {data.get('total_passes', 0)} passes"
+        )
+        return "\n".join(
+            [
+                f"Advanced run {data.get('run_id', '')}: completed {data.get('completed_skill', '')} ({len(changed)} changed files)",
+                f"Snapshot: {old_snap} -> {new_snap}",
+                next_step,
+            ]
+        )
     if command == "memory":
-        return f"Exported memory: {data.get('output', '')} ({data.get('contracts', 0)} contracts)"
+        if "contracts" in data:
+            return f"Exported memory: {data.get('output', '')} ({data.get('contracts', 0)} contracts)"
+        return f"Exported memory: {data.get('output', '')} ({data.get('records', 0)} records from {data.get('deliverable', 'domain')})"
     if command == "checkpoint":
         checkpoints = data.get("checkpoints", [])
         latest_note = checkpoints[-1].get("note", "") if checkpoints else ""
@@ -609,6 +629,7 @@ def render_tty_output(
     if command in {
         "validate-run",
         "resume",
+        "advance",
         "memory",
         "checkpoint",
         "report",
@@ -810,6 +831,11 @@ def parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="Authorize publishing findings to external issue trackers (default: false)",
             )
+            sub.add_argument(
+                "--single-task",
+                action="store_true",
+                help="Initialize a stateless single-task loop that emits one active skill per pass",
+            )
 
     # 3. Run Management commands
     sub_val = commands.add_parser(
@@ -825,6 +851,18 @@ def parser() -> argparse.ArgumentParser:
         help="Check for source drift and revalidate an in-progress audit run",
     )
     sub_res.add_argument("directory", type=Path, help="Path to audit run directory")
+
+    sub_adv = commands.add_parser(
+        "advance",
+        parents=[sub_common],
+        help="Record source freshness, advance run snapshots and loop pass state, and emit the next skill prompt",
+    )
+    sub_adv.add_argument("directory", type=Path, help="Path to run directory")
+    sub_adv.add_argument(
+        "--note",
+        default=None,
+        help="Optional single-line note recorded on the completed pass",
+    )
 
     sub_mem = commands.add_parser(
         "memory",
@@ -1374,6 +1412,7 @@ def handle_runs(a: argparse.Namespace) -> Any:
             a.output,
             allow_fixes=a.allow_fixes,
             allow_publication=a.allow_issue_publication,
+            single_task=getattr(a, "single_task", False),
             **options,
         )
         return {
@@ -1391,12 +1430,32 @@ def handle_runs(a: argparse.Namespace) -> Any:
         return {"valid": True, "semantic_claims_verified": False}
     if a.command == "resume":
         return runs.revalidate(a.directory)
+    if a.command == "advance":
+        return runs.advance(a.directory, note=getattr(a, "note", None))
     if a.command == "checkpoint":
         return runs.checkpoint(a.directory, a.state, a.note)
     if a.command == "memory":
         data = runs.memory(a.directory)
         atomic_json(a.output, data)
-        return {"output": str(a.output), "contracts": len(data["contracts"])}
+        if "contracts" in data:
+            return {"output": str(a.output), "contracts": len(data["contracts"])}
+        record_count = sum(
+            len(data.get(key, []))
+            for key in (
+                "decisions",
+                "boundaries",
+                "findings",
+                "test_cases",
+                "interview_decisions",
+                "requirements",
+            )
+            if isinstance(data.get(key), list)
+        )
+        return {
+            "output": str(a.output),
+            "deliverable": data.get("deliverable", ""),
+            "records": record_count,
+        }
     if a.command == "compare":
         before_path = _resolve_audit_only_input(a.before, "compare")
         after_path = _resolve_audit_only_input(a.after, "compare")
@@ -1655,6 +1714,7 @@ COMMAND_REGISTRY: dict[str, Callable[[argparse.Namespace], Any]] = {
     # Run Management
     "validate-run": handle_runs,
     "resume": handle_runs,
+    "advance": handle_runs,
     "checkpoint": handle_runs,
     "memory": handle_runs,
     "compare": handle_runs,

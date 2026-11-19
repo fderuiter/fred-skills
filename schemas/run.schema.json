@@ -315,6 +315,111 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "single_task",
+        "active_index",
+        "tasks",
+        "snapshot_history"
+      ],
+      "properties": {
+        "single_task": {
+          "type": "boolean"
+        },
+        "active_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "skill",
+              "status"
+            ],
+            "properties": {
+              "skill": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "active",
+                  "completed"
+                ]
+              },
+              "started_at": {
+                "type": "string",
+                "minLength": 1
+              },
+              "completed_at": {
+                "type": "string",
+                "minLength": 1
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "snapshot_history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "at",
+              "pass_index",
+              "skill",
+              "snapshot_digest",
+              "revision",
+              "dirty",
+              "changed_files"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pass_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "skill": {
+                "type": "string",
+                "minLength": 1
+              },
+              "snapshot_digest": {
+                "type": "string",
+                "minLength": 1
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "dirty": {
+                "type": "boolean"
+              },
+              "changed_files": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

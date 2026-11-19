@@ -1,0 +1,13 @@
+interface:
+  display_name: Session Handoff
+  short_description: Compact active sessions into validated fresh-window handoffs
+  default_prompt: Use $session-handoff to compact this session into a validated exit handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

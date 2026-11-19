@@ -47,7 +47,7 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_get_suite_skills_returns_audit_skills(self):
         skills = get_suite_skills(ROOT)
-        self.assertEqual(55, len(skills))
+        self.assertEqual(57, len(skills))
         for skill in skills:
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
@@ -83,10 +83,10 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_package_skills_creates_all_archives_and_checksums(self):
         suite_skills = get_suite_skills(ROOT)
-        self.assertEqual(55, len(suite_skills))
+        self.assertEqual(57, len(suite_skills))
         checksums = package_skills(self.output_dir, root=ROOT)
         expected_archive_count = len(suite_skills) + 1
-        self.assertEqual(56, expected_archive_count)
+        self.assertEqual(58, expected_archive_count)
         self.assertEqual(expected_archive_count, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)

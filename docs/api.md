@@ -19,6 +19,7 @@ For command-line usage and CLI workflows, see the [Local Toolkit Guide](toolkit.
    - [`validate_run`](#validate_run)
    - [`checkpoint`](#checkpoint)
    - [`revalidate`](#revalidate)
+   - [`advance`](#advance)
    - [`fingerprint`](#fingerprint)
    - [`compare`](#compare)
    - [`reconcile`](#reconcile)
@@ -181,6 +182,7 @@ def initialize(
     task: str,
     allow_fixes: bool = False,
     allow_publication: bool = False,
+    single_task: bool = False,
     **options,
 ) -> dict
 ```
@@ -193,10 +195,11 @@ Initializes a new run workspace directory with `run.json`, `prompt.md`, and the 
   - `task` (`str`): Task recipe identifier.
   - `allow_fixes` (`bool`, default: `False`): Explicit authority granting permission for application code changes.
   - `allow_publication` (`bool`, default: `False`): Explicit authority granting permission for remote issue publication.
+  - `single_task` (`bool`, default: `False`): When `True`, initializes `run["loop"]` with an ordered per-skill queue (`active_index=0`, empty `snapshot_history`) and emits only the active pass's skill in `prompt.md`.
   - `**options`: Additional keyword arguments forwarded to `plan()` (e.g., `mode`, `budget`, `base`, `profile`, `exclude`, `config`).
 - **Returns:** `dict` — The initialized `run` dictionary written to `run.json`.
 - **Exceptions:**
-  - `ValueError`: Raised if `output` is the repository root or toolkit root, or if `output` already contains files; or if planning validation fails.
+  - `ValueError`: Raised if `single_task` is not a boolean; if `output` is the repository root or toolkit root, or if `output` already contains files; or if planning validation fails.
 
 ---
 
@@ -206,7 +209,7 @@ Initializes a new run workspace directory with `run.json`, `prompt.md`, and the 
 def prompt(run: dict) -> str
 ```
 
-Formats the composed tactical markdown instruction prompt for an agent or reviewer executing the planned run, interpolating selected `skills/*/assets/prompt.md` templates alongside declared dependency versions, a read-only directory map, symbol blast-radius migration ordering, verified facts versus assumptions, path guards, and read-only `gh` CLI queries.
+Formats the composed tactical markdown instruction prompt for an agent or reviewer executing the planned run, interpolating selected `skills/*/assets/prompt.md` templates alongside declared dependency versions, a read-only directory map, symbol blast-radius migration ordering, verified facts versus assumptions, path guards, and read-only `gh` CLI queries. When `run["loop"]["single_task"]` is `True`, emits only the single active pass's skill instructions and companion deliverable contracts (or a completion notice once all passes finish).
 
 - **Parameters:**
   - `run` (`dict`): Run dictionary containing `"plan"`, `"repository"`, `"snapshot"`, `"authority"`, and optional `"dependencies"` / `"capabilities"`.
@@ -236,7 +239,7 @@ Validates an audit ledger against `schemas/audit.schema.json` and suite structur
 def validate_run(directory: Path) -> list[str]
 ```
 
-Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) against its declarative suite schema (plus matching run IDs and snapshot consistency for `audit.json`).
+Validates the integrity of an entire run directory, verifying `run.json` against `schemas/run.schema.json`, snapshot hash integrity, optional `loop` task-queue invariants, and the suite deliverable (`audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json`) against its declarative suite schema (plus matching run IDs and snapshot consistency for `audit.json`, accepting prior digests recorded in `loop["snapshot_history"]`).
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
@@ -277,6 +280,23 @@ Compares the current repository state against the run's recorded snapshot, valid
 - **Returns:** `dict` — Revalidation record written to `revalidation.json`, containing `"old_snapshot"`, `"new_snapshot"`, `"changed_files"`, `"stale_finding_ids"`, `"unreviewed_changed_files"`, `"needs_impact_review"`, `"reusable_evidence_is_not_proof_of_unchanged_behavior"`, `"complete"`, and `"next_action"`.
 - **Exceptions:**
   - `ValueError`: Raised if the suite deliverable is missing or fails schema validation.
+
+---
+
+### `advance`
+
+```python
+def advance(directory: Path, note: str | None = None) -> dict
+```
+
+Checks repository freshness via `revalidate()`, appends the completed pass's snapshot digest and metadata to `loop["snapshot_history"]`, updates `run.json` snapshot and repository state to the current checkout, advances the loop task queue to the next planned skill, and regenerates `prompt.md` for a fresh context window.
+
+- **Parameters:**
+  - `directory` (`Path`): Path to the run directory containing `run.json` and the suite deliverable.
+  - `note` (`str | None`, default: `None`): Optional single-line note recorded on the completed loop task entry.
+- **Returns:** `dict` — Progression summary containing `"run_id"`, `"state"`, `"pass_index"`, `"total_passes"`, `"completed_skill"`, `"active_skill"`, `"completed"`, `"old_snapshot"`, `"new_snapshot"`, `"changed_files"`, `"stale_finding_ids"`, `"prompt"`, and `"revalidation"`.
+- **Exceptions:**
+  - `ValueError`: Raised if `note` is empty or multi-line; if `validate_run(directory)` reports errors before advancing; or if all planned loop tasks are already completed.
 
 ---
 
@@ -350,12 +370,15 @@ Updates the remediation state of a finding in `directory / remediation.json`.
 def memory(directory: Path) -> dict
 ```
 
-Generates a portable memory ledger extracting contracts, evidence hashes, and finding summaries from a completed run.
+Generates a portable cross-run memory ledger from a validated run workspace across `audit.json`, `architecture.json`, `review.json`, `testing.json`, or `spec.json` with SHA-256 file provenance.
 
 - **Parameters:**
-  - `directory` (`Path`): Path to the run directory containing `run.json` and `audit.json`.
-- **Returns:** `dict` — Schema 1.0 memory dictionary containing `"schema_version"`, `"source_run"`, `"snapshot"`, `"contracts"`, `"evidence"`, `"findings"`, and `"limitations"`.
-- **Exceptions:** None.
+  - `directory` (`Path`): Path to the run directory containing `run.json` and its suite deliverable.
+- **Returns:** `dict` — Schema 1.0 memory dictionary:
+  - For `audit.json`: `"schema_version"`, `"source_run"`, `"snapshot"`, `"contracts"`, `"evidence"` (with `"content_sha256"`), `"findings"`, and `"limitations"`.
+  - For domain deliverables (`architecture.json`, `review.json`, `testing.json`, `spec.json`): `"schema_version"`, `"source_run"`, `"suite"`, `"deliverable"`, `"snapshot"`, `"file_hashes"`, domain records annotated with `"content_sha256"` / `"referenced_file_hashes"`, and `"limitations"`.
+- **Exceptions:**
+  - `ValueError`: Raised if `directory`, `run.json`, or the expected suite deliverable is missing, or if schema or snapshot integrity validation fails.
 
 ---
 

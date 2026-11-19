@@ -296,7 +296,7 @@ class VettingModuleTests(unittest.TestCase):
         img_errors = validate_skill(pkg_net)
         self.assertTrue(any("[remote-image]" in e for e in img_errors), img_errors)
 
-        # All 55 repository skills pass with zero errors
+        # All 57 repository skills pass with zero errors
         self.assertEqual([], validate(ROOT))
 
     def test_releases_and_installation_enforce_vetting_and_flag_untracked_across_hosts(

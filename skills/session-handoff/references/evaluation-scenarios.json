@@ -1,0 +1,38 @@
+{
+  "topic": "session-handoff",
+  "scenarios": [
+    {
+      "id": "session-handoff-failure",
+      "prompt": "Compact this debugging session into a handoff document so a fresh context window can continue cleanly.",
+      "fixture_shape": "The session contains an unverified hypothesis alongside uncommitted edits in two files and a failed test command, but a naive summary presents the unverified guess as confirmed root cause and omits the dirty working tree and dead-end experiment.",
+      "expected_behavior": [
+        "Record exact HEAD revision, dirty state, and modified paths.",
+        "Keep unproven hypotheses under assumptions rather than verified facts.",
+        "Document the refuted dead-end experiment and failed command output so the next window does not repeat it."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw workspace state and a neutral handoff request without revealing expected continuation outcomes."
+    },
+    {
+      "id": "session-handoff-safe",
+      "prompt": "Compact this debugging session into a handoff document so a fresh context window can continue cleanly.",
+      "fixture_shape": "A bounded session reproduced a parser failure at a known commit, verified one guard, left source files clean, and identified the exact next function to patch.",
+      "expected_behavior": [
+        "Emit a structured handoff conforming to assets/session-handoff.schema.json.",
+        "Cite verified facts, executed commands, untouched scope boundaries, and one concrete next action.",
+        "Leave repository source files and git history unchanged."
+      ],
+      "evaluation_note": "Construct a clean session handoff control; keep expected workflow outcomes out of the execution prompt."
+    },
+    {
+      "id": "session-handoff-routing",
+      "prompt": "Switch replies to ultra-brief mode while keeping code blocks exact and format a 50-character Conventional Commit subject for the current diff.",
+      "expected_behavior": [
+        "Recognize that response compression and 50-character Conventional Commit formatting belong to terse-output-commit rather than session-handoff.",
+        "Defer or route to terse-output-commit instead of generating a full session exit handoff."
+      ],
+      "evaluation_note": "Near-neighbor sibling routing check within repository-workflows; verify routing to terse-output-commit instead of session-handoff.",
+      "sibling_skill": "terse-output-commit"
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

@@ -509,6 +509,16 @@
       "license": "MIT"
     },
     {
+      "name": "session-handoff",
+      "source": "./skills/session-handoff",
+      "description": "Use when compacting an active investigation or implementation session into a validated exit handoff for a fresh context window.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
+    },
+    {
       "name": "spec-authoring",
       "source": "./skills/spec-authoring",
       "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
@@ -532,6 +542,16 @@
       "name": "spec-interview",
       "source": "./skills/spec-interview",
       "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
+    },
+    {
+      "name": "terse-output-commit",
+      "source": "./skills/terse-output-commit",
+      "description": "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"

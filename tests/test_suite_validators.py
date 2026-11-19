@@ -55,7 +55,7 @@ class SuiteValidatorsTests(unittest.TestCase):
             check=False,
         )
 
-    def test_all_55_skill_worked_example_json_blocks_pass_suite_semantic_validators(
+    def test_all_57_skill_worked_example_json_blocks_pass_suite_semantic_validators(
         self,
     ) -> None:
         suites = json.loads((ROOT / "catalog/suites.json").read_text(encoding="utf-8"))[
@@ -198,6 +198,47 @@ class SuiteValidatorsTests(unittest.TestCase):
         f_errs = validate_workflow.validate(contradictory_finding, finding_schema)
         self.assertTrue(any("reproduced to false" in e for e in f_errs), f_errs)
         self.assertTrue(any("non-empty commands" in e for e in f_errs), f_errs)
+
+        handoff_schema = json.loads(
+            (
+                ROOT / "skills/session-handoff/assets/session-handoff.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        bad_handoff: dict[str, Any] = {
+            "schema_version": "1.0",
+            "objective": "Resume retry work",
+            "repository": {"path": ".", "revision": "abc1234", "dirty": False},
+            "verified_facts": [],
+            "assumptions": [],
+            "completed_steps": [],
+            "dead_ends": [],
+            "touched_files": ["../outside/secret.py"],
+            "untouched_scope": [],
+            "commands_run": [],
+            "next_action": "Inspect retry.py",
+        }
+        h_errs = validate_workflow.validate(bad_handoff, handoff_schema)
+        self.assertTrue(any("touched_files" in e for e in h_errs), h_errs)
+
+        terse_schema = json.loads(
+            (
+                ROOT
+                / "skills/terse-output-commit/assets/terse-output-commit.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        mismatched_terse: dict[str, Any] = {
+            "schema_version": "1.0",
+            "compression_level": "full",
+            "terse_response": "Updated guard.",
+            "preserved_exact_spans": ["verify_jwt"],
+            "commit_type": "fix",
+            "commit_scope": "auth",
+            "commit_subject": "feat(billing): wrong type and scope",
+            "commit_body_bullets": [],
+            "git_mutated": False,
+        }
+        t_errs = validate_workflow.validate(mismatched_terse, terse_schema)
+        self.assertTrue(any("commit_subject must match" in e for e in t_errs), t_errs)
 
     def test_validate_architecture_enforces_unique_boundaries_and_decisions(
         self,

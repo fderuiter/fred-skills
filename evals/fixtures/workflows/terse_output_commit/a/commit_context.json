@@ -1,0 +1,15 @@
+{
+  "active_change": true,
+  "compression_level": "full",
+  "summary": "Guarded empty bearer token in verify_jwt; unit suite green.",
+  "exact_spans": [
+    "verify_jwt",
+    "src/auth/jwt.py"
+  ],
+  "commit_type": "fix",
+  "commit_scope": "auth",
+  "commit_subject": "fix(auth): guard empty bearer token in verify_jwt",
+  "body_bullets": [
+    "Reject blank Authorization header before base64 decode"
+  ]
+}

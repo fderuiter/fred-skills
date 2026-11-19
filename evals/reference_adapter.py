@@ -694,6 +694,83 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
             "unmapped_records": list(rdata["unmapped"]),
         }
 
+    if "session-handoff.schema.json" in request:
+        if is_routing:
+            return {
+                "actor": ACTOR,
+                "schema_version": "1.0",
+                "objective": "Abstained on sibling workflow request",
+                "repository": {"path": ".", "revision": "unchanged", "dirty": False},
+                "verified_facts": [],
+                "assumptions": [],
+                "completed_steps": [],
+                "dead_ends": [],
+                "touched_files": [],
+                "untouched_scope": ["."],
+                "commands_run": [
+                    {"command": "noop: abstained", "outcome": "informational"}
+                ],
+                "next_action": "abstained",
+            }
+        sdata = json.loads((source / "session_state.json").read_text(encoding="utf-8"))
+        return {
+            "actor": ACTOR,
+            "schema_version": "1.0",
+            "objective": str(sdata["objective"]),
+            "repository": {
+                "path": ".",
+                "revision": str(sdata["revision"]),
+                "dirty": bool(sdata["dirty"]),
+            },
+            "verified_facts": list(sdata["verified_facts"]),
+            "assumptions": list(sdata["assumptions"]),
+            "completed_steps": list(sdata["completed_steps"]),
+            "dead_ends": list(sdata["dead_ends"]),
+            "touched_files": list(sdata["touched_files"]),
+            "untouched_scope": list(sdata["untouched_scope"]),
+            "commands_run": list(sdata["commands_run"]),
+            "next_action": str(sdata["next_action"]),
+        }
+
+    if "terse-output-commit.schema.json" in request:
+        if is_routing:
+            return {
+                "actor": ACTOR,
+                "schema_version": "1.0",
+                "compression_level": "lite",
+                "terse_response": "Abstained on sibling handoff request.",
+                "preserved_exact_spans": ["session-handoff"],
+                "commit_type": "chore",
+                "commit_subject": "chore: abstain on sibling workflow request",
+                "commit_body_bullets": [],
+                "git_mutated": False,
+            }
+        cdata = json.loads((source / "commit_context.json").read_text(encoding="utf-8"))
+        if not cdata.get("active_change"):
+            return {
+                "actor": ACTOR,
+                "schema_version": "1.0",
+                "compression_level": str(cdata["compression_level"]),
+                "terse_response": str(cdata["summary"]),
+                "preserved_exact_spans": list(cdata["exact_spans"]),
+                "commit_type": "chore",
+                "commit_subject": "chore: abstain when working tree has no diff",
+                "commit_body_bullets": [],
+                "git_mutated": False,
+            }
+        return {
+            "actor": ACTOR,
+            "schema_version": "1.0",
+            "compression_level": str(cdata["compression_level"]),
+            "terse_response": str(cdata["summary"]),
+            "preserved_exact_spans": list(cdata["exact_spans"]),
+            "commit_type": str(cdata["commit_type"]),
+            "commit_scope": str(cdata["commit_scope"]),
+            "commit_subject": str(cdata["commit_subject"]),
+            "commit_body_bullets": list(cdata["body_bullets"]),
+            "git_mutated": False,
+        }
+
     raise ValueError("Unsupported workflow contract in prompt")
 
 
@@ -854,6 +931,8 @@ def main() -> None:
             "fix.schema.json",
             "verification.schema.json",
             "reconciliation.schema.json",
+            "session-handoff.schema.json",
+            "terse-output-commit.schema.json",
         )
     ):
         payload = _handle_workflow(request, source)
