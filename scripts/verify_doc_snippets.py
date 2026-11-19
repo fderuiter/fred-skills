@@ -1082,16 +1082,14 @@ def _validate_marketplace_install(
 
 
 def _validate_marketplace(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
-    """Validate Claude Code and Codex marketplace plugin commands."""
+    """Validate Claude Code marketplace plugin commands."""
     bad = _find_unknown_flag(parts[1:], set())
     if bad:
         return False, f"Invalid marketplace plugin flag: {bad}"
-    subparts = parts[1:] if parts[0] == "/plugin" else parts[2:]
+    subparts = parts[1:]
     if subparts[:2] == ["marketplace", "add"]:
         return _validate_marketplace_add(subparts[2:], root)
-    if parts[0] == "/plugin" and subparts[:1] == ["install"]:
-        return _validate_marketplace_install(subparts[1:], root)
-    if parts[0] == "codex" and subparts[:1] == ["add"]:
+    if subparts[:1] == ["install"]:
         return _validate_marketplace_install(subparts[1:], root)
     return False, f"Unsupported marketplace plugin command: {cmd}"
 
@@ -1628,7 +1626,6 @@ def _validate_tar(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
 
 TOOL_DISPATCHERS: dict[tuple[str, ...], ToolHandler] = {
     ("/plugin",): _validate_marketplace,
-    ("codex", "plugin"): _validate_marketplace,
     ("make",): _validate_make,
     ("python",): _validate_python,
     ("python3",): _validate_python,
@@ -1718,11 +1715,21 @@ def _strip_shell_redirections(segment: str) -> str:
     return result.strip()
 
 
+def _has_singular_agent_skills_path(segment: str) -> bool:
+    """Return True if a command segment references singular .agent/skills."""
+    return bool(re.search(r"(?:^|[\s/\\~\"'])\.agent/skills(?:$|[\s/\\\"'])", segment))
+
+
 def _execute_single_segment(segment: str, root: Path) -> tuple[bool, str]:
     """Tokenize and dispatch a single shell command segment."""
     cleaned = _strip_shell_redirections(segment)
     if not cleaned:
         return True, ""
+    if _has_singular_agent_skills_path(cleaned):
+        return (
+            False,
+            f"Singular '.agent/skills' path is invalid in '{cleaned}'; use '.agents/skills'",
+        )
     parts = shlex.split(cleaned)
     if not parts:
         return True, ""
@@ -1782,24 +1789,20 @@ def _block_command_tokens(block: CommandBlock) -> list[tuple[int, list[str]]]:
 
 
 def _verify_marketplace_block(rel_path: str, block: CommandBlock) -> list[str]:
-    """Reject marketplace add blocks in onboarding docs that lack an install command."""
+    """Reject incomplete Claude marketplace blocks or unsupported Codex plugin commands."""
     if rel_path not in MARKETPLACE_ONBOARDING_DOCS:
         return []
     tokenized = _block_command_tokens(block)
     has_claude_install = any(p[:2] == ["/plugin", "install"] for _, p in tokenized)
-    has_codex_install = any(p[:3] == ["codex", "plugin", "add"] for _, p in tokenized)
     errors: list[str] = []
     for line_no, parts in tokenized:
         if parts[:3] == ["/plugin", "marketplace", "add"] and not has_claude_install:
             errors.append(
                 f"{rel_path}:L{line_no}: Marketplace block missing '/plugin install <name>@fred-skills'"
             )
-        if (
-            parts[:4] == ["codex", "plugin", "marketplace", "add"]
-            and not has_codex_install
-        ):
+        if parts[:2] == ["codex", "plugin"]:
             errors.append(
-                f"{rel_path}:L{line_no}: Marketplace block missing 'codex plugin add <name>@fred-skills'"
+                f"{rel_path}:L{line_no}: Unsupported 'codex plugin' command; use '.agents/skills' or '$skill-installer'"
             )
     return errors
 

@@ -17,20 +17,28 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Register the marketplace catalog and install a curated pack (such as `complete` for all 51 packages or `starter`) or an individual skill, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, and Windsurf, see the [integration guide](integration.md).
+Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`), or an individual skill, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, and Windsurf, see the [integration guide](integration.md).
 
 ### Claude Code and Cursor
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
+/plugin install fred-skills@fred-skills
+# Or install a curated pack:
+/plugin install starter@fred-skills
 /plugin install complete@fred-skills
 ```
 
 ### Codex
 
+Install skills into `.agents/skills/` using OpenAI Codex's built-in `$skill-installer` or the local CLI:
+
+```text
+$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
+```
+
 ```sh
-codex plugin marketplace add fderuiter/fred-skills
-codex plugin add starter@fred-skills
+python scripts/fred.py install --destination /path/to/project --host codex --pack starter
 ```
 
 ### Gemini CLI Extension
@@ -41,11 +49,11 @@ gemini extensions install https://github.com/fderuiter/fred-skills
 
 ### Toolkit CLI (Project and User Scopes)
 
-Auto-detect the active workspace host (`.claude`, `.cursor`, `.agents`, `.gemini`, `.github`, `.opencode`, `.windsurf`, or `.devin`) or pass `--host` explicitly:
+Run `install` without flags to install the `starter` pack across all detected workspace hosts (`.claude`, `.cursor`, `.agents`, `.gemini`, `.github`, `.opencode`, `.windsurf`, or `.devin`)—or bootstrap `.agents/skills/` when no markers exist—or pass `--host` explicitly:
 
 ```sh
-# Auto-detect active workspace host
-python scripts/fred.py install --pack starter
+# Install starter pack across detected workspace hosts (or bootstrap .agents/skills/)
+python scripts/fred.py install
 
 # Explicit project-scope installations
 python scripts/fred.py install --destination /path/to/project --host cursor --pack starter

@@ -587,10 +587,29 @@ class InstallationTests(unittest.TestCase):
         )
 
     def test_auto_detect_fails_with_zero_markers(self):
+        from fredlib.common import choose_skills
+
+        with self.assertRaises(ValueError):
+            choose_skills(self.source)
+
         dest = self.root / "empty_project"
         dest.mkdir(parents=True)
+        with self.assertRaises(ValueError) as detect_ctx:
+            installation.detect_host(dest)
+        self.assertIn("--host", str(detect_ctx.exception))
+
+        res = installation.install(dest, root=self.source)
+        self.assertEqual("codex", res["host"])
+        self.assertEqual(["sample", "other"], res["skills"])
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+        self.assertTrue((dest / ".agents/skills/other/SKILL.md").is_file())
+        rec = installation.receipt(dest / ".fred-skills/codex-project")
+        self.assertEqual("codex", rec["host"])
+
+        empty_update = self.root / "empty_update_project"
+        empty_update.mkdir(parents=True)
         with self.assertRaises(ValueError) as ctx:
-            installation.install(dest, pack="starter", root=self.source)
+            installation.install(empty_update, update=True, root=self.source)
         self.assertIn("--host", str(ctx.exception))
 
     def test_auto_detect_fails_with_ambiguous_markers(self):
@@ -598,8 +617,81 @@ class InstallationTests(unittest.TestCase):
         (dest / ".claude").mkdir(parents=True)
         (dest / ".agents").mkdir(parents=True)
         with self.assertRaises(ValueError) as ctx:
-            installation.install(dest, pack="starter", root=self.source)
+            installation.detect_host(dest)
         self.assertIn("--host", str(ctx.exception))
+
+        res = installation.install(dest, root=self.source)
+        self.assertEqual(["codex", "claude-code"], [h["host"] for h in res["hosts"]])
+        self.assertTrue((dest / ".claude/skills/sample/SKILL.md").is_file())
+        self.assertTrue((dest / ".agents/skills/sample/SKILL.md").is_file())
+        self.assertTrue(
+            (dest / ".fred-skills/claude-code-project/receipt.json").is_file()
+        )
+        self.assertTrue((dest / ".fred-skills/codex-project/receipt.json").is_file())
+        self.assertFalse((dest / ".fred-skills/antigravity-project").exists())
+
+        (self.source / "skills/sample/SKILL.md").write_text("Updated across hosts")
+        upd = installation.install(dest, update=True, root=self.source)
+        self.assertEqual("update", upd["action"])
+        self.assertEqual(
+            "Updated across hosts",
+            (dest / ".claude/skills/sample/SKILL.md").read_text(),
+        )
+        self.assertEqual(
+            "Updated across hosts",
+            (dest / ".agents/skills/sample/SKILL.md").read_text(),
+        )
+
+        queried = installation.query_installed(dest, root=self.source)
+        self.assertTrue(queried["healthy"])
+        self.assertEqual(
+            ["codex", "claude-code"], [h["host"] for h in queried["hosts"]]
+        )
+
+        for fn in (
+            lambda: installation.remove(dest, skills=["sample"], root=self.source),
+            lambda: installation.rollback(dest, root=self.source),
+            lambda: installation.recover(
+                dest, confirm_interrupted=True, root=self.source
+            ),
+        ):
+            with self.assertRaises(ValueError) as guard_ctx:
+                fn()
+            self.assertIn("--host", str(guard_ctx.exception))
+
+    def test_multi_host_atomic_rollback_when_second_host_commit_fails(self):
+        import os
+
+        dest = self.root / "multi_host_atomic"
+        (dest / ".claude").mkdir(parents=True)
+        (dest / ".agents").mkdir(parents=True)
+        installation.install(dest, root=self.source)
+        before_claude = (dest / ".claude/skills/sample/SKILL.md").read_bytes()
+        before_codex = (dest / ".agents/skills/sample/SKILL.md").read_bytes()
+
+        (self.source / "skills/sample/SKILL.md").write_text("Broken multi update")
+        orig_replace = os.replace
+
+        def fail_on_second_host_swap(src, dst):
+            if "staging" in Path(src).parts and ".claude" in Path(dst).parts:
+                raise OSError("Simulated second host failure")
+            return orig_replace(src, dst)
+
+        with (
+            patch.object(
+                installation.os, "replace", side_effect=fail_on_second_host_swap
+            ),
+            self.assertRaises(OSError),
+        ):
+            installation.install(dest, update=True, root=self.source)
+
+        self.assertEqual(
+            before_claude, (dest / ".claude/skills/sample/SKILL.md").read_bytes()
+        )
+        self.assertEqual(
+            before_codex, (dest / ".agents/skills/sample/SKILL.md").read_bytes()
+        )
+        self.assertTrue(installation.query_installed(dest, root=self.source)["healthy"])
 
     def test_auto_detect_fails_with_conflicting_receipts(self):
         dest = self.root / "conflicting_project"

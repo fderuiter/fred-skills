@@ -4,6 +4,21 @@
     {
       "name": "repository-audits",
       "protocol_version": "1.0",
+      "artifact": {
+        "filename": "audit.json",
+        "schema": "shared/repo-audit/resources/assets/audit.schema.json",
+        "starter": {
+          "schema_version": "1.0",
+          "contracts": [],
+          "evidence": [],
+          "findings": [],
+          "issues": [],
+          "limitations": [
+            "Initialized workspace only; no application tests or agent audit executed."
+          ],
+          "checks": []
+        }
+      },
       "phases": [
         {
           "id": 0,
@@ -76,6 +91,21 @@
     {
       "name": "repository-workflows",
       "protocol_version": "1.0",
+      "artifact": {
+        "filename": "audit.json",
+        "schema": "shared/repo-audit/resources/assets/audit.schema.json",
+        "starter": {
+          "schema_version": "1.0",
+          "contracts": [],
+          "evidence": [],
+          "findings": [],
+          "issues": [],
+          "limitations": [
+            "Initialized workspace only; no application tests or agent audit executed."
+          ],
+          "checks": []
+        }
+      },
       "phases": [
         {
           "id": 0,
@@ -124,6 +154,17 @@
     {
       "name": "software-architecture",
       "protocol_version": "1.0",
+      "artifact": {
+        "filename": "architecture.json",
+        "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+        "starter": {
+          "schema_version": "1.0",
+          "title": "Architecture specification",
+          "status": "draft",
+          "boundaries": [],
+          "decisions": []
+        }
+      },
       "phases": [
         {
           "id": 0,
@@ -151,6 +192,16 @@
     {
       "name": "code-review",
       "protocol_version": "1.0",
+      "artifact": {
+        "filename": "review.json",
+        "schema": "skills/review-diff-analysis/assets/review.schema.json",
+        "starter": {
+          "schema_version": "1.0",
+          "verdict": "comment",
+          "summary": "Initialized workspace only; agent code review has not run.",
+          "findings": []
+        }
+      },
       "phases": [
         {
           "id": 0,
@@ -178,6 +229,16 @@
     {
       "name": "automated-testing",
       "protocol_version": "1.0",
+      "artifact": {
+        "filename": "testing.json",
+        "schema": "skills/test-case-generation/assets/testing.schema.json",
+        "starter": {
+          "schema_version": "1.0",
+          "component": "repository",
+          "framework": "unspecified",
+          "test_cases": []
+        }
+      },
       "phases": [
         {
           "id": 0,

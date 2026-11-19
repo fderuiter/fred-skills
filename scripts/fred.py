@@ -91,17 +91,13 @@ def format_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join([header_line, separator_line, *data_lines])
 
 
-def _render_installed_table(data: Any) -> str:
-    headers = ["Skill", "Version", "Status", "Harness Path"]
-    skills_dict = data.get("skills", {}) if isinstance(data, dict) else {}
-    untracked_list = data.get("untracked", []) if isinstance(data, dict) else []
-    target = data.get("target", "") if isinstance(data, dict) else ""
-    if not skills_dict and not untracked_list:
-        if isinstance(data, dict) and data.get("message"):
-            return data["message"]
-        return "No entries found."
+def _installed_rows_for_host(host_label: str, entry: dict[str, Any]) -> list[list[str]]:
+    skills_dict = entry.get("skills", {})
+    untracked_list = entry.get("untracked", [])
+    target = entry.get("target", "")
     rows = [
         [
+            host_label,
             name,
             info.get("source_version", "unknown"),
             info.get("status", "tracked"),
@@ -113,12 +109,41 @@ def _render_installed_table(data: Any) -> str:
         name = item if isinstance(item, str) else item.get("name", "")
         rows.append(
             [
+                host_label,
                 name,
                 "-",
                 "untracked",
                 str(Path(target) / name) if target else "",
             ]
         )
+    return rows
+
+
+def _render_installed_table(data: Any) -> str:
+    headers = ["Host", "Skill", "Version", "Status", "Harness Path"]
+    if not isinstance(data, dict):
+        return "No entries found."
+    hosts_val = data.get("hosts")
+    rows: list[list[str]] = []
+    if isinstance(hosts_val, list):
+        for host_entry in hosts_val:
+            if isinstance(host_entry, dict):
+                rows.extend(
+                    _installed_rows_for_host(
+                        str(host_entry.get("host") or "-"), host_entry
+                    )
+                )
+    elif isinstance(hosts_val, dict):
+        for host_name, host_entry in hosts_val.items():
+            if isinstance(host_entry, dict):
+                rows.extend(_installed_rows_for_host(host_name, host_entry))
+    else:
+        host_label = str(data.get("host") or "-")
+        rows.extend(_installed_rows_for_host(host_label, data))
+    if not rows:
+        if data.get("message"):
+            return str(data["message"])
+        return "No entries found."
     return format_table(headers, rows)
 
 
@@ -640,10 +665,16 @@ def parser() -> argparse.ArgumentParser:
                 help="Archive modified managed skills to backups and repair or remove drifted entries",
             )
         if command in {"install", "update"}:
+            pack_help = (
+                f"Skill pack to install ({', '.join(PACK_CHOICES)}; defaults to starter when --skill is omitted)"
+                if command == "install"
+                else f"Skill pack to install ({', '.join(PACK_CHOICES)})"
+            )
             sub.add_argument(
                 "--pack",
+                default=None,
                 choices=PACK_CHOICES,
-                help=f"Skill pack to install ({', '.join(PACK_CHOICES)})",
+                help=pack_help,
             )
         if command == "recover-install":
             sub.add_argument(
@@ -839,8 +870,13 @@ def handle_installation(a: argparse.Namespace) -> Any:
     if a.command == "installed":
         return installation.query_installed(target)
     if a.command in {"install", "update"}:
+        selected_pack = (
+            a.pack
+            if (a.pack or a.skill)
+            else ("starter" if a.command == "install" else None)
+        )
         install_options = installation.InstallOptions(
-            pack=a.pack,
+            pack=selected_pack,
             skills=a.skill,
             update=a.command == "update",
             dry_run=a.dry_run,
@@ -868,26 +904,51 @@ def handle_installation(a: argparse.Namespace) -> Any:
     raise ValueError(f"Unknown installation command: {a.command}")
 
 
+def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
+    resolved = resolve_audit_path(target)
+    if target.is_dir():
+        runs._require_audit_directory(target, command_name)
+    if (
+        resolved.name != "audit.json"
+        and resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+    ):
+        raise ValueError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported"
+        )
+    return resolved
+
+
 def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
+        prior_data = None
+        if a.prior:
+            audit_path = _resolve_audit_only_input(a.audit, "report --prior")
+            prior_path = _resolve_audit_only_input(a.prior, "report --prior")
+            prior_data = runs._require_audit_ledger(
+                read_json(prior_path), "report --prior"
+            )
+        else:
+            audit_path = resolve_audit_path(a.audit)
         target = reports.render(
-            read_json(resolve_audit_path(a.audit)),
+            read_json(audit_path),
             a.output,
-            read_json(resolve_audit_path(a.prior)) if a.prior else None,
+            prior_data,
         )
         return {"output": str(target)}
     if a.command == "issues":
+        audit_path = _resolve_audit_only_input(a.audit, "issues")
         return {
             "drafts": reports.issue_drafts(
-                read_json(resolve_audit_path(a.audit)), a.output, format=a.format
+                read_json(audit_path), a.output, format=a.format
             ),
             "remote_writes": 0,
         }
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
 
+        audit_path = _resolve_audit_only_input(a.audit, "export-sarif")
         data = convert_file(
-            resolve_audit_path(a.audit),
+            audit_path,
             a.output,
             filter_refuted=a.filter_refuted or a.filter_refuted_or_info,
             filter_info=a.filter_info or a.filter_refuted_or_info,

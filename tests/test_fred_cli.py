@@ -305,21 +305,33 @@ class FredCLITests(unittest.TestCase):
     def test_install_without_destination_reports_resolved_directory(self):
         import tempfile
 
+        starter_skills = json.loads(
+            (ROOT / "catalog/packs.json").read_text(encoding="utf-8")
+        )["packs"]["starter"]["skills"]
+        self.assertEqual(6, len(starter_skills))
+
         with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
             proc = self.run_cli("install", cwd=tmp_dir)
-            self.assertEqual(1, proc.returncode)
-            self.assertIn("No host markers (", proc.stderr)
-            for marker in [
-                ".claude",
-                ".cursor",
-                ".agents",
-                ".gemini",
-                ".opencode",
-                ".windsurf",
-            ]:
-                self.assertIn(marker, proc.stderr)
-            self.assertIn(str(Path(tmp_dir).resolve()), proc.stderr)
-            self.assertIn("--host", proc.stderr)
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual("codex", data["host"])
+            self.assertEqual(starter_skills, data["skills"])
+            for skill_name in starter_skills:
+                self.assertTrue(
+                    (tmp_path / ".agents/skills" / skill_name / "SKILL.md").is_file()
+                )
+            receipt_path = tmp_path / ".fred-skills/codex-project/receipt.json"
+            self.assertTrue(receipt_path.is_file())
+            rec = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual("codex", rec["host"])
+
+        with tempfile.TemporaryDirectory() as empty_update_dir:
+            upd_proc = self.run_cli("update", cwd=empty_update_dir)
+            self.assertEqual(1, upd_proc.returncode)
+            self.assertIn("No host markers (", upd_proc.stderr)
+            self.assertIn(str(Path(empty_update_dir).resolve()), upd_proc.stderr)
+            self.assertIn("--host", upd_proc.stderr)
 
     def test_cli_install_succeeds_for_new_hosts_in_project_and_user_scopes(self):
         import tempfile
@@ -756,10 +768,61 @@ class FredCLITests(unittest.TestCase):
                 isatty=True,
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertIn("Host", proc.stdout)
             self.assertIn("Skill", proc.stdout)
             self.assertIn("Version", proc.stdout)
             self.assertIn("Harness Path", proc.stdout)
+            self.assertIn("codex", proc.stdout)
             self.assertIn("repo-audit-concurrency", proc.stdout)
+
+    def test_multi_host_install_update_installed_and_destructive_guardrails(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ws = Path(tmp_dir).resolve()
+            (ws / ".claude").mkdir()
+            (ws / ".agents").mkdir()
+
+            inst = self.run_cli("install", "--destination", str(ws))
+            self.assertEqual(0, inst.returncode, inst.stderr)
+            inst_data = json.loads(inst.stdout)
+            self.assertEqual(
+                ["codex", "claude-code"], [h["host"] for h in inst_data["hosts"]]
+            )
+            self.assertTrue(
+                (ws / ".claude/skills/repo-audit-concurrency/SKILL.md").is_file()
+            )
+            self.assertTrue(
+                (ws / ".agents/skills/repo-audit-concurrency/SKILL.md").is_file()
+            )
+            self.assertFalse((ws / ".fred-skills/antigravity-project").exists())
+
+            tty = self.run_cli("installed", "--destination", str(ws), isatty=True)
+            self.assertEqual(0, tty.returncode, tty.stderr)
+            self.assertIn("Host", tty.stdout)
+            self.assertIn("claude-code", tty.stdout)
+            self.assertIn("codex", tty.stdout)
+            self.assertIn(".claude/skills", tty.stdout)
+            self.assertIn(".agents/skills", tty.stdout)
+
+            chk = self.run_cli("installed", "--destination", str(ws), "--check")
+            self.assertEqual(0, chk.returncode, chk.stderr)
+            chk_json = json.loads(chk.stdout)
+            self.assertEqual(
+                ["codex", "claude-code"], [h["host"] for h in chk_json["hosts"]]
+            )
+
+            upd = self.run_cli("update", "--destination", str(ws))
+            self.assertEqual(0, upd.returncode, upd.stderr)
+
+            for subcmd, extra in [
+                ("remove", ["--skill", "repo-audit-concurrency"]),
+                ("rollback", []),
+                ("recover-install", ["--confirm-interrupted"]),
+            ]:
+                denied = self.run_cli(subcmd, "--destination", str(ws), *extra)
+                self.assertEqual(1, denied.returncode)
+                self.assertIn("--host", denied.stderr)
 
     def test_installed_json_output(self):
         import tempfile
@@ -1196,10 +1259,21 @@ class FredCLITests(unittest.TestCase):
                     )
                     self.assertEqual(0, init_proc.returncode, init_proc.stderr)
                     self.assertTrue((ws / deliverable).is_file())
+                    self.assertFalse((ws / "audit.json").exists())
                     self.assertTrue((ws / "prompt.md").is_file())
 
                     val_proc = self.run_cli("validate-run", str(ws))
                     self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+                    # Invalid domain artifact causes validate-run to exit 1
+                    starter_bytes = (ws / deliverable).read_bytes()
+                    (ws / deliverable).write_text(
+                        json.dumps({"schema_version": "1.0", "unexpected": True}),
+                        encoding="utf-8",
+                    )
+                    bad_val_proc = self.run_cli("validate-run", str(ws))
+                    self.assertEqual(1, bad_val_proc.returncode)
+                    (ws / deliverable).write_bytes(starter_bytes)
 
                     # Report on workspace directory and on JSON file directly
                     rep_dir_html = tmp_path / f"report-dir-{task}.html"
@@ -1220,6 +1294,18 @@ class FredCLITests(unittest.TestCase):
                     self.assertTrue(rep_file_html.is_file())
 
                     # Audit-only commands fail with exit code 1 and clear audit.json guidance
+                    prior_proc = self.run_cli(
+                        "report",
+                        str(ws),
+                        "--prior",
+                        str(ws),
+                        "--output",
+                        str(tmp_path / f"report-prior-{task}.html"),
+                    )
+                    self.assertEqual(1, prior_proc.returncode)
+                    self.assertIn("audit.json", prior_proc.stderr)
+                    self.assertIn(deliverable, prior_proc.stderr)
+
                     iss_proc = self.run_cli(
                         "issues", str(ws), "--output", str(tmp_path / f"iss-{task}")
                     )
@@ -1234,6 +1320,36 @@ class FredCLITests(unittest.TestCase):
                     )
                     self.assertEqual(1, sarif_proc.returncode)
                     self.assertIn("audit.json", sarif_proc.stderr)
+
+                    # Even an empty {} domain file still triggers clear domain deliverable guidance
+                    (ws / deliverable).write_text("{}", encoding="utf-8")
+                    for empty_cmd in [
+                        [
+                            "issues",
+                            str(ws),
+                            "--output",
+                            str(tmp_path / f"iss-empty-{task}"),
+                        ],
+                        [
+                            "export-sarif",
+                            str(ws / deliverable),
+                            "--output",
+                            str(tmp_path / f"empty-{task}.sarif"),
+                        ],
+                        [
+                            "report",
+                            str(ws),
+                            "--prior",
+                            str(ws / deliverable),
+                            "--output",
+                            str(tmp_path / f"prior-empty-{task}.html"),
+                        ],
+                    ]:
+                        empty_proc = self.run_cli(*empty_cmd)
+                        self.assertEqual(1, empty_proc.returncode)
+                        self.assertIn("audit.json", empty_proc.stderr)
+                        self.assertIn(deliverable, empty_proc.stderr)
+                    (ws / deliverable).write_bytes(starter_bytes)
 
                     cmp_proc = self.run_cli(
                         "compare", str(ws / deliverable), str(ws / deliverable)
