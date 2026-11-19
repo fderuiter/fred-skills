@@ -15,7 +15,7 @@ actual validation. There is no claim of being the world's best skill repository.
 | Reviewable outcomes | Escaped offline HTML, local issue drafts, comparisons/fingerprints | Missing findings do not imply resolution; duplicate remote issue checks are external |
 | Verification lifecycle | Six skills, independent regression guidance, separate remediation and proof records | Proof fields cannot independently establish truthful execution |
 | Analyzer interoperability | SARIF observations with safe locations, no auto-confirmation | Additional scanner formats can be added when justified by actual users |
-| Evaluations | 15 executable cases, paired configurations, trace/usage/timeout/failure records | Deterministic adapter is a harness check; broad multi-model quality remains unmeasured |
+| Evaluations | 60 executable cases across 20 skills and five suites, suite-contract schema grading, scoped `writable_paths` checks, paired `skill_lift` and token summaries, trace/usage/timeout/failure records | Deterministic adapter is a harness check; broad multi-model quality remains unmeasured |
 | Runnable onboarding | Exact synthetic original/corrected behavior, controls, reports/drafts/proof | Generalize only after real bounded application runs |
 | Versioned distribution | Deterministic pack archives, manifest/checksums, CI validation, automated `main` GitHub Release publishing under MIT [LICENSE](../LICENSE) | Downstream consumers should verify SHA-256 checksums and SLSA provenance attestations |
 | Maintenance and trust | Canonical resources, generated discovery, Linux/Windows CI, browser checks, MIT [LICENSE](../LICENSE), contributor/security/release guidance | Dedicated private-report channel remains an owner decision |

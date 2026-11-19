@@ -1,0 +1,13 @@
+{
+  "decision_needed": true,
+  "id": "ADR-001",
+  "topic": "Outbox queue vs synchronous RPC for order events",
+  "options": [
+    "transactional-outbox",
+    "synchronous-rpc"
+  ],
+  "constraints": [
+    "at-least-once delivery",
+    "bounded checkout latency"
+  ]
+}

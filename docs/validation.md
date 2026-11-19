@@ -33,10 +33,10 @@ unsafe fixture was correct. No production system or remote issue record was modi
 ## Specified evaluations are not executed evaluations
 
 Each of the 51 skills in the suite includes three scenario specifications in
-`references/evaluation-scenarios.json`: relevant failure, safe control, and unrelated
-activation request. These 153 specifications are not 153 executed evaluations. They are
+`references/evaluation-scenarios.json`: relevant failure, safe control, and near-neighbor
+sibling routing request (`sibling_skill`). These 153 specifications are not 153 executed evaluations. They are
 authoring inputs for future raw fixtures and fresh-context agent runs; do not supply
-their expected answers to the agent performing an audit.
+their expected answers to the agent performing an investigation.
 
 The sampled runs are a small workflow/evidence-discipline check, not a statistical
 benchmark or a measured improvement over the baseline. Comprehensive behavior on real
@@ -57,9 +57,12 @@ variant, controlled overlap/cancellation, and synchronous abort reentrancy. It p
 schema-valid audit, report, local issue draft, and separate proof/remediation record. This
 is a synthetic demonstration, not an agent audit or correction of a user's application.
 
-The reference evaluation adapter executed 15 raw cases in baseline and with-skill
-configurations (30 runs). Its deterministic key matching passed in both configurations;
-this verifies harness plumbing and is not evidence of a model-quality improvement.
+The reference evaluation adapter executed 60 raw cases across 20 skills and all five
+suites in baseline and with-skill configurations (120 runs), validating audit,
+architecture, code-review, automated-testing, and repository-workflow contracts,
+scoped `writable_paths` source edits, token summaries, and paired `skill_lift` deltas.
+Its deterministic contract matching passed in both configurations; this verifies harness
+plumbing and is not evidence of a model-quality improvement.
 
 Two fresh-context agent tasks on 13 November 2026 used only selected skill instructions
 and one raw source fixture each, without expected keys or other cases:

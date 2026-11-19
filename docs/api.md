@@ -624,7 +624,7 @@ def evaluate(
 ) -> dict
 ```
 
-Runs a user-supplied adapter executable over evaluation test cases, executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, and grading output against expected rubrics.
+Runs a user-supplied adapter executable over evaluation test cases across all five suites (`audit`, `architecture`, `review`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
 
 - **Parameters:**
   - `output` (`Path`): Output directory for evaluation logs and `benchmark.json`. Must be a new or empty directory.
@@ -639,7 +639,7 @@ Runs a user-supplied adapter executable over evaluation test cases, executing bo
   - `"adapter_argv"`: Command arguments used
   - `"cases_digest"`: SHA-256 digest of cases definition
   - `"runs"`: List of individual run grading records
-  - `"summary"`: Statistical aggregate by configuration (`"runs"`, `"exact_match_rate"`, `"mean_seconds"`, `"failures"`)
+  - `"summary"`: Statistical aggregate by configuration (`"runs"`, `"exact_match_rate"`, `"mean_seconds"`, `"failures"`, `"tokens_reported_runs"`, `"total_tokens"`, `"mean_tokens"`) plus paired `"skill_lift"` deltas across `without_skill` and `with_skill` (`"paired_runs"`, `"exact_match_rate_delta"`, `"mean_seconds_delta"`, `"failures_delta"`, `"true_positives_delta"`, `"false_positives_delta"`, `"false_negatives_delta"`, `"paired_token_runs"`, `"total_tokens_delta"`, `"mean_tokens_delta"`, preserving `None` when token usage is omitted)
   - `"limitations"`: Evaluation boundary notices
 - **Exceptions:**
   - `ValueError`: Raised if `command` is missing or empty; if `repeats` or `timeout` is outside valid ranges; if `output` exists and is non-empty; or if unknown case IDs are specified.
