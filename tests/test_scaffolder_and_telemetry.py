@@ -674,6 +674,85 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
         self.assertIn("| New-Skill First-Pass Rate | **33.33%** |", md)
         self.assertIn("| Output Schema Coverage | 75.0% |", md)
 
+    def test_attempt_ledger_surfaces_corrupted_json_and_writes_atomically(self) -> None:
+        from unittest.mock import patch
+
+        from fredlib.common import FredCliError, atomic_json
+
+        missing_ledger = self.repo / ".fred-skills/validation-attempts.json"
+        self.assertEqual({}, validate_skills._load_attempt_ledger(missing_ledger))
+
+        # Write atomically via atomic_json with zero leftover temp files
+        with patch.object(
+            validate_skills, "atomic_json", wraps=atomic_json
+        ) as spy_atomic:
+            validate_skills._save_attempt_ledger(
+                missing_ledger,
+                {"sample-new": {"first_pass_valid": True, "attempts": 1}},
+            )
+            spy_atomic.assert_called_once()
+        self.assertTrue(missing_ledger.is_file())
+        self.assertEqual(
+            [],
+            list(missing_ledger.parent.glob(".fred-*")),
+        )
+
+        # Truncated JSON in validation-attempts.json raises FredCliError without wiping file
+        truncated_raw = '{\n  "schema_version": "1.0",\n  "skills": {\n'
+        missing_ledger.write_text(truncated_raw, encoding="utf-8")
+        with self.assertRaises(FredCliError) as json_ctx:
+            validate_skills._load_attempt_ledger(missing_ledger)
+        self.assertEqual("invalid_json", json_ctx.exception.code)
+        self.assertIn("validation-attempts.json", json_ctx.exception.message)
+
+        with self.assertRaises(FredCliError) as val_ctx:
+            validate_skills.validate_with_telemetry(self.repo)
+        self.assertEqual("invalid_json", val_ctx.exception.code)
+        self.assertEqual(truncated_raw, missing_ledger.read_text(encoding="utf-8"))
+
+        # CLI surfaces structured error and exits 2, while --no-ledger bypasses ledger read
+        bad_cli = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(self.repo),
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, bad_cli.returncode)
+        self.assertIn("[invalid_json]", bad_cli.stderr)
+        self.assertEqual(truncated_raw, missing_ledger.read_text(encoding="utf-8"))
+
+        no_ledger_cli = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(self.repo),
+                "--no-ledger",
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, no_ledger_cli.returncode, no_ledger_cli.stderr)
+
+        # Non-object root and missing 'skills' map also raise FredCliError
+        missing_ledger.write_text("[]\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as root_ctx:
+            validate_skills._load_attempt_ledger(missing_ledger)
+        self.assertEqual("invalid_json_root", root_ctx.exception.code)
+
+        missing_ledger.write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+        with self.assertRaises(FredCliError) as schema_ctx:
+            validate_skills._load_attempt_ledger(missing_ledger)
+        self.assertEqual("invalid_ledger", schema_ctx.exception.code)
+
 
 class WorkflowAndContributingGuardrailTests(unittest.TestCase):
     """Verify CI workflow telemetry setup, action pins, and CONTRIBUTING.md guardrails."""

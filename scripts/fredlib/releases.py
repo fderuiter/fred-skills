@@ -23,7 +23,6 @@ from .common import (
     _validate_allowed_skill_file,
     atomic_json,
     choose_skills,
-    read_json,
     read_json_object,
     relative_path,
     resolve_manifest_path,
@@ -33,9 +32,22 @@ from .common import (
 
 def _load_documented_packs(root: Path = ROOT) -> tuple[str, ...]:
     packs_path = root / "catalog/packs.json"
-    if not packs_path.is_file():
-        return ()
-    return tuple(read_json(packs_path).get("packs", {}).keys())
+    try:
+        packs_doc = read_json_object(
+            packs_path, label="Packs catalog 'catalog/packs.json'"
+        )
+    except FredCliError as exc:
+        if exc.code == "missing_file":
+            return ()
+        raise
+    packs = packs_doc.get("packs")
+    if not isinstance(packs, dict):
+        raise FredCliError(
+            f"Malformed packs catalog '{packs_path}': expected 'packs' object",
+            code="invalid_catalog",
+            hint=f"Ensure '{packs_path}' contains a JSON object under 'packs'.",
+        )
+    return tuple(packs.keys())
 
 
 DOCUMENTED_PACKS: tuple[str, ...] = _load_documented_packs()
@@ -104,22 +116,46 @@ def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[
         return sorted(dict.fromkeys(skills))
 
     packs_path = root / "catalog" / "packs.json"
-    if packs_path.is_file():
-        try:
-            packs_doc = read_json(packs_path)
-            packs = packs_doc.get("packs", {})
-            if suite_name == "repository-audits":
-                pack = packs.get("full-audit", {})
-            elif suite_name == "repository-workflows":
-                pack = packs.get("verified-fixes", {})
-            elif suite_name is not None:
-                pack = packs.get(suite_name, {})
-            else:
-                pack = packs.get("complete", {})
-            if "skills" in pack:
-                return sorted(dict.fromkeys(pack["skills"]))
-        except (OSError, ValueError, KeyError):
-            pass
+    try:
+        packs_doc = read_json_object(
+            packs_path, label="Packs catalog 'catalog/packs.json'"
+        )
+    except FredCliError as exc:
+        if exc.code != "missing_file":
+            raise
+    else:
+        packs = packs_doc.get("packs")
+        if not isinstance(packs, dict):
+            raise FredCliError(
+                f"Malformed packs catalog '{packs_path}': expected 'packs' object",
+                code="invalid_catalog",
+                hint=f"Ensure '{packs_path}' contains a JSON object under 'packs'.",
+            )
+        if suite_name == "repository-audits":
+            pack = packs.get("full-audit")
+        elif suite_name == "repository-workflows":
+            pack = packs.get("verified-fixes")
+        elif suite_name is not None:
+            pack = packs.get(suite_name)
+        else:
+            pack = packs.get("complete")
+        if pack is not None:
+            if not isinstance(pack, dict) or not isinstance(pack.get("skills"), list):
+                raise FredCliError(
+                    f"Malformed pack entry in '{packs_path}': expected object with 'skills' array",
+                    code="invalid_catalog",
+                    hint=f"Ensure pack entries in '{packs_path}' define a 'skills' array.",
+                )
+            skills_list: list[str] = []
+            for item in pack["skills"]:
+                if not isinstance(item, str) or not item:
+                    raise FredCliError(
+                        f"Malformed pack entry in '{packs_path}': skill identifiers must be nonempty strings",
+                        code="invalid_catalog",
+                        hint=f"Ensure all entries in 'skills' inside '{packs_path}' are strings.",
+                    )
+                skills_list.append(item)
+            return sorted(dict.fromkeys(skills_list))
 
     skills_dir = root / "skills"
     if skills_dir.is_dir():

@@ -1042,12 +1042,9 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
         )
     run_path = p / "run.json"
     if run_path.is_file():
-        try:
-            expected = _deliverable_for_run(
-                read_json_object(run_path, label="Run metadata 'run.json'")
-            )
-        except ValueError:
-            expected = "audit.json"
+        expected = _deliverable_for_run(
+            read_json_object(run_path, label="Run metadata 'run.json'")
+        )
         if expected != "audit.json":
             raise FredCliError(
                 f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{expected}' is not supported",

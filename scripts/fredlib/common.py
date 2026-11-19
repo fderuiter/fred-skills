@@ -21,11 +21,13 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from skill_tools import (
     DOMAIN_KIND_KEY_SETS,
     SKILL_SUITE_PREFIXES,
+    FredCliError,
     classify_domain_payload,
     detect_artifact_suite,
     detect_domain_artifact,
     infer_suite_name,
     is_audit_ledger_shape,
+    read_json_object,
     read_suites_catalog,
     recipe_to_suite_map,
     skill_to_suite_map,
@@ -114,76 +116,8 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 
-class FredCliError(ValueError):
-    """Structured CLI and boundary validation error with an actionable recovery hint."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "cli_error",
-        hint: str | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.hint = hint
-
-    def to_dict(self) -> dict[str, str | None]:
-        return {
-            "code": self.code,
-            "message": self.message,
-            "hint": self.hint,
-        }
-
-
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def read_json_object(
-    path: Path | str,
-    *,
-    label: str = "JSON file",
-    hint: str | None = None,
-) -> dict[str, Any]:
-    p = Path(path)
-    if not p.exists():
-        raise FredCliError(
-            f"{label} not found: {p}",
-            code="missing_file",
-            hint=hint or f"Verify that '{p}' exists and check the path spelling.",
-        )
-    if p.is_dir():
-        raise FredCliError(
-            f"Expected {label.lower()} at '{p}', got a directory",
-            code="invalid_path_type",
-            hint=hint or f"Pass a JSON file path instead of directory '{p}'.",
-        )
-    try:
-        raw_text = p.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise FredCliError(
-            f"Unable to read {label.lower()} '{p}': {exc}",
-            code="io_error",
-            hint=hint or f"Check file permissions and readability for '{p}'.",
-        ) from exc
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise FredCliError(
-            f"Malformed JSON in {label.lower()} '{p}' (line {exc.lineno}, column {exc.colno}): {exc.msg}",
-            code="invalid_json",
-            hint=hint or f"Fix the JSON syntax in '{p}' near line {exc.lineno}.",
-        ) from exc
-    if not isinstance(data, dict):
-        actual = type(data).__name__
-        raise FredCliError(
-            f"Expected JSON object in {label.lower()} '{p}', got {actual}",
-            code="invalid_json_root",
-            hint=hint or f"Ensure the root value in '{p}' is a JSON object ({{...}}).",
-        )
-    return data
 
 
 def _load_suite_contracts(root: Path = ROOT) -> dict[str, dict[str, Any]]:
@@ -373,11 +307,14 @@ def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path,
     assets: list[tuple[Path, Path]] = []
     for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
         try:
-            manifest = read_json(manifest_path)
-        except (OSError, ValueError, TypeError):
-            continue
-        if not isinstance(manifest, dict):
-            continue
+            manifest = read_json_object(
+                manifest_path,
+                label="Shared resource manifest 'manifest.json'",
+            )
+        except FredCliError as exc:
+            if exc.code == "missing_file":
+                continue
+            raise
         if manifest.get("suite", "repository-audits") != suite_name:
             continue
         for raw_entry in manifest.get("files", []):
@@ -412,10 +349,9 @@ def resolve_audit_path(path: Path | str | None = None) -> Path:
     if p.is_dir():
         run_file = p / "run.json"
         if run_file.is_file():
-            try:
-                expected = _deliverable_for_run(read_json(run_file))
-            except (OSError, ValueError, TypeError):
-                expected = "audit.json"
+            expected = _deliverable_for_run(
+                read_json_object(run_file, label="Run metadata 'run.json'")
+            )
             target = p / expected
             if target.is_file():
                 return target
@@ -744,19 +680,49 @@ def version(root: Path = ROOT) -> str:
 def choose_skills(
     root: Path = ROOT, pack: str | None = None, skills: list[str] | None = None
 ) -> list[str]:
+    skills_doc = read_json_object(
+        root / "catalog/skills.json", label="Skills catalog 'catalog/skills.json'"
+    )
+    raw_skills = skills_doc.get("skills")
+    if not isinstance(raw_skills, list):
+        raise FredCliError(
+            f"Malformed skills catalog '{root / 'catalog/skills.json'}': expected 'skills' array",
+            code="invalid_catalog",
+            hint="Ensure 'catalog/skills.json' contains a JSON array under 'skills'.",
+        )
     catalog = {
-        item["name"] for item in read_json(root / "catalog/skills.json")["skills"]
+        item["name"]
+        for item in raw_skills
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
     }
     selected = list(skills or [])
     if pack:
-        packs = read_json(root / "catalog/packs.json")["packs"]
+        packs_doc = read_json_object(
+            root / "catalog/packs.json", label="Packs catalog 'catalog/packs.json'"
+        )
+        packs = packs_doc.get("packs")
+        if not isinstance(packs, dict):
+            raise FredCliError(
+                f"Malformed packs catalog '{root / 'catalog/packs.json'}': expected 'packs' object",
+                code="invalid_catalog",
+                hint="Ensure 'catalog/packs.json' contains a JSON object under 'packs'.",
+            )
         if pack not in packs:
             raise FredCliError(
                 f"Unknown pack {pack!r}; use fred.py packs",
                 code="unknown_pack",
                 hint=f"Available packs: {', '.join(sorted(packs))}.",
             )
-        selected.extend(packs[pack]["skills"])
+        pack_entry = packs[pack]
+        if not isinstance(pack_entry, dict) or not isinstance(
+            pack_entry.get("skills"), list
+        ):
+            raise FredCliError(
+                f"Malformed pack '{pack}' in '{root / 'catalog/packs.json'}': expected 'skills' array",
+                code="invalid_catalog",
+                hint="Ensure each pack in 'catalog/packs.json' defines a 'skills' array.",
+            )
+        selected.extend(pack_entry["skills"])
     if not selected:
         raise FredCliError(
             "Select a pack or at least one --skill",

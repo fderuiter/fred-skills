@@ -19,6 +19,7 @@ __all__ = [
     "DOMAIN_KIND_TO_SUITE",
     "ROOT",
     "SKILL_SUITE_PREFIXES",
+    "FredCliError",
     "build_outputs",
     "classify_domain_payload",
     "detect_artifact_suite",
@@ -32,6 +33,7 @@ __all__ = [
     "infer_suite_name",
     "is_audit_ledger_shape",
     "read_frontmatter",
+    "read_json_object",
     "read_suites_catalog",
     "recipe_to_suite_map",
     "resolve_relative_link_target",
@@ -43,6 +45,75 @@ __all__ = [
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class FredCliError(ValueError):
+    """Structured CLI and boundary validation error with an actionable recovery hint."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "cli_error",
+        hint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.hint = hint
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "hint": self.hint,
+        }
+
+
+def read_json_object(
+    path: Path | str,
+    *,
+    label: str = "JSON file",
+    hint: str | None = None,
+) -> dict[str, Any]:
+    p = path if isinstance(path, Path) else Path(path)
+    if p.is_dir():
+        raise FredCliError(
+            f"Expected {label.lower()} at '{p}', got a directory",
+            code="invalid_path_type",
+            hint=hint or f"Pass a JSON file path instead of directory '{p}'.",
+        )
+    try:
+        raw_text = p.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FredCliError(
+            f"{label} not found: {p}",
+            code="missing_file",
+            hint=hint or f"Verify that '{p}' exists and check the path spelling.",
+        ) from exc
+    except OSError as exc:
+        raise FredCliError(
+            f"Unable to read {label.lower()} '{p}': {exc}",
+            code="io_error",
+            hint=hint or f"Check file permissions and readability for '{p}'.",
+        ) from exc
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise FredCliError(
+            f"Malformed JSON in {label.lower()} '{p}' (line {exc.lineno}, column {exc.colno}): {exc.msg}",
+            code="invalid_json",
+            hint=hint or f"Fix the JSON syntax in '{p}' near line {exc.lineno}.",
+        ) from exc
+    if not isinstance(data, dict):
+        actual = type(data).__name__
+        raise FredCliError(
+            f"Expected JSON object in {label.lower()} '{p}', got {actual}",
+            code="invalid_json_root",
+            hint=hint or f"Ensure the root value in '{p}' is a JSON object ({{...}}).",
+        )
+    return data
+
 
 # Matches markdown links [text](target), images ![text](target)
 MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
@@ -491,17 +562,33 @@ def _iter_suite_phase_skills(
 
 
 def read_suites_catalog(root: Path = ROOT) -> list[dict[str, Any]] | None:
-    """Read catalog/suites.json leniently, returning suite objects or None if absent/invalid."""
+    """Read catalog/suites.json, returning suite objects or None when absent."""
     suites_path = root / "catalog/suites.json"
-    if not suites_path.is_file():
-        return None
     try:
-        doc = json.loads(suites_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return None
-    if not isinstance(doc, dict) or not isinstance(doc.get("suites"), list):
-        return None
-    return [s for s in doc["suites"] if isinstance(s, dict)]
+        doc = read_json_object(
+            suites_path, label="Suites catalog 'catalog/suites.json'"
+        )
+    except FredCliError as exc:
+        if exc.code == "missing_file":
+            return None
+        raise
+    suites = doc.get("suites")
+    if not isinstance(suites, list):
+        raise FredCliError(
+            f"Malformed suites catalog '{suites_path}': expected 'suites' array",
+            code="invalid_catalog",
+            hint=f"Ensure '{suites_path}' contains a JSON array under 'suites'.",
+        )
+    result: list[dict[str, Any]] = []
+    for suite in suites:
+        if not isinstance(suite, dict):
+            raise FredCliError(
+                f"Malformed suites catalog '{suites_path}': each suite entry must be an object",
+                code="invalid_catalog",
+                hint=f"Ensure every item in 'suites' in '{suites_path}' is a JSON object.",
+            )
+        result.append(suite)
+    return result
 
 
 def suite_skills_by_suite(root: Path = ROOT) -> dict[str, tuple[str, ...]] | None:
@@ -591,18 +678,28 @@ def suite_for_skills(
     )
     if not resolved_map:
         skills_path = root / "catalog/skills.json"
-        if skills_path.is_file():
-            try:
-                doc = json.loads(skills_path.read_text(encoding="utf-8"))
-                resolved_map = {
-                    row["name"]: row["suite"]
-                    for row in doc.get("skills", [])
-                    if isinstance(row, dict)
-                    and isinstance(row.get("name"), str)
-                    and isinstance(row.get("suite"), str)
-                }
-            except (OSError, ValueError, TypeError):
-                resolved_map = {}
+        try:
+            doc = read_json_object(
+                skills_path, label="Skills catalog 'catalog/skills.json'"
+            )
+        except FredCliError as exc:
+            if exc.code != "missing_file":
+                raise
+        else:
+            raw_skills = doc.get("skills")
+            if not isinstance(raw_skills, list):
+                raise FredCliError(
+                    f"Malformed skills catalog '{skills_path}': expected 'skills' array",
+                    code="invalid_catalog",
+                    hint=f"Ensure '{skills_path}' contains a JSON array under 'skills'.",
+                )
+            resolved_map = {
+                row["name"]: row["suite"]
+                for row in raw_skills
+                if isinstance(row, dict)
+                and isinstance(row.get("name"), str)
+                and isinstance(row.get("suite"), str)
+            }
     suites = list(dict.fromkeys(resolved_map[s] for s in skills if s in resolved_map))
     if "repository-audits" in suites:
         return "repository-audits"
@@ -612,17 +709,24 @@ def suite_for_skills(
 def recipe_to_suite_map(root: Path = ROOT) -> dict[str, str]:
     """Map every recipe name and alias in catalog/recipes.json to its target suite."""
     recipes_path = root / "catalog/recipes.json"
-    if not recipes_path.is_file():
-        return {}
     try:
-        doc = json.loads(recipes_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return {}
-    if not isinstance(doc, dict) or not isinstance(doc.get("recipes"), dict):
-        return {}
+        doc = read_json_object(
+            recipes_path, label="Recipes catalog 'catalog/recipes.json'"
+        )
+    except FredCliError as exc:
+        if exc.code == "missing_file":
+            return {}
+        raise
+    recipes_obj = doc.get("recipes")
+    if not isinstance(recipes_obj, dict):
+        raise FredCliError(
+            f"Malformed recipes catalog '{recipes_path}': expected 'recipes' object",
+            code="invalid_catalog",
+            hint=f"Ensure '{recipes_path}' contains a JSON object under 'recipes'.",
+        )
     s_map = skill_to_suite_map(root)
     mapping: dict[str, str] = {}
-    for recipe_name, recipe_obj in doc["recipes"].items():
+    for recipe_name, recipe_obj in recipes_obj.items():
         if not isinstance(recipe_name, str) or not isinstance(recipe_obj, dict):
             continue
         explicit_suite = recipe_obj.get("suite")
