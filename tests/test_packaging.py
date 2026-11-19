@@ -465,6 +465,10 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(hooks[hook_id].get("language"), "system")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
             self.assertTrue(hooks[hook_id].get("always_run", False))
+        self.assertEqual(
+            hooks["validate-skills"].get("entry"),
+            "python scripts/validate_skills.py --telemetry validation-telemetry.json",
+        )
         self.assertEqual(hooks["unit-tests"].get("stages"), ["pre-push"])
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
@@ -540,6 +544,22 @@ class PackageTests(unittest.TestCase):
                 ),
                 f"validate.yml must run dedicated '{phase}' phase step",
             )
+        self.assertTrue(
+            any(
+                "scripts/run_checks.py --phase packages --telemetry validation-telemetry.json"
+                in cmd
+                for cmd in run_cmds
+            ),
+            "validate.yml packages phase must export validation-telemetry.json",
+        )
+        self.assertFalse(
+            any(cmd.strip().startswith("ruff ") for cmd in run_cmds),
+            "validate.yml must not run duplicate standalone ruff commands",
+        )
+        self.assertFalse(
+            any(cmd.strip() == "make check" for cmd in run_cmds),
+            "validate.yml must not run duplicate make check command",
+        )
         self.assertEqual(
             1,
             sum(
@@ -593,6 +613,10 @@ class PackageTests(unittest.TestCase):
             **push_ctx_a,
             "sha": "c6b4610700000000000000000000000000000002",
         }
+        push_ctx_c = {
+            **push_ctx_a,
+            "sha": "e8d6832900000000000000000000000000000004",
+        }
         pr_ctx_1 = {
             "workflow": "Validate skill packages",
             "event_name": "pull_request",
@@ -603,24 +627,47 @@ class PackageTests(unittest.TestCase):
             **pr_ctx_1,
             "sha": "d7c5721800000000000000000000000000000003",
         }
+        branch_push_1 = {
+            "workflow": "Validate skill packages",
+            "event_name": "push",
+            "ref": "refs/heads/feature/branch",
+            "sha": "a111111100000000000000000000000000000001",
+        }
+        branch_push_2 = {
+            **branch_push_1,
+            "sha": "b222222200000000000000000000000000000002",
+        }
 
         group_push_a = eval_gha_template(group_tpl, push_ctx_a)
         group_push_b = eval_gha_template(group_tpl, push_ctx_b)
-        self.assertNotEqual(group_push_a, group_push_b)
+        group_push_c = eval_gha_template(group_tpl, push_ctx_c)
+        self.assertEqual(3, len({group_push_a, group_push_b, group_push_c}))
         self.assertIn(push_ctx_a["sha"], group_push_a)
         self.assertIn(push_ctx_b["sha"], group_push_b)
+        self.assertIn(push_ctx_c["sha"], group_push_c)
         self.assertEqual(group_push_a, eval_gha_template(group_tpl, push_ctx_a))
         self.assertIs(eval_gha_template(cancel_tpl, push_ctx_a), False)
         self.assertIs(eval_gha_template(cancel_tpl, push_ctx_b), False)
+        self.assertIs(eval_gha_template(cancel_tpl, push_ctx_c), False)
 
         group_pr_1 = eval_gha_template(group_tpl, pr_ctx_1)
         group_pr_2 = eval_gha_template(group_tpl, pr_ctx_2)
         self.assertEqual(
             group_pr_1, "skills-Validate skill packages-refs/pull/42/merge"
         )
+        self.assertNotIn(pr_ctx_1["sha"], group_pr_1)
         self.assertEqual(group_pr_1, group_pr_2)
         self.assertNotEqual(group_push_a, group_pr_1)
         self.assertIs(eval_gha_template(cancel_tpl, pr_ctx_1), True)
+
+        group_branch_1 = eval_gha_template(group_tpl, branch_push_1)
+        group_branch_2 = eval_gha_template(group_tpl, branch_push_2)
+        self.assertEqual(
+            group_branch_1, "skills-Validate skill packages-refs/heads/feature/branch"
+        )
+        self.assertNotIn(branch_push_1["sha"], group_branch_1)
+        self.assertEqual(group_branch_1, group_branch_2)
+        self.assertIs(eval_gha_template(cancel_tpl, branch_push_1), True)
 
         release_wf = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -628,7 +675,14 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(
             release_wf["concurrency"],
             {
-                "group": "skills-${{ github.workflow }}-${{ github.ref }}",
+                "group": "skills-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}",
+                "cancel-in-progress": False,
+            },
+        )
+        self.assertEqual(
+            release_wf["jobs"]["release"]["concurrency"],
+            {
+                "group": "skills-release-publish-${{ needs.preflight.outputs.release_tag || github.ref }}",
                 "cancel-in-progress": False,
             },
         )
