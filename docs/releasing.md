@@ -14,25 +14,38 @@ pushes to `main` automatically publish the hosted explorer and documentation to
 `.github/workflows/pages.yml` after `Validate skill packages` succeeds (with `workflow_dispatch`
 on `main` available to retry transient Pages outages without manual deployment steps).
 
-Pushes to `main` run a read-only `preflight` gate that validates SemVer 2.0.0 `v<VERSION>`,
-resolves an immutable `target_sha`, verifies `LICENSE` and `VERSION` at `target_sha`, and
-checks live GitHub Releases. When `v<VERSION>` is unpublished (or exists only as a draft),
-the release workflow checks out `target_sha`, runs `make check`, packages and verifies all
-release archives and SHA-256 manifests, verifies downloaded `manifest.json`, `SHA256SUMS`,
-and `checksums.sha256` completeness before attesting SLSA build provenance, serializes
-publication per release tag, pushes tag `v<VERSION>` if missing on `origin`, and publishes
-(or promotes) the GitHub Release using `docs/release-notes-<VERSION>.md` when present (or
-generated notes otherwise, marking pre-release tags with `--prerelease`). Subsequent `main`
-pushes with an already published `VERSION` skip packaging and publication cleanly.
+Pushes to `main` and matching `v*` tags run a read-only `preflight` gate in
+`.github/workflows/release.yml` that validates SemVer 2.0.0 `v<VERSION>`, resolves an
+immutable `target_sha`, fetches full `origin/main` history and tags to verify that
+`target_sha` (`GITHUB_SHA`) is an ancestor of `origin/main`, verifies nonempty `LICENSE`
+and matching `VERSION` at `target_sha`, and checks live GitHub Releases. When `v<VERSION>`
+is unpublished (or exists only as a draft), the release workflow calls the reusable
+`.github/workflows/validate.yml` workflow (`workflow_call` with `contents: read` across
+Ubuntu and Windows on Python 3.12 and 3.13, `pre-commit`, the synthetic Node walkthrough,
+standalone pack verification, and Chromium browser checks) before packaging deterministic
+release archives and SHA-256 manifests in `build`. Next, the `release` job fetches full
+history and tags to re-verify `origin/main` ancestry, nonempty `LICENSE`, and remote
+`refs/tags/v<VERSION>` tag binding, verifies downloaded `manifest.json`, `SHA256SUMS`, and
+`checksums.sha256` completeness before attesting SLSA build provenance, serializes
+publication per release tag, pushes `refs/tags/v<VERSION>` on `main` branch pushes if
+missing on `origin`, and performs zero-touch GitHub Release publication (`--verify-tag` and
+`--target`, without `--draft` or manual approval) using `docs/release-notes-<VERSION>.md`
+when present (or `--generate-notes` otherwise, marking pre-release tags with
+`--prerelease`). Subsequent `main` pushes with an already published `VERSION` skip
+validation, packaging, and publication cleanly.
 
 Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
 `workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)
-builds and uploads `release-artifacts` with read-only permissions while skipping the
-privileged `release` job entirely. Setting `inputs.publish` to `true` (with optional
-`inputs.tag`, defaulting to `v<VERSION>`) runs full preflight verification — requiring
-`refs/tags/<tag>` on `origin` for non-`main` refs or historical tags — and performs an
-idempotent recovery publication or draft promotion at `target_sha`. Ordinary pull requests
-have no `contents: write` job and never invoke live model adapters.
+executes the reusable `.github/workflows/validate.yml` suite and builds/uploads verified
+`release-artifacts` with read-only permissions (without requiring a `LICENSE` or remote tag)
+while skipping the privileged `release` job entirely. Setting `inputs.publish` to `true`
+(with optional `inputs.tag`, defaulting to `v<VERSION>`) enforces `origin/main` commit
+ancestry, nonempty `LICENSE`, and an existing remote `refs/tags/v<VERSION>` tag on `origin`
+for `target_sha` before running reusable validation, signing provenance, and performing
+zero-touch publication or draft promotion (`--verify-tag` and `--target`). Tags or
+publication dispatches targeting commits outside `origin/main` fail fast before attestation
+or release creation. Ordinary pull requests have no `contents: write` job and never invoke
+live model adapters.
 
 ZIP, TAR, and `.tar.gz` archives contain standalone skill directories; the repository
 source is still needed for root CLI tooling. Archive entries use fixed POSIX path order,

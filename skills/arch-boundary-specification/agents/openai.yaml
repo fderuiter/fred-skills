@@ -1,4 +1,14 @@
 interface:
-  display_name: "Boundary Specification"
-  short_description: "Specify and verify trust and module boundaries"
-  default_prompt: "Use $arch-boundary-specification on this source and its component boundaries."
+  display_name: Boundary Specification
+  short_description: Specify and verify trust and module boundaries
+  default_prompt: Use $arch-boundary-specification on this source and its component
+    boundaries.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
