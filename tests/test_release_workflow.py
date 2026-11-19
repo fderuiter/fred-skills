@@ -595,6 +595,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("--draft ", script)
         self.assertNotIn("--draft\n", script)
 
+    def _run_shell_script(
+        self,
+        script: str,
+        *,
+        cwd: Path,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as script_dir:
+            script_path = Path(script_dir) / "workflow_step.sh"
+            _write_lf(script_path, script)
+            return subprocess.run(
+                ["sh", script_path.as_posix()],
+                cwd=str(cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
     def _run_preflight_script(
         self,
         cwd: Path,
@@ -606,13 +625,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         if output_file.exists():
             output_file.unlink()
         merged_env = _isolated_env(cwd, {"GITHUB_OUTPUT": str(output_file), **env_vars})
-        proc = subprocess.run(
-            ["sh", "-c", gate_step["run"]],
-            cwd=str(cwd),
+        proc = self._run_shell_script(
+            gate_step["run"],
+            cwd=cwd,
             env=merged_env,
-            capture_output=True,
-            text=True,
-            check=False,
         )
         return proc, _parse_github_output(output_file)
 
@@ -623,13 +639,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         verify_step = next(
             s for s in release_steps if s.get("name") == "Verify release prerequisites"
         )
-        return subprocess.run(
-            ["sh", "-c", verify_step["run"]],
-            cwd=str(cwd),
+        return self._run_shell_script(
+            verify_step["run"],
+            cwd=cwd,
             env=_isolated_env(cwd, env_vars),
-            capture_output=True,
-            text=True,
-            check=False,
         )
 
     def _run_checksum_step(self, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -639,13 +652,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             for s in release_steps
             if s.get("name") == "Verify downloaded artifact checksums"
         )
-        return subprocess.run(
-            ["sh", "-c", checksum_step["run"]],
-            cwd=str(cwd),
+        return self._run_shell_script(
+            checksum_step["run"],
+            cwd=cwd,
             env=_isolated_env(cwd, {"PYTHON_BIN": sys.executable}),
-            capture_output=True,
-            text=True,
-            check=False,
         )
 
     def _run_publish_script(
@@ -655,13 +665,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         publish_step = next(
             s for s in release_steps if s.get("name") == "Publish GitHub Release"
         )
-        return subprocess.run(
-            ["sh", "-c", publish_step["run"]],
-            cwd=str(cwd),
+        return self._run_shell_script(
+            publish_step["run"],
+            cwd=cwd,
             env=_isolated_env(cwd, env_vars),
-            capture_output=True,
-            text=True,
-            check=False,
         )
 
     def _setup_origin_and_clone(
@@ -1731,6 +1738,67 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("inputs.tag", doc_text)
         self.assertIn("release-artifacts", doc_text)
         self.assertIn("[LICENSE](../LICENSE)", doc_text)
+
+    def test_workflow_script_runners_stay_under_windows_cmdline_limit(self) -> None:
+        """Workflow test helpers must execute shell steps via script files rather than sh -c exceeding Windows 8191-char limit."""
+        windows_cmdline_max = 8191
+        real_run = subprocess.run
+        recorded_sh_cmdlines: list[str] = []
+
+        def checked_run(
+            cmd: Any, *args: Any, **kwargs: Any
+        ) -> subprocess.CompletedProcess[Any]:
+            if isinstance(cmd, list) and cmd and cmd[0] == "sh":
+                win_cmdline = subprocess.list2cmdline(
+                    [r"C:\Program Files\Git\bin\sh.exe", *cmd[1:]]
+                )
+                recorded_sh_cmdlines.append(win_cmdline)
+                if len(win_cmdline) > windows_cmdline_max and cmd[1:2] == ["-c"]:
+                    over = len(win_cmdline) - windows_cmdline_max
+                    cmd = ["sh", "-c", cmd[2][:-over]]
+            return real_run(cmd, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            _, workspace, head_sha = self._setup_origin_and_clone(
+                base,
+                version_text="0.2.0\n",
+                license_text="MIT License\n",
+                remote_tag="v0.2.0",
+            )
+            gh_env, _ = _install_fake_gh(base, {"releases": []})
+            with mock.patch("subprocess.run", side_effect=checked_run):
+                preflight_proc, preflight_out = self._run_preflight_script(
+                    workspace,
+                    {
+                        **gh_env,
+                        "EVENT_NAME": "push",
+                        "WORKFLOW_SHA": head_sha,
+                        "INPUT_PUBLISH": "",
+                        "INPUT_TAG": "",
+                        "REF_NAME": "v0.2.0",
+                        "REF_TYPE": "tag",
+                    },
+                )
+                verify_proc = self._run_verification_script(
+                    workspace,
+                    {
+                        "EVENT_NAME": "push",
+                        "GITHUB_SHA": head_sha,
+                        "REF_TYPE": "tag",
+                        "REF_NAME": "v0.2.0",
+                        "INPUT_TAG": "",
+                        "RELEASE_TAG": "v0.2.0",
+                        "TARGET_SHA": head_sha,
+                    },
+                )
+
+            self.assertEqual(preflight_proc.returncode, 0, msg=preflight_proc.stderr)
+            self.assertEqual(preflight_out.get("should_publish"), "true")
+            self.assertEqual(verify_proc.returncode, 0, msg=verify_proc.stderr)
+            self.assertGreaterEqual(len(recorded_sh_cmdlines), 2)
+            for win_cmdline in recorded_sh_cmdlines:
+                self.assertLessEqual(len(win_cmdline), windows_cmdline_max)
 
 
 class WorkflowActionPinVerificationTests(unittest.TestCase):

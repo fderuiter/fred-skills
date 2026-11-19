@@ -337,14 +337,19 @@ class PagesWorkflowTests(unittest.TestCase):
             head_sha = _git(repo, "rev-parse", "HEAD")
 
             def run_gate(env_vars: dict[str, str]) -> subprocess.CompletedProcess[str]:
-                return subprocess.run(
-                    ["sh", "-c", script],
-                    cwd=str(repo),
-                    env=_isolated_env(repo, env_vars),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
+                with tempfile.TemporaryDirectory(
+                    ignore_cleanup_errors=True
+                ) as script_dir:
+                    script_path = Path(script_dir) / "pages_gate.sh"
+                    script_path.write_text(script, encoding="utf-8", newline="\n")
+                    return subprocess.run(
+                        ["sh", script_path.as_posix()],
+                        cwd=str(repo),
+                        env=_isolated_env(repo, env_vars),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
 
             ok_wf = run_gate(
                 {
