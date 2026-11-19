@@ -1,6 +1,5 @@
-Use test-case-generation to author automated regression tests for <repository> at <revision>.
-Target uncovered behavioral contracts and defect specifications with independent test oracles.
-Select appropriate test layers to isolate units, components, and boundary conditions.
-Construct deterministic test cases with clean setup, execution, and teardown logic.
-Do not modify production code or write repository test files without explicit user authorization.
-Record generated tests conforming to the testing template and assets/testing.schema.json.
+Use test-case-generation to author deterministic automated tests for <repository> at <revision> targeting <directory>, <symbol>, and issue <issue-number>.
+Select the lowest effective test layer across <critical workflows> to isolate contract preconditions, boundary edges, and defect regressions.
+Construct clean setup/teardown fixtures and independent assertion oracles that do not duplicate production implementation logic.
+Write `testing.json` conforming to the testing template and `assets/testing.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify production code or write files outside authorized paths.

@@ -1,12 +1,7 @@
-Use repo-audit-boundary-conditions to conduct a comprehensive boundary-condition correctness audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-boundary-conditions to audit numeric, collection, and format boundaries in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while reviewing context from issue <issue-number>.
+Inventory indexing arithmetic, slice bounds, counts, pagination offsets, timestamps, byte/UTF-8 lengths, numeric casts, parsers, and protocol frame limits.
+Verify inclusive versus exclusive endpoints across zero, one, limit-minus-one, exact limit, limit-plus-one, negative values, overflow, and NaN/infinity inputs.
+Trace caller guards and downstream consumers to prove off-by-one, truncation, or wraparound defects with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

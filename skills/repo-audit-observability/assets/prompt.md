@@ -1,12 +1,7 @@
-Use repo-audit-observability to conduct a comprehensive observability gaps audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-observability to audit diagnostic telemetry, correlation, and redaction in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while checking issue <issue-number>.
+Inventory structured logs, distributed trace spans, metrics/counters, error boundaries, request/correlation IDs, PII/secret scrubbers, and operator runbooks.
+Test whether an operator can determine which operation failed, at which boundary, with what durable side effects, across async queues, retries, and cancellations.
+Flag silent failure black holes, dropped trace context, high-cardinality metric explosions, and secret leakage in telemetry with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

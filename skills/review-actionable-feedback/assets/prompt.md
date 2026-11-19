@@ -1,6 +1,5 @@
-Use review-actionable-feedback to synthesize review findings for <repository> at <revision>.
-Consolidate individual review observations and deduplicate overlapping findings.
-Assign accurate severity classifications and draft constructive remediation advice.
-Provide concrete code diffs or implementation patterns to guide developers.
-Do not approve breaking contract changes without concrete remediation guardrails.
-Format review feedback adhering to the review template and schema.
+Use review-actionable-feedback to synthesize deduplicated code review findings for <repository> at <revision> across <directory> and <symbol>.
+Consolidate overlapping diff and invariant observations linked to issue <issue-number>, assigning calibrated severity (critical, high, medium, low, advisory).
+Draft constructive rationale paired with minimal, concrete remediation patterns and an explicit overall review verdict.
+Write `review.json` adhering to the review template and `assets/review.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not approve breaking contract changes without remediation guardrails or modify code unauthorized.

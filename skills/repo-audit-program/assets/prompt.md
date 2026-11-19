@@ -1,11 +1,6 @@
-Use repo-audit-program to comprehensively audit <repository> at <revision> for hidden
-contracts and implicit architectural behavior. Prioritize <critical workflows>, retaining
-all applicable topics in the coverage ledger. Complete behavioral discovery, correctness
-and resilience, then architecture and maintainability. Reuse <existing audit workspace>
-if present. Trace real caller/consumer boundaries, inspect defenses, and challenge every
-finding. Preserve stable contract/evidence/finding IDs, honest coverage, independently
-supported intended behavior, and executed-versus-proposed validation. Consolidate root
-causes into an ordered issue plan with acceptance criteria, audit.json conforming to
-assets/audit.schema.json, and a separate implementation handoff. Do not modify
-application code or publish issues unless explicitly authorized by the current request.
-Finish bounded slices and checkpoint with exact remaining work.
+Use repo-audit-program to orchestrate a full hidden-contract audit of <repository> at <revision> focused on <directory> and <symbol>.
+Prioritize <critical workflows>, reuse <existing audit workspace> if present, and incorporate context from issue <issue-number>.
+Complete behavioral discovery, correctness/resilience, and architecture/maintainability slices while keeping all applicable topics in the coverage ledger.
+Trace real caller/consumer boundaries, challenge every candidate finding against safeguards, and preserve stable contract/evidence/finding IDs.
+Consolidate root causes into an ordered issue plan, `audit.json` conforming to `assets/audit.schema.json`, and a standalone implementation handoff.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.
