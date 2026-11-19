@@ -4,3 +4,4 @@ use independent validation and safe controls, and preserve uncertainty and sourc
 identity. Write verification.json validated against assets/verification.schema.json
 and return a standalone handoff with actual commands/results and next action.
 Honor the current user-authorized mutation scope; draft external changes otherwise.
+Do not modify application code, publish remote updates, or mark unexecuted checks verified.

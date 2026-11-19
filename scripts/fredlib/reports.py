@@ -6,14 +6,62 @@ import json
 import re
 from html import escape
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 
 from .common import DOMAIN_DELIVERABLE_SCHEMAS, ROOT, _detect_domain_kind, read_json
-from .runs import audit_errors, compare
+from .runs import audit_errors, compare, fingerprint
 
-STYLE = """:root{--table-border:#ddd}body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--table-border);padding:.6rem}.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;font-size:.85rem;font-weight:650}.badge-critical,.critical{background:#fed7d7;color:#9b1c1c}.badge-high,.high{background:#feebc8;color:#7b341e}.badge-medium,.medium{background:#fefcbf;color:#744210}.badge-low,.low{background:#c6f6d5;color:#22543d}.badge-info,.info,.badge-advisory,.advisory{background:#bee3f8;color:#2a4365}.empty-state{text-align:center;padding:1.5rem;color:#53667a}.muted{color:#53667a}input,select,button{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px}button{background:#fff;cursor:pointer}label{display:inline-block;margin:.4rem}article[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #1556a5}@media(prefers-color-scheme:dark){:root{--table-border:#405164}body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}.empty-state{color:#b2c6d9}input,select,button{background:#101821;color:#e3ecf5;border-color:#405164}:focus-visible{outline:3px solid #95c7ff}.badge-critical,.critical{background:#742a2a;color:#feb2b2}.badge-high,.high{background:#7b341e;color:#fbd38d}.badge-medium,.medium{background:#744210;color:#faf089}.badge-low,.low{background:#22543d;color:#9ae6b4}.badge-info,.info,.badge-advisory,.advisory{background:#2a4365;color:#90cdf4}}"""
-SCRIPT = """const q=document.querySelector('#query'),s=document.querySelector('#status'),e=document.querySelector('#empty-state'),r=document.querySelector('#reset-filters');function filter(){const qv=q?q.value.toLowerCase():'',sv=s?s.value:'';let n=0;const a=document.querySelectorAll('article.finding');for(const el of a){el.hidden=!(el.textContent.toLowerCase().includes(qv)&&(!sv||el.dataset.status===sv));if(!el.hidden)n++;}const c=document.querySelector('#count');if(c)c.textContent=n+' '+(c.dataset.noun||'findings')+' shown';if(e)e.hidden=!(a.length>0&&n===0);}if(q)q.addEventListener('input',filter);if(s)s.addEventListener('change',filter);if(r)r.addEventListener('click',()=>{if(q)q.value='';if(s)s.value='';filter();});filter();"""
+STYLE = """:root{--table-border:#ddd}body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--table-border);padding:.6rem}.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}.badges{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;font-size:.85rem;font-weight:650}.badge-critical,.critical{background:#fed7d7;color:#9b1c1c}.badge-high,.high{background:#feebc8;color:#7b341e}.badge-medium,.medium{background:#fefcbf;color:#744210}.badge-low,.low{background:#c6f6d5;color:#22543d}.badge-info,.info,.badge-advisory,.advisory{background:#bee3f8;color:#2a4365}.callout{border-left:4px solid #5380ab;background:#edf2f7;padding:.75rem 1rem;border-radius:6px;margin:.8rem 0}.callout p{margin:.25rem 0}.empty-state{text-align:center;padding:1.5rem;color:#53667a}.muted{color:#53667a}input,select,button{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px}button{background:#fff;cursor:pointer}label{display:inline-block;margin:.4rem}article[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #1556a5}@media(prefers-color-scheme:dark){:root{--table-border:#405164}body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}.empty-state{color:#b2c6d9}.callout{background:#1e2f3f;border-left-color:#95c7ff}input,select,button{background:#101821;color:#e3ecf5;border-color:#405164}:focus-visible{outline:3px solid #95c7ff}.badge-critical,.critical{background:#742a2a;color:#feb2b2}.badge-high,.high{background:#7b341e;color:#fbd38d}.badge-medium,.medium{background:#744210;color:#faf089}.badge-low,.low{background:#22543d;color:#9ae6b4}.badge-info,.info,.badge-advisory,.advisory{background:#2a4365;color:#90cdf4}}"""
+SCRIPT = """const q=document.querySelector('#query'),sev=document.querySelector('#severity'),s=document.querySelector('#status'),rem=document.querySelector('#remediation'),e=document.querySelector('#empty-state'),r=document.querySelector('#reset-filters');function filter(){const qv=q?q.value.toLowerCase():'',sevv=sev?sev.value:'',sv=s?s.value:'',remv=rem?rem.value:'';let n=0;const a=document.querySelectorAll('article.finding');for(const el of a){el.hidden=!(el.textContent.toLowerCase().includes(qv)&&(!sevv||el.dataset.severity===sevv)&&(!sv||el.dataset.status===sv)&&(!remv||el.dataset.remediation===remv));if(!el.hidden)n++;}const c=document.querySelector('#count');if(c){const base=c.dataset.noun||'findings';c.textContent=n+' '+(n===1?base.replace(/s$/,''):base)+' shown';}if(e)e.hidden=!(a.length>0&&n===0);}if(q)q.addEventListener('input',filter);if(sev)sev.addEventListener('change',filter);if(s)s.addEventListener('change',filter);if(rem)rem.addEventListener('change',filter);if(r)r.addEventListener('click',()=>{if(q)q.value='';if(sev)sev.value='';if(s)s.value='';if(rem)rem.value='';filter();});filter();"""
+
+_SEVERITY_ORDER: tuple[str, ...] = ("critical", "high", "medium", "low", "info")
+_SEVERITY_LABELS: dict[str, str] = {
+    "critical": "Critical",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "info": "Info",
+}
+_STATUS_ORDER: tuple[str, ...] = (
+    "confirmed",
+    "supported",
+    "needs-validation",
+    "hardening",
+    "refuted",
+)
+_STATUS_LABELS: dict[str, str] = {
+    "confirmed": "Confirmed",
+    "supported": "Supported",
+    "needs-validation": "Needs validation",
+    "hardening": "Hardening",
+    "refuted": "Refuted",
+}
+_REMEDIATION_ORDER: tuple[str, ...] = (
+    "open",
+    "in-progress",
+    "fixed-pending-verification",
+    "verified-fixed",
+    "regressed",
+    "accepted-risk",
+)
+_REMEDIATION_LABELS: dict[str, str] = {
+    "open": "Open",
+    "in-progress": "In progress",
+    "fixed-pending-verification": "Fixed pending verification",
+    "verified-fixed": "Verified fixed",
+    "regressed": "Regressed",
+    "accepted-risk": "Accepted risk",
+}
+_REMEDIATION_TONES: dict[str, str] = {
+    "open": "medium",
+    "in-progress": "info",
+    "fixed-pending-verification": "info",
+    "verified-fixed": "low",
+    "regressed": "critical",
+    "accepted-risk": "medium",
+}
 
 
 def text(value) -> str:
@@ -210,31 +258,271 @@ def _render_testing_html(doc: dict) -> str:
     return _page_shell(f"Automated testing — {text(doc['component'])}", body)
 
 
-def _render_audit_html(audit: dict, prior: dict | None = None) -> str:
+def _index_remediation(
+    remediation: dict[str, Any] | None, audit: dict[str, Any]
+) -> tuple[dict[str, dict[str, str]], bool]:
+    if remediation is None:
+        return {}, False
+    if (
+        not isinstance(remediation, dict)
+        or "records" not in remediation
+        or not isinstance(remediation["records"], list)
+    ):
+        raise ValueError("Invalid remediation ledger: expected a 'records' list")
+    raw_records = remediation["records"]
+    finding_ids = {f["id"] for f in audit["findings"]}
+    fp_to_ids: dict[str, list[str]] = {}
+    for finding in audit["findings"]:
+        fp_to_ids.setdefault(fingerprint(finding, audit), []).append(finding["id"])
+    latest: dict[str, dict[str, str]] = {}
+    for rec in raw_records:
+        state = rec.get("state") if isinstance(rec, dict) else None
+        if not isinstance(rec, dict) or state not in _REMEDIATION_LABELS:
+            raise ValueError(f"Unknown remediation state: {state!r}")
+        note = str(rec.get("note", ""))
+        fid = rec.get("finding_id")
+        fp = rec.get("fingerprint")
+        matched_id: str | None = None
+        if isinstance(fid, str) and fid in finding_ids:
+            matched_id = fid
+        elif isinstance(fp, str) and len(fp_to_ids.get(fp, [])) == 1:
+            matched_id = fp_to_ids[fp][0]
+        if matched_id is not None:
+            latest[matched_id] = {"state": state, "note": note}
+    return latest, len(raw_records) > 0
+
+
+def _severity_badge_html(sev: str) -> str:
+    label = _SEVERITY_LABELS.get(sev, sev)
+    return f'<span class="badge badge-{text(sev)} {text(sev)}">{text(label)}</span>'
+
+
+def _collision_summary_html(
+    before_ids: list[str],
+    after_ids: list[str],
+    prior_findings: dict[str, dict[str, Any]],
+    curr_findings: dict[str, dict[str, Any]],
+    prior_evidence: dict[str, dict[str, Any]],
+    curr_evidence: dict[str, dict[str, Any]],
+) -> tuple[str, str]:
+    paired: list[tuple[dict[str, Any], dict[str, dict[str, Any]]]] = [
+        *(
+            (curr_findings[fid], curr_evidence)
+            for fid in after_ids
+            if fid in curr_findings
+        ),
+        *(
+            (prior_findings[fid], prior_evidence)
+            for fid in before_ids
+            if fid in prior_findings
+        ),
+    ]
+    topics = list(
+        dict.fromkeys(f.get("topic", "") for f, _ in paired if f.get("topic"))
+    )
+    locs = sorted(
+        {
+            (ev[eid]["path"], ev[eid]["symbol"])
+            for f, ev in paired
+            for eid in f.get("evidence_ids", [])
+            if eid in ev
+        }
+    )
+    topic_html = (
+        text(", ".join(topics)) if topics else '<span class="muted">Unspecified</span>'
+    )
+    loc_html = (
+        ", ".join(
+            f"<code>{text(p)}</code> (<code>{text(sym)}</code>)" for p, sym in locs
+        )
+        if locs
+        else '<span class="muted">No location recorded</span>'
+    )
+    return topic_html, loc_html
+
+
+def _render_comparison_html(prior: dict[str, Any] | None, audit: dict[str, Any]) -> str:
+    if prior is None:
+        return "<p>No prior ledger supplied. Missing findings on another run do not prove resolution.</p>"
+    diff = compare(prior, audit)
+    prior_findings = {f["id"]: f for f in prior.get("findings", [])}
+    curr_findings = {f["id"]: f for f in audit.get("findings", [])}
+    prior_evidence = {e["id"]: e for e in prior.get("evidence", [])}
+    curr_evidence = {e["id"]: e for e in audit.get("evidence", [])}
+
+    introduced_rows = (
+        "".join(
+            f'<tr><td><a href="#{text(fid)}">{text(fid)}</a></td>'
+            f"<td>{_severity_badge_html(curr_findings[fid]['severity']) if fid in curr_findings else '—'}</td>"
+            f"<td>{text(_STATUS_LABELS.get(curr_findings[fid]['status'], curr_findings[fid]['status'])) if fid in curr_findings else '—'}</td>"
+            f"<td>{text(curr_findings[fid]['title']) if fid in curr_findings else '—'}</td></tr>"
+            for fid in diff["introduced"]
+        )
+        or '<tr><td colspan="4" class="empty-state">No introduced findings.</td></tr>'
+    )
+    changed_rows = (
+        "".join(
+            f'<tr><td><a href="#{text(item["after"])}">{text(item["after"])}</a></td>'
+            f"<td><code>{text(item['before'])}</code></td>"
+            f"<td>{_severity_badge_html(curr_findings[item['after']]['severity']) if item['after'] in curr_findings else '—'}</td>"
+            f"<td>{text(_STATUS_LABELS.get(item['from'], item['from']))} → {text(_STATUS_LABELS.get(item['to'], item['to']))}</td>"
+            f"<td>{text(curr_findings[item['after']]['title']) if item['after'] in curr_findings else '—'}</td></tr>"
+            for item in diff["status_changed"]
+        )
+        or '<tr><td colspan="5" class="empty-state">No status changes.</td></tr>'
+    )
+    persisting_rows = (
+        "".join(
+            f'<tr><td><a href="#{text(item["after"])}">{text(item["after"])}</a></td>'
+            f"<td><code>{text(item['before'])}</code></td>"
+            f"<td>{_severity_badge_html(curr_findings[item['after']]['severity']) if item['after'] in curr_findings else '—'}</td>"
+            f"<td>{text(_STATUS_LABELS.get(curr_findings[item['after']]['status'], curr_findings[item['after']]['status'])) if item['after'] in curr_findings else '—'}</td>"
+            f"<td>{text(curr_findings[item['after']]['title']) if item['after'] in curr_findings else '—'}</td></tr>"
+            for item in diff["persisting"]
+        )
+        or '<tr><td colspan="5" class="empty-state">No persisting findings.</td></tr>'
+    )
+    absent_rows = (
+        "".join(
+            f"<tr><td><code>{text(fid)}</code></td>"
+            f"<td>{_severity_badge_html(prior_findings[fid]['severity']) if fid in prior_findings else '—'}</td>"
+            f"<td>{text(_STATUS_LABELS.get(prior_findings[fid]['status'], prior_findings[fid]['status'])) if fid in prior_findings else '—'}</td>"
+            f"<td>{text(prior_findings[fid]['title']) if fid in prior_findings else '—'}</td></tr>"
+            for fid in diff["not_observed"]
+        )
+        or '<tr><td colspan="4" class="empty-state">No absent prior findings.</td></tr>'
+    )
+    ambiguous_rows_list: list[str] = []
+    for item in diff["ambiguous"]:
+        after_links = (
+            ", ".join(
+                f'<a href="#{text(fid)}">{text(fid)}</a> ({text(curr_findings[fid]["title"])})'
+                if fid in curr_findings
+                else f'<a href="#{text(fid)}">{text(fid)}</a>'
+                for fid in item["after"]
+            )
+            or '<span class="muted">None</span>'
+        )
+        before_codes = (
+            ", ".join(
+                f"<code>{text(fid)}</code> ({text(prior_findings[fid]['title'])})"
+                if fid in prior_findings
+                else f"<code>{text(fid)}</code>"
+                for fid in item["before"]
+            )
+            or '<span class="muted">None</span>'
+        )
+        topic_html, loc_html = _collision_summary_html(
+            item["before"],
+            item["after"],
+            prior_findings,
+            curr_findings,
+            prior_evidence,
+            curr_evidence,
+        )
+        ambiguous_rows_list.append(
+            f"<tr><td>{after_links}</td><td>{before_codes}</td><td>{topic_html}</td><td>{loc_html}</td></tr>"
+        )
+    ambiguous_rows = (
+        "".join(ambiguous_rows_list)
+        or '<tr><td colspan="4" class="empty-state">No ambiguous fingerprint collisions.</td></tr>'
+    )
+    caveats = diff.get("limitations", [])
+    callout_html = (
+        '<div class="callout" role="note">'
+        + "".join(f"<p>{text(note)}</p>" for note in caveats)
+        + "</div>"
+        if caveats
+        else ""
+    )
+    prior_run = text(prior.get("run_id", "prior"))
+    curr_run = text(audit["run_id"])
+    return (
+        f"<p>Compared prior run <code>{prior_run}</code> against <code>{curr_run}</code>: "
+        f"{len(diff['introduced'])} introduced, {len(diff['status_changed'])} status changed, "
+        f"{len(diff['persisting'])} persisting, {len(diff['not_observed'])} not observed, "
+        f"{len(diff['ambiguous'])} ambiguous.</p>"
+        f"{callout_html}"
+        f"<h3>Introduced ({len(diff['introduced'])})</h3>"
+        f'<div class="table-container"><table><thead><tr><th>Finding</th><th>Severity</th><th>Evidence status</th><th>Title</th></tr></thead><tbody>{introduced_rows}</tbody></table></div>'
+        f"<h3>Status changed ({len(diff['status_changed'])})</h3>"
+        f'<div class="table-container"><table><thead><tr><th>Current finding</th><th>Prior ID</th><th>Severity</th><th>Status transition</th><th>Title</th></tr></thead><tbody>{changed_rows}</tbody></table></div>'
+        f"<h3>Persisting ({len(diff['persisting'])})</h3>"
+        f'<div class="table-container"><table><thead><tr><th>Current finding</th><th>Prior ID</th><th>Severity</th><th>Evidence status</th><th>Title</th></tr></thead><tbody>{persisting_rows}</tbody></table></div>'
+        f"<h3>Not observed in current run ({len(diff['not_observed'])})</h3>"
+        f'<div class="table-container"><table><thead><tr><th>Prior ID</th><th>Prior severity</th><th>Prior status</th><th>Title</th></tr></thead><tbody>{absent_rows}</tbody></table></div>'
+        f"<h3>Ambiguous collisions ({len(diff['ambiguous'])})</h3>"
+        f'<div class="table-container"><table><thead><tr><th>Current findings</th><th>Prior IDs</th><th>Topic</th><th>Collision location (path · symbol)</th></tr></thead><tbody>{ambiguous_rows}</tbody></table></div>'
+    )
+
+
+def _render_audit_html(
+    audit: dict,
+    prior: dict | None = None,
+    remediation: dict | None = None,
+) -> str:
     errors = audit_errors(audit)
     if errors:
         raise ValueError("Invalid audit ledger: " + "; ".join(errors[:5]))
+    latest_remediation, has_remediation = _index_remediation(remediation, audit)
     evidence = {e["id"]: e for e in audit["evidence"]}
     findings = sorted(
         audit["findings"],
         key=lambda f: (
-            ["critical", "high", "medium", "low", "info"].index(f["severity"]),
+            _SEVERITY_ORDER.index(f["severity"]),
             f["id"],
         ),
     )
+    findings_by_id = {f["id"]: f for f in findings}
     cards = []
     for f in findings:
         locations = "".join(
             f"<li><code>{text(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']}</code> — {text(evidence[eid]['symbol'])} — {text(evidence[eid]['context'])}</li>"
             for eid in f["evidence_ids"]
         )
+        locations_html = f"<ul>{locations}</ul>" if locations else ""
         sequence = "".join(f"<li>{text(step)}</li>" for step in f["sequence"])
         criteria = "".join(f"<li>{text(step)}</li>" for step in f["acceptance"])
-        cards.append(f'''<article class="finding" data-status="{text(f["status"])}" id="{text(f["id"])}"><h3>{text(f["id"])}: {text(f["title"])}</h3>
-<p class="badge badge-{text(f["severity"])} {text(f["severity"])}">{text(f["severity"])} · {text(f["status"])} · confidence {text(f["confidence"])}</p>
-<p>{text(f["impact"])}</p><details><summary>Developer: failure, source, and correction</summary><p>{text(f["preconditions"])}</p><ol class="trace">{sequence}</ol><p><b>Expected:</b> {text(f["expected"])}</p><p><b>Actual:</b> {text(f["actual"])}</p><ul>{locations}</ul><p><b>Cause:</b> {text(f["root_cause"])}</p><p><b>Proposed remedy:</b> {text(f["remedy"])}</p></details>
-<details><summary>Reviewer: contracts, safeguards, and verification</summary><p>Contracts: {text(", ".join(f["contract_ids"]))}</p><p>{text(f["counterevidence"])}</p><p>Validation: {text(f["validation"]["state"])}</p><pre>{text(chr(10).join(f["validation"]["commands"]))}</pre><p>{text(f["validation"]["result"])}</p></details>
-<details><summary>Implementation: acceptance and relationships</summary><ul>{criteria}</ul><p>Related findings: {text(", ".join(f["related_findings"]))}</p><p class="muted">Evidence certainty is separate from remediation state.</p></details></article>''')
+        contracts_html = (
+            f"<p>Contracts: {text(', '.join(f['contract_ids']))}</p>"
+            if f["contract_ids"]
+            else ""
+        )
+        commands_html = (
+            f"<pre>{text(chr(10).join(f['validation']['commands']))}</pre>"
+            if f["validation"]["commands"]
+            else ""
+        )
+        if f["related_findings"]:
+            related_links = ", ".join(
+                f'<a href="#{text(rf)}">{text(rf)}</a>'
+                if rf in findings_by_id
+                else text(rf)
+                for rf in f["related_findings"]
+            )
+            related_html = f"<p>Related findings: {related_links}</p>"
+        else:
+            related_html = ""
+        rem_entry = latest_remediation.get(f["id"])
+        rem_attr = rem_entry["state"] if rem_entry else "unreconciled"
+        if rem_entry:
+            rem_state = rem_entry["state"]
+            rem_label = _REMEDIATION_LABELS[rem_state]
+            rem_tone = _REMEDIATION_TONES[rem_state]
+            rem_badge_html = f' <span class="badge badge-{rem_tone} {rem_tone}">{text(rem_label)}</span>'
+            rem_note_html = (
+                f'<p class="remediation-note"><b>Remediation ({text(rem_label)}):</b> {text(rem_entry["note"])}</p>'
+                if rem_entry["note"]
+                else ""
+            )
+        else:
+            rem_badge_html = ""
+            rem_note_html = ""
+        cards.append(f'''<article class="finding" data-severity="{text(f["severity"])}" data-status="{text(f["status"])}" data-remediation="{text(rem_attr)}" id="{text(f["id"])}"><h3>{text(f["id"])}: {text(f["title"])}</h3>
+<p class="badges"><span class="badge badge-{text(f["severity"])} {text(f["severity"])}">{text(f["severity"])} · {text(f["status"])} · confidence {text(f["confidence"])}</span>{rem_badge_html}</p>
+{rem_note_html}<p>{text(f["impact"])}</p><details><summary>Developer: failure, source, and correction</summary><p>{text(f["preconditions"])}</p><ol class="trace">{sequence}</ol><p><b>Expected:</b> {text(f["expected"])}</p><p><b>Actual:</b> {text(f["actual"])}</p>{locations_html}<p><b>Cause:</b> {text(f["root_cause"])}</p><p><b>Proposed remedy:</b> {text(f["remedy"])}</p></details>
+<details><summary>Reviewer: contracts, safeguards, and verification</summary>{contracts_html}<p>{text(f["counterevidence"])}</p><p>Validation: {text(f["validation"]["state"])}</p>{commands_html}<p>{text(f["validation"]["result"])}</p></details>
+<details><summary>Implementation: acceptance and relationships</summary><ul>{criteria}</ul>{related_html}<p class="muted">Evidence certainty is separate from remediation state.</p></details></article>''')
     coverage = (
         "".join(
             f"<tr><td>{text(c['topic'])}</td><td>{text(c['scope'])}</td><td>{text(c['status'])}</td><td>{text(c['notes'])}</td><td>{text(c['next_action'])}</td></tr>"
@@ -242,7 +530,13 @@ def _render_audit_html(audit: dict, prior: dict | None = None) -> str:
         )
         or '<tr><td colspan="5" class="empty-state">No coverage recorded.</td></tr>'
     )
-    limitations = "".join(f"<li>{text(item)}</li>" for item in audit["limitations"])
+    limitations_html = (
+        "<ul>"
+        + "".join(f"<li>{text(item)}</li>" for item in audit["limitations"])
+        + "</ul>"
+        if audit["limitations"]
+        else '<p class="muted">No explicit limitations recorded.</p>'
+    )
     checks = (
         "".join(
             f"<tr><td>{text(c['name'])}</td><td>{text(c['state'])}</td><td><code>{text(c['command'])}</code></td><td>{text(c['result'])}</td></tr>"
@@ -250,25 +544,40 @@ def _render_audit_html(audit: dict, prior: dict | None = None) -> str:
         )
         or '<tr><td colspan="4" class="empty-state">No checks recorded.</td></tr>'
     )
-    comparison = (
-        text(json.dumps(compare(prior, audit), indent=2))
-        if prior
-        else "No prior ledger supplied. Missing findings on another run do not prove resolution."
-    )
+    comparison_html = _render_comparison_html(prior, audit)
     if len(findings) > 0:
-        status_options = "".join(
-            f"<option>{s}</option>"
-            for s in [
-                "confirmed",
-                "supported",
-                "needs-validation",
-                "hardening",
-                "refuted",
-            ]
+        severity_options = "".join(
+            f'<option value="{s}">{text(_SEVERITY_LABELS[s])} ({sum(f["severity"] == s for f in findings)})</option>'
+            for s in _SEVERITY_ORDER
         )
+        status_options = "".join(
+            f'<option value="{s}">{text(_STATUS_LABELS[s])} ({sum(f["status"] == s for f in findings)})</option>'
+            for s in _STATUS_ORDER
+        )
+        if has_remediation:
+            rem_opts = [
+                f'<option value="{st}">{text(_REMEDIATION_LABELS[st])} ({sum(latest_remediation.get(f["id"], {}).get("state") == st for f in findings)})</option>'
+                for st in _REMEDIATION_ORDER
+            ]
+            unreconciled_count = sum(
+                f["id"] not in latest_remediation for f in findings
+            )
+            if unreconciled_count > 0:
+                rem_opts.append(
+                    f'<option value="unreconciled">Unreconciled ({unreconciled_count})</option>'
+                )
+            remediation_filter_html = (
+                f'<label for="remediation">Remediation state <select id="remediation">'
+                f'<option value="">All remediation states ({len(findings)})</option>'
+                f"{''.join(rem_opts)}</select></label>"
+            )
+        else:
+            remediation_filter_html = ""
         findings_body = (
             f'<label for="query">Search findings <input id="query" type="search"></label>'
-            f'<label for="status">Evidence status <select id="status"><option value="">All statuses</option>{status_options}</select></label>'
+            f'<label for="severity">Severity <select id="severity"><option value="">All severities ({len(findings)})</option>{severity_options}</select></label>'
+            f'<label for="status">Evidence status <select id="status"><option value="">All statuses ({len(findings)})</option>{status_options}</select></label>'
+            f"{remediation_filter_html}"
             f'<p id="count" role="status" aria-live="polite"></p>'
             f'<div id="empty-state" class="empty-state" hidden><p>No findings match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
             f"{''.join(cards)}"
@@ -277,20 +586,55 @@ def _render_audit_html(audit: dict, prior: dict | None = None) -> str:
         findings_body = (
             "<p>No findings recorded. Review coverage before drawing conclusions.</p>"
         )
+    record_label = (
+        "1 finding record" if len(findings) == 1 else f"{len(findings)} finding records"
+    )
+    sev_summary = ", ".join(
+        f"{sum(f['severity'] == s for f in findings)} {s}" for s in _SEVERITY_ORDER
+    )
+    if has_remediation:
+        vf_count = sum(
+            latest_remediation.get(f["id"], {}).get("state") == "verified-fixed"
+            for f in findings
+        )
+        rem_parts = [f"{vf_count} verified fixed"]
+        for st in _REMEDIATION_ORDER:
+            if st == "verified-fixed":
+                continue
+            st_count = sum(
+                latest_remediation.get(f["id"], {}).get("state") == st for f in findings
+            )
+            if st_count > 0:
+                rem_parts.append(f"{st_count} {_REMEDIATION_LABELS[st].lower()}")
+        unrec_exec = sum(f["id"] not in latest_remediation for f in findings)
+        if unrec_exec > 0:
+            rem_parts.append(f"{unrec_exec} unreconciled")
+        rem_exec_text = ", ".join(rem_parts) + "."
+    else:
+        rem_exec_text = "0 verified fixed (no remediation records supplied)."
     body = f"""<header><p class="muted">fred-skills · local evidence report</p><h1>Repository audit</h1><p>{text(audit["run_id"])} · {text(audit["repository"]["identity"])}</p><p>Revision: <code>{text(audit["repository"]["revision"])}</code> · dirty: {text(audit["repository"]["dirty"])}</p><nav aria-label="Report views"><a href="#executive">Executive</a><a href="#findings">Findings</a><a href="#coverage">Coverage</a><a href="#checks">Checks</a><a href="#comparison">Comparison</a></nav></header>
-<section id="executive"><h2>Executive view</h2><p>{len(findings)} finding records; {sum(f["status"] == "confirmed" for f in findings)} reproduced; {sum(f["status"] == "refuted" for f in findings)} refuted. These counts are not a repository safety score.</p><ul>{limitations}</ul></section>
+<section id="executive"><h2>Executive view</h2><p>{record_label}; {sum(f["status"] == "confirmed" for f in findings)} reproduced; {sum(f["status"] == "refuted" for f in findings)} refuted. These counts are not a repository safety score.</p><p><b>Severity counts:</b> {sev_summary}.</p><p><b>Remediation totals:</b> {rem_exec_text}</p>{limitations_html}</section>
 <section id="findings"><h2>Review findings</h2>{findings_body}</section>
 <section id="coverage"><h2>Coverage and continuation</h2><div class="table-container"><table><thead><tr><th>Topic</th><th>Scope</th><th>Status</th><th>Notes</th><th>Next action</th></tr></thead><tbody>{coverage}</tbody></table></div></section>
-<section id="checks"><h2>Executed and unexecuted checks</h2><div class="table-container"><table><thead><tr><th>Check</th><th>State</th><th>Command</th><th>Result</th></tr></thead><tbody>{checks}</tbody></table></div></section><section id="comparison"><h2>Comparison</h2><pre>{comparison}</pre></section>"""
+<section id="checks"><h2>Executed and unexecuted checks</h2><div class="table-container"><table><thead><tr><th>Check</th><th>State</th><th>Command</th><th>Result</th></tr></thead><tbody>{checks}</tbody></table></div></section><section id="comparison"><h2>Comparison</h2>{comparison_html}</section>"""
     return _page_shell(f"Repository audit — {text(audit['run_id'])}", body)
 
 
-def render(audit: dict, output: Path, prior: dict | None = None) -> Path:
+def render(
+    audit: dict,
+    output: Path,
+    prior: dict | None = None,
+    remediation: dict | None = None,
+) -> Path:
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
         if prior is not None:
             raise ValueError(
                 f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported"
+            )
+        if remediation is not None:
+            raise ValueError(
+                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported"
             )
         renderers = {
             "architecture": _render_architecture_html,
@@ -304,7 +648,7 @@ def render(audit: dict, output: Path, prior: dict | None = None) -> Path:
         _validate_domain_payload(audit, domain_kind)
         html = renderers[domain_kind](audit)
     else:
-        html = _render_audit_html(audit, prior=prior)
+        html = _render_audit_html(audit, prior=prior, remediation=remediation)
     output = Path(output)
     if output.is_dir() or not output.suffix:
         output.mkdir(parents=True, exist_ok=True)

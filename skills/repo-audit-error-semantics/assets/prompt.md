@@ -7,6 +7,6 @@ Separate reproduced defects, statically supported findings, unresolved risks, ha
 and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
 Record honest coverage, tests actually run, validation not run, severity and confidence,
 minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json.
+stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
 Draft any issue recommendations; do not modify application code or publish issues unless
 the current user request separately authorizes it.

@@ -22,7 +22,9 @@ from .common import (
     _deliverable_for_run,
     _detect_domain_kind,
     _load_suite_contracts,
+    _suite_for_run,
     _suite_for_skills,
+    _suite_shared_assets,
     atomic_json,
     digest,
     read_json,
@@ -95,12 +97,12 @@ def plan(
     if profile and profile not in profiles:
         raise ValueError(f"Unknown profile: {profile}")
     selected = list(recipe["skills"])
+    suite_name = _suite_for_skills(recipe["skills"])
     notes = [
         recipe["outcome"],
         "Selected by task; installation and execution are separate actions.",
     ]
     if mode == "comprehensive":
-        suite_name = _suite_for_skills(recipe["skills"])
         suite = next(
             item
             for item in read_json(ROOT / "catalog/suites.json")["suites"]
@@ -122,7 +124,16 @@ def plan(
             "Comprehensive scope still requires workflow slices and explicit remaining coverage."
         )
     if profile:
-        selected = list(dict.fromkeys(profiles[profile]["priorities"] + selected))
+        skill_suites = {
+            row["name"]: row.get("suite")
+            for row in read_json(ROOT / "catalog/skills.json")["skills"]
+        }
+        priorities = [
+            name
+            for name in profiles[profile]["priorities"]
+            if skill_suites.get(name) == suite_name
+        ]
+        selected = list(dict.fromkeys(priorities + selected))
         notes.append(
             "Profile assumptions must be checked against this checkout: "
             + profiles[profile]["description"]
@@ -262,16 +273,22 @@ def _workflow_companions_for_run(run: dict | None) -> list[tuple[str, str]]:
 def _deliverable_prompt_rules(
     deliverable: str, schema_rel: str, run: dict | None = None
 ) -> str:
+    local_schema = f"assets/{Path(schema_rel).name}" if schema_rel else ""
+    domain_schema_ref = (
+        f"{local_schema} ({schema_rel})"
+        if schema_rel and schema_rel != local_schema
+        else (schema_rel or local_schema)
+    )
     if deliverable == "architecture.json":
         return f"""Work in bounded slices. Update architecture.json using assets/architecture-template.md
-for narrative records and verify conformance against {schema_rel}
+for narrative records and verify conformance against {domain_schema_ref}
 (schema_version, title, status, boundaries, and decisions; additionalProperties is false).
 Report architectural decisions and system boundaries with concrete source locations,
 rationale, and consequences. Stop with a precise checkpoint when the selected work
 cannot be completed. Empty boundaries or decisions lists are valid starter states."""
     if deliverable == "review.json":
         return f"""Work in bounded slices. Update review.json using assets/review-template.md to structure
-change findings and validate findings format against {schema_rel}
+change findings and validate findings format against {domain_schema_ref}
 (schema_version, verdict, summary, and findings; additionalProperties is false).
 Report change impact surfaces and invariant checks with precise file paths, line
 ranges, and actionable recommendations. Stop with a precise checkpoint when the
@@ -296,7 +313,7 @@ selected work cannot be completed. An empty findings list is valid."""
                 "files, or ask the operator to re-initialize with `--allow-fixes`."
             )
         return f"""Work in bounded slices. Update testing.json using assets/testing-template.md to document
-uncovered gaps and ensure test gap specifications conform to {schema_rel}
+uncovered gaps and ensure test gap specifications conform to {domain_schema_ref}
 (schema_version, component, framework, and test_cases; additionalProperties is false).
 Provide prioritized test scenarios with deterministic, independent assertion oracles
 (state, exception, output, or boundary). Stop with a precise checkpoint when the
@@ -315,6 +332,28 @@ acceptance criteria. Keep remediation state in remediation.json, distinct from e
 certainty. A missing finding on a later run is not proof of resolution. Preserve unrelated
 records and stop with a precise checkpoint when the selected work cannot be completed.
 An empty findings list is valid.{companion_guidance}"""
+
+
+def _copy_domain_assets(run: dict, contract: dict[str, Any], output: Path) -> None:
+    suite_name = _suite_for_run(run)
+    asset_entries = _suite_shared_assets(suite_name)
+    resolved_output = output.resolve()
+    copied = False
+    for rel, source in asset_entries:
+        target = output / rel
+        if not target.resolve().is_relative_to(resolved_output):
+            raise ValueError(f"Asset destination escapes run directory: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+        copied = True
+    if not copied:
+        schema_rel = contract.get("schema")
+        if isinstance(schema_rel, str) and schema_rel:
+            schema_source = ROOT / relative_path(schema_rel)
+            if schema_source.is_file() and not schema_source.is_symlink():
+                target = output / "assets" / schema_source.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(schema_source.read_bytes())
 
 
 def initialize(
@@ -354,6 +393,8 @@ def initialize(
     contract = _artifact_contract_for_run(run)
     deliverable = str(contract["filename"])
     output.mkdir(parents=True, exist_ok=True)
+    if deliverable != "audit.json":
+        _copy_domain_assets(run, contract, output)
     atomic_json(output / "run.json", run)
     atomic_json(
         output / deliverable,
@@ -451,7 +492,7 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
                 raise ValueError(
                     f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{expected}' is not supported"
                 )
-        for domain_name in DOMAIN_DELIVERABLE_SCHEMAS:
+        for domain_name in (*DOMAIN_DELIVERABLE_SCHEMAS, *WORKFLOW_DELIVERABLE_SCHEMAS):
             if (directory / domain_name).is_file():
                 raise ValueError(
                     f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{domain_name}' is not supported"

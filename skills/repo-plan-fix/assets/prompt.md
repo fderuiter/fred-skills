@@ -4,3 +4,4 @@ use independent validation and safe controls, and preserve uncertainty and sourc
 identity. Write plan.json validated against assets/plan.schema.json and return a
 standalone handoff with actual commands/results and next action.
 Honor the current user-authorized mutation scope; draft external changes otherwise.
+Do not modify application code, invent issue metadata, or publish external changes without authorization.

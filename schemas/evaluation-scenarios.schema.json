@@ -25,12 +25,13 @@
         "required": [
           "id",
           "prompt",
-          "expected_behavior"
+          "expected_behavior",
+          "evaluation_note"
         ],
         "properties": {
           "id": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*-(?:failure|safe|routing)$"
           },
           "prompt": {
             "type": "string",
@@ -39,6 +40,10 @@
           "fixture_shape": {
             "type": "string",
             "minLength": 1
+          },
+          "sibling_skill": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
           },
           "expected_behavior": {
             "type": "array",
@@ -51,6 +56,26 @@
           "evaluation_note": {
             "type": "string",
             "minLength": 1
+          }
+        },
+        "if": {
+          "properties": {
+            "id": {
+              "pattern": "-routing$"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "then": {
+          "required": [
+            "sibling_skill"
+          ],
+          "properties": {
+            "prompt": {
+              "minLength": 20
+            }
           }
         }
       }

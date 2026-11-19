@@ -30,134 +30,93 @@
     "records": {
       "type": "array",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "at",
-          "finding_id",
-          "fingerprint",
-          "state",
-          "note",
-          "verification"
-        ],
-        "properties": {
-          "at": {
-            "type": "string",
-            "minLength": 1
-          },
-          "finding_id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "fingerprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "state": {
-            "type": "string",
-            "enum": [
-              "open",
-              "in-progress",
-              "fixed-pending-verification",
-              "verified-fixed",
-              "regressed",
-              "accepted-risk"
-            ]
-          },
-          "note": {
-            "type": "string"
-          },
-          "verification": {
-            "anyOf": [
-              {
-                "type": "null"
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "at",
+              "finding_id",
+              "fingerprint",
+              "state",
+              "note",
+              "verification"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "minLength": 1
               },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "before_revision",
-                  "after_revision",
-                  "original_reproduced",
-                  "regression_passed",
-                  "safe_controls_passed",
-                  "commands",
-                  "result"
-                ],
-                "properties": {
-                  "schema_version": {
-                    "type": "string",
-                    "minLength": 1
+              "finding_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fingerprint": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "in-progress",
+                  "fixed-pending-verification",
+                  "regressed",
+                  "accepted-risk"
+                ]
+              },
+              "note": {
+                "type": "string"
+              },
+              "verification": {
+                "anyOf": [
+                  {
+                    "type": "null"
                   },
-                  "finding_id": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "before_revision": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "after_revision": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "original_reproduced": {
-                    "type": "boolean"
-                  },
-                  "regression_passed": {
-                    "type": "boolean"
-                  },
-                  "safe_controls_passed": {
-                    "type": "boolean"
-                  },
-                  "commands": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                      "type": "string",
-                      "minLength": 1
-                    }
-                  },
-                  "result": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "notes": {
-                    "type": "string"
+                  {
+                    "$ref": "#/$defs/verification_proof"
                   }
-                }
+                ]
               }
-            ]
-          }
-        },
-        "if": {
-          "properties": {
-            "state": {
-              "const": "verified-fixed"
             }
           },
-          "required": [
-            "state"
-          ]
-        },
-        "then": {
-          "properties": {
-            "verification": {
-              "type": "object",
-              "properties": {
-                "original_reproduced": {
-                  "const": true
-                },
-                "regression_passed": {
-                  "const": true
-                },
-                "safe_controls_passed": {
-                  "const": true
-                }
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "at",
+              "finding_id",
+              "fingerprint",
+              "state",
+              "note",
+              "verification"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "minLength": 1
+              },
+              "finding_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fingerprint": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "type": "string",
+                "const": "verified-fixed"
+              },
+              "note": {
+                "type": "string"
+              },
+              "verification": {
+                "$ref": "#/$defs/verified_fixed_proof"
               }
             }
           }
-        }
+        ]
       }
     },
     "finding_fingerprint_matches": {
@@ -310,6 +269,121 @@
     },
     "notes": {
       "type": "string"
+    }
+  },
+  "$defs": {
+    "verification_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_revision",
+        "after_revision",
+        "original_reproduced",
+        "regression_passed",
+        "safe_controls_passed",
+        "commands",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "before_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "after_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_reproduced": {
+          "type": "boolean"
+        },
+        "regression_passed": {
+          "type": "boolean"
+        },
+        "safe_controls_passed": {
+          "type": "boolean"
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "result": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "verified_fixed_proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_revision",
+        "after_revision",
+        "original_reproduced",
+        "regression_passed",
+        "safe_controls_passed",
+        "commands",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "before_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "after_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_reproduced": {
+          "type": "boolean",
+          "const": true
+        },
+        "regression_passed": {
+          "type": "boolean",
+          "const": true
+        },
+        "safe_controls_passed": {
+          "type": "boolean",
+          "const": true
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "result": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
     }
   }
 }

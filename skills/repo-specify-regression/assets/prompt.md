@@ -4,3 +4,4 @@ use independent validation and safe controls, and preserve uncertainty and sourc
 identity. Write regression.json validated against assets/regression.schema.json and
 return a standalone handoff with actual commands/results and next action.
 Honor the current user-authorized mutation scope; draft external changes otherwise.
+Do not modify production code, loosen assertions, or write repository files without authorization.

@@ -10,7 +10,7 @@
         "Tie the intended guarantee to independent evidence.",
         "Give a concrete trace, actual validation state, and coverage limitations."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral audit task without revealing expected findings."
     },
     {
       "id": "capacity-safe",
@@ -20,15 +20,17 @@
         "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
         "Record a healthy pattern or refuted candidate."
       ],
-      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+      "evaluation_note": "Construct a raw safe control; keep expected audit outcomes out of the execution prompt."
     },
     {
       "id": "capacity-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Audit quadratic nested lookups and pathological input costs capable of causing CPU exhaustion on large payloads.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets repo-audit-complexity rather than repo-audit-capacity.",
+        "Defer or route to repo-audit-complexity instead of forcing an out-of-scope repository-audits pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+      "evaluation_note": "Near-neighbor sibling routing check within repository-audits; verify routing to repo-audit-complexity instead of repo-audit-capacity.",
+      "sibling_skill": "repo-audit-complexity"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

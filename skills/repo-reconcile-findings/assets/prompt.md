@@ -5,3 +5,4 @@ identity. Write reconciliation.json and remediation.json validated against
 assets/reconciliation.schema.json, and return a standalone handoff with actual
 commands/results and next action. Honor the current user-authorized mutation scope;
 draft external changes otherwise.
+Do not modify application code or mutate remote issue state without explicit user authorization.

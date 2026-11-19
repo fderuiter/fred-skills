@@ -1,0 +1,7 @@
+{
+  "before_revision": "rev-before-2",
+  "after_revision": "rev-after-2",
+  "zero_divisor_handled_before": false,
+  "zero_divisor_handled_after": true,
+  "nonzero_controls_preserved_after": true
+}

@@ -165,7 +165,7 @@
       "protocol_version": "1.0",
       "artifact": {
         "filename": "architecture.json",
-        "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+        "schema": "shared/software-architecture/resources/assets/architecture.schema.json",
         "starter": {
           "schema_version": "1.0",
           "title": "Architecture specification",
@@ -203,7 +203,7 @@
       "protocol_version": "1.0",
       "artifact": {
         "filename": "review.json",
-        "schema": "skills/review-diff-analysis/assets/review.schema.json",
+        "schema": "shared/code-review/resources/assets/review.schema.json",
         "starter": {
           "schema_version": "1.0",
           "verdict": "comment",
@@ -240,7 +240,7 @@
       "protocol_version": "1.0",
       "artifact": {
         "filename": "testing.json",
-        "schema": "skills/test-case-generation/assets/testing.schema.json",
+        "schema": "shared/automated-testing/resources/assets/testing.schema.json",
         "starter": {
           "schema_version": "1.0",
           "component": "repository",

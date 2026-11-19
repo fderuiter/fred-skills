@@ -21,3 +21,4 @@ Identify missing regression assertions, untested error branches, and edge condit
 Document uncovered gaps using the [testing template](assets/testing-template.md).
 Ensure test gap specifications conform to [testing schema](assets/testing.schema.json).
 Provide a prioritized list of test scenarios needed to eliminate coverage blind spots.
+Do not modify repository or test files without explicit user authorization; keep confirmed gaps and unverified hypotheses distinct.

@@ -29,3 +29,4 @@ Use the [handoff](assets/handoff.md) and [starting prompt](assets/prompt.md). Re
 observed versus inferred behavior, actual validation state, compatibility limits, and
 next action. Resolve related workflow skills by name, without assuming a host API.
 Validate structured verification artifacts using [finding verification schema](assets/finding-verification.schema.json).
+Do not modify application code or publish remote records without explicit user authorization.

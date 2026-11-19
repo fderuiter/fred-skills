@@ -10,7 +10,7 @@
         "Specify interface contracts and encapsulation barriers to isolate state.",
         "Require invariant checks and validation guards at boundary entry points."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral architecture task without revealing expected boundaries or decisions."
     },
     {
       "id": "arch-boundary-specification-safe",
@@ -21,15 +21,17 @@
         "Verify invariant checks and authorization guards execute at each crossing.",
         "Document boundary specifications adhering to the architecture schema."
       ],
-      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+      "evaluation_note": "Construct a raw well-bounded architecture control; keep expected specification outcomes out of the execution prompt."
     },
     {
       "id": "arch-boundary-specification-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Decompose this monolithic billing pipeline into cohesive ingestion, calculation, and notification components with acyclic interfaces.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets arch-component-decomposition rather than arch-boundary-specification.",
+        "Defer or route to arch-component-decomposition instead of forcing an out-of-scope software-architecture pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+      "evaluation_note": "Near-neighbor sibling routing check within software-architecture; verify routing to arch-component-decomposition instead of arch-boundary-specification.",
+      "sibling_skill": "arch-component-decomposition"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
