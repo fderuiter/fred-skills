@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AuditSessionDiagnosticBundle",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "schema_version",
     "session_id",
@@ -24,6 +25,7 @@
     },
     "failure_classification": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "failure_type",
         "summary",
@@ -56,6 +58,7 @@
     },
     "correlated_domain": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "specialist_skill": {
           "type": ["string", "null"]
@@ -73,6 +76,7 @@
     },
     "environment": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "platform",
         "python_version"
@@ -94,6 +98,7 @@
     },
     "recovery": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "instructions"
       ],
@@ -114,6 +119,7 @@
     },
     "redaction": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "tier",
         "credentials_redacted",
@@ -152,6 +158,7 @@
     },
     "transcript_discovery": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "source",
         "selected_transcript",
@@ -178,6 +185,7 @@
           "type": "array",
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "required": [
               "path",
               "reason"

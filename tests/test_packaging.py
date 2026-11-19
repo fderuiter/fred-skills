@@ -36,7 +36,11 @@ class PackageTests(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\nDeliver the audit output.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json).\n"
+            "Do not modify application code without explicit user authorization.\n",
+            encoding="utf-8",
         )
         assets_dir = self.skill / "assets"
         assets_dir.mkdir(parents=True)
@@ -46,13 +50,19 @@ class PackageTests(unittest.TestCase):
                 {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
+                    "additionalProperties": False,
+                    "required": ["schema_version"],
+                    "properties": {
+                        "schema_version": {"type": "string", "const": "1.0"}
+                    },
                 }
             ),
             encoding="utf-8",
         )
         self.prompt = assets_dir / "prompt.md"
         self.prompt.write_text(
-            "Use sample-audit on <repository> at <revision>. Do not modify application code without authorization.\n",
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Do not modify application code without authorization.\n",
             encoding="utf-8",
         )
         self.scenarios_file = self.skill / "references/evaluation-scenarios.json"
@@ -1192,28 +1202,283 @@ class PackageTests(unittest.TestCase):
         )
 
     def test_prompt_lacking_negative_constraints_or_guardrails_is_rejected(self):
+        noun_only_prompt = (
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Enforce boundary guardrails, isolation barriers, invariants, and safe controls.\n"
+        )
+        for unconstrained_prompt in (
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json.\n",
+            noun_only_prompt,
+        ):
+            self.prompt.write_text(unconstrained_prompt, encoding="utf-8")
+            errors = validate_skill(self.skill)
+            self.assertTrue(
+                any(
+                    "prompt template lacks negative constraints or boundary guardrails"
+                    in error
+                    for error in errors
+                ),
+                f"Expected prompt constraint error for {unconstrained_prompt!r}, got: {errors}",
+            )
+
+    def test_prompt_missing_output_schema_mention_is_rejected(self):
         self.prompt.write_text(
-            "Use sample-audit on <repository> at <revision>.\n", encoding="utf-8"
+            "Use sample-audit on <repository> at <revision>. Inspect data schemas carefully. "
+            "Do not modify application code without authorization.\n",
+            encoding="utf-8",
         )
         errors = validate_skill(self.skill)
         self.assertTrue(
-            any(
-                "prompt template lacks negative constraints or boundary guardrails"
-                in error
-                for error in errors
-            ),
-            f"Expected prompt constraint error, got: {errors}",
+            any("output schema contract" in error for error in errors),
+            f"Expected missing output schema mention error, got: {errors}",
         )
 
     def test_skill_markdown_lacking_boundary_sections_is_rejected(self):
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract without standard headers.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\nInspect [audit schema](assets/audit.schema.json); do not mutate files.\n",
+            encoding="utf-8",
         )
         errors = validate_skill(self.skill)
         self.assertTrue(
             any("lacks boundary sections" in error for error in errors),
             f"Expected missing boundary section error, got: {errors}",
         )
+
+    def test_skill_markdown_prohibition_and_delivery_or_guardrail_rules(self):
+        # Noun-only SKILL.md without explicit prohibitions is rejected
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Workflow\n\nMap trust boundaries and isolation barriers.\n\n"
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) invariant summaries.\n",
+            encoding="utf-8",
+        )
+        noun_only_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("explicit negative prohibitions" in e for e in noun_only_errors),
+            f"Expected explicit prohibition error, got: {noun_only_errors}",
+        )
+
+        # Prohibition only in ## Workflow without ## Guardrails or ## Deliver prohibition is rejected
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Workflow\n\nDo not trust unvalidated inputs.\n\n"
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
+            encoding="utf-8",
+        )
+        misplaced_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "dedicated guardrail heading" in e and "delivery section" in e
+                for e in misplaced_errors
+            ),
+            f"Expected guardrail/delivery placement error, got: {misplaced_errors}",
+        )
+
+        # Dedicated ## Guardrails section with explicit prohibition and linked schema is accepted
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Guardrails\n\n- Never modify application code without authorization.\n\n"
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_skill_markdown_missing_schema_link_is_rejected(self):
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Deliver\n\nDeliver the audit output. Do not modify application code.\n",
+            encoding="utf-8",
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "missing markdown link to output schema assets/audit.schema.json"
+                in error
+                for error in errors
+            ),
+            f"Expected unlinked schema error, got: {errors}",
+        )
+
+    def test_empty_and_open_schemas_are_rejected_while_map_objects_are_allowed(self):
+        # 1. Empty {} schema
+        self.output_schema.write_text("{}", encoding="utf-8")
+        empty_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("empty or non-object JSON schema" in e for e in empty_errors),
+            f"Expected empty schema rejection, got: {empty_errors}",
+        )
+
+        # 2. Open root object schema without properties
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                }
+            ),
+            encoding="utf-8",
+        )
+        open_root_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "root schema must define non-empty 'properties'" in e
+                for e in open_root_errors
+            ),
+            f"Expected open root schema rejection, got: {open_root_errors}",
+        )
+
+        # 3. Nested structured object with properties omitting additionalProperties: false
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "nested": {
+                            "type": "object",
+                            "properties": {"field": {"type": "string"}},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        nested_open_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "$.properties.nested" in e and "'additionalProperties': false" in e
+                for e in nested_open_errors
+            ),
+            f"Expected nested open object rejection, got: {nested_open_errors}",
+        )
+
+        # 4. Intentional map object (additionalProperties schema) and untyped details object without properties
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "by_category": {
+                            "type": "object",
+                            "additionalProperties": {"type": "integer", "minimum": 0},
+                        },
+                        "details": {"type": "object"},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_multi_hop_markdown_links_are_rejected(self):
+        refs_dir = self.skill / "references"
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        (refs_dir / "hop1.md").write_text(
+            "# Hop 1\n\nSee [hop 2](hop2.md) for nested details.\n",
+            encoding="utf-8",
+        )
+        (refs_dir / "hop2.md").write_text("# Hop 2\n", encoding="utf-8")
+        self.entry.write_text(
+            self.entry.read_text(encoding="utf-8")
+            + "\nRead [hop 1](references/hop1.md).\n",
+            encoding="utf-8",
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "1-hop depth limit" in e
+                and "SKILL.md -> references/hop1.md -> references/hop2.md" in e
+                for e in errors
+            ),
+            f"Expected multi-hop link error, got: {errors}",
+        )
+
+    def test_progressive_disclosure_token_budgets_are_enforced(self):
+        orig_entry = self.entry.read_text(encoding="utf-8")
+
+        # 1. Frontmatter startup metadata over 100 tokens
+        bloated_desc = " ".join(["contract"] * 105)
+        self.entry.write_text(
+            f'---\nname: sample-audit\ndescription: "{bloated_desc}"\n---\n\n'
+            "# Sample\n\n## Deliver\n\nDeliver [audit schema](assets/audit.schema.json). "
+            "Do not modify code.\n",
+            encoding="utf-8",
+        )
+        meta_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("frontmatter metadata exceeds token budget" in e for e in meta_errors),
+            f"Expected metadata token budget error, got: {meta_errors}",
+        )
+
+        # 2. SKILL.md 5,000-token body (< 500 lines)
+        five_k_body = "\n".join([" ".join(["word"] * 50) for _ in range(100)])
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            f"# Sample\n\n{five_k_body}\n\n## Deliver\n\n"
+            "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
+            encoding="utf-8",
+        )
+        body_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("skill body exceeds token budget" in e for e in body_errors),
+            f"Expected 5,000-token body rejection, got: {body_errors}",
+        )
+
+        # 3. Reference markdown 5,000-token file
+        self.entry.write_text(orig_entry, encoding="utf-8")
+        bloated_ref = self.skill / "references/bloated.md"
+        bloated_ref.write_text(" ".join(["detail"] * 5000), encoding="utf-8")
+        ref_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "references/bloated.md: reference markdown exceeds token budget" in e
+                for e in ref_errors
+            ),
+            f"Expected reference token budget error, got: {ref_errors}",
+        )
+
+    def test_telemetry_rejects_unconstrained_and_empty_schema_fixtures_with_zero_coverage(
+        self,
+    ):
+        self.manifest()
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+
+        # 1. Negative-constraint-free noun-only synthetic fixture -> 0% constraint coverage
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Map boundaries and guardrails.\n",
+            encoding="utf-8",
+        )
+        errors_no_neg, tel_no_neg = validate_with_telemetry(self.root)
+        self.assertTrue(errors_no_neg)
+        self.assertEqual(0, tel_no_neg["passed_packages"])
+        self.assertEqual(0.0, tel_no_neg["deterministic_constraint_coverage"])
+        self.assertEqual(
+            0.0, tel_no_neg["deterministic_constraint_coverage_percentage"]
+        )
+
+        # 2. Empty {} schema synthetic fixture -> 0% constraint and schema coverage
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Do not modify application code.\n",
+            encoding="utf-8",
+        )
+        self.output_schema.write_text("{}", encoding="utf-8")
+        errors_empty, tel_empty = validate_with_telemetry(self.root)
+        self.assertTrue(errors_empty)
+        self.assertEqual(0, tel_empty["passed_packages"])
+        self.assertEqual(0.0, tel_empty["output_schema_coverage"])
+        self.assertEqual(0.0, tel_empty["deterministic_constraint_coverage"])
+        self.assertEqual(0.0, tel_empty["deterministic_constraint_coverage_percentage"])
 
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)
