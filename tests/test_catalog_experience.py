@@ -184,6 +184,102 @@ class ExperienceTests(unittest.TestCase):
         ):
             self.assertIn(f"`{recipe_name}`", quickstart_header)
 
+    def test_workflow_recipes_companions_prompts_and_status_alignment(self):
+        suites = {
+            item["name"]: item
+            for item in read_json(ROOT / "catalog/suites.json")["suites"]
+        }
+        expected_companions = {
+            "finding-verification.json": "skills/repo-verify-finding/assets/finding-verification.schema.json",
+            "regression.json": "skills/repo-specify-regression/assets/regression.schema.json",
+            "plan.json": "skills/repo-plan-fix/assets/plan.schema.json",
+            "fix.json": "skills/repo-apply-fix/assets/fix.schema.json",
+            "verification.json": "skills/repo-verify-fix/assets/verification.schema.json",
+            "reconciliation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+            "remediation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+        }
+        companions = suites["repository-workflows"].get("companions")
+        self.assertEqual(expected_companions, companions)
+        for schema_rel in expected_companions.values():
+            self.assertTrue((ROOT / schema_rel).is_file(), schema_rel)
+
+        recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
+        experience_md = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
+        explorer_html = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
+        expected_recipe_companions = {
+            "investigate-bug": ["finding-verification.json"],
+            "flaky-tests": ["finding-verification.json"],
+            "plan-findings": ["finding-verification.json", "plan.json"],
+            "verify-fix": [
+                "finding-verification.json",
+                "regression.json",
+                "verification.json",
+                "reconciliation.json",
+                "remediation.json",
+            ],
+            "apply-fix": [
+                "finding-verification.json",
+                "regression.json",
+                "plan.json",
+                "fix.json",
+                "verification.json",
+                "reconciliation.json",
+                "remediation.json",
+            ],
+        }
+        for recipe_name, req_files in expected_recipe_companions.items():
+            outputs = recipes[recipe_name]["outputs"]
+            self.assertEqual("audit.json", outputs[0])
+            for fname in req_files:
+                self.assertIn(fname, outputs)
+                self.assertIn(fname, experience_md)
+                self.assertIn(fname, explorer_html)
+
+        prompt_expectations = {
+            "repo-verify-finding": (
+                ["finding-verification.json"],
+                "assets/finding-verification.schema.json",
+            ),
+            "repo-specify-regression": (
+                ["regression.json"],
+                "assets/regression.schema.json",
+            ),
+            "repo-plan-fix": (["plan.json"], "assets/plan.schema.json"),
+            "repo-apply-fix": (["fix.json"], "assets/fix.schema.json"),
+            "repo-verify-fix": (
+                ["verification.json"],
+                "assets/verification.schema.json",
+            ),
+            "repo-reconcile-findings": (
+                ["reconciliation.json", "remediation.json"],
+                "assets/reconciliation.schema.json",
+            ),
+        }
+        for skill_name, (deliverables, schema_ref) in prompt_expectations.items():
+            prompt_text = (ROOT / "skills" / skill_name / "assets/prompt.md").read_text(
+                encoding="utf-8"
+            )
+            for deliverable in deliverables:
+                self.assertIn(deliverable, prompt_text)
+            self.assertIn(schema_ref, prompt_text)
+
+        audit_statuses = set(
+            read_json(ROOT / "shared/repo-audit/resources/assets/audit.schema.json")[
+                "properties"
+            ]["findings"]["items"]["properties"]["status"]["enum"]
+        )
+        fv_statuses = read_json(
+            ROOT / "skills/repo-verify-finding/assets/finding-verification.schema.json"
+        )["properties"]["reproduction_status"]["enum"]
+        self.assertIn("supported", fv_statuses)
+        self.assertNotIn("statically-supported", fv_statuses)
+        self.assertIn("supported", audit_statuses)
+        skill_md = (ROOT / "skills/repo-verify-finding/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("statically supported", skill_md)
+        self.assertNotIn("statically-supported", skill_md)
+
 
 if __name__ == "__main__":
     unittest.main()

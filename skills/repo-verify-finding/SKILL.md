@@ -13,7 +13,7 @@ Use provided run/audit schemas when available; keep unrelated records unchanged.
 1. Normalize the claim, affected revision, preconditions, stated contract, and evidence certainty. Recheck cited code and caller reachability; preserve unknown requirements.
 2. Trace the strongest safeguard and construct both a failing input/event sequence and a close safe control. Check callbacks, synchronization, authoritative validation, and caller guarantees.
 3. Use a bounded isolated reproduction of the exact source where practical. Record commands, raw results, dependency versions, and whether the original implementation was executed.
-4. Return confirmed, statically supported, needs-validation, hardening, or refuted with the decisive evidence. Never promote a small illustrative model into proof about unexecuted production code.
+4. Return confirmed, supported, needs-validation, hardening, or refuted with the decisive evidence. Never promote a small illustrative model into proof about unexecuted production code.
 5. Preserve source finding IDs, contrary evidence, limits, and the smallest next validation step. Do not fix the application or publish an issue without applicable authorization.
 
 ## Concrete boundary to investigate

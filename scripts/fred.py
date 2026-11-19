@@ -15,7 +15,13 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 from fredlib import evaluations, installation, releases, reports, repository, runs
-from fredlib.common import ROOT, atomic_json, read_json, resolve_audit_path
+from fredlib.common import (
+    ROOT,
+    WORKFLOW_DELIVERABLE_SCHEMAS,
+    atomic_json,
+    read_json,
+    resolve_audit_path,
+)
 
 HOST_CHOICES = sorted(read_json(ROOT / "catalog/hosts.json")["hosts"].keys())
 TASK_CHOICES = sorted(read_json(ROOT / "catalog/recipes.json")["recipes"].keys())
@@ -1237,9 +1243,11 @@ def handle_runs(a: argparse.Namespace) -> Any:
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "compare":
+        before_path = _resolve_audit_only_input(a.before, "compare")
+        after_path = _resolve_audit_only_input(a.after, "compare")
         return runs.compare(
-            read_json(resolve_audit_path(a.before)),
-            read_json(resolve_audit_path(a.after)),
+            read_json(before_path),
+            read_json(after_path),
         )
     if a.command == "reconcile":
         return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
@@ -1290,9 +1298,13 @@ def handle_installation(a: argparse.Namespace) -> Any:
 
 
 def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
-    resolved = resolve_audit_path(target)
     if target.is_dir():
         runs._require_audit_directory(target, command_name)
+    resolved = resolve_audit_path(target)
+    if resolved.name == "run.json":
+        raise ValueError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; 'run.json' is run metadata and is not supported"
+        )
     if (
         resolved.name != "audit.json"
         and resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
@@ -1314,6 +1326,13 @@ def handle_reporting(a: argparse.Namespace) -> Any:
             )
         else:
             audit_path = resolve_audit_path(a.audit)
+            if (
+                audit_path.name == "run.json"
+                or audit_path.name in WORKFLOW_DELIVERABLE_SCHEMAS
+            ):
+                raise ValueError(
+                    f"Report rendering ('report') requires an 'audit.json' ledger; artifact '{audit_path.name}' is not supported"
+                )
         target = reports.render(
             read_json(audit_path),
             a.output,

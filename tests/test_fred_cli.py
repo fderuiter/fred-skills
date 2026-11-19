@@ -1760,6 +1760,115 @@ class FredCLITests(unittest.TestCase):
                     self.assertEqual(1, rec_proc.returncode)
                     self.assertIn("audit.json", rec_proc.stderr)
 
+    def test_workflow_companions_and_run_json_rejected_by_audit_only_cli_commands(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("value = 1\n", encoding="utf-8")
+            ws = root / "ws"
+            init_proc = self.run_cli(
+                "init", str(repo), "--task", "apply-fix", "--output", str(ws)
+            )
+            self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+
+            # Invalid companion file causes CLI validate-run to fail naming the companion file
+            (ws / "plan.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "task_breakdowns": [],
+                        "dependency_order": [],
+                        "file_scopes": [],
+                        "acceptance_criteria": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bad_val = self.run_cli("validate-run", str(ws))
+            self.assertEqual(1, bad_val.returncode)
+            self.assertIn("plan.json", bad_val.stderr)
+            (ws / "plan.json").unlink()
+            ok_val = self.run_cli("validate-run", str(ws))
+            self.assertEqual(0, ok_val.returncode, ok_val.stderr)
+
+            artifact_dir = root / "artifacts"
+            artifact_dir.mkdir()
+            non_audit_files = {
+                "finding-verification.json": {
+                    "finding_id": "F-1",
+                    "reproduction_status": "supported",
+                    "safe_control_outcomes": [{"control": "ok", "passed": True}],
+                    "confidence_rating": "high",
+                },
+                "regression.json": {
+                    "finding_id": "F-1",
+                    "failure_boundaries": ["x"],
+                    "test_command_traces": ["pytest"],
+                    "assertion_expectations": ["assert ok"],
+                },
+                "plan.json": {
+                    "task_breakdowns": [
+                        {
+                            "task_id": "W-1",
+                            "title": "Fix",
+                            "file_scopes": ["a.py"],
+                            "acceptance_criteria": ["ok"],
+                        }
+                    ],
+                    "dependency_order": ["W-1"],
+                    "file_scopes": ["a.py"],
+                    "acceptance_criteria": ["ok"],
+                },
+                "fix.json": {
+                    "file_changes": ["a.py"],
+                    "diff_summaries": ["guard input"],
+                    "execution_results": [
+                        {"command": "pytest", "exit_code": 0, "passed": True}
+                    ],
+                    "compatibility_limits": [],
+                },
+                "verification.json": {
+                    "before_revision": "a1",
+                    "after_revision": "b2",
+                    "original_reproduced": True,
+                    "regression_passed": True,
+                    "safe_controls_passed": True,
+                    "commands": ["pytest"],
+                    "result": "ok",
+                },
+                "reconciliation.json": {
+                    "finding_fingerprint_matches": [],
+                    "remediation_state_transitions": [],
+                    "unmapped_records": [],
+                },
+                "remediation.json": {"schema_version": "1.0", "records": []},
+                "run.json": json.loads((ws / "run.json").read_text(encoding="utf-8")),
+            }
+            audit_file = ws / "audit.json"
+            for fname, payload in non_audit_files.items():
+                fpath = artifact_dir / fname
+                fpath.write_text(json.dumps(payload), encoding="utf-8")
+                for argv in (
+                    ["report", str(fpath), "--output", str(root / f"rep-{fname}.html")],
+                    ["issues", str(fpath), "--output", str(root / f"iss-{fname}")],
+                    [
+                        "export-sarif",
+                        str(fpath),
+                        "--output",
+                        str(root / f"sarif-{fname}.json"),
+                    ],
+                    ["compare", str(fpath), str(audit_file)],
+                ):
+                    with self.subTest(artifact=fname, cmd=argv[0]):
+                        proc = self.run_cli(*argv)
+                        self.assertEqual(1, proc.returncode)
+                        self.assertIn("audit.json", proc.stderr)
+                        self.assertIn(fname, proc.stderr)
+
 
 class FredDispatchRegistryTests(unittest.TestCase):
     @classmethod

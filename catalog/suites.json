@@ -106,6 +106,15 @@
           "checks": []
         }
       },
+      "companions": {
+        "finding-verification.json": "skills/repo-verify-finding/assets/finding-verification.schema.json",
+        "regression.json": "skills/repo-specify-regression/assets/regression.schema.json",
+        "plan.json": "skills/repo-plan-fix/assets/plan.schema.json",
+        "fix.json": "skills/repo-apply-fix/assets/fix.schema.json",
+        "verification.json": "skills/repo-verify-fix/assets/verification.schema.json",
+        "reconciliation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+        "remediation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json"
+      },
       "phases": [
         {
           "id": 0,
