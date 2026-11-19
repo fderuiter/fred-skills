@@ -22,7 +22,9 @@ from .common import (
     _artifact_contract_for_run,
     _deliverable_for_run,
     _detect_domain_kind,
+    _is_single_line_text,
     _load_suite_contracts,
+    _markdown_code_span,
     _suite_for_run,
     _suite_for_skills,
     _suite_shared_assets,
@@ -106,16 +108,24 @@ def plan(
                 hint="Provide a YAML mapping containing only 'profile', 'exclude', and/or 'critical_workflows'.",
             )
         settings = loaded
-        for key in ["exclude", "critical_workflows"]:
-            if key in settings and (
-                not isinstance(settings[key], list)
-                or any(not isinstance(s, str) or not s.strip() for s in settings[key])
-            ):
-                raise FredCliError(
-                    f"Project config {key} must be a list of nonempty strings",
-                    code="invalid_config",
-                    hint=f"Set '{key}' to a YAML list of nonempty strings in '{config_path}'.",
-                )
+        if "exclude" in settings and (
+            not isinstance(settings["exclude"], list)
+            or any(not isinstance(s, str) or not s.strip() for s in settings["exclude"])
+        ):
+            raise FredCliError(
+                "Project config exclude must be a list of nonempty strings",
+                code="invalid_config",
+                hint=f"Set 'exclude' to a YAML list of nonempty strings in '{config_path}'.",
+            )
+        if "critical_workflows" in settings and (
+            not isinstance(settings["critical_workflows"], list)
+            or any(not _is_single_line_text(s) for s in settings["critical_workflows"])
+        ):
+            raise FredCliError(
+                "Project config critical_workflows must be a list of single-line nonempty strings",
+                code="invalid_config",
+                hint=f"Set 'critical_workflows' to a YAML list of single-line nonempty strings in '{config_path}'.",
+            )
         if "profile" in settings and not isinstance(settings["profile"], str):
             raise FredCliError(
                 f"Project profile must be a string (available profiles: {profile_list})",
@@ -481,9 +491,17 @@ def prompt(run: dict) -> str:
     deliverable = str(contract["filename"])
     schema_rel = str(contract["schema"])
     rules = _deliverable_prompt_rules(deliverable, schema_rel, run=run)
+    repo_span = _markdown_code_span(run["repository"]["path"])
+    workflows_rendered = ", ".join(
+        _markdown_code_span(wf) for wf in run["plan"]["critical_workflows"]
+    )
+    changed_rendered = (
+        ", ".join(_markdown_code_span(p) for p in run["plan"]["changed_files"])
+        or "No diff restriction supplied"
+    )
     return f"""# Engineering task: {run["plan"]["task"]}
 
-Repository: {run["repository"]["path"]}
+Repository: {repo_span}
 Revision: {run["repository"]["revision"]}; content identity: {run["snapshot"]["digest"]}
 Mode: {run["plan"]["mode"]}; work budget: {run["plan"]["budget"]}
 
@@ -494,8 +512,8 @@ Check actual source freshness before reusing evidence. Inspect callers, dependen
 guards, and synchronous callback boundaries as well as await points. Preserve intended
 requirements separately from observed behavior and record healthy/refuted controls.
 
-Critical workflows: {", ".join(run["plan"]["critical_workflows"])}.
-Changed paths: {", ".join(run["plan"]["changed_files"]) or "No diff restriction supplied"}.
+Critical workflows: {workflows_rendered}.
+Changed paths: {changed_rendered}.
 Deferred skills: {", ".join(run["plan"]["deferred_skills"]) or "None in selected recipe"}.
 Expected outputs: {", ".join(run["plan"]["expected_outputs"])}.
 

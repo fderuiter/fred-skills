@@ -1863,6 +1863,68 @@ Bearer sk-proj-1234567890abcdef1234567890
             self.assertIn(fname, blob)
             self.assertNotIn("validate_audit.py", blob)
 
+    def test_recovery_shell_quotes_workspace_paths_and_report_expands_fences(self):
+        import shlex
+
+        spaced_ws = self.temp_path / "workspace with spaces & $vars"
+        spaced_ws.mkdir()
+        (spaced_ws / "audit.json").write_text('{"findings": []}\n', encoding="utf-8")
+
+        breakout_line = (
+            "ValidationError: bad payload ```\n# Injected Heading\n``` trailing"
+        )
+        failure = {
+            "failure_type": "schema_validation_error",
+            "summary": "Unclassified execution failure: ```\n# Injected Summary",
+            "line_number": 9,
+            "matched_line": breakout_line,
+            "details": {},
+        }
+        rec = triage.formulate_recovery_instructions(
+            failure, run_data=None, workspace_dir=spaced_ws
+        )
+        expected_ws_quoted = shlex.quote(str(spaced_ws))
+        expected_audit_quoted = shlex.quote(f"{spaced_ws}/audit.json")
+        joined_steps = "\n".join(rec["instructions"])
+        self.assertIn(f"validate_audit.py {expected_audit_quoted}", joined_steps)
+        self.assertIn(
+            f"python scripts/fred.py resume {expected_ws_quoted}", joined_steps
+        )
+        # Step 1 wraps matched_line containing ``` inside a 4-backtick single-line code span
+        self.assertIn(
+            r"````ValidationError: bad payload ```\n# Injected Heading\n``` trailing````",
+            rec["instructions"][0],
+        )
+
+        bundle = {
+            "schema_version": "1.0",
+            "session_id": "sess-fence",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "failure_classification": failure,
+            "correlated_domain": {
+                "specialist_skill": "repo-audit-concurrency",
+                "topic": "concurrency",
+                "ledger_references": [],
+            },
+            "recovery": rec,
+            "redaction": {
+                "tier": "full",
+                "credentials_redacted": 0,
+                "tool_outputs_omitted": 0,
+                "total_redactions": 0,
+            },
+            "transcript_discovery": {
+                "source": "explicit",
+                "selected_transcript": "/tmp/log`tick`/session.jsonl",
+                "selection_reason": "explicit path",
+                "rejected_candidates": [],
+            },
+        }
+        report_md = triage.render_report(bundle)
+        self.assertIn(f"````\n{breakout_line}\n````", report_md)
+        self.assertIn("``/tmp/log`tick`/session.jsonl``", report_md)
+        self.assertNotIn("\n# Injected Summary", report_md)
+
 
 if __name__ == "__main__":
     unittest.main()

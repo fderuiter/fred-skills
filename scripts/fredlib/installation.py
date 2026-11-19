@@ -11,6 +11,8 @@ from typing import Any
 from .common import (
     ROOT,
     FredCliError,
+    _copy_allowed_skill_package,
+    _scan_validated_skill_files,
     atomic_json,
     choose_skills,
     digest,
@@ -718,7 +720,7 @@ def _check_install_candidate(
 ) -> None:
     root, force = context
     source = root / "skills" / name
-    package_files(source)  # reject source symlinks before any writes
+    _scan_validated_skill_files(source, root=root)
     path = checked_target(target, name)
     _validate_managed_target(path, record, force)
 
@@ -754,11 +756,7 @@ def _stage_skills(
     staged.mkdir(parents=True)
     backups.mkdir(parents=True)
     for name in selected:
-        shutil.copytree(
-            root / "skills" / name,
-            staged / name,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
+        _copy_allowed_skill_package(root / "skills" / name, staged / name, root=root)
     return staged, backups
 
 

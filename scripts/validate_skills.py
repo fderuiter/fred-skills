@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
 import shutil
 import subprocess
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PureWindowsPath
@@ -94,6 +96,179 @@ _NON_AUDIT_NOTE_SUITES = frozenset(
 _NO_EXPECTED_FINDINGS_SUITES = frozenset(
     {"software-architecture", "automated-testing", "repository-workflows"}
 )
+_ALLOWED_PACKAGE_TEXT_SUFFIXES = frozenset({".md", ".json", ".yaml", ".svg"})
+_DISALLOWED_DOC_FILENAMES = frozenset({"readme.md", "changelog.md"})
+_ALLOWED_CC_WHITESPACE = frozenset({"\n", "\r", "\t"})
+_BANNED_SCRIPT_MODULES = frozenset(
+    {
+        "aiohttp",
+        "builtins",
+        "cffi",
+        "ctypes",
+        "curl",
+        "ftplib",
+        "grpc",
+        "http",
+        "httpx",
+        "imaplib",
+        "importlib",
+        "paramiko",
+        "poplib",
+        "pty",
+        "pycurl",
+        "requests",
+        "runpy",
+        "smtplib",
+        "socket",
+        "socketserver",
+        "ssl",
+        "subprocess",
+        "telnetlib",
+        "urllib",
+        "urllib3",
+        "webbrowser",
+        "websocket",
+        "websockets",
+        "wsgiref",
+        "xmlrpc",
+    }
+)
+_BANNED_SCRIPT_BUILTINS = frozenset(
+    {"__builtins__", "__import__", "compile", "eval", "exec"}
+)
+_BANNED_OS_ATTRS = frozenset(
+    {
+        "execl",
+        "execle",
+        "execlp",
+        "execlpe",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+        "fork",
+        "forkpty",
+        "popen",
+        "posix_spawn",
+        "posix_spawnp",
+        "spawnl",
+        "spawnle",
+        "spawnlp",
+        "spawnlpe",
+        "spawnv",
+        "spawnve",
+        "spawnvp",
+        "spawnvpe",
+        "system",
+    }
+)
+
+
+def _find_hidden_unicode(text: str) -> str | None:
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            return f"U+{ord(ch):04X}"
+        if cat == "Cc" and ch not in _ALLOWED_CC_WHITESPACE:
+            return f"U+{ord(ch):04X}"
+    return None
+
+
+def _check_text_hygiene(
+    text: str, rel_posix: str, *, check_html_comments: bool = False
+) -> list[str]:
+    if "\x00" in text:
+        return [f"Binary file (NUL byte) in skill package: {rel_posix}"]
+    issues: list[str] = []
+    hidden = _find_hidden_unicode(text)
+    if hidden is not None:
+        issues.append(
+            f"{rel_posix}: disallowed hidden or control Unicode character {hidden}"
+        )
+    if check_html_comments and "<!--" in text:
+        issues.append(f"{rel_posix}: HTML comments are not allowed")
+    return issues
+
+
+def _inspect_skill_md_raw_bytes(skill_md_path: Path) -> list[str]:
+    if skill_md_path.is_symlink() or not skill_md_path.is_file():
+        return []
+    try:
+        raw_bytes = skill_md_path.read_bytes()
+    except OSError:
+        return []
+    if b"\x00" in raw_bytes:
+        return ["Binary file (NUL byte) in skill package: SKILL.md"]
+    try:
+        raw_text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return ["Binary or non-UTF-8 file in skill package: SKILL.md"]
+    return _check_text_hygiene(raw_text, "SKILL.md", check_html_comments=True)
+
+
+def _is_package_script_rel(rel_posix: str, suffix: str) -> bool:
+    parts = rel_posix.split("/")
+    return len(parts) == 2 and parts[0] == "scripts" and suffix == ".py"
+
+
+def _check_package_file_allowlist(rel_posix: str, name: str, suffix: str) -> str | None:
+    if name.lower() in _DISALLOWED_DOC_FILENAMES:
+        return f"Disallowed documentation clutter in skill package: {rel_posix}"
+    if _is_package_script_rel(rel_posix, suffix):
+        return None
+    if suffix in _ALLOWED_PACKAGE_TEXT_SUFFIXES:
+        return None
+    return (
+        f"Disallowed or binary file in skill package: {rel_posix} "
+        "(allowed UTF-8 text files: .md, .json, .yaml, .svg, scripts/*.py)"
+    )
+
+
+def _ast_import_errors(node: ast.AST, rel_posix: str) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            f"{rel_posix}: banned import '{alias.name}' (line {node.lineno})"
+            for alias in node.names
+            if alias.name.split(".")[0] in _BANNED_SCRIPT_MODULES
+        ]
+    if isinstance(node, ast.ImportFrom) and node.module:
+        root_mod = node.module.split(".")[0]
+        if root_mod in _BANNED_SCRIPT_MODULES:
+            return [
+                f"{rel_posix}: banned import from '{node.module}' (line {node.lineno})"
+            ]
+    return []
+
+
+def _ast_expr_error(node: ast.AST, rel_posix: str) -> str | None:
+    if (
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in _BANNED_SCRIPT_BUILTINS
+    ):
+        return f"{rel_posix}: banned builtin '{node.id}' (line {node.lineno})"
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+        and node.attr in _BANNED_OS_ATTRS
+    ):
+        return f"{rel_posix}: banned call 'os.{node.attr}' (line {node.lineno})"
+    return None
+
+
+def _inspect_python_script(source: str, rel_posix: str) -> list[str]:
+    try:
+        tree = ast.parse(source, filename=rel_posix)
+    except SyntaxError as exc:
+        return [f"{rel_posix}: invalid Python syntax ({exc.msg} at line {exc.lineno})"]
+    issues: list[str] = []
+    for node in ast.walk(tree):
+        issues.extend(_ast_import_errors(node, rel_posix))
+        expr_err = _ast_expr_error(node, rel_posix)
+        if expr_err is not None:
+            issues.append(expr_err)
+    return issues
 
 
 def _is_relative_icon_path(raw_value: str) -> bool:
@@ -105,14 +280,29 @@ def _is_relative_icon_path(raw_value: str) -> bool:
     )
 
 
-def _validate_svg_file(candidate: Path, field: str, raw_value: str) -> list[str]:
+def _read_cached_utf8(path: Path, cached_texts: dict[Path, str] | None) -> str:
+    if cached_texts is not None and path in cached_texts:
+        return cached_texts[path]
+    content = path.read_text(encoding="utf-8")
+    if cached_texts is not None and not path.is_symlink():
+        cached_texts[path] = content
+    return content
+
+
+def _validate_svg_file(
+    candidate: Path,
+    field: str,
+    raw_value: str,
+    cached_texts: dict[Path, str] | None = None,
+) -> list[str]:
     if candidate.suffix.lower() != ".svg":
         return [f"UI {field} must point to an .svg file: {raw_value}"]
     if not candidate.is_file():
         return [f"Missing UI {field} file: {raw_value}"]
     try:
-        svg_root = ET.fromstring(candidate.read_text(encoding="utf-8"))
-    except (OSError, ET.ParseError) as exc:
+        svg_text = _read_cached_utf8(candidate, cached_texts)
+        svg_root = ET.fromstring(svg_text)
+    except (OSError, UnicodeDecodeError, ET.ParseError) as exc:
         return [f"Invalid SVG in UI {field} ({raw_value}): {exc}"]
     tag = svg_root.tag.rsplit("}", 1)[-1]
     if tag != "svg":
@@ -120,7 +310,12 @@ def _validate_svg_file(candidate: Path, field: str, raw_value: str) -> list[str]
     return []
 
 
-def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]:
+def _validate_ui_icon(
+    package: Path,
+    field: str,
+    raw_value: object,
+    cached_texts: dict[Path, str] | None = None,
+) -> list[str]:
     if not isinstance(raw_value, str) or not raw_value.strip():
         return [f"Missing or invalid UI {field}"]
     if not _is_relative_icon_path(raw_value):
@@ -135,7 +330,7 @@ def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]
         return [f"UI {field} escapes standalone package: {raw_value}"]
     if candidate.is_symlink():
         return [f"UI {field} must not be a symlink: {raw_value}"]
-    return _validate_svg_file(candidate, field, raw_value)
+    return _validate_svg_file(candidate, field, raw_value, cached_texts)
 
 
 def _fallback_suite_name(skill_name: str) -> str:
@@ -538,10 +733,21 @@ def _is_valid_skill_name(name: object, package_name: str) -> bool:
     )
 
 
+def _check_frontmatter_xml_tags(metadata: Mapping[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for field in ("name", "description"):
+        val = metadata.get(field)
+        if isinstance(val, str) and ("<" in val or ">" in val):
+            issues.append(
+                f"SKILL.md: frontmatter '{field}' must not contain XML tags ('<' or '>')"
+            )
+    return issues
+
+
 def _validate_frontmatter_metadata(
     package_name: str, metadata: Mapping[str, Any]
 ) -> list[str]:
-    errors: list[str] = []
+    errors = _check_frontmatter_xml_tags(metadata)
     name = metadata.get("name")
     if not _is_valid_skill_name(name, package_name):
         errors.append("Invalid name or directory mismatch")
@@ -651,6 +857,8 @@ def _validate_prompt_template(
         return [f"Missing prompt template: {prompt_rel}"], False
     try:
         prompt_content = prompt_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return [f"Binary or non-UTF-8 file in skill package: {prompt_rel}"], False
     except OSError as exc:
         return [f"{prompt_rel}: {exc}"], False
 
@@ -735,15 +943,12 @@ def _validate_evaluation_scenarios(
     return errors
 
 
-def _inspect_json_file(
+def _inspect_json_text(
     path: Path,
     rel_posix: str,
-    cached_texts: Mapping[Path, str],
+    raw_json: str,
     valid_closed_schemas: set[Path],
 ) -> list[str]:
-    raw_json = (
-        cached_texts[path] if path in cached_texts else path.read_text(encoding="utf-8")
-    )
     data = json.loads(raw_json)
     if not path.name.endswith(".schema.json"):
         return []
@@ -771,17 +976,14 @@ def _check_markdown_links(
     return errors
 
 
-def _inspect_markdown_file(
+def _inspect_markdown_text(
     path: Path,
     rel_posix: str,
+    md_text: str,
     *,
     package_resolved: Path,
     references_dir: Path,
-    cached_texts: Mapping[Path, str],
 ) -> list[str]:
-    md_text = (
-        cached_texts[path] if path in cached_texts else path.read_text(encoding="utf-8")
-    )
     errors: list[str] = []
     if path.resolve().is_relative_to(references_dir):
         ref_tokens = estimate_tokens(md_text)
@@ -795,13 +997,58 @@ def _inspect_markdown_file(
     return errors
 
 
+def _inspect_typed_file_content(
+    path: Path,
+    rel_posix: str,
+    raw_text: str,
+    *,
+    package_resolved: Path,
+    references_dir: Path,
+    valid_closed_schemas: set[Path],
+) -> list[str]:
+    if path.suffix == ".json":
+        return _inspect_json_text(path, rel_posix, raw_text, valid_closed_schemas)
+    if path.suffix == ".md":
+        return _inspect_markdown_text(
+            path,
+            rel_posix,
+            raw_text,
+            package_resolved=package_resolved,
+            references_dir=references_dir,
+        )
+    if path.suffix == ".py":
+        return _inspect_python_script(raw_text, rel_posix)
+    return []
+
+
+def _load_and_check_entry_text(
+    path: Path,
+    rel_posix: str,
+    cached_texts: dict[Path, str],
+) -> tuple[str | None, list[str]]:
+    try:
+        raw_text = _read_cached_utf8(path, cached_texts)
+    except UnicodeDecodeError:
+        return None, [f"Binary or non-UTF-8 file in skill package: {rel_posix}"]
+    except OSError as exc:
+        return None, [f"{rel_posix}: {exc}"]
+    if rel_posix == "SKILL.md":
+        return raw_text, []
+    hygiene = _check_text_hygiene(
+        raw_text, rel_posix, check_html_comments=(path.suffix == ".md")
+    )
+    if "\x00" in raw_text:
+        return None, hygiene
+    return raw_text, hygiene
+
+
 def _inspect_package_entry(
     path: Path,
     package: Path,
     *,
     package_resolved: Path,
     references_dir: Path,
-    cached_texts: Mapping[Path, str],
+    cached_texts: dict[Path, str],
     valid_closed_schemas: set[Path],
 ) -> list[str]:
     if path.is_symlink():
@@ -811,31 +1058,32 @@ def _inspect_package_entry(
     if not path.is_file():
         return []
     rel_posix = path.relative_to(package).as_posix()
-    errors: list[str] = []
     if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
-        errors.append(f"Generated Python cache in package: {rel_posix}")
+        return [f"Generated Python cache in package: {rel_posix}"]
+    allow_err = _check_package_file_allowlist(rel_posix, path.name, path.suffix)
+    if allow_err is not None:
+        return [allow_err]
+    raw_text, errors = _load_and_check_entry_text(path, rel_posix, cached_texts)
+    if raw_text is None:
+        return errors
     try:
-        if path.suffix == ".json":
-            errors.extend(
-                _inspect_json_file(path, rel_posix, cached_texts, valid_closed_schemas)
+        errors.extend(
+            _inspect_typed_file_content(
+                path,
+                rel_posix,
+                raw_text,
+                package_resolved=package_resolved,
+                references_dir=references_dir,
+                valid_closed_schemas=valid_closed_schemas,
             )
-        elif path.suffix == ".md":
-            errors.extend(
-                _inspect_markdown_file(
-                    path,
-                    rel_posix,
-                    package_resolved=package_resolved,
-                    references_dir=references_dir,
-                    cached_texts=cached_texts,
-                )
-            )
+        )
     except (ValueError, OSError, jsonschema.SchemaError) as exc:
         errors.append(f"{rel_posix}: {exc}")
     return errors
 
 
 def _scan_package_files(
-    package: Path, cached_texts: Mapping[Path, str]
+    package: Path, cached_texts: dict[Path, str]
 ) -> tuple[list[str], set[Path]]:
     errors: list[str] = []
     valid_closed_schemas: set[Path] = set()
@@ -871,7 +1119,10 @@ def _validate_ui_short_description(short: object) -> tuple[list[str], str | None
 
 
 def _validate_ui_interface(
-    package: Path, name: object, ui: object
+    package: Path,
+    name: object,
+    ui: object,
+    cached_texts: dict[Path, str] | None = None,
 ) -> tuple[list[str], str | None]:
     if not isinstance(ui, dict):
         return ["Invalid optional UI metadata: missing interface"], None
@@ -886,8 +1137,12 @@ def _validate_ui_interface(
     prompt = ui.get("default_prompt")
     if not isinstance(prompt, str) or f"${name}" not in prompt:
         errors.append("UI default_prompt must name the skill")
-    errors.extend(_validate_ui_icon(package, "icon_small", ui.get("icon_small")))
-    errors.extend(_validate_ui_icon(package, "icon_large", ui.get("icon_large")))
+    errors.extend(
+        _validate_ui_icon(package, "icon_small", ui.get("icon_small"), cached_texts)
+    )
+    errors.extend(
+        _validate_ui_icon(package, "icon_large", ui.get("icon_large"), cached_texts)
+    )
     return errors, normalized_short
 
 
@@ -908,18 +1163,23 @@ def _validate_ui_policy(policy: object) -> list[str]:
     return errors
 
 
-def _validate_ui_metadata(package: Path, name: object) -> tuple[list[str], str | None]:
+def _validate_ui_metadata(
+    package: Path,
+    name: object,
+    cached_texts: dict[Path, str] | None = None,
+) -> tuple[list[str], str | None]:
     ui_path = package / "agents/openai.yaml"
     if ui_path.is_symlink() or not ui_path.exists():
         return [], None
     try:
-        ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
+        raw_ui = _read_cached_utf8(ui_path, cached_texts)
+        ui_doc = yaml.safe_load(raw_ui)
     except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
         return [f"Invalid optional UI metadata: {exc}"], None
     if not isinstance(ui_doc, dict):
         return ["Invalid optional UI metadata: expected mapping"], None
     errors, short_description = _validate_ui_interface(
-        package, name, ui_doc.get("interface")
+        package, name, ui_doc.get("interface"), cached_texts
     )
     errors.extend(_validate_ui_policy(ui_doc.get("policy")))
     return errors, short_description
@@ -929,12 +1189,13 @@ def _inspect_skill_package(
     package: Path, scenario_schema: dict | None = None
 ) -> _ParsedSkillPackage:
     skill_md_path = package / "SKILL.md"
+    raw_skill_errors = _inspect_skill_md_raw_bytes(skill_md_path)
     try:
         metadata, body = read_frontmatter(skill_md_path)
     except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         _, fallback_schemas = _discover_output_schemas(package)
         return _ParsedSkillPackage(
-            errors=[str(exc)],
+            errors=[*raw_skill_errors, str(exc)],
             output_schemas=[
                 p.relative_to(package).as_posix() for p in fallback_schemas
             ],
@@ -944,7 +1205,8 @@ def _inspect_skill_package(
     if not skill_md_path.is_symlink():
         cached_texts[skill_md_path] = body
 
-    errors = _validate_frontmatter_metadata(package.name, metadata)
+    errors = list(raw_skill_errors)
+    errors.extend(_validate_frontmatter_metadata(package.name, metadata))
     body_errors, has_boundary_sections = _validate_skill_body(body)
     errors.extend(body_errors)
 
@@ -967,11 +1229,11 @@ def _inspect_skill_package(
         )
     )
 
+    ui_errors, short_description = _validate_ui_metadata(package, name, cached_texts)
+    errors.extend(ui_errors)
+
     scan_errors, valid_closed_schemas = _scan_package_files(package, cached_texts)
     errors.extend(scan_errors)
-
-    ui_errors, short_description = _validate_ui_metadata(package, name)
-    errors.extend(ui_errors)
 
     has_output_schema = (
         bool(output_schemas)

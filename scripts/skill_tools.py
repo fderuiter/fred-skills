@@ -192,7 +192,7 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
             depth = len(path_chain) - 1
             try:
                 content = current.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             for raw_target in extract_relative_links(content):
                 resolved = resolve_relative_link_target(raw_target, current.parent)
@@ -234,7 +234,7 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
             )
             try:
                 ref_content = ref_md.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             for raw_target in extract_relative_links(ref_content):
                 resolved = resolve_relative_link_target(raw_target, ref_md.parent)
