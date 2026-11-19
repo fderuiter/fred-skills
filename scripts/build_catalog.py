@@ -237,9 +237,18 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         },
         "plugins": cursor_plugins,
     }
+    gemini_description = (
+        f"{description} Stage-1 budget note: installing the full extension loads all "
+        f"{len(sorted_member_names)} skills at startup, which can exceed Stage-1 "
+        "discovery limits in OpenAI Codex (https://developers.openai.com/codex/skills, "
+        "2% context / 8,000-character fallback) and Claude Code "
+        "(https://code.claude.com/docs/en/skills, 1% context); prefer "
+        "`python scripts/fred.py install --pack starter` (6 skills, <= 1,500 chars) "
+        "for bounded discovery."
+    )
     gemini_extension = {
         "name": "fred-skills",
-        "description": description,
+        "description": gemini_description,
         "version": extension_version,
         "contextFileName": "AGENTS.md",
     }

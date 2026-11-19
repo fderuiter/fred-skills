@@ -1,6 +1,7 @@
 ---
 name: repo-apply-fix
-description: "Use when the user authorizes implementing a bounded correction for an established repository finding."
+description: "Implement an authorized, minimal source fix. Use when applying approved code. Do not use for audits."
+disable-model-invocation: true
 ---
 
 # Scoped Correction

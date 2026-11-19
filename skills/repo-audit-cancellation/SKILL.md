@@ -1,6 +1,6 @@
 ---
 name: repo-audit-cancellation
-description: "Audit cancellation propagation with code evidence and counterexamples. Use when auditing abort propagation, cancelled tasks that keep running, stale publication after cancellation, or shutdown draining."
+description: "Audit abort propagation and post-cancel work. Use when checking task aborts. Do not use for locks."
 ---
 
 # Cancellation Propagation

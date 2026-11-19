@@ -1,6 +1,6 @@
 {
   "name": "arch-component-decomposition",
-  "description": "Partition software systems into cohesive modules, narrow collaboration interfaces, and staged monolith-splitting plans. Use when breaking apart tightly coupled packages, assigning component ownership, or planning modular restructuring.",
+  "description": "Decompose capabilities into clean services. Use when structuring modular subsystems. Do not use for audits.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

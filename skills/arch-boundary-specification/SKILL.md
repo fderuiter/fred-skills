@@ -1,6 +1,6 @@
 ---
 name: arch-boundary-specification
-description: "Specify service encapsulation contracts, module interfaces, and failure-domain isolation rules in architecture artifacts. Use when designing new subsystem perimeters, authoring API gateway specs, or documenting inter-service communication protocols."
+description: "Define service APIs, ownership, and schemas. Use when designing modules. Do not use for authz audits."
 ---
 
 # Boundary Specification

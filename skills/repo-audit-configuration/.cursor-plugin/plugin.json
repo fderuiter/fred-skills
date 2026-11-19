@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-configuration",
-  "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
+  "description": "Audit flag conflicts, env order, and reloads. Use when checking config drift. Do not use for logs.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

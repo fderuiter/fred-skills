@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-complexity",
-  "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
+  "description": "Audit quadratic hot paths, ReDoS, and N+1s. Use when checking slow paths. Do not use for queues.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

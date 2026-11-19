@@ -1,6 +1,6 @@
 ---
 name: repo-audit-failure-modes
-description: "Audit failure-mode completeness with code evidence and counterexamples. Use when auditing partial failures, timeouts, recovery gaps, interrupted workflows, or failure transition completeness."
+description: "Audit partial failures, timeouts, and recovery. Use when checking fault paths. Do not use for logs."
 ---
 
 # Failure-Mode Completeness

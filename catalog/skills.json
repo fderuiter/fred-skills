@@ -4,7 +4,7 @@
     {
       "name": "arch-boundary-specification",
       "title": "Boundary Specification",
-      "description": "Specify service encapsulation contracts, module interfaces, and failure-domain isolation rules in architecture artifacts. Use when designing new subsystem perimeters, authoring API gateway specs, or documenting inter-service communication protocols.",
+      "description": "Define service APIs, ownership, and schemas. Use when designing modules. Do not use for authz audits.",
       "path": "skills/arch-boundary-specification/SKILL.md",
       "suite": "software-architecture",
       "phase": 1,
@@ -31,7 +31,7 @@
     {
       "name": "arch-component-decomposition",
       "title": "Component Decomposition",
-      "description": "Partition software systems into cohesive modules, narrow collaboration interfaces, and staged monolith-splitting plans. Use when breaking apart tightly coupled packages, assigning component ownership, or planning modular restructuring.",
+      "description": "Decompose capabilities into clean services. Use when structuring modular subsystems. Do not use for audits.",
       "path": "skills/arch-component-decomposition/SKILL.md",
       "suite": "software-architecture",
       "phase": 2,
@@ -57,7 +57,7 @@
     {
       "name": "arch-decision-record",
       "title": "Architectural Decision Records",
-      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "description": "Author structured ADRs weighing trade-offs. Use when recording design choices. Do not use for audits.",
       "path": "skills/arch-decision-record/SKILL.md",
       "suite": "software-architecture",
       "phase": 0,
@@ -83,7 +83,7 @@
     {
       "name": "repo-apply-fix",
       "title": "Scoped Correction",
-      "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
+      "description": "Implement an authorized, minimal source fix. Use when applying approved code. Do not use for audits.",
       "path": "skills/repo-apply-fix/SKILL.md",
       "suite": "repository-workflows",
       "phase": 3,
@@ -109,7 +109,7 @@
     {
       "name": "repo-audit-accessibility-state",
       "title": "Accessibility State Consistency",
-      "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
+      "description": "Audit ARIA state, focus, and keyboard parity. Use when checking UI a11y. Do not use for CSS style.",
       "path": "skills/repo-audit-accessibility-state/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -136,7 +136,7 @@
     {
       "name": "repo-audit-agent-configs",
       "title": "Agent Configurations and Skill Bundles",
-      "description": "Audit repository agent configurations, skill bundles, instruction files, and MCP server definitions with code evidence and counterexamples. Use when inspecting .claude/skills, .agents/skills, .cursor/skills, AGENTS.md, .cursorrules, or .mcp.json for prompt injection, unvetted scripts, or unsafe agent tool permissions.",
+      "description": "Audit skill bundles, AGENTS.md, and MCPs. Use when vetting agent setups. Do not use for app authz.",
       "path": "skills/repo-audit-agent-configs/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -163,7 +163,7 @@
     {
       "name": "repo-audit-api-consistency",
       "title": "API Design Consistency",
-      "description": "Audit API design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+      "description": "Audit endpoint verbs, paging, and shapes. Use when checking API uniformity. Do not use for wire.",
       "path": "skills/repo-audit-api-consistency/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -190,7 +190,7 @@
     {
       "name": "repo-audit-architecture",
       "title": "Architectural Boundaries and Dependency Direction",
-      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when investigating import cycles, layering inversions, forbidden package coupling, or leaky subsystem seams.",
+      "description": "Audit dependency cycles and layer leaks. Use when checking package coupling. Do not use for ADRs.",
       "path": "skills/repo-audit-architecture/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -217,7 +217,7 @@
     {
       "name": "repo-audit-behavioral-contracts",
       "title": "Behavioral Contract Reconstruction",
-      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when mapping undocumented guarantees, preconditions, postconditions, caller obligations, or cross-subsystem expectations from source.",
+      "description": "Reconstruct hidden subsystem promises. Use when mapping implicit rules. Do not use for fix plans.",
       "path": "skills/repo-audit-behavioral-contracts/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -244,7 +244,7 @@
     {
       "name": "repo-audit-boundary-conditions",
       "title": "Boundary-Condition Correctness",
-      "description": "Audit boundary-condition correctness with code evidence and counterexamples. Use when auditing empty inputs, limits, off-by-one errors, numeric overflow, Unicode, or malformed boundary values.",
+      "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking numeric edges. Do not use for tests.",
       "path": "skills/repo-audit-boundary-conditions/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -271,7 +271,7 @@
     {
       "name": "repo-audit-cache-coherence",
       "title": "Cache Coherence",
-      "description": "Audit cache coherence with code evidence and counterexamples. Use when auditing stale caches, invalidation races, cache keys, tenant leakage through caches, or competing cache layers.",
+      "description": "Audit stale caches, keys, and invalidation. Use when checking cache drift. Do not use for schemas.",
       "path": "skills/repo-audit-cache-coherence/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -298,7 +298,7 @@
     {
       "name": "repo-audit-cancellation",
       "title": "Cancellation Propagation",
-      "description": "Audit cancellation propagation with code evidence and counterexamples. Use when auditing abort propagation, cancelled tasks that keep running, stale publication after cancellation, or shutdown draining.",
+      "description": "Audit abort propagation and post-cancel work. Use when checking task aborts. Do not use for locks.",
       "path": "skills/repo-audit-cancellation/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -325,7 +325,7 @@
     {
       "name": "repo-audit-canonicalization",
       "title": "Security-Sensitive Canonicalization",
-      "description": "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement.",
+      "description": "Audit path, URL, and Unicode bypasses. Use when checking parser allowlists. Do not use for casts.",
       "path": "skills/repo-audit-canonicalization/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -353,7 +353,7 @@
     {
       "name": "repo-audit-capacity",
       "title": "Resource Bounds and Backpressure",
-      "description": "Audit resource bounds and backpressure with code evidence and counterexamples. Use when auditing unbounded memory, queues, retries, fan-out, polling, backpressure, or resource exhaustion.",
+      "description": "Audit unbounded queues, memory, and backpressure. Use when checking load limits. Do not use for leaks.",
       "path": "skills/repo-audit-capacity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -381,7 +381,7 @@
     {
       "name": "repo-audit-cohesion",
       "title": "Cohesion and Responsibility",
-      "description": "Audit cohesion and responsibility with code evidence and counterexamples. Use when auditing mixed module responsibilities, unrelated reasons to change, god objects, or weak cohesion.",
+      "description": "Audit god objects and mixed module duties. Use when checking low cohesion. Do not use for design.",
       "path": "skills/repo-audit-cohesion/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -408,7 +408,7 @@
     {
       "name": "repo-audit-compatibility",
       "title": "Compatibility and Migration Contracts",
-      "description": "Audit compatibility and migration contracts with code evidence and counterexamples. Use when auditing breaking persisted-state changes, migrations, older-client compatibility, or rolling deployment contracts.",
+      "description": "Audit breaking schema changes and rollouts. Use when checking migrations. Do not use for wire skew.",
       "path": "skills/repo-audit-compatibility/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -436,7 +436,7 @@
     {
       "name": "repo-audit-complexity",
       "title": "Algorithmic Complexity",
-      "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
+      "description": "Audit quadratic hot paths, ReDoS, and N+1s. Use when checking slow paths. Do not use for queues.",
       "path": "skills/repo-audit-complexity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -464,7 +464,7 @@
     {
       "name": "repo-audit-concurrency",
       "title": "Concurrency and Race Conditions",
-      "description": "Audit concurrency and race conditions with code evidence and counterexamples. Use when auditing races, stale asynchronous results, reentrancy, lost updates, or unsafe overlapping operations.",
+      "description": "Audit race conditions, locks, and stale async state. Use when tracing thread races. Do not use for fixes.",
       "path": "skills/repo-audit-concurrency/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -492,7 +492,7 @@
     {
       "name": "repo-audit-configuration",
       "title": "Configuration Combinatorics",
-      "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
+      "description": "Audit flag conflicts, env order, and reloads. Use when checking config drift. Do not use for logs.",
       "path": "skills/repo-audit-configuration/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -519,7 +519,7 @@
     {
       "name": "repo-audit-data-integrity",
       "title": "Data Transformation Integrity",
-      "description": "Audit data transformation integrity with code evidence and counterexamples. Use when auditing lossy mappings, serialization errors, precision loss, provenance gaps, or parser-to-model data corruption.",
+      "description": "Audit lossy serialization and precision casts. Use when tracing corrupt data. Do not use for URLs.",
       "path": "skills/repo-audit-data-integrity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -546,7 +546,7 @@
     {
       "name": "repo-audit-dead-code",
       "title": "Dead Code and Obsolete Compatibility Paths",
-      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when investigating unreachable branches, stale feature toggles, unreferenced exports, retired shims, or orphaned fallbacks.",
+      "description": "Audit unreachable branches and stale flags. Use when finding dead code. Do not use for refactors.",
       "path": "skills/repo-audit-dead-code/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -573,7 +573,7 @@
     {
       "name": "repo-audit-diagnostics",
       "title": "Repository Audit Session Diagnostics",
-      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles. Use when triaging interrupted audit runs, inspecting failed session logs, redacting transcript secrets, or producing checkpoint resume instructions.",
+      "description": "Triage a stalled audit log and scrub secrets. Use when fixing a stalled audit. Do not use for code.",
       "path": "skills/repo-audit-diagnostics/SKILL.md",
       "suite": "repository-audits",
       "phase": 0,
@@ -600,7 +600,7 @@
     {
       "name": "repo-audit-domain-models",
       "title": "Implicit Domain Models",
-      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, conflated identifiers or units, unmodeled value objects, or scattered entity rules.",
+      "description": "Audit primitive obsession and unit mixups. Use when checking value types. Do not use for greenfield.",
       "path": "skills/repo-audit-domain-models/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -627,7 +627,7 @@
     {
       "name": "repo-audit-error-semantics",
       "title": "Error Semantics and Taxonomy",
-      "description": "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation.",
+      "description": "Audit swallowed exceptions and fault types. Use when checking error flow. Do not use for metrics.",
       "path": "skills/repo-audit-error-semantics/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -654,7 +654,7 @@
     {
       "name": "repo-audit-failure-modes",
       "title": "Failure-Mode Completeness",
-      "description": "Audit failure-mode completeness with code evidence and counterexamples. Use when auditing partial failures, timeouts, recovery gaps, interrupted workflows, or failure transition completeness.",
+      "description": "Audit partial failures, timeouts, and recovery. Use when checking fault paths. Do not use for logs.",
       "path": "skills/repo-audit-failure-modes/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -681,7 +681,7 @@
     {
       "name": "repo-audit-idempotency",
       "title": "Idempotency and Replay Safety",
-      "description": "Audit idempotency and replay safety with code evidence and counterexamples. Use when auditing duplicate deliveries, unsafe retries, repeated initialization, replay handling, or idempotency keys.",
+      "description": "Audit duplicate delivery and replay safety. Use when checking dedup keys. Do not use for locks.",
       "path": "skills/repo-audit-idempotency/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -708,7 +708,7 @@
     {
       "name": "repo-audit-invariants",
       "title": "Implicit Invariants",
-      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced aggregate rules, bypassed constructor guards, or illegal combinations of persisted fields.",
+      "description": "Audit unenforced domain rules and bad states. Use when hunting invariant bugs. Do not use for PRs.",
       "path": "skills/repo-audit-invariants/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -735,7 +735,7 @@
     {
       "name": "repo-audit-lifecycle",
       "title": "Ownership and Lifecycle Boundaries",
-      "description": "Audit ownership and lifecycle boundaries with code evidence and counterexamples. Use when auditing resource ownership, missing cleanup, use after disposal, leaked listeners, streams, timers, or tasks.",
+      "description": "Audit resource ownership, disposal, and leaks. Use when checking handle teardown. Do not use for sizing.",
       "path": "skills/repo-audit-lifecycle/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -763,7 +763,7 @@
     {
       "name": "repo-audit-nondeterminism",
       "title": "Nondeterministic Behavior",
-      "description": "Audit nondeterministic behavior with code evidence and counterexamples. Use when auditing flaky tests, clock/randomness dependence, global state leakage, or order-sensitive workflows.",
+      "description": "Audit clock, random, and order flakiness. Use when tracing non-determinism. Do not use for runners.",
       "path": "skills/repo-audit-nondeterminism/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -790,7 +790,7 @@
     {
       "name": "repo-audit-observability",
       "title": "Observability Gaps",
-      "description": "Audit observability gaps with code evidence and counterexamples. Use when auditing undiagnosable failures, missing correlation, misleading telemetry, or insufficient recovery visibility.",
+      "description": "Audit missing trace IDs and blind telemetry. Use when checking blind spots. Do not use for errors.",
       "path": "skills/repo-audit-observability/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -817,7 +817,7 @@
     {
       "name": "repo-audit-program",
       "title": "Repository Audit Program",
-      "description": "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program.",
+      "description": "Coordinate multi-pass codebase audits. Use when running a broad audit. Do not use for code edits.",
       "path": "skills/repo-audit-program/SKILL.md",
       "suite": "repository-audits",
       "phase": 0,
@@ -844,7 +844,7 @@
     {
       "name": "repo-audit-protocol-drift",
       "title": "Protocol Contract Drift",
-      "description": "Audit protocol contract drift with code evidence and counterexamples. Use when auditing producer-consumer disagreement, wire format drift, message versioning, or incompatible protocol assumptions.",
+      "description": "Audit wire-format skew and version drift. Use when checking message payloads. Do not use for DBs.",
       "path": "skills/repo-audit-protocol-drift/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -871,7 +871,7 @@
     {
       "name": "repo-audit-side-effects",
       "title": "Hidden Side Effects",
-      "description": "Audit hidden side effects with code evidence and counterexamples. Use when investigating unexpected mutations, hidden I/O, effectful getters, render effects, or misleading function contracts.",
+      "description": "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits.",
       "path": "skills/repo-audit-side-effects/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -898,7 +898,7 @@
     {
       "name": "repo-audit-sources-of-truth",
       "title": "Duplicated Sources of Truth",
-      "description": "Audit duplicated sources of truth with code evidence and counterexamples. Use when auditing duplicated domain state, conflicting authorities, independently maintained derived fields, or divergent projections.",
+      "description": "Audit split authorities and drifted views. Use when checking dual state. Do not use for cache TTLs.",
       "path": "skills/repo-audit-sources-of-truth/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -925,7 +925,7 @@
     {
       "name": "repo-audit-state-machines",
       "title": "Implicit State Machines",
-      "description": "Audit implicit state machines with code evidence and counterexamples. Use when investigating ad-hoc status flags, unreachable or missing transitions, unguarded mode switches, or illegal lifecycle combinations.",
+      "description": "Audit implicit state transitions and stuck flows. Use when tracing bad states. Do not use for PRs.",
       "path": "skills/repo-audit-state-machines/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -952,7 +952,7 @@
     {
       "name": "repo-audit-synthesis",
       "title": "Audit Findings and Issue Planning",
-      "description": "Consolidate specialist audit outputs into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use when synthesizing completed audit passes or turning topic reports into a prioritized issue backlog.",
+      "description": "Consolidate audit ledgers into issue drafts. Use when publishing audit findings. Do not use for plans.",
       "path": "skills/repo-audit-synthesis/SKILL.md",
       "suite": "repository-audits",
       "phase": 4,
@@ -979,7 +979,7 @@
     {
       "name": "repo-audit-temporal-coupling",
       "title": "Temporal Coupling",
-      "description": "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts.",
+      "description": "Audit call-order and init sequencing rules. Use when tracing typestate bugs. Do not use for locks.",
       "path": "skills/repo-audit-temporal-coupling/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -1006,7 +1006,7 @@
     {
       "name": "repo-audit-test-contracts",
       "title": "Untested Behavioral Contracts",
-      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping unverified requirement guarantees, missing negative-path checks, or unasserted recovery obligations.",
+      "description": "Audit untested promises in existing suites. Use when auditing missing checks. Do not use for edits.",
       "path": "skills/repo-audit-test-contracts/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -1033,7 +1033,7 @@
     {
       "name": "repo-audit-test-oracles",
       "title": "Test Oracle Quality",
-      "description": "Audit test oracle quality with code evidence and counterexamples. Use when auditing assertions that mirror implementation, ineffective mocks, weak expected results, or surviving mutations.",
+      "description": "Audit tautological mocks and weak asserts. Use when checking surviving bugs. Do not use for gaps.",
       "path": "skills/repo-audit-test-oracles/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -1061,7 +1061,7 @@
     {
       "name": "repo-audit-transactions",
       "title": "Implicit Transaction Boundaries",
-      "description": "Audit implicit transaction boundaries with code evidence and counterexamples. Use when auditing multi-step consistency, partial commits, transaction scope, dual writes, or compensation guarantees.",
+      "description": "Audit atomic write scopes and dual writes. Use when checking partial commits. Do not use for retries.",
       "path": "skills/repo-audit-transactions/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -1089,7 +1089,7 @@
     {
       "name": "repo-audit-trust-boundaries",
       "title": "Trust and Authorization Boundaries",
-      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping unvalidated external inputs, privilege escalation paths, cross-tenant data leaks, or unguarded sinks.",
+      "description": "Audit untrusted inputs, authz, and isolation. Use when tracing privilege bypasses. Do not use for blueprints.",
       "path": "skills/repo-audit-trust-boundaries/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -1118,7 +1118,7 @@
     {
       "name": "repo-plan-fix",
       "title": "Scoped Implementation Planning",
-      "description": "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff.",
+      "description": "Sequence verified bugs into bounded tasks. Use when planning safe remediation. Do not use for synthesis.",
       "path": "skills/repo-plan-fix/SKILL.md",
       "suite": "repository-workflows",
       "phase": 2,
@@ -1144,7 +1144,7 @@
     {
       "name": "repo-reconcile-findings",
       "title": "Remediation Reconciliation",
-      "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
+      "description": "Reconcile ledger statuses across run history. Use when syncing issue state. Do not use for audits.",
       "path": "skills/repo-reconcile-findings/SKILL.md",
       "suite": "repository-workflows",
       "phase": 5,
@@ -1170,7 +1170,7 @@
     {
       "name": "repo-specify-regression",
       "title": "Regression Specification",
-      "description": "Use when defining an independent regression test for a supported behavioral defect.",
+      "description": "Specify a minimal failing check for one bug. Use when locking bug criteria. Do not use for suites.",
       "path": "skills/repo-specify-regression/SKILL.md",
       "suite": "repository-workflows",
       "phase": 1,
@@ -1196,7 +1196,7 @@
     {
       "name": "repo-verify-finding",
       "title": "Finding Verification",
-      "description": "Use when verifying, reproducing, refuting, or narrowing an existing repository finding.",
+      "description": "Reproduce, narrow, or refute one finding. Use when validating a bug claim. Do not use for audits.",
       "path": "skills/repo-verify-finding/SKILL.md",
       "suite": "repository-workflows",
       "phase": 0,
@@ -1223,7 +1223,7 @@
     {
       "name": "repo-verify-fix",
       "title": "Fix Verification",
-      "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+      "description": "Verify a proposed patch fixes its bug safely. Use when checking patch safety. Do not use for triage.",
       "path": "skills/repo-verify-fix/SKILL.md",
       "suite": "repository-workflows",
       "phase": 4,
@@ -1249,7 +1249,7 @@
     {
       "name": "review-actionable-feedback",
       "title": "Feedback Synthesis",
-      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "description": "Turn PR review notes into ranked comments. Use when drafting PR feedback. Do not use for patches.",
       "path": "skills/review-actionable-feedback/SKILL.md",
       "suite": "code-review",
       "phase": 2,
@@ -1275,7 +1275,7 @@
     {
       "name": "review-diff-analysis",
       "title": "Diff Analysis",
-      "description": "Use when analyzing pull request diffs to evaluate behavioral impact, blast radius, and unintended regressions.",
+      "description": "Analyze pull request hunks and blast radius. Use when triaging PR changes. Do not use for audits.",
       "path": "skills/review-diff-analysis/SKILL.md",
       "suite": "code-review",
       "phase": 0,
@@ -1301,7 +1301,7 @@
     {
       "name": "review-invariant-violations",
       "title": "Invariant Violations",
-      "description": "Verify pull request patches for broken safety assumptions, rollback regressions, and unbalanced resource lifecycles. Use when inspecting proposed diff hunks for broken preconditions, race hazards, or corrupted state transitions before merge.",
+      "description": "Inspect PR diff hunks for broken contracts. Use when reviewing code changes. Do not use for audits.",
       "path": "skills/review-invariant-violations/SKILL.md",
       "suite": "code-review",
       "phase": 1,
@@ -1327,7 +1327,7 @@
     {
       "name": "session-handoff",
       "title": "Session Handoff",
-      "description": "Use when compacting an active investigation or implementation session into a validated exit handoff for a fresh context window.",
+      "description": "Compact session state into a clean handoff. Use when rotating context windows. Do not use for logs.",
       "path": "skills/session-handoff/SKILL.md",
       "suite": "repository-workflows",
       "phase": 6,
@@ -1353,7 +1353,7 @@
     {
       "name": "spec-authoring",
       "title": "Specification Authoring",
-      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+      "description": "Compile settled decisions into SPEC.md files. Use when authoring specs. Do not use for ADR history.",
       "path": "skills/spec-authoring/SKILL.md",
       "suite": "spec-driven-development",
       "phase": 1,
@@ -1379,7 +1379,7 @@
     {
       "name": "spec-convergence",
       "title": "Specification Convergence Verification",
-      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+      "description": "Verify plans and diffs match SPEC.md scope. Use when checking spec drift. Do not use for PR style.",
       "path": "skills/spec-convergence/SKILL.md",
       "suite": "spec-driven-development",
       "phase": 2,
@@ -1405,7 +1405,7 @@
     {
       "name": "spec-interview",
       "title": "Pre-Code Specification Interview",
-      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "description": "Run pre-code Socratic scope interviews. Use when clarifying feature requirements. Do not use for debugging.",
       "path": "skills/spec-interview/SKILL.md",
       "suite": "spec-driven-development",
       "phase": 0,
@@ -1431,7 +1431,7 @@
     {
       "name": "terse-output-commit",
       "title": "Terse Output and Commit",
-      "description": "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages.",
+      "description": "Format terse code replies and 50-char commits. Use when cutting token output. Do not use for docs.",
       "path": "skills/terse-output-commit/SKILL.md",
       "suite": "repository-workflows",
       "phase": 6,
@@ -1457,7 +1457,7 @@
     {
       "name": "test-case-generation",
       "title": "Test Case Generation",
-      "description": "Author deterministic unit, integration, and regression tests with isolated fixtures and independent assertion oracles. Use when writing executable test suites from gap backlogs or turning reproduced bug specs into automated checks.",
+      "description": "Write executable unit and property test files. Use when generating suites. Do not use for bug specs.",
       "path": "skills/test-case-generation/SKILL.md",
       "suite": "automated-testing",
       "phase": 1,
@@ -1483,7 +1483,7 @@
     {
       "name": "test-gap-analysis",
       "title": "Test Gap Analysis",
-      "description": "Prioritize unexercised code branches, exception handlers, and edge-value ranges into a structured test backlog. Use when planning automated test expansion, ranking untested failure branches, or scoping regression scenarios for a module.",
+      "description": "Identify uncovered branches and edge cases. Use when planning unit tests. Do not use for audits.",
       "path": "skills/test-gap-analysis/SKILL.md",
       "suite": "automated-testing",
       "phase": 0,
@@ -1509,7 +1509,7 @@
     {
       "name": "test-suite-verification",
       "title": "Test Suite Verification",
-      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "description": "Execute test runners and check pass health. Use when validating test suites. Do not use for flakes.",
       "path": "skills/test-suite-verification/SKILL.md",
       "suite": "automated-testing",
       "phase": 2,

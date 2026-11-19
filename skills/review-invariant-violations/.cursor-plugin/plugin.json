@@ -1,6 +1,6 @@
 {
   "name": "review-invariant-violations",
-  "description": "Verify pull request patches for broken safety assumptions, rollback regressions, and unbalanced resource lifecycles. Use when inspecting proposed diff hunks for broken preconditions, race hazards, or corrupted state transitions before merge.",
+  "description": "Inspect PR diff hunks for broken contracts. Use when reviewing code changes. Do not use for audits.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

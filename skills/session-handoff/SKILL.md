@@ -1,6 +1,6 @@
 ---
 name: session-handoff
-description: "Use when compacting an active investigation or implementation session into a validated exit handoff for a fresh context window."
+description: "Compact session state into a clean handoff. Use when rotating context windows. Do not use for logs."
 ---
 
 # Session Handoff

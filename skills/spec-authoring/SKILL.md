@@ -1,6 +1,6 @@
 ---
 name: spec-authoring
-description: "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation."
+description: "Compile settled decisions into SPEC.md files. Use when authoring specs. Do not use for ADR history."
 ---
 
 # Specification Authoring

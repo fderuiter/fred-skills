@@ -1,6 +1,6 @@
 ---
 name: test-suite-verification
-description: "Use when executing and verifying generated test suites against regressions and failure oracles."
+description: "Execute test runners and check pass health. Use when validating test suites. Do not use for flakes."
 ---
 
 # Test Suite Verification

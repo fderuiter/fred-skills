@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import importlib.util
 import json
 import os
@@ -373,24 +374,31 @@ Bearer sk-proj-1234567890abcdef1234567890
             self.skipTest("pty module is not available on this platform")
         fred_cli = ROOT / "scripts/fred.py"
         master, slave = pty.openpty()
-        proc = subprocess.Popen(
-            [sys.executable, str(fred_cli), *args],
-            stdin=subprocess.DEVNULL,
-            stdout=slave,
-            stderr=slave,
-        )
-        os.close(slave)
-        chunks: list[bytes] = []
-        while True:
-            try:
-                chunk = os.read(master, 4096)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            except OSError:
-                break
-        os.close(master)
-        returncode = proc.wait()
+        try:
+            with subprocess.Popen(
+                [sys.executable, str(fred_cli), *args],
+                stdin=subprocess.DEVNULL,
+                stdout=slave,
+                stderr=slave,
+            ) as proc:
+                os.close(slave)
+                slave = -1
+                chunks: list[bytes] = []
+                while True:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                returncode = proc.wait()
+        finally:
+            if slave >= 0:
+                os.close(slave)
+            os.close(master)
         return subprocess.CompletedProcess(
             args=[sys.executable, str(fred_cli), *args],
             returncode=returncode,

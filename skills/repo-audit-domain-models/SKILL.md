@@ -1,6 +1,6 @@
 ---
 name: repo-audit-domain-models
-description: "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, conflated identifiers or units, unmodeled value objects, or scattered entity rules."
+description: "Audit primitive obsession and unit mixups. Use when checking value types. Do not use for greenfield."
 ---
 
 # Implicit Domain Models

@@ -1,6 +1,7 @@
 ---
 name: repo-audit-program
-description: "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program."
+description: "Coordinate multi-pass codebase audits. Use when running a broad audit. Do not use for code edits."
+disable-model-invocation: true
 ---
 
 # Repository Audit Program

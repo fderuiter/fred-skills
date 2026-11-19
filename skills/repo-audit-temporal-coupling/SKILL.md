@@ -1,6 +1,6 @@
 ---
 name: repo-audit-temporal-coupling
-description: "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts."
+description: "Audit call-order and init sequencing rules. Use when tracing typestate bugs. Do not use for locks."
 ---
 
 # Temporal Coupling

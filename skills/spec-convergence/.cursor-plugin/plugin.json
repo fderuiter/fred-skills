@@ -1,6 +1,6 @@
 {
   "name": "spec-convergence",
-  "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+  "description": "Verify plans and diffs match SPEC.md scope. Use when checking spec drift. Do not use for PR style.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

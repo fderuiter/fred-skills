@@ -150,7 +150,7 @@
       ]
     },
     "complete": {
-      "description": "Every audit and engineering workflow.",
+      "description": "Every audit and engineering workflow (57 skills; prefer starter for bounded Stage-1 discovery within Codex and Claude Code context budgets).",
       "skills": [
         "arch-boundary-specification",
         "arch-component-decomposition",

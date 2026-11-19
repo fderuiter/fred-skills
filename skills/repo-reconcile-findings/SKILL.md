@@ -1,6 +1,7 @@
 ---
 name: repo-reconcile-findings
-description: "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs."
+description: "Reconcile ledger statuses across run history. Use when syncing issue state. Do not use for audits."
+disable-model-invocation: true
 ---
 
 # Remediation Reconciliation

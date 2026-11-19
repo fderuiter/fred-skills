@@ -1,6 +1,6 @@
 {
   "name": "test-gap-analysis",
-  "description": "Prioritize unexercised code branches, exception handlers, and edge-value ranges into a structured test backlog. Use when planning automated test expansion, ranking untested failure branches, or scoping regression scenarios for a module.",
+  "description": "Identify uncovered branches and edge cases. Use when planning unit tests. Do not use for audits.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

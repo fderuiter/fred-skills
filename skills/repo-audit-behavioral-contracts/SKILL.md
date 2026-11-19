@@ -1,6 +1,6 @@
 ---
 name: repo-audit-behavioral-contracts
-description: "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when mapping undocumented guarantees, preconditions, postconditions, caller obligations, or cross-subsystem expectations from source."
+description: "Reconstruct hidden subsystem promises. Use when mapping implicit rules. Do not use for fix plans."
 ---
 
 # Behavioral Contract Reconstruction
