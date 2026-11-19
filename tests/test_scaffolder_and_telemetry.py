@@ -586,6 +586,8 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
             "deterministic_constraint_coverage_percentage",
             "output_schema_coverage",
             "output_schema_coverage_percentage",
+            "routing_trigger_coverage",
+            "routing_trigger_coverage_percentage",
             "skill_worked_example_coverage",
             "skill_worked_example_coverage_percentage",
             "validator_script_coverage",

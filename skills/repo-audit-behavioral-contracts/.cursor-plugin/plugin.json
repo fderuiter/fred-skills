@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-behavioral-contracts",
-  "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
+  "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when mapping undocumented guarantees, preconditions, postconditions, caller obligations, or cross-subsystem expectations from source.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

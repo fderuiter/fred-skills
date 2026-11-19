@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-test-contracts",
-  "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
+  "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping unverified requirement guarantees, missing negative-path checks, or unasserted recovery obligations.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

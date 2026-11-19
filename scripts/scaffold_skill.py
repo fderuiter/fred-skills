@@ -46,11 +46,28 @@ def _default_title(name: str) -> str:
     return " ".join(words) if words else name
 
 
+def _lower_preserving_acronyms(text: str) -> str:
+    return " ".join(
+        word if (len(word) >= 2 and word.isupper()) else word.lower()
+        for word in text.split()
+    )
+
+
+def _topic_phrase(title: str) -> str:
+    cased = _lower_preserving_acronyms(title)
+    for prefix in ("repo audit ", "arch ", "review ", "test ", "spec ", "repo "):
+        if cased.lower().startswith(prefix) and len(cased) > len(prefix):
+            return cased[len(prefix) :]
+    return cased
+
+
 def _default_description(name: str, title: str) -> str:
     """Construct a concise, unique activation description within 1..1024 characters."""
+    topic = _topic_phrase(title)
+    ref = topic[:24].rstrip() if len(topic) > 24 else topic
     desc = (
-        f"Use when executing {title.lower()} workflows or inspecting {name} "
-        "contracts and boundaries on explicit request."
+        f"Evaluate {topic}. Use when {ref} inputs, {ref} states, "
+        f"or {ref} outputs in {ref} change."
     )
     return desc[:1024]
 
