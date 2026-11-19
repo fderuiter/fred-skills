@@ -209,8 +209,7 @@ def build(
     output.mkdir(parents=True, exist_ok=True)
 
     if all_packs or pack == "all":
-        packs_doc = read_json(root / "catalog/packs.json").get("packs", {})
-        available_packs = list(packs_doc.keys())
+        available_packs = list(_load_documented_packs(root))
         if not available_packs:
             raise ValueError("No documented packs found in catalog/packs.json")
 
@@ -275,6 +274,7 @@ def build(
             "file": path.name,
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "bytes": path.stat().st_size,
+            "skills": list(selected),
         }
         for path in sorted(output.iterdir())
         if path.is_file()

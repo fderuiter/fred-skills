@@ -321,6 +321,9 @@ class InstallationTests(unittest.TestCase):
         second = releases.build(two, pack="starter", root=self.source)
         self.assertEqual(first, second)
         self.assertEqual(2, releases.verify(one / "manifest.json")["verified_archives"])
+        for entry in first["archives"]:
+            self.assertEqual(["sample", "other"], entry["skills"])
+            self.assertEqual(first["skills"], entry["skills"])
         archive = one / first["archives"][0]["file"]
         archive.write_bytes(archive.read_bytes() + b"corrupt")
         with self.assertRaises(ValueError):
@@ -339,25 +342,48 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((one / "checksums.sha256").is_file())
 
         ver_result = releases.verify(manifest_path)
+        self.assertEqual(74, ver_result["verified_archives"])
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
-        # Check all 12 documented catalog packs (tar and zip)
-        catalog_packs = list(read_json(ROOT / "catalog/packs.json")["packs"].keys())
-        self.assertEqual(12, len(catalog_packs))
+        # Check all 11 canonical catalog packs (tar and zip) and archive skills lists
+        packs_data = read_json(ROOT / "catalog/packs.json")["packs"]
+        catalog_packs = list(packs_data.keys())
+        self.assertEqual(11, len(catalog_packs))
+        self.assertNotIn("architecture", catalog_packs)
+        self.assertEqual(36, len(packs_data["full-audit"]["skills"]))
+        self.assertIn("repo-audit-diagnostics", packs_data["full-audit"]["skills"])
         self.assertEqual(tuple(catalog_packs), releases.DOCUMENTED_PACKS)
         self.assertEqual(catalog_packs, list(first["packs"].keys()))
-        archive_files = {item["file"] for item in first["archives"]}
+        archives_by_file = {item["file"]: item for item in first["archives"]}
+        for item in first["archives"]:
+            self.assertIn("skills", item)
+            self.assertTrue(len(item["skills"]) > 0, f"Empty skills for {item['file']}")
         for pack in catalog_packs:
             tar_name = f"fred-skills-{first['version']}-{pack}.tar"
             zip_name = f"fred-skills-{first['version']}-{pack}.zip"
             self.assertTrue((one / tar_name).is_file(), f"Missing {tar_name}")
             self.assertTrue((one / zip_name).is_file(), f"Missing {zip_name}")
-            self.assertIn(tar_name, archive_files)
-            self.assertIn(zip_name, archive_files)
+            self.assertIn(tar_name, archives_by_file)
+            self.assertIn(zip_name, archives_by_file)
+            self.assertEqual(
+                packs_data[pack]["skills"],
+                archives_by_file[tar_name]["skills"],
+            )
+            self.assertEqual(
+                packs_data[pack]["skills"],
+                archives_by_file[zip_name]["skills"],
+            )
 
         # Check consolidated suite and standalone skills
         self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
+        self.assertEqual(
+            51, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
+        )
         self.assertTrue((one / "repo-audit-concurrency.tar.gz").is_file())
+        self.assertEqual(
+            ["repo-audit-concurrency"],
+            archives_by_file["repo-audit-concurrency.tar.gz"]["skills"],
+        )
 
         # Verify tampering is detected
         corrupt_target = one / first["archives"][0]["file"]

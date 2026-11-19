@@ -964,6 +964,159 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertIn("python scripts/check_doc_links.py", agents_text)
         self.assertIn("python scripts/verify_doc_snippets.py", agents_text)
 
+    def test_yaml_workflow_run_steps_extracted_and_reject_invalid_flags(self) -> None:
+        """YAML workflow blocks in docs/integration.md execute run steps and reject invalid flags."""
+        integration_blocks = discover_doc_blocks(root=ROOT)["docs/integration.md"]
+        yaml_blocks = [b for b in integration_blocks if b.language in ("yaml", "yml")]
+        self.assertEqual(1, len(yaml_blocks))
+        yaml_cmds = [cmd for _, cmd in yaml_blocks[0].commands]
+        self.assertTrue(
+            any(
+                "scripts/fred.py plan ." in cmd and "--json > audit-plan.json" in cmd
+                for cmd in yaml_cmds
+            ),
+            f"Expected plan --json redirection in YAML commands, got: {yaml_cmds}",
+        )
+        self.assertTrue(
+            any("data['plan']" in cmd for cmd in yaml_cmds),
+            f"Expected data['plan'] assertion in YAML commands, got: {yaml_cmds}",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            (tmp_root / "scripts").symlink_to(
+                ROOT / "scripts", target_is_directory=True
+            )
+            (tmp_root / "docs").mkdir(parents=True)
+            bad_yaml_doc = tmp_root / "docs/integration.md"
+            bad_yaml_doc.write_text(
+                "```yaml\n"
+                "jobs:\n"
+                "  audit:\n"
+                "    steps:\n"
+                "      - name: Bad plan flag\n"
+                "        run: |\n"
+                "          python scripts/fred.py plan . \\\n"
+                "            --task review-pr \\\n"
+                "            --output-plan audit-plan.json\n"
+                "      - run: python scripts/fred.py search --bogus-inline-flag\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            errors = verify_all_snippets(root=tmp_root, files=["docs/integration.md"])
+            self.assertTrue(
+                any(
+                    "docs/integration.md:L7:" in err and "--output-plan" in err
+                    for err in errors
+                ),
+                f"Expected exact-line --output-plan failure, got: {errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/integration.md:L10:" in err and "--bogus-inline-flag" in err
+                    for err in errors
+                ),
+                f"Expected exact-line inline run failure, got: {errors}",
+            )
+
+    def test_version_pack_and_skill_count_drift_detected_with_exact_lines(self) -> None:
+        """Modifying VERSION or catalog/packs.json without updating release docs reports exact file lines."""
+        # Direct curl and tar checks against wrong version or unknown/removed pack
+        bad_release_cmds = [
+            "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v9.9.9/SHA256SUMS",
+            "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.1.0-starter.tar",
+            "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-architecture.tar",
+            "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/nonexistent-skill.tar.gz",
+            "tar -xf fred-skills-9.9.9-starter.tar -C /path/to/project/.agents/skills/",
+            "tar -xf fred-skills-0.2.0-architecture.tar -C /path/to/project/.agents/skills/",
+            "tar -xzf nonexistent-skill.tar.gz -C /path/to/project/.agents/skills/",
+        ]
+        for bad_cmd in bad_release_cmds:
+            ok, _ = execute_snippet_command(bad_cmd, root=ROOT)
+            self.assertFalse(ok, f"Expected release drift probe to fail: {bad_cmd}")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            (tmp_root / "scripts").symlink_to(
+                ROOT / "scripts", target_is_directory=True
+            )
+            (tmp_root / "skills").symlink_to(ROOT / "skills", target_is_directory=True)
+            (tmp_root / "examples").symlink_to(
+                ROOT / "examples", target_is_directory=True
+            )
+            for rel in (
+                "README.md",
+                "Makefile",
+                "requirements-dev.txt",
+                ".claude-plugin/marketplace.json",
+                "catalog/hosts.json",
+                "catalog/packs.json",
+                "docs/usage.md",
+                "docs/release-notes-0.2.0.md",
+            ):
+                dst = tmp_root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((ROOT / rel).read_bytes())
+
+            # 1. Bump VERSION without updating README.md or docs/usage.md
+            (tmp_root / "VERSION").write_text("0.3.0\n", encoding="utf-8")
+            ver_errors = verify_all_snippets(
+                root=tmp_root, files=["README.md", "docs/usage.md"]
+            )
+            self.assertTrue(
+                any("README.md:L106:" in err and "v0.3.0" in err for err in ver_errors),
+                f"Expected README.md:L106 version drift failure, got: {ver_errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/usage.md:L128:" in err and "v0.3.0" in err
+                    for err in ver_errors
+                ),
+                f"Expected docs/usage.md:L128 version drift failure, got: {ver_errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/usage.md:L156:" in err and "0.3.0" in err
+                    for err in ver_errors
+                ),
+                f"Expected docs/usage.md:L156 tar version drift failure, got: {ver_errors}",
+            )
+
+            # Restore VERSION and mutate catalog/packs.json skill count without updating docs
+            (tmp_root / "VERSION").write_text(
+                (ROOT / "VERSION").read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            import json
+
+            packs_doc = json.loads(
+                (tmp_root / "catalog/packs.json").read_text(encoding="utf-8")
+            )
+            packs_doc["packs"]["complete"]["skills"].pop()
+            (tmp_root / "catalog/packs.json").write_text(
+                json.dumps(packs_doc), encoding="utf-8"
+            )
+            count_errors = verify_all_snippets(
+                root=tmp_root,
+                files=["README.md", "docs/usage.md", "docs/release-notes-0.2.0.md"],
+            )
+            self.assertTrue(
+                any("README.md:L4:" in err and "50" in err for err in count_errors),
+                f"Expected README.md:L4 count drift failure, got: {count_errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/usage.md:L20:" in err and "50" in err for err in count_errors
+                ),
+                f"Expected docs/usage.md:L20 count drift failure, got: {count_errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/release-notes-0.2.0.md:L6:" in err and "50" in err
+                    for err in count_errors
+                ),
+                f"Expected release-notes L6 count drift failure, got: {count_errors}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
