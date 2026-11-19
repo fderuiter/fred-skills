@@ -1,6 +1,6 @@
 ---
 name: repo-audit-state-machines
-description: "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior."
+description: "Audit implicit state transitions and stuck flows. Use when tracing bad states. Do not use for PRs."
 ---
 
 # Implicit State Machines

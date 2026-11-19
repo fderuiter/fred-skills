@@ -1,6 +1,6 @@
 ---
 name: repo-audit-compatibility
-description: "Audit compatibility and migration contracts with code evidence and counterexamples. Use when auditing breaking persisted-state changes, migrations, older-client compatibility, or rolling deployment contracts."
+description: "Audit breaking schema changes and rollouts. Use when checking migrations. Do not use for wire skew."
 ---
 
 # Compatibility and Migration Contracts

@@ -1,6 +1,6 @@
 ---
 name: test-gap-analysis
-description: "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions."
+description: "Identify uncovered branches and edge cases. Use when planning unit tests. Do not use for audits."
 ---
 
 # Test Gap Analysis

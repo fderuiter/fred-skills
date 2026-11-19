@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-domain-models",
-  "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+  "description": "Audit primitive obsession and unit mixups. Use when checking value types. Do not use for greenfield.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

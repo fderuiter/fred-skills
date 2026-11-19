@@ -1,6 +1,6 @@
 ---
 name: arch-boundary-specification
-description: "Use when defining, documenting, or verifying system, service, module, and trust boundaries."
+description: "Define service APIs, ownership, and schemas. Use when designing modules. Do not use for authz audits."
 ---
 
 # Boundary Specification

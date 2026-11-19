@@ -1,6 +1,6 @@
 ---
 name: spec-interview
-description: "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions."
+description: "Run pre-code Socratic scope interviews. Use when clarifying requirements. Do not use for coding."
 ---
 
 # Pre-Code Specification Interview

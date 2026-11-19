@@ -17,21 +17,21 @@ behavior, permissions, or tool availability across agents.
 
 ## Installation
 
-Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 57 packages or `starter`), or an individual skill, use `npx skills add`, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, Windsurf, and Kiro, see the [integration guide](integration.md).
+Register the marketplace catalog and install `starter` for 6 core audit skills (`<= 1,500` raw characters), another curated pack, an individual skill, or `complete` for all 57 packages / the `fred-skills` suite plugin, use `npx skills add`, install a native extension, or install via the local CLI (see the [integration guide](integration.md) for OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, Windsurf, and Kiro). **Stage-1 context budget warning:** Prefer `starter@fred-skills` (`6` skills, `<= 1,500` raw characters) or focused domain packs by default; installing `complete@fred-skills`, `fred-skills@fred-skills`, `fred-skills-suite.tar.gz`, or `gemini-extension.json` exposes all 57 skills at startup, which can crowd or exceed Stage-1 discovery budgets on smaller context windows in [OpenAI Codex](https://developers.openai.com/codex/skills) (`2%` of context or `8,000`-character fallback) and [Claude Code](https://code.claude.com/docs/en/skills) (`1%` of context, `skillListingBudgetFraction = 0.01`).
 
 ### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
-/plugin install fred-skills@fred-skills
-# Or install a curated pack:
 /plugin install starter@fred-skills
+/plugin install repo-audit-concurrency@fred-skills
 /plugin install complete@fred-skills
+/plugin install fred-skills@fred-skills
 ```
 
 ### Cursor
 
-Import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace through **Dashboard -> Plugins & MCPs** (**Import from Repo**), then open **Customize** in the sidebar to install `fred-skills` or an individual specialist at project or user scope. To install a curated pack into `.cursor/skills/` locally, use the toolkit CLI:
+Install the recommended 6-skill `starter` pack into `.cursor/skills/` locally with the toolkit CLI below, or import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace through **Dashboard -> Plugins & MCPs** (**Import from Repo**) and open **Customize** in the sidebar to install an individual specialist (recommended) or `fred-skills` (loads all 57 skills; see Stage-1 budget warning above) at project or user scope:
 
 ```sh
 python scripts/fred.py install --destination /path/to/project --host cursor --pack starter
@@ -42,24 +42,26 @@ python scripts/fred.py install --destination /path/to/project --host cursor --pa
 Install skills across supported agent hosts with the open [`skills`](https://skills.sh/docs) CLI:
 
 ```sh
-npx skills add fderuiter/fred-skills
-# Or install a single specialist:
 npx skills add fderuiter/fred-skills --skill repo-audit-concurrency
+# Or add the full 57-skill repository (see Stage-1 budget warning above):
+npx skills add fderuiter/fred-skills
 ```
 
 ### Codex
 
-Install skills into `.agents/skills/` using OpenAI Codex's built-in `$skill-installer` or the local CLI:
-
-```text
-$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
-```
+Install skills into `.agents/skills/` using the local CLI (`starter` pack by default) or OpenAI Codex's built-in `$skill-installer`:
 
 ```sh
 python scripts/fred.py install --destination /path/to/project --host codex --pack starter
 ```
 
+```text
+$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
+```
+
 ### Gemini CLI Extension
+
+Prefer installing the 6-skill `starter` pack via the toolkit CLI (`python scripts/fred.py install --destination /path/to/project --host gemini-cli --pack starter`) for bounded Stage-1 discovery. Installing the repository-wide Gemini CLI extension (`gemini-extension.json`) loads all 57 skills at startup:
 
 ```sh
 gemini extensions install https://github.com/fderuiter/fred-skills
@@ -70,10 +72,8 @@ gemini extensions install https://github.com/fderuiter/fred-skills
 Run `install` without flags to install the `starter` pack across all detected workspace hosts (`.claude`, `.cursor`, `.agents`, `.gemini`, `.github`, `.opencode`, `.windsurf`, `.devin`, or `.kiro`)—or bootstrap `.agents/skills/` when no markers exist—or pass `--host` explicitly:
 
 ```sh
-# Install starter pack across detected workspace hosts (or bootstrap .agents/skills/)
 python scripts/fred.py install
 
-# Explicit project-scope installations
 python scripts/fred.py install --destination /path/to/project --host cursor --pack starter
 python scripts/fred.py install --destination /path/to/project --host copilot --pack starter
 python scripts/fred.py install --destination /path/to/project --host opencode --pack starter
@@ -136,7 +136,7 @@ fixable causes remain separate even if symptoms overlap.
 
 ## Download and verify release archives
 
-Official releases publish versioned pack archives (such as `starter`, `full-audit`, or the complete 57-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file.
+Official releases publish versioned pack archives (led by the 6-skill `starter` pack, `full-audit`, or the complete 57-package pack) in uncompressed TAR and ZIP formats, accompanied by a `manifest.json` and `SHA256SUMS` checksums file. Prefer `starter` (`<= 1,500` raw characters) for default deployments; extracting the complete 57-package pack or `fred-skills-suite.tar.gz` loads all 57 skills and can crowd Stage-1 context budgets in [OpenAI Codex](https://developers.openai.com/codex/skills) and [Claude Code](https://code.claude.com/docs/en/skills).
 
 ### Download
 

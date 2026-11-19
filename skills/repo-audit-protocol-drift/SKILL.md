@@ -1,6 +1,6 @@
 ---
 name: repo-audit-protocol-drift
-description: "Audit protocol contract drift with code evidence and counterexamples. Use when auditing producer-consumer disagreement, wire format drift, message versioning, or incompatible protocol assumptions."
+description: "Audit wire-format skew and version drift. Use when checking message payloads. Do not use for DBs."
 ---
 
 # Protocol Contract Drift

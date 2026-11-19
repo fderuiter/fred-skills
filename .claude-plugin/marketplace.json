@@ -313,7 +313,7 @@
     },
     {
       "name": "complete",
-      "description": "Every audit and engineering workflow.",
+      "description": "Every audit and engineering workflow (57 skills; prefer starter for bounded Stage-1 discovery within Codex and Claude Code context budgets).",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -382,7 +382,7 @@
     },
     {
       "name": "arch-boundary-specification",
-      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "description": "Define service APIs, ownership, and schemas. Use when designing modules. Do not use for authz audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -394,7 +394,7 @@
     },
     {
       "name": "arch-component-decomposition",
-      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "description": "Decompose capabilities into clean services. Use when structuring subsystems. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -406,7 +406,7 @@
     },
     {
       "name": "arch-decision-record",
-      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "description": "Author structured ADRs weighing trade-offs. Use when recording design choices. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -418,7 +418,7 @@
     },
     {
       "name": "repo-apply-fix",
-      "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
+      "description": "Implement an authorized, minimal source fix. Use when applying approved code. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -430,7 +430,7 @@
     },
     {
       "name": "repo-audit-accessibility-state",
-      "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
+      "description": "Audit ARIA state, focus, and keyboard parity. Use when checking UI a11y. Do not use for CSS style.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -442,7 +442,7 @@
     },
     {
       "name": "repo-audit-agent-configs",
-      "description": "Audit repository agent configurations, skill bundles, instruction files, and MCP server definitions with code evidence and counterexamples. Use when inspecting .claude/skills, .agents/skills, .cursor/skills, AGENTS.md, .cursorrules, or .mcp.json for prompt injection, unvetted scripts, or unsafe agent tool permissions.",
+      "description": "Audit skill bundles, AGENTS.md, and MCPs. Use when vetting agent setups. Do not use for app authz.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -454,7 +454,7 @@
     },
     {
       "name": "repo-audit-api-consistency",
-      "description": "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+      "description": "Audit endpoint verbs, paging, and shapes. Use when checking API uniformity. Do not use for wire.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -466,7 +466,7 @@
     },
     {
       "name": "repo-audit-architecture",
-      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+      "description": "Audit dependency cycles and layer leaks. Use when checking package coupling. Do not use for ADRs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -478,7 +478,7 @@
     },
     {
       "name": "repo-audit-behavioral-contracts",
-      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
+      "description": "Reconstruct hidden subsystem promises. Use when mapping implicit rules. Do not use for fix plans.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -490,7 +490,7 @@
     },
     {
       "name": "repo-audit-boundary-conditions",
-      "description": "Audit boundary-condition correctness with code evidence and counterexamples. Use when auditing empty inputs, limits, off-by-one errors, numeric overflow, Unicode, or malformed boundary values.",
+      "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking edges. Do not use for tests.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -502,7 +502,7 @@
     },
     {
       "name": "repo-audit-cache-coherence",
-      "description": "Audit cache coherence with code evidence and counterexamples. Use when auditing stale caches, invalidation races, cache keys, tenant leakage through caches, or competing cache layers.",
+      "description": "Audit stale caches, keys, and invalidation. Use when checking cache drift. Do not use for schemas.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -514,7 +514,7 @@
     },
     {
       "name": "repo-audit-cancellation",
-      "description": "Audit cancellation propagation with code evidence and counterexamples. Use when auditing abort propagation, cancelled tasks that keep running, stale publication after cancellation, or shutdown draining.",
+      "description": "Audit abort propagation and post-cancel work. Use when checking task aborts. Do not use for locks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -526,7 +526,7 @@
     },
     {
       "name": "repo-audit-canonicalization",
-      "description": "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement.",
+      "description": "Audit path, URL, and Unicode bypasses. Use when checking parser allowlists. Do not use for casts.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -538,7 +538,7 @@
     },
     {
       "name": "repo-audit-capacity",
-      "description": "Audit resource bounds and backpressure with code evidence and counterexamples. Use when auditing unbounded memory, queues, retries, fan-out, polling, backpressure, or resource exhaustion.",
+      "description": "Audit unbounded queues, memory, and backpressure. Use when checking limits. Do not use for leaks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -550,7 +550,7 @@
     },
     {
       "name": "repo-audit-cohesion",
-      "description": "Audit cohesion and responsibility with code evidence and counterexamples. Use when auditing mixed module responsibilities, unrelated reasons to change, god objects, or weak cohesion.",
+      "description": "Audit god objects and mixed module duties. Use when checking low cohesion. Do not use for design.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -562,7 +562,7 @@
     },
     {
       "name": "repo-audit-compatibility",
-      "description": "Audit compatibility and migration contracts with code evidence and counterexamples. Use when auditing breaking persisted-state changes, migrations, older-client compatibility, or rolling deployment contracts.",
+      "description": "Audit breaking schema changes and rollouts. Use when checking migrations. Do not use for wire skew.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -574,7 +574,7 @@
     },
     {
       "name": "repo-audit-complexity",
-      "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
+      "description": "Audit quadratic hot paths, ReDoS, and N+1s. Use when checking slow paths. Do not use for queues.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -586,7 +586,7 @@
     },
     {
       "name": "repo-audit-concurrency",
-      "description": "Audit concurrency and race conditions with code evidence and counterexamples. Use when auditing races, stale asynchronous results, reentrancy, lost updates, or unsafe overlapping operations.",
+      "description": "Audit race conditions, locks, and stale async state. Use when tracing races. Do not use for fixes.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -598,7 +598,7 @@
     },
     {
       "name": "repo-audit-configuration",
-      "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
+      "description": "Audit flag conflicts, env order, and reloads. Use when checking config drift. Do not use for logs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -610,7 +610,7 @@
     },
     {
       "name": "repo-audit-data-integrity",
-      "description": "Audit data transformation integrity with code evidence and counterexamples. Use when auditing lossy mappings, serialization errors, precision loss, provenance gaps, or parser-to-model data corruption.",
+      "description": "Audit lossy serialization and precision casts. Use when tracing corrupt data. Do not use for URLs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -622,7 +622,7 @@
     },
     {
       "name": "repo-audit-dead-code",
-      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths.",
+      "description": "Audit unreachable branches and stale flags. Use when finding dead code. Do not use for refactors.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -634,7 +634,7 @@
     },
     {
       "name": "repo-audit-diagnostics",
-      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
+      "description": "Triage a stalled audit log and scrub secrets. Use when fixing a stalled audit. Do not use for code.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -646,7 +646,7 @@
     },
     {
       "name": "repo-audit-domain-models",
-      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+      "description": "Audit primitive obsession and unit mixups. Use when checking value types. Do not use for greenfield.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -658,7 +658,7 @@
     },
     {
       "name": "repo-audit-error-semantics",
-      "description": "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation.",
+      "description": "Audit swallowed exceptions and fault types. Use when checking error flow. Do not use for metrics.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -670,7 +670,7 @@
     },
     {
       "name": "repo-audit-failure-modes",
-      "description": "Audit failure-mode completeness with code evidence and counterexamples. Use when auditing partial failures, timeouts, recovery gaps, interrupted workflows, or failure transition completeness.",
+      "description": "Audit partial failures, timeouts, and recovery. Use when checking fault paths. Do not use for logs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -682,7 +682,7 @@
     },
     {
       "name": "repo-audit-idempotency",
-      "description": "Audit idempotency and replay safety with code evidence and counterexamples. Use when auditing duplicate deliveries, unsafe retries, repeated initialization, replay handling, or idempotency keys.",
+      "description": "Audit duplicate delivery and replay safety. Use when checking dedup keys. Do not use for locks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -694,7 +694,7 @@
     },
     {
       "name": "repo-audit-invariants",
-      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values.",
+      "description": "Audit unenforced domain rules and bad states. Use when hunting invariant bugs. Do not use for PRs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -706,7 +706,7 @@
     },
     {
       "name": "repo-audit-lifecycle",
-      "description": "Audit ownership and lifecycle boundaries with code evidence and counterexamples. Use when auditing resource ownership, missing cleanup, use after disposal, leaked listeners, streams, timers, or tasks.",
+      "description": "Audit resource ownership, disposal, and leaks. Use when checking teardown. Do not use for sizing.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -718,7 +718,7 @@
     },
     {
       "name": "repo-audit-nondeterminism",
-      "description": "Audit nondeterministic behavior with code evidence and counterexamples. Use when auditing flaky tests, clock/randomness dependence, global state leakage, or order-sensitive workflows.",
+      "description": "Audit clock, random, and order flakiness. Use when tracing non-determinism. Do not use for runners.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -730,7 +730,7 @@
     },
     {
       "name": "repo-audit-observability",
-      "description": "Audit observability gaps with code evidence and counterexamples. Use when auditing undiagnosable failures, missing correlation, misleading telemetry, or insufficient recovery visibility.",
+      "description": "Audit missing trace IDs and blind telemetry. Use when checking blind spots. Do not use for errors.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -742,7 +742,7 @@
     },
     {
       "name": "repo-audit-program",
-      "description": "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program.",
+      "description": "Coordinate multi-pass codebase audits. Use when running a broad audit. Do not use for code edits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -754,7 +754,7 @@
     },
     {
       "name": "repo-audit-protocol-drift",
-      "description": "Audit protocol contract drift with code evidence and counterexamples. Use when auditing producer-consumer disagreement, wire format drift, message versioning, or incompatible protocol assumptions.",
+      "description": "Audit wire-format skew and version drift. Use when checking message payloads. Do not use for DBs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -766,7 +766,7 @@
     },
     {
       "name": "repo-audit-side-effects",
-      "description": "Audit hidden side effects with code evidence and counterexamples. Use when investigating unexpected mutations, hidden I/O, effectful getters, render effects, or misleading function contracts.",
+      "description": "Audit hidden mutations and impure getters. Use when checking surprise I/O. Do not use for commits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -778,7 +778,7 @@
     },
     {
       "name": "repo-audit-sources-of-truth",
-      "description": "Audit duplicated sources of truth with code evidence and counterexamples. Use when auditing duplicated domain state, conflicting authorities, independently maintained derived fields, or divergent projections.",
+      "description": "Audit split authorities and drifted views. Use when checking dual state. Do not use for cache TTLs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -790,7 +790,7 @@
     },
     {
       "name": "repo-audit-state-machines",
-      "description": "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior.",
+      "description": "Audit implicit state transitions and stuck flows. Use when tracing bad states. Do not use for PRs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -802,7 +802,7 @@
     },
     {
       "name": "repo-audit-synthesis",
-      "description": "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan.",
+      "description": "Consolidate audit ledgers into issue drafts. Use when publishing findings. Do not use for plans.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -814,7 +814,7 @@
     },
     {
       "name": "repo-audit-temporal-coupling",
-      "description": "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts.",
+      "description": "Audit call-order and init sequencing rules. Use when tracing typestate bugs. Do not use for locks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -826,7 +826,7 @@
     },
     {
       "name": "repo-audit-test-contracts",
-      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
+      "description": "Audit untested promises in existing suites. Use when auditing missing checks. Do not use for edits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -838,7 +838,7 @@
     },
     {
       "name": "repo-audit-test-oracles",
-      "description": "Audit test oracle quality with code evidence and counterexamples. Use when auditing assertions that mirror implementation, ineffective mocks, weak expected results, or surviving mutations.",
+      "description": "Audit tautological mocks and weak asserts. Use when checking surviving bugs. Do not use for gaps.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -850,7 +850,7 @@
     },
     {
       "name": "repo-audit-transactions",
-      "description": "Audit implicit transaction boundaries with code evidence and counterexamples. Use when auditing multi-step consistency, partial commits, transaction scope, dual writes, or compensation guarantees.",
+      "description": "Audit atomic write scopes and dual writes. Use when checking partial commits. Do not use for retries.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -862,7 +862,7 @@
     },
     {
       "name": "repo-audit-trust-boundaries",
-      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
+      "description": "Audit untrusted inputs, authz, and isolation. Use when tracing bypasses. Do not use for blueprints.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -874,7 +874,7 @@
     },
     {
       "name": "repo-plan-fix",
-      "description": "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff.",
+      "description": "Sequence verified bugs into bounded tasks. Use when planning remediation. Do not use for synthesis.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -886,7 +886,7 @@
     },
     {
       "name": "repo-reconcile-findings",
-      "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
+      "description": "Reconcile ledger statuses across run history. Use when syncing issue state. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -898,7 +898,7 @@
     },
     {
       "name": "repo-specify-regression",
-      "description": "Use when defining an independent regression test for a supported behavioral defect.",
+      "description": "Specify a minimal failing check for one bug. Use when locking bug criteria. Do not use for suites.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -910,7 +910,7 @@
     },
     {
       "name": "repo-verify-finding",
-      "description": "Use when verifying, reproducing, refuting, or narrowing an existing repository finding.",
+      "description": "Reproduce, narrow, or refute one finding. Use when validating a bug claim. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -922,7 +922,7 @@
     },
     {
       "name": "repo-verify-fix",
-      "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+      "description": "Verify a proposed patch fixes its bug safely. Use when checking patch safety. Do not use for triage.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -934,7 +934,7 @@
     },
     {
       "name": "review-actionable-feedback",
-      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "description": "Turn PR review notes into ranked comments. Use when drafting PR feedback. Do not use for patches.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -946,7 +946,7 @@
     },
     {
       "name": "review-diff-analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "description": "Analyze pull request hunks and blast radius. Use when triaging PR changes. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -958,7 +958,7 @@
     },
     {
       "name": "review-invariant-violations",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "description": "Inspect PR diff hunks for broken contracts. Use when reviewing code changes. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -970,7 +970,7 @@
     },
     {
       "name": "session-handoff",
-      "description": "Use when compacting an active investigation or implementation session into a validated exit handoff for a fresh context window.",
+      "description": "Compact session state into a clean handoff. Use when rotating context windows. Do not use for logs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -982,7 +982,7 @@
     },
     {
       "name": "spec-authoring",
-      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+      "description": "Compile settled decisions into SPEC.md files. Use when authoring specs. Do not use for ADR history.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -994,7 +994,7 @@
     },
     {
       "name": "spec-convergence",
-      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+      "description": "Verify plans and diffs match SPEC.md scope. Use when checking spec drift. Do not use for PR style.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1006,7 +1006,7 @@
     },
     {
       "name": "spec-interview",
-      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "description": "Run pre-code Socratic scope interviews. Use when clarifying requirements. Do not use for coding.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1018,7 +1018,7 @@
     },
     {
       "name": "terse-output-commit",
-      "description": "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages.",
+      "description": "Format terse code replies and 50-char commits. Use when cutting token output. Do not use for docs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1030,7 +1030,7 @@
     },
     {
       "name": "test-case-generation",
-      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "description": "Write executable unit and property test files. Use when generating suites. Do not use for bug specs.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1042,7 +1042,7 @@
     },
     {
       "name": "test-gap-analysis",
-      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "description": "Identify uncovered branches and edge cases. Use when planning unit tests. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1054,7 +1054,7 @@
     },
     {
       "name": "test-suite-verification",
-      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "description": "Execute test runners and check pass health. Use when validating test suites. Do not use for flakes.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"

@@ -1,6 +1,6 @@
 ---
 name: repo-audit-dead-code
-description: "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths."
+description: "Audit unreachable branches and stale flags. Use when finding dead code. Do not use for refactors."
 ---
 
 # Dead Code and Obsolete Compatibility Paths

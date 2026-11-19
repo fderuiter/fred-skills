@@ -1,6 +1,6 @@
 ---
 name: repo-verify-finding
-description: "Use when verifying, reproducing, refuting, or narrowing an existing repository finding."
+description: "Reproduce, narrow, or refute one finding. Use when validating a bug claim. Do not use for audits."
 ---
 
 # Finding Verification

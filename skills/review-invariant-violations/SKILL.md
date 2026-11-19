@@ -1,6 +1,6 @@
 ---
 name: review-invariant-violations
-description: "Use when reviewing code changes against behavioral invariants, state machines, and system invariants."
+description: "Inspect PR diff hunks for broken contracts. Use when reviewing code changes. Do not use for audits."
 ---
 
 # Invariant Verification

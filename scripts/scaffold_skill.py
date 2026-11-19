@@ -26,7 +26,12 @@ from skill_tools import (
     read_frontmatter,
     suite_skills_by_suite,
 )
-from validate_skills import NAME
+from validate_skills import (
+    EXPLICIT_INVOCATION_ONLY_SKILLS,
+    MAX_DESCRIPTION_CHARS,
+    NAME,
+    _validate_description_contract,
+)
 
 VALID_MATURITIES: tuple[str, ...] = ("experimental", "beta", "stable")
 RESERVED_SKILL_NAMES: frozenset[str] = frozenset({"fred-skills"})
@@ -46,13 +51,64 @@ def _default_title(name: str) -> str:
     return " ".join(words) if words else name
 
 
-def _default_description(name: str, title: str) -> str:
-    """Construct a concise, unique activation description within 1..1024 characters."""
-    desc = (
-        f"Use when executing {title.lower()} workflows or inspecting {name} "
-        "contracts and boundaries on explicit request."
+_SUITE_DESCRIPTION_TEMPLATES: dict[str, tuple[str, str, str]] = {
+    "repository-audits": (
+        "Audit {topic} contracts",
+        "checking {slug} bugs",
+        "code edits",
+    ),
+    "repository-workflows": (
+        "Run {topic} workflow steps",
+        "handling {slug} tasks",
+        "repo audits",
+    ),
+    "software-architecture": (
+        "Specify {topic} topology",
+        "designing {slug} APIs",
+        "diff reviews",
+    ),
+    "code-review": (
+        "Review {topic} PR hunks",
+        "grading {slug} diffs",
+        "system design",
+    ),
+    "automated-testing": (
+        "Check {topic} suite coverage",
+        "expanding {slug} tests",
+        "issue triage",
+    ),
+    "spec-driven-development": (
+        "Draft {topic} specs pre-code",
+        "aligning {slug} scope",
+        "debugging",
+    ),
+}
+
+
+def _clean_scaffold_topic(title: str) -> str:
+    lowered = title.lower()
+    for prefix in ("repo audit ", "repo ", "arch ", "review ", "test ", "spec "):
+        if lowered.startswith(prefix) and len(lowered) > len(prefix):
+            lowered = lowered[len(prefix) :]
+            break
+    return lowered[:24].rstrip()
+
+
+def _default_description(
+    name: str, title: str, suite_name: str = "repository-audits"
+) -> str:
+    """Construct a concise three-part description within 1..140 characters."""
+    cap_tpl, use_tpl, dont_str = _SUITE_DESCRIPTION_TEMPLATES.get(
+        suite_name, _SUITE_DESCRIPTION_TEMPLATES["repository-audits"]
     )
-    return desc[:1024]
+    topic = _clean_scaffold_topic(title) or name[:20]
+    slug = name[:24].rstrip("-") or name[:20]
+    desc = (
+        f"{cap_tpl.format(topic=topic)}. "
+        f"Use when {use_tpl.format(slug=slug)}. "
+        f"Do not use for {dont_str}."
+    )
+    return desc[:MAX_DESCRIPTION_CHARS]
 
 
 def _default_short_description(title: str, name: str) -> str:
@@ -167,15 +223,18 @@ def _render_skill_markdown(
     description: str,
     schema_filename: str,
     extra_schema_links: Sequence[str] = (),
+    disable_model_invocation: bool = False,
 ) -> str:
     extra_clause = ""
     if extra_schema_links:
         formatted = ", ".join(f"[suite schema]({rel})" for rel in extra_schema_links)
         extra_clause = f" and {formatted}"
+    guard_line = "disable-model-invocation: true\n" if disable_model_invocation else ""
     return (
         "---\n"
         f"name: {name}\n"
         f"description: {_yaml_double_quoted(description)}\n"
+        f"{guard_line}"
         "---\n\n"
         f"# {title}\n\n"
         f"Review the [starting prompt](assets/prompt.md), "
@@ -291,10 +350,16 @@ def _render_icon_svg(name: str, suite_name: str) -> str:
     )
 
 
-def _render_openai_yaml(name: str, title: str, short_description: str) -> str:
+def _render_openai_yaml(
+    name: str,
+    title: str,
+    short_description: str,
+    allow_implicit_invocation: bool = True,
+) -> str:
     default_prompt = (
         f"Use ${name} on this repository and report evidence-backed results."
     )
+    implicit_str = "true" if allow_implicit_invocation else "false"
     return (
         "interface:\n"
         f"  display_name: {_yaml_double_quoted(title)}\n"
@@ -308,7 +373,7 @@ def _render_openai_yaml(name: str, title: str, short_description: str) -> str:
         "    - codex\n"
         "    - api\n"
         "    - atlas\n"
-        "  allow_implicit_invocation: true\n"
+        f"  allow_implicit_invocation: {implicit_str}\n"
     )
 
 
@@ -511,10 +576,9 @@ def _validate_inputs(
                 f"Skill name {name!r} collides with existing pack name in catalog/packs.json"
             )
 
-    if not 1 <= len(description.strip()) <= 1024:
-        raise ValueError(
-            "Description must be a nonempty string of at most 1024 characters"
-        )
+    desc_errors = _validate_description_contract(description)
+    if desc_errors:
+        raise ValueError("; ".join(desc_errors))
 
     if not 25 <= len(short_description) <= 64:
         raise ValueError(
@@ -706,11 +770,16 @@ def scaffold_skill(
     )
     package_dir = skills_parent / name
 
+    effective_suite, sibling_skill = _resolve_suite_and_sibling(
+        root=resolved_root,
+        name=name,
+        explicit_suite=suite,
+    )
     effective_title = title.strip() if title and title.strip() else _default_title(name)
     effective_description = (
         description.strip()
         if description and description.strip()
-        else _default_description(name, effective_title)
+        else _default_description(name, effective_title, effective_suite)
     )
     effective_short = (
         short_description.strip()
@@ -739,16 +808,12 @@ def scaffold_skill(
         )
 
     schema_filename = f"{name}.schema.json"
-    effective_suite, sibling_skill = _resolve_suite_and_sibling(
-        root=resolved_root,
-        name=name,
-        explicit_suite=suite,
-    )
     extra_schema_links = (
         _discover_suite_synced_schemas(resolved_root, effective_suite, schema_filename)
         if sync_catalog
         else []
     )
+    explicit_only = name in EXPLICIT_INVOCATION_ONLY_SKILLS
     package_files: dict[str, str] = {
         "SKILL.md": _render_skill_markdown(
             name=name,
@@ -756,6 +821,7 @@ def scaffold_skill(
             description=effective_description,
             schema_filename=schema_filename,
             extra_schema_links=extra_schema_links,
+            disable_model_invocation=explicit_only,
         ),
         "assets/icon.svg": _render_icon_svg(
             name=name,
@@ -773,6 +839,7 @@ def scaffold_skill(
             name=name,
             title=effective_title,
             short_description=effective_short,
+            allow_implicit_invocation=not explicit_only,
         ),
         "references/evaluation-scenarios.json": _render_evaluation_scenarios(
             name=name,

@@ -28,14 +28,66 @@ from skill_tools import (
     extract_relative_links,
     find_deep_reference_chains,
     infer_suite_and_siblings,
+    infer_suite_name,
     read_frontmatter,
     resolve_relative_link_target,
+    skill_to_suite_map,
     suite_members,
 )
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 MAX_PROMPT_CHARS = 1200
 MAX_PROMPT_LINES = 20
+MAX_DESCRIPTION_CHARS = 140
+MAX_SUITE_METADATA_CHARS = 8000
+MAX_STARTER_PACK_CHARS = 1500
+MAX_CURATED_PACK_CHARS = 2500
+MAX_CROSS_SUITE_JACCARD = 0.20
+UMBRELLA_PACK_NAMES = frozenset({"full-audit", "complete"})
+EXPLICIT_INVOCATION_ONLY_SKILLS = frozenset(
+    {
+        "repo-apply-fix",
+        "repo-audit-diagnostics",
+        "repo-audit-program",
+        "repo-audit-synthesis",
+        "repo-reconcile-findings",
+        "repo-specify-regression",
+        "test-case-generation",
+    }
+)
+DESCRIPTION_USE_WHEN_RE = re.compile(r"\bUse when\s+\S", re.IGNORECASE)
+DESCRIPTION_DO_NOT_USE_RE = re.compile(
+    r"\bDo not use(?:\s+(?:for|when|to))?\s+\S", re.IGNORECASE
+)
+JACCARD_TOKEN_RE = re.compile(r"[a-z0-9]+")
+JACCARD_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "do",
+        "for",
+        "from",
+        "in",
+        "into",
+        "is",
+        "not",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "use",
+        "when",
+        "with",
+    }
+)
 MAX_METADATA_TOKENS = 100
 MAX_BODY_TOKENS = 5000
 MAX_REFERENCE_TOKENS = 5000
@@ -1144,18 +1196,74 @@ def _check_frontmatter_xml_tags(metadata: Mapping[str, Any]) -> list[str]:
     return issues
 
 
+def _check_description_clauses(stripped: str) -> list[str]:
+    errors: list[str] = []
+    use_match = DESCRIPTION_USE_WHEN_RE.search(stripped)
+    dont_match = DESCRIPTION_DO_NOT_USE_RE.search(stripped)
+    use_pos = use_match.start() if use_match is not None else len(stripped)
+    dont_pos = dont_match.start() if dont_match is not None else len(stripped)
+    first_clause_idx = min(use_pos, dont_pos)
+    if not stripped[:first_clause_idx].strip(" .;:,-"):
+        errors.append("SKILL.md: description must state capability before 'Use when'")
+    if use_match is None:
+        errors.append("SKILL.md: description missing 'Use when' trigger clause")
+    if dont_match is None:
+        errors.append(
+            "SKILL.md: description missing 'Do not use' negative-boundary clause"
+        )
+    elif use_match is not None and dont_pos <= use_pos:
+        errors.append("SKILL.md: description must place 'Use when' before 'Do not use'")
+    return errors
+
+
+def _validate_description_contract(description: object) -> list[str]:
+    if not isinstance(description, str) or not description.strip():
+        return [
+            f"Description must be a nonempty string of at most {MAX_DESCRIPTION_CHARS} characters"
+        ]
+    stripped = description.strip()
+    errors: list[str] = []
+    if len(stripped) > MAX_DESCRIPTION_CHARS:
+        errors.append(
+            f"SKILL.md: description exceeds {MAX_DESCRIPTION_CHARS} characters "
+            f"({len(stripped)} > {MAX_DESCRIPTION_CHARS})"
+        )
+    errors.extend(_check_description_clauses(stripped))
+    return errors
+
+
+def _validate_frontmatter_invocation_flag(
+    package_name: str, metadata: Mapping[str, Any]
+) -> tuple[list[str], bool | None]:
+    guarded_msg = (
+        "SKILL.md: mutating, publishing, transcript, or multi-pass skill "
+        "must set 'disable-model-invocation: true'"
+    )
+    if "disable-model-invocation" not in metadata:
+        if package_name in EXPLICIT_INVOCATION_ONLY_SKILLS:
+            return [guarded_msg], False
+        return [], False
+    raw_flag = metadata["disable-model-invocation"]
+    if not isinstance(raw_flag, bool):
+        return ["SKILL.md: 'disable-model-invocation' must be a boolean"], None
+    if package_name in EXPLICIT_INVOCATION_ONLY_SKILLS and not raw_flag:
+        return [guarded_msg], raw_flag
+    return [], raw_flag
+
+
 def _validate_frontmatter_metadata(
     package_name: str, metadata: Mapping[str, Any]
-) -> list[str]:
+) -> tuple[list[str], bool | None]:
     errors = _check_frontmatter_xml_tags(metadata)
     name = metadata.get("name")
     if not _is_valid_skill_name(name, package_name):
         errors.append("Invalid name or directory mismatch")
     description = metadata.get("description")
-    if not isinstance(description, str) or not 1 <= len(description.strip()) <= 1024:
-        errors.append(
-            "Description must be a nonempty string of at most 1024 characters"
-        )
+    errors.extend(_validate_description_contract(description))
+    flag_errors, disable_model_flag = _validate_frontmatter_invocation_flag(
+        package_name, metadata
+    )
+    errors.extend(flag_errors)
     if isinstance(name, str) and isinstance(description, str):
         metadata_tokens = estimate_tokens(f"{name} {description.strip()}")
         if metadata_tokens > MAX_METADATA_TOKENS:
@@ -1163,7 +1271,7 @@ def _validate_frontmatter_metadata(
                 f"SKILL.md: frontmatter metadata exceeds token budget "
                 f"({metadata_tokens} > {MAX_METADATA_TOKENS} estimated tokens)"
             )
-    return errors
+    return errors, disable_model_flag
 
 
 def _validate_skill_body(body: str) -> tuple[list[str], bool]:
@@ -1714,14 +1822,42 @@ def _is_nonempty_str_list(value: object) -> bool:
     return all(isinstance(item, str) and bool(item.strip()) for item in value)
 
 
-def _validate_ui_policy(policy: object) -> list[str]:
+def _validate_ui_policy(policy: object) -> tuple[list[str], bool | None]:
     if not isinstance(policy, dict):
-        return ["Missing UI policy: policy.allow_implicit_invocation must be a boolean"]
+        return [
+            "Missing UI policy: policy.allow_implicit_invocation must be a boolean"
+        ], None
     errors: list[str] = []
-    if not isinstance(policy.get("allow_implicit_invocation"), bool):
+    raw_allow = policy.get("allow_implicit_invocation")
+    allow_implicit: bool | None = None
+    if isinstance(raw_allow, bool):
+        allow_implicit = raw_allow
+    else:
         errors.append("UI policy.allow_implicit_invocation must be a boolean")
     if "products" in policy and not _is_nonempty_str_list(policy.get("products")):
         errors.append("UI policy.products must be a nonempty list of strings")
+    return errors, allow_implicit
+
+
+def _validate_invocation_policy_parity(
+    package_name: str,
+    disable_model_flag: bool | None,
+    allow_implicit_flag: bool | None,
+) -> list[str]:
+    errors: list[str] = []
+    if package_name in EXPLICIT_INVOCATION_ONLY_SKILLS and allow_implicit_flag is True:
+        errors.append(
+            "agents/openai.yaml: mutating, publishing, transcript, or multi-pass "
+            "skill must set 'policy.allow_implicit_invocation: false'"
+        )
+    if disable_model_flag is None or allow_implicit_flag is None:
+        return errors
+    if disable_model_flag != (not allow_implicit_flag):
+        errors.append(
+            "Invocation policy mismatch: SKILL.md 'disable-model-invocation' "
+            f"({disable_model_flag}) conflicts with agents/openai.yaml "
+            f"'policy.allow_implicit_invocation' ({allow_implicit_flag})"
+        )
     return errors
 
 
@@ -1729,22 +1865,23 @@ def _validate_ui_metadata(
     package: Path,
     name: object,
     cached_texts: dict[Path, str] | None = None,
-) -> tuple[list[str], str | None]:
+) -> tuple[list[str], str | None, bool | None]:
     ui_path = package / "agents/openai.yaml"
     if ui_path.is_symlink() or not ui_path.exists():
-        return [], None
+        return [], None, None
     try:
         raw_ui = _read_cached_utf8(ui_path, cached_texts)
         ui_doc = yaml.safe_load(raw_ui)
     except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
-        return [f"Invalid optional UI metadata: {exc}"], None
+        return [f"Invalid optional UI metadata: {exc}"], None, None
     if not isinstance(ui_doc, dict):
-        return ["Invalid optional UI metadata: expected mapping"], None
+        return ["Invalid optional UI metadata: expected mapping"], None, None
     errors, short_description = _validate_ui_interface(
         package, name, ui_doc.get("interface"), cached_texts
     )
-    errors.extend(_validate_ui_policy(ui_doc.get("policy")))
-    return errors, short_description
+    policy_errors, allow_implicit = _validate_ui_policy(ui_doc.get("policy"))
+    errors.extend(policy_errors)
+    return errors, short_description, allow_implicit
 
 
 def _inspect_skill_package(
@@ -1768,7 +1905,10 @@ def _inspect_skill_package(
         cached_texts[skill_md_path] = body
 
     errors = list(raw_skill_errors)
-    errors.extend(_validate_frontmatter_metadata(package.name, metadata))
+    fm_errors, disable_model_flag = _validate_frontmatter_metadata(
+        package.name, metadata
+    )
+    errors.extend(fm_errors)
     body_errors, has_boundary_sections = _validate_skill_body(body)
     errors.extend(body_errors)
 
@@ -1792,8 +1932,15 @@ def _inspect_skill_package(
         )
     )
 
-    ui_errors, short_description = _validate_ui_metadata(package, name, cached_texts)
+    ui_errors, short_description, allow_implicit_flag = _validate_ui_metadata(
+        package, name, cached_texts
+    )
     errors.extend(ui_errors)
+    errors.extend(
+        _validate_invocation_policy_parity(
+            package.name, disable_model_flag, allow_implicit_flag
+        )
+    )
 
     scan_errors, valid_closed_schemas = _scan_package_files(package, cached_texts)
     errors.extend(scan_errors)
@@ -2156,9 +2303,11 @@ def _record_unique_descriptions(
     parsed: _ParsedSkillPackage,
     descriptions: dict[str, str],
     short_descriptions: dict[str, str],
+    descriptions_by_pkg: dict[str, str],
 ) -> list[str]:
     problems: list[str] = []
     if parsed.description is not None:
+        descriptions_by_pkg[pkg_name] = parsed.description
         if parsed.description in descriptions:
             problems.append(
                 f"Duplicate activation description: {pkg_name} and {descriptions[parsed.description]}"
@@ -2229,6 +2378,147 @@ def _validate_root_cursor_manifest(root: Path) -> list[str]:
     return _validate_cursor_plugin_manifest(
         root, "fred-skills", data, ".cursor-plugin/plugin.json"
     )
+
+
+def _description_content_tokens(description: str) -> frozenset[str]:
+    return frozenset(
+        tok
+        for tok in JACCARD_TOKEN_RE.findall(description.lower())
+        if tok not in JACCARD_STOPWORDS
+    )
+
+
+def _resolve_package_suites(root: Path, pkg_names: Sequence[str]) -> dict[str, str]:
+    configured = skill_to_suite_map(root)
+    known_suites = tuple(dict.fromkeys(configured.values()))
+    return {
+        pkg: configured.get(pkg) or infer_suite_name(pkg, known_suites)
+        for pkg in pkg_names
+    }
+
+
+def _check_cross_suite_pair(
+    pkg_a: str,
+    suite_a: str,
+    tokens_a: frozenset[str],
+    pkg_b: str,
+    suite_b: str,
+    tokens_b: frozenset[str],
+) -> str | None:
+    if suite_a == suite_b:
+        return None
+    union = tokens_a | tokens_b
+    if not union:
+        return None
+    jaccard = len(tokens_a & tokens_b) / len(union)
+    if jaccard <= MAX_CROSS_SUITE_JACCARD:
+        return None
+    return (
+        f"Cross-suite description overlap ({jaccard:.4f} > "
+        f"{MAX_CROSS_SUITE_JACCARD:.2f}): {pkg_a} ({suite_a}) and {pkg_b} ({suite_b})"
+    )
+
+
+def _validate_cross_suite_jaccard(
+    root: Path, descriptions_by_pkg: Mapping[str, str]
+) -> list[str]:
+    ordered = sorted(descriptions_by_pkg)
+    if len(ordered) <= 1:
+        return []
+    suites_by_pkg = _resolve_package_suites(root, ordered)
+    tokens_by_pkg = {
+        pkg: _description_content_tokens(descriptions_by_pkg[pkg]) for pkg in ordered
+    }
+    errors: list[str] = []
+    for idx, pkg_a in enumerate(ordered):
+        for pkg_b in ordered[idx + 1 :]:
+            pair_err = _check_cross_suite_pair(
+                pkg_a,
+                suites_by_pkg[pkg_a],
+                tokens_by_pkg[pkg_a],
+                pkg_b,
+                suites_by_pkg[pkg_b],
+                tokens_by_pkg[pkg_b],
+            )
+            if pair_err is not None:
+                errors.append(pair_err)
+    return errors
+
+
+def _check_single_pack_budget(
+    pack_name: str, pack_cfg: object, raw_chars_by_pkg: Mapping[str, int]
+) -> str | None:
+    if not isinstance(pack_cfg, dict):
+        return None
+    skills = pack_cfg.get("skills")
+    if not isinstance(skills, list):
+        return None
+    pack_chars = sum(raw_chars_by_pkg.get(s, 0) for s in skills if isinstance(s, str))
+    if pack_name == "starter" and pack_chars > MAX_STARTER_PACK_CHARS:
+        return (
+            f"Pack 'starter' exceeds Stage-1 starter budget "
+            f"({pack_chars} > {MAX_STARTER_PACK_CHARS} raw characters)"
+        )
+    if pack_name not in UMBRELLA_PACK_NAMES and pack_chars >= MAX_CURATED_PACK_CHARS:
+        return (
+            f"Pack '{pack_name}' exceeds Stage-1 pack budget "
+            f"({pack_chars} >= {MAX_CURATED_PACK_CHARS} raw characters)"
+        )
+    if pack_name in UMBRELLA_PACK_NAMES and pack_chars >= MAX_SUITE_METADATA_CHARS:
+        return (
+            f"Pack '{pack_name}' exceeds Stage-1 suite budget "
+            f"({pack_chars} >= {MAX_SUITE_METADATA_CHARS} raw characters)"
+        )
+    return None
+
+
+def _validate_pack_char_budgets(
+    root: Path, raw_chars_by_pkg: Mapping[str, int]
+) -> list[str]:
+    packs_doc, load_errs = _load_optional_json_dict(
+        root / "catalog/packs.json", "catalog/packs.json"
+    )
+    if load_errs or packs_doc is None:
+        return load_errs
+    packs = packs_doc.get("packs")
+    if not isinstance(packs, dict):
+        return []
+    return [
+        err
+        for pack_name, pack_cfg in packs.items()
+        if (
+            err := _check_single_pack_budget(str(pack_name), pack_cfg, raw_chars_by_pkg)
+        )
+        is not None
+    ]
+
+
+def _validate_stage1_char_budgets(
+    root: Path, descriptions_by_pkg: Mapping[str, str]
+) -> list[str]:
+    raw_chars_by_pkg = {
+        pkg: len(pkg) + len(desc.strip()) for pkg, desc in descriptions_by_pkg.items()
+    }
+    configured = set(skill_to_suite_map(root))
+    active_names = configured if configured else set(raw_chars_by_pkg)
+    total_chars = sum(raw_chars_by_pkg.get(pkg, 0) for pkg in active_names)
+    errors: list[str] = []
+    if total_chars >= MAX_SUITE_METADATA_CHARS:
+        errors.append(
+            f"Aggregate Stage-1 skill metadata exceeds budget "
+            f"({total_chars} >= {MAX_SUITE_METADATA_CHARS} raw characters)"
+        )
+    errors.extend(_validate_pack_char_budgets(root, raw_chars_by_pkg))
+    return errors
+
+
+def _validate_routing_and_budget_gates(
+    root: Path, descriptions_by_pkg: Mapping[str, str]
+) -> list[str]:
+    return [
+        *_validate_stage1_char_budgets(root, descriptions_by_pkg),
+        *_validate_cross_suite_jaccard(root, descriptions_by_pkg),
+    ]
 
 
 def _validate_suite_manifest(root: Path) -> list[str]:
@@ -3076,6 +3366,7 @@ def validate_with_telemetry(
         new_skill_names |= set(ledger_entries.keys()) & set(pkg_names)
 
     descriptions: dict[str, str] = {}
+    descriptions_by_pkg: dict[str, str] = {}
     short_descriptions: dict[str, str] = {}
     prompt_bodies: dict[str, str] = {}
     method_lines_by_pkg: dict[str, list[str]] = {}
@@ -3109,7 +3400,11 @@ def validate_with_telemetry(
         )
         problems.extend(
             _record_unique_descriptions(
-                package.name, parsed, descriptions, short_descriptions
+                package.name,
+                parsed,
+                descriptions,
+                short_descriptions,
+                descriptions_by_pkg,
             )
         )
         problems.extend(_record_unique_prompt_body(package.name, parsed, prompt_bodies))
@@ -3118,6 +3413,7 @@ def validate_with_telemetry(
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
 
     problems.extend(_validate_suite_manifest(root))
+    problems.extend(_validate_routing_and_budget_gates(root, descriptions_by_pkg))
     problems.extend(_validate_documentation_invariants(root))
     method_dup_errors, method_dup_rate, method_dup_pct = (
         _evaluate_method_boilerplate_duplication(method_lines_by_pkg)

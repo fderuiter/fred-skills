@@ -1,6 +1,6 @@
 ---
 name: repo-audit-canonicalization
-description: "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement."
+description: "Audit path, URL, and Unicode bypasses. Use when checking parser allowlists. Do not use for casts."
 ---
 
 # Security-Sensitive Canonicalization

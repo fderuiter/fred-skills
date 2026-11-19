@@ -1,6 +1,6 @@
 ---
 name: repo-audit-concurrency
-description: "Audit concurrency and race conditions with code evidence and counterexamples. Use when auditing races, stale asynchronous results, reentrancy, lost updates, or unsafe overlapping operations."
+description: "Audit race conditions, locks, and stale async state. Use when tracing races. Do not use for fixes."
 ---
 
 # Concurrency and Race Conditions

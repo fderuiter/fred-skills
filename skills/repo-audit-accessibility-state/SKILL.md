@@ -1,6 +1,6 @@
 ---
 name: repo-audit-accessibility-state
-description: "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements."
+description: "Audit ARIA state, focus, and keyboard parity. Use when checking UI a11y. Do not use for CSS style."
 ---
 
 # Accessibility State Consistency

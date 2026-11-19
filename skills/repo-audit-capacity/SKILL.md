@@ -1,6 +1,6 @@
 ---
 name: repo-audit-capacity
-description: "Audit resource bounds and backpressure with code evidence and counterexamples. Use when auditing unbounded memory, queues, retries, fan-out, polling, backpressure, or resource exhaustion."
+description: "Audit unbounded queues, memory, and backpressure. Use when checking limits. Do not use for leaks."
 ---
 
 # Resource Bounds and Backpressure

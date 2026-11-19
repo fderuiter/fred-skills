@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-trust-boundaries",
-  "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
+  "description": "Audit untrusted inputs, authz, and isolation. Use when tracing bypasses. Do not use for blueprints.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

@@ -1,6 +1,6 @@
 ---
 name: review-diff-analysis
-description: "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts."
+description: "Analyze pull request hunks and blast radius. Use when triaging PR changes. Do not use for audits."
 ---
 
 # Diff Analysis

@@ -1,6 +1,6 @@
 {
   "name": "arch-component-decomposition",
-  "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+  "description": "Decompose capabilities into clean services. Use when structuring subsystems. Do not use for audits.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

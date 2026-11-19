@@ -1,6 +1,6 @@
 ---
 name: repo-audit-api-consistency
-description: "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions."
+description: "Audit endpoint verbs, paging, and shapes. Use when checking API uniformity. Do not use for wire."
 ---
 
 # API Design Consistency

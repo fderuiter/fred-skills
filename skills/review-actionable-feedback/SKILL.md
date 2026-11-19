@@ -1,6 +1,6 @@
 ---
 name: review-actionable-feedback
-description: "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance."
+description: "Turn PR review notes into ranked comments. Use when drafting PR feedback. Do not use for patches."
 ---
 
 # Feedback Synthesis

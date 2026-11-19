@@ -1,6 +1,7 @@
 ---
 name: repo-audit-diagnostics
-description: "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles."
+description: "Triage a stalled audit log and scrub secrets. Use when fixing a stalled audit. Do not use for code."
+disable-model-invocation: true
 ---
 
 # Repository Audit Session Diagnostics

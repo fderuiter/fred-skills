@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-transactions",
-  "description": "Audit implicit transaction boundaries with code evidence and counterexamples. Use when auditing multi-step consistency, partial commits, transaction scope, dual writes, or compensation guarantees.",
+  "description": "Audit atomic write scopes and dual writes. Use when checking partial commits. Do not use for retries.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

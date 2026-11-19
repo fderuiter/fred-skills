@@ -1,6 +1,7 @@
 ---
 name: repo-audit-synthesis
-description: "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan."
+description: "Consolidate audit ledgers into issue drafts. Use when publishing findings. Do not use for plans."
+disable-model-invocation: true
 ---
 
 # Audit Findings and Issue Planning

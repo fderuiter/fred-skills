@@ -1,6 +1,7 @@
 ---
 name: test-case-generation
-description: "Use when generating automated regression and unit test cases for uncovered behavioral contracts."
+description: "Write executable unit and property test files. Use when generating suites. Do not use for bug specs."
+disable-model-invocation: true
 ---
 
 # Test Case Generation

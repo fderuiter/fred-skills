@@ -1,6 +1,6 @@
 ---
 name: terse-output-commit
-description: "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages."
+description: "Format terse code replies and 50-char commits. Use when cutting token output. Do not use for docs."
 ---
 
 # Terse Output and Commit

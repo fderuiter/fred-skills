@@ -82,17 +82,20 @@ Claude Code discovers skills stored in the `.claude/skills` directory.
 - **User Scope**: `<user-home>/.claude/skills/<skill-name>/`
 
 #### Installation Commands
-Register the marketplace catalog and install the suite plugin, a curated pack, or an individual skill, or use the local toolkit CLI:
+Register the marketplace catalog and install the 6-skill `starter` pack (`<= 1,500` raw characters), another curated pack, an individual skill, or the full suite plugin, or use the local toolkit CLI:
 
-1. **Marketplace install (suite, pack, or individual skill)**:
+1. **Marketplace install (`starter` pack, individual skill, or full suite)**:
    ```sh
    /plugin marketplace add fderuiter/fred-skills
-   /plugin install fred-skills@fred-skills
-   # Or install a curated pack or one specialist:
-   /plugin install complete@fred-skills
    /plugin install starter@fred-skills
+   # Or install one specialist:
    /plugin install repo-audit-concurrency@fred-skills
+   # Full 57-skill bundles (exceed Stage-1 discovery budgets on smaller context windows):
+   /plugin install complete@fred-skills
+   /plugin install fred-skills@fred-skills
    ```
+
+   > **Stage-1 context budget warning:** Installing `complete@fred-skills` or `fred-skills@fred-skills` loads all 57 skills at startup, which can crowd or exceed Stage-1 skill-listing budgets in [Claude Code](https://code.claude.com/docs/en/skills) (`1%` of context, `skillListingBudgetFraction = 0.01`) and [OpenAI Codex](https://developers.openai.com/codex/skills) (`2%` of context or `8,000`-character fallback). Prefer `starter@fred-skills` (`6` skills) or focused packs by default.
 
 2. **Toolkit CLI (Project Scope)**:
    ```sh
@@ -132,7 +135,7 @@ Cursor discovers skills in `.cursor/skills` and loads Cursor Plugins from `.curs
 - **User Scope**: `<user-home>/.cursor/skills/<skill-name>/`
 
 #### Installation Commands
-Import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace from **Dashboard -> Plugins & MCPs** (**Import from Repo**) and install `fred-skills` or an individual specialist from **Customize** in the sidebar, or install curated packs and skills locally with the toolkit CLI:
+Install curated packs (`starter` by default) and skills locally with the toolkit CLI, or import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace from **Dashboard -> Plugins & MCPs** (**Import from Repo**) and install an individual specialist (recommended) or `fred-skills` (loads all 57 skills; see Stage-1 context budget note above) from **Customize** in the sidebar:
 
 1. **Toolkit CLI (Project Scope)**:
    ```sh
@@ -234,6 +237,8 @@ Gemini CLI discovers skills in the `.gemini/skills` directory.
    ```sh
    python scripts/fred.py install --destination /path/to/project --host gemini-cli --skill repo-audit-behavioral-contracts
    ```
+
+> **Stage-1 context budget note (`gemini-extension.json`):** Installing the repository-wide Gemini CLI extension (`gemini extensions install https://github.com/fderuiter/fred-skills`) exposes all 57 skills at startup. Prefer `--pack starter` (`6` skills, `<= 1,500` raw characters) when sharing workspaces across hosts subject to [OpenAI Codex](https://developers.openai.com/codex/skills) and [Claude Code](https://code.claude.com/docs/en/skills) Stage-1 discovery budgets.
 
 #### Invocation Syntax
 Activate skills by prompt reference:
