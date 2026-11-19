@@ -914,7 +914,9 @@ class ReportTests(unittest.TestCase):
                 page,
             )
             self.assertNotIn('id="query"', page)
+            self.assertNotIn('id="severity"', page)
             self.assertNotIn('id="status"', page)
+            self.assertNotIn('id="remediation"', page)
             self.assertNotIn('id="count"', page)
             self.assertNotIn('id="empty-state"', page)
             self.assertNotIn('id="reset-filters"', page)
@@ -930,17 +932,265 @@ class ReportTests(unittest.TestCase):
             reports.render(audit, path)
             page = path.read_text()
             self.assertIn('id="query"', page)
+            self.assertIn('id="severity"', page)
             self.assertIn('id="status"', page)
+            self.assertNotIn('id="remediation"', page)
             self.assertIn('id="count"', page)
             self.assertIn('id="empty-state"', page)
             self.assertIn('id="reset-filters"', page)
             self.assertIn("Search findings", page)
+            self.assertIn("Severity", page)
             self.assertIn("Evidence status", page)
+            self.assertIn('<option value="refuted">Refuted (0)</option>', page)
             self.assertIn('article class="finding"', page)
             self.assertNotIn(
                 "<p>No findings recorded. Review coverage before drawing conclusions.</p>",
                 page,
             )
+
+    def test_comparison_renders_tables_links_caveats_and_collision_summaries(self):
+        prior = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        prior["run_id"] = "run-before"
+        base_finding = copy.deepcopy(prior["findings"][0])
+        prior["evidence"].extend(
+            [
+                {
+                    "id": "E-2",
+                    "path": "worker.mjs",
+                    "line_start": 10,
+                    "line_end": 15,
+                    "symbol": "Worker.flush",
+                    "context": "Flush queue",
+                },
+                {
+                    "id": "E-3",
+                    "path": "cache.mjs",
+                    "line_start": 20,
+                    "line_end": 25,
+                    "symbol": "Cache.evict",
+                    "context": "Eviction path",
+                },
+                {
+                    "id": "E-4",
+                    "path": "auth.mjs",
+                    "line_start": 30,
+                    "line_end": 35,
+                    "symbol": "Auth.check",
+                    "context": "Token check",
+                },
+            ]
+        )
+        # F-1: persisting (becomes F-10 in current)
+        # F-2: status_changed supported -> confirmed (becomes F-20 in current)
+        f_changed_prior = {
+            **copy.deepcopy(base_finding),
+            "id": "F-2",
+            "title": "Unbounded flush retry",
+            "severity": "high",
+            "status": "supported",
+            "evidence_ids": ["E-2"],
+            "root_cause": "Missing retry ceiling",
+        }
+        # F-3: not_observed in current
+        f_absent_prior = {
+            **copy.deepcopy(base_finding),
+            "id": "F-3",
+            "title": "Stale cache entry",
+            "severity": "low",
+            "status": "supported",
+            "evidence_ids": ["E-3"],
+            "root_cause": "TTL ignored on warm read",
+        }
+        # F-4: collides in current (F-40 and F-41 share fingerprint)
+        f_ambig_prior = {
+            **copy.deepcopy(base_finding),
+            "id": "F-4",
+            "title": "Duplicate auth check",
+            "severity": "critical",
+            "status": "supported",
+            "evidence_ids": ["E-4"],
+            "root_cause": "Shared token nonce",
+        }
+        prior["findings"] = [
+            base_finding,
+            f_changed_prior,
+            f_absent_prior,
+            f_ambig_prior,
+        ]
+
+        current = copy.deepcopy(prior)
+        current["run_id"] = "run-after"
+        current["evidence"].append(
+            {
+                "id": "E-5",
+                "path": "router.mjs",
+                "line_start": 1,
+                "line_end": 6,
+                "symbol": "Router.dispatch",
+                "context": "Route handler",
+            }
+        )
+        f_persisting_curr = {**copy.deepcopy(base_finding), "id": "F-10"}
+        f_changed_curr = {
+            **copy.deepcopy(f_changed_prior),
+            "id": "F-20",
+            "status": "confirmed",
+            "validation": {
+                "state": "executed",
+                "commands": ["pytest -k retry"],
+                "result": "Reproduced retry loop",
+            },
+        }
+        f_intro_curr = {
+            **copy.deepcopy(base_finding),
+            "id": "F-30",
+            "title": "Missing route timeout",
+            "severity": "high",
+            "status": "needs-validation",
+            "contract_ids": [],
+            "evidence_ids": ["E-5"],
+            "root_cause": "No deadline propagated",
+        }
+        f_ambig_curr_a = {**copy.deepcopy(f_ambig_prior), "id": "F-40"}
+        f_ambig_curr_b = {
+            **copy.deepcopy(f_ambig_prior),
+            "id": "F-41",
+            "title": "Duplicate auth check variant",
+        }
+        current["findings"] = [
+            f_persisting_curr,
+            f_changed_curr,
+            f_intro_curr,
+            f_ambig_curr_a,
+            f_ambig_curr_b,
+        ]
+
+        diff = runs.compare(prior, current)
+        ambig_fp = diff["ambiguous"][0]["fingerprint"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "comparison.html"
+            reports.render(current, path, prior=prior)
+            page = path.read_text(encoding="utf-8")
+            comp_start = page.index('<section id="comparison">')
+            comp_html = page[comp_start:]
+
+            self.assertNotIn("<pre>", comp_html)
+            self.assertNotIn(ambig_fp, comp_html)
+            self.assertEqual(5, comp_html.count("<table>"))
+            self.assertIn("Not observed does not mean fixed.", comp_html)
+            self.assertIn('class="callout"', comp_html)
+            self.assertIn('<a href="#F-30">F-30</a>', comp_html)
+            self.assertIn('<a href="#F-20">F-20</a>', comp_html)
+            self.assertIn("Supported → Confirmed", comp_html)
+            self.assertIn('<a href="#F-10">F-10</a>', comp_html)
+            self.assertIn("<code>F-3</code>", comp_html)
+            self.assertNotIn('href="#F-3"', comp_html)
+            self.assertIn("<code>auth.mjs</code> (<code>Auth.check</code>)", comp_html)
+            self.assertIn('<a href="#F-40">F-40</a>', comp_html)
+            self.assertIn('<a href="#F-41">F-41</a>', comp_html)
+
+    def test_remediation_badges_executive_grammar_and_optional_empty_fields(self):
+        audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        # Single finding singular grammar check
+        with tempfile.TemporaryDirectory() as tmp:
+            single_page = reports.render(audit, Path(tmp) / "single.html").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("1 finding record;", single_page)
+            self.assertNotIn("1 finding records;", single_page)
+            self.assertIn(
+                "<b>Severity counts:</b> 0 critical, 0 high, 1 medium, 0 low, 0 info.",
+                single_page,
+            )
+            self.assertIn(
+                "<b>Remediation totals:</b> 0 verified fixed (no remediation records supplied).",
+                single_page,
+            )
+
+        # Multi-finding with reconciled history + non-confirmed finding with empty optional lists
+        f2 = {
+            **copy.deepcopy(audit["findings"][0]),
+            "id": "F-2",
+            "title": "Hardening check without contracts or commands",
+            "status": "hardening",
+            "severity": "low",
+            "contract_ids": [],
+            "evidence_ids": [],
+            "validation": {
+                "state": "not-run",
+                "commands": [],
+                "result": "Inspection only",
+            },
+            "related_findings": [],
+        }
+        audit["findings"][0]["status"] = "confirmed"
+        audit["findings"][0]["severity"] = "critical"
+        audit["findings"][0]["validation"] = {
+            "state": "executed",
+            "commands": ["node check.mjs"],
+            "result": "Reproduced race",
+        }
+        audit["findings"][0]["related_findings"] = ["F-2"]
+        audit["findings"].append(f2)
+        audit["limitations"] = []
+
+        remediation = {
+            "schema_version": "1.0",
+            "records": [
+                {
+                    "at": "2026-11-18T10:00:00Z",
+                    "finding_id": "F-1",
+                    "state": "in-progress",
+                    "note": "Initial investigation note",
+                },
+                {
+                    "at": "2026-11-18T12:00:00Z",
+                    "finding_id": "F-1",
+                    "state": "verified-fixed",
+                    "note": "Regression and safe controls passed",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            page = reports.render(
+                audit, Path(tmp) / "reconciled.html", remediation=remediation
+            ).read_text(encoding="utf-8")
+
+            self.assertIn("2 finding records; 1 reproduced; 0 refuted.", page)
+            self.assertIn(
+                "<b>Severity counts:</b> 1 critical, 0 high, 0 medium, 1 low, 0 info.",
+                page,
+            )
+            self.assertIn(
+                "<b>Remediation totals:</b> 1 verified fixed, 1 unreconciled.", page
+            )
+            self.assertIn("No explicit limitations recorded.", page)
+            self.assertNotIn("<ul></ul>", page)
+            self.assertNotIn("<pre></pre>", page)
+            self.assertIn('id="remediation"', page)
+            self.assertIn(
+                '<option value="verified-fixed">Verified fixed (1)</option>', page
+            )
+            self.assertIn(
+                '<option value="unreconciled">Unreconciled (1)</option>', page
+            )
+            # Latest remediation state & note shown separately from certainty
+            self.assertIn("critical · confirmed · confidence high", page)
+            self.assertIn(
+                '<span class="badge badge-low low">Verified fixed</span>', page
+            )
+            self.assertIn("Regression and safe controls passed", page)
+            self.assertNotIn("Initial investigation note", page)
+            self.assertIn('<a href="#F-2">F-2</a>', page)
+
+            # Verify F-2 omits dangling Contracts:, Related findings:, and blank <pre>/<ul>
+            f2_start = page.index('id="F-2"')
+            f2_end = page.index("</article>", f2_start)
+            f2_card = page[f2_start:f2_end]
+            self.assertNotIn("Contracts:", f2_card)
+            self.assertNotIn("Related findings:", f2_card)
+            self.assertNotIn("<pre>", f2_card)
 
     def test_render_output_path_resolution(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
@@ -1207,12 +1457,19 @@ class ReportTests(unittest.TestCase):
                     self.assertIn(expected_heading, html)
                     self.assertIn('id="query"', html)
 
-                    # Prior comparison and issue drafts reject domain artifacts clearly
+                    # Prior comparison, remediation, and issue drafts reject domain artifacts clearly
                     with self.assertRaises(ValueError) as prior_ctx:
                         reports.render(
                             payload, tmp_path / f"{label}-prior.html", prior=payload
                         )
                     self.assertIn("audit.json", str(prior_ctx.exception))
+                    with self.assertRaises(ValueError) as rem_ctx:
+                        reports.render(
+                            payload,
+                            tmp_path / f"{label}-rem.html",
+                            remediation={"schema_version": "1.0", "records": []},
+                        )
+                    self.assertIn("audit.json", str(rem_ctx.exception))
                     with self.assertRaises(ValueError) as iss_ctx:
                         reports.issue_drafts(payload, tmp_path / f"iss-{label}")
                     self.assertIn("audit.json", str(iss_ctx.exception))
