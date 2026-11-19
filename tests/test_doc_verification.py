@@ -221,6 +221,34 @@ class DocLinkVerificationTests(unittest.TestCase):
             errors = check_file_links(doc, root=tmp_path)
             self.assertEqual([], errors)
 
+    def test_orphan_guide_in_docs_is_rejected(self) -> None:
+        """check_docs rejects unreferenced guides in docs/ and passes once linked."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (tmp_path / "README.md").write_text(
+                "# Project\n\nSee [Guide](docs/linked.md).\n",
+                encoding="utf-8",
+            )
+            (docs_dir / "linked.md").write_text("# Linked\n", encoding="utf-8")
+            orphan = docs_dir / "orphan-notes.md"
+            orphan.write_text(
+                "# Orphan\n\nSelf link [Top](#orphan) does not count.\n",
+                encoding="utf-8",
+            )
+
+            errors = check_docs(root=tmp_path)
+            self.assertEqual(1, len(errors), errors)
+            self.assertIn("docs/orphan-notes.md", errors[0])
+            self.assertIn("Orphaned documentation file", errors[0])
+
+            (docs_dir / "linked.md").write_text(
+                "# Linked\n\nAlso see [Notes](orphan-notes.md).\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], check_docs(root=tmp_path))
+
     def test_extract_relative_links_exported_from_skill_tools(self):
         """extract_relative_links is exported from skill_tools and shared with check_doc_links."""
         self.assertIs(extract_relative_links, skill_tools_extract_relative_links)

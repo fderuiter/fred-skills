@@ -156,11 +156,57 @@ def _collect_dir_doc_files(directory: Path) -> list[Path]:
     return collected
 
 
+def _check_orphan_docs_guides(
+    docs_dir: Path,
+    scan_files: list[Path],
+    display_root: Path,
+) -> list[str]:
+    """Verify every documentation file in docs_dir has at least one inbound relative link."""
+    if not docs_dir.is_dir():
+        return []
+    inbound_targets: set[Path] = set()
+    for src_file in scan_files:
+        if not src_file.is_file():
+            continue
+        try:
+            content = src_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        resolved_src = src_file.resolve()
+        is_html = resolved_src.suffix.lower() == ".html"
+        scannable = _strip_non_link_blocks(content, is_html=is_html)
+        for target in extract_relative_links(scannable, include_fragments=False):
+            resolved_target = resolve_relative_link_target(target, resolved_src.parent)
+            if resolved_target is None or resolved_target == resolved_src:
+                continue
+            inbound_targets.add(resolved_target)
+            if resolved_target.is_dir() and (resolved_target / "index.html").is_file():
+                inbound_targets.add((resolved_target / "index.html").resolve())
+
+    orphan_errors: list[str] = []
+    for guide_path in sorted(docs_dir.iterdir()):
+        if not guide_path.is_file() or guide_path.suffix.lower() not in DOC_EXTENSIONS:
+            continue
+        resolved_guide = guide_path.resolve()
+        if resolved_guide not in inbound_targets:
+            try:
+                rel_guide = resolved_guide.relative_to(
+                    display_root.resolve()
+                ).as_posix()
+            except ValueError:
+                rel_guide = guide_path.as_posix()
+            orphan_errors.append(
+                f"{rel_guide}: Orphaned documentation file in docs/ (zero inbound relative links)"
+            )
+    return orphan_errors
+
+
 def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> list[str]:
     """Scan markdown and HTML documentation files and verify all relative targets exist."""
     errors: list[str] = []
     resolved_root = root.resolve()
     files: list[Path] = []
+    orphan_check_scopes: list[tuple[Path, list[Path]]] = []
 
     if target_files:
         for raw_target in target_files:
@@ -176,20 +222,30 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
                 errors.append(f"{raw_target}: Target path does not exist")
                 continue
             if resolved_candidate.is_dir():
-                files.extend(_collect_dir_doc_files(resolved_candidate))
+                dir_files = _collect_dir_doc_files(resolved_candidate)
+                files.extend(dir_files)
+                if (resolved_candidate / "docs").is_dir():
+                    orphan_check_scopes.append((resolved_candidate / "docs", dir_files))
             elif resolved_candidate.suffix.lower() in DOC_EXTENSIONS:
                 files.append(resolved_candidate)
     else:
+        repo_files: list[Path] = []
         for path in resolved_root.rglob("*"):
             if not path.is_file() or path.suffix.lower() not in DOC_EXTENSIONS:
                 continue
             rel_parts = path.relative_to(resolved_root).parts
             if any(part in EXCLUDE_DIRS for part in rel_parts):
                 continue
-            files.append(path)
+            repo_files.append(path)
+        files.extend(repo_files)
+        if (resolved_root / "docs").is_dir():
+            orphan_check_scopes.append((resolved_root / "docs", repo_files))
         staged_site = resolved_root / "dist" / "site"
         if staged_site.is_dir():
-            files.extend(_collect_dir_doc_files(staged_site))
+            staged_files = _collect_dir_doc_files(staged_site)
+            files.extend(staged_files)
+            if (staged_site / "docs").is_dir():
+                orphan_check_scopes.append((staged_site / "docs", staged_files))
 
     anchor_cache: dict[Path, set[str]] = {}
     for doc_file in sorted(set(files)):
@@ -197,6 +253,11 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
             continue
         errors.extend(
             check_file_links(doc_file, root=resolved_root, anchor_cache=anchor_cache)
+        )
+
+    for docs_dir, scope_files in orphan_check_scopes:
+        errors.extend(
+            _check_orphan_docs_guides(docs_dir, scope_files, display_root=resolved_root)
         )
 
     return errors

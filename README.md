@@ -149,7 +149,9 @@ tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agents/skills/
 ```
 
 See the [CLI guide](docs/toolkit.md) for resuming work, source freshness, reports,
-comparisons, scanner imports, project profiles, and installation recovery. See
+comparisons, scanner imports, project profiles, and installation recovery, the
+[host integration guide](docs/integration.md) for adapter setup and orchestration, and
+the [Python API reference](docs/api.md) for programmatic `fredlib` interfaces. See
 [operational runbooks](docs/runbooks.md) for failure recovery, lock contention,
 corrupted receipts, and Git resolution errors. See [usage](docs/usage.md) for
 portable invocation and [evaluations](evals/README.md) for baseline/with-skill
@@ -179,4 +181,5 @@ For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
 [architecture](docs/architecture.md), [runbooks](docs/runbooks.md), [security](SECURITY.md), and
 [research](docs/research.md). Distributed under the MIT [LICENSE](LICENSE) (see
 [licensing](docs/licensing.md)); pushes to `main` automatically tag and publish verified
-`VERSION` releases as documented in [releasing](docs/releasing.md).
+`VERSION` releases as documented in [releasing](docs/releasing.md) (see the
+[0.2.0 release notes](docs/release-notes-0.2.0.md)).
