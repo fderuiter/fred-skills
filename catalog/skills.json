@@ -1325,6 +1325,32 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "session-handoff",
+      "title": "Session Handoff",
+      "description": "Use when compacting an active investigation or implementation session into a validated exit handoff for a fresh context window.",
+      "path": "skills/session-handoff/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 6,
+      "phase_title": "Session Hygiene",
+      "maturity": "experimental",
+      "symptoms": [
+        "context window filling up",
+        "hand off active session",
+        "compact investigation state",
+        "avoid repeating dead ends"
+      ],
+      "expected_inputs": [
+        "repository and revision",
+        "working tree diff and commands run",
+        "active session findings or notes"
+      ],
+      "outcomes": [
+        "Schema-validated session-handoff.json and cold-start continuation summary"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "spec-authoring",
       "title": "Specification Authoring",
       "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
@@ -1398,6 +1424,32 @@
       ],
       "outcomes": [
         "Settled pre-code interview decisions and scope boundaries in spec.json"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "terse-output-commit",
+      "title": "Terse Output and Commit",
+      "description": "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages.",
+      "path": "skills/terse-output-commit/SKILL.md",
+      "suite": "repository-workflows",
+      "phase": 6,
+      "phase_title": "Session Hygiene",
+      "maturity": "experimental",
+      "symptoms": [
+        "verbose ai explanations",
+        "caveman brief output mode",
+        "concise conventional commit",
+        "50 character commit subject"
+      ],
+      "expected_inputs": [
+        "working or staged git diff",
+        "target code or question",
+        "desired compression level"
+      ],
+      "outcomes": [
+        "Filler-free exact-code reply and <=50-character Conventional Commit draft"
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"

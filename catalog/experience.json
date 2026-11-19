@@ -1094,6 +1094,44 @@
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "session-handoff": {
+      "maturity": "experimental",
+      "symptoms": [
+        "context window filling up",
+        "hand off active session",
+        "compact investigation state",
+        "avoid repeating dead ends"
+      ],
+      "expected_inputs": [
+        "repository and revision",
+        "working tree diff and commands run",
+        "active session findings or notes"
+      ],
+      "outcomes": [
+        "Schema-validated session-handoff.json and cold-start continuation summary"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "terse-output-commit": {
+      "maturity": "experimental",
+      "symptoms": [
+        "verbose ai explanations",
+        "caveman brief output mode",
+        "concise conventional commit",
+        "50 character commit subject"
+      ],
+      "expected_inputs": [
+        "working or staged git diff",
+        "target code or question",
+        "desired compression level"
+      ],
+      "outcomes": [
+        "Filler-free exact-code reply and <=50-character Conventional Commit draft"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
     }
   }
 }

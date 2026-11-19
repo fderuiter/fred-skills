@@ -78,12 +78,6 @@ class RecoverOptions:
     target: TargetEnvironment | None = None
 
 
-# Backward-compatible aliases
-TargetScope = TargetEnvironment
-TargetOptions = TargetEnvironment
-RecoveryOptions = RecoverOptions
-
-
 def _coalesce(*values: Any) -> Any:
     for v in values:
         if v is not None:
@@ -778,7 +772,7 @@ def _check_install_candidate(
 
 
 def _validate_install_target_skills(
-    target: Path, selected: list[str], current: dict, flags: tuple[bool, bool]
+    target: Path, selected: list[str], flags: tuple[bool, bool]
 ) -> None:
     update, force = flags
     for name in selected:
@@ -937,7 +931,6 @@ def _normalize_install_args(
     dry_run: bool | None = None,
     force: bool | None = None,
     root: Path | None = None,
-    **kwargs: Any,
 ) -> tuple[TargetEnvironment, InstallOptions]:
     base_tgt, base_opt, is_structured = _resolve_install_targets(target, options)
     if is_structured:
@@ -1015,7 +1008,7 @@ def _prepare_host_plan(
         _check_install_candidate(
             target_path, name, current["skills"].get(name), (env.root, opt.force)
         )
-    _validate_install_target_skills(target_path, selected, current, flags)
+    _validate_install_target_skills(target_path, selected, flags)
     preview = {
         "action": "update" if opt.update else "install",
         "skills": selected,
@@ -1206,7 +1199,6 @@ def _normalize_remove_args(
     dry_run: bool | None = None,
     force: bool | None = None,
     root: Path | None = None,
-    **kwargs: Any,
 ) -> tuple[TargetEnvironment, RemoveOptions]:
     base_tgt, base_opt, is_structured = _resolve_remove_targets(target, options)
     if is_structured:
@@ -1381,7 +1373,6 @@ def _normalize_rollback_args(
     host: str | None = None,
     scope: str | None = None,
     root: Path | None = None,
-    **kwargs: Any,
 ) -> tuple[TargetEnvironment, RollbackOptions]:
     base_tgt, base_opt, is_structured = _resolve_rollback_targets(target, options)
     if is_structured:
@@ -1555,7 +1546,6 @@ def _normalize_recover_args(
     scope: str | None = None,
     confirm_interrupted: bool | None = None,
     root: Path | None = None,
-    **kwargs: Any,
 ) -> tuple[TargetEnvironment, RecoverOptions]:
     base_tgt, base_opt, is_structured = _resolve_recover_targets(target, options)
     if is_structured:

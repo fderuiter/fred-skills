@@ -32,9 +32,9 @@ unsafe fixture was correct. No production system or remote issue record was modi
 
 ## Specified evaluations are not executed evaluations
 
-Each of the 55 skills in the suite includes three scenario specifications in
+Each of the 57 skills in the suite includes three scenario specifications in
 `references/evaluation-scenarios.json`: relevant failure, safe control, and near-neighbor
-sibling routing request (`sibling_skill`). These 165 specifications are not 165 executed evaluations. They are
+sibling routing request (`sibling_skill`). These 171 specifications are not 171 executed evaluations. They are
 authoring inputs for future raw fixtures and fresh-context agent runs; do not supply
 their expected answers to the agent performing an investigation.
 
@@ -45,8 +45,8 @@ misses, false positives, and environment constraints when extending the suite.
 
 ## 0.2.0 usability and correction-workflow validation
 
-The expanded deterministic suite exercises 55 total packages, generated recipes,
-packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
+The expanded deterministic suite exercises 57 total packages across 6 suites, generated
+recipes, 13 packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
 proof requirements, comparison collisions, safe SARIF imports, HTML escaping, managed
 installation lifecycle/recovery, deterministic archives/tamper detection, and evaluation
 failure/timeout/input-isolation paths. Exact test counts and CI results are recorded in
@@ -57,8 +57,8 @@ variant, controlled overlap/cancellation, and synchronous abort reentrancy. It p
 schema-valid audit, report, local issue draft, and separate proof/remediation record. This
 is a synthetic demonstration, not an agent audit or correction of a user's application.
 
-The reference evaluation adapter executed 69 raw cases across 23 skills and all six
-suites in baseline and with-skill configurations (138 runs), validating audit,
+The reference evaluation adapter executed 75 raw cases across 25 skills and all six
+suites in baseline and with-skill configurations (150 runs), validating audit,
 architecture, code-review, automated-testing, spec-driven-development, and repository-workflow contracts,
 scoped `writable_paths` source edits, token summaries, and paired `skill_lift` deltas.
 Its deterministic contract matching passed in both configurations; this verifies harness
@@ -76,6 +76,6 @@ The local optional Chromium check could not launch in the managed environment be
 Unix socket creation was denied. No browser assertions passed locally and no restriction
 was bypassed. The PR's dedicated CI job runs the actual report/explorer search, filter,
 escaping, and no-external-request assertions. CI status is separate from this local record.
-Copy-path tests cover four host layouts using temporary directories; none are host runtime
-certification. Additional host versions, real repositories, all 99 original specifications,
+Copy-path tests cover 9 host layouts using temporary directories; none are host runtime
+certification. Additional host versions, real repositories, all 171 scenario specifications,
 and statistically meaningful model comparisons remain future evidence, not completed work.

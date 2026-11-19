@@ -65,9 +65,7 @@ class _GradeOutcome:
     malformed_error: str | None = None
 
 
-def _resolve_case_contract(
-    case: dict[str, Any], root: Path, suite_map: dict[str, str]
-) -> str:
+def _resolve_case_contract(case: dict[str, Any], suite_map: dict[str, str]) -> str:
     explicit = case.get("contract")
     if explicit is not None:
         if not isinstance(explicit, str) or explicit not in _VALID_CONTRACTS:
@@ -608,6 +606,30 @@ def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
                 ev = proof or reason or (f"matched:{fid}" if fid in matched_ids else "")
                 status = "supported"
             records.append(_make_normalized_record(key, status, ev))
+    elif "dead_ends" in payload and "verified_facts" in payload:
+        next_act = payload.get("next_action")
+        grounded_ok = (
+            bool(payload.get("verified_facts"))
+            and bool(payload.get("commands_run"))
+            and isinstance(next_act, str)
+            and bool(next_act.strip())
+        )
+        action_text = next_act.strip() if isinstance(next_act, str) else ""
+        for p in payload.get("touched_files", []):
+            if isinstance(p, str) and p and p != "none":
+                ev = f"{p}: {action_text}" if grounded_ok else ""
+                records.append(_make_normalized_record(p, "confirmed", ev))
+    elif "commit_subject" in payload and "compression_level" in payload:
+        subj = str(payload.get("commit_subject", ""))
+        ctype = str(payload.get("commit_type", ""))
+        if subj and not subj.startswith("chore: abstain") and ctype:
+            grounded_ok = (
+                0 < len(subj) <= 50
+                and bool(payload.get("preserved_exact_spans"))
+                and payload.get("git_mutated") is False
+            )
+            ev = subj if grounded_ok else ""
+            records.append(_make_normalized_record(ctype, "confirmed", ev))
     return records
 
 
@@ -930,6 +952,8 @@ def _grade_workflow(
             isinstance(m, dict) and m.get("match_status") == "ambiguous"
             for m in payload.get("finding_fingerprint_matches", [])
         )
+    elif "dead_ends" in payload and "verified_facts" in payload:
+        uncertain = len(payload.get("assumptions", []))
 
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
@@ -945,12 +969,24 @@ def _grade_workflow(
             "regression_passed",
             "safe_controls_passed",
             "result",
+            "next_action",
+            "compression_level",
+            "commit_type",
+            "git_mutated",
         ):
             if (
                 direct_field in assertions
                 and payload.get(direct_field) != assertions[direct_field]
             ):
                 assertions_ok = False
+        if "dead_end_count" in assertions and len(payload.get("dead_ends", [])) != int(
+            assertions["dead_end_count"]
+        ):
+            assertions_ok = False
+        if "max_subject_length" in assertions and len(
+            str(payload.get("commit_subject", ""))
+        ) > int(assertions["max_subject_length"]):
+            assertions_ok = False
         if "safe_controls_all_passed" in assertions:
             outcomes = payload.get("safe_control_outcomes", [])
             all_passed = bool(outcomes) and all(
@@ -1124,7 +1160,7 @@ def evaluate(
     )
     results: list[dict[str, Any]] = []
     for case in selected:
-        contract = _resolve_case_contract(case, root, suite_map)
+        contract = _resolve_case_contract(case, suite_map)
         schema_path = _resolve_case_schema(case, contract, root)
         writable_paths = case.get("writable_paths")
         for configuration in ["without_skill", "with_skill"]:

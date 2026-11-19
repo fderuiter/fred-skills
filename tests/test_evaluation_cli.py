@@ -25,9 +25,9 @@ class EvaluationTests(unittest.TestCase):
             "{output_file}",
         ]
         manifest = json.loads((ROOT / "evals/cases.json").read_text(encoding="utf-8"))
-        self.assertEqual(69, len(manifest["cases"]))
+        self.assertEqual(75, len(manifest["cases"]))
         skills_covered = {case["skill"] for case in manifest["cases"]}
-        self.assertEqual(23, len(skills_covered))
+        self.assertEqual(25, len(skills_covered))
 
         suites_doc = json.loads(
             (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
@@ -53,13 +53,13 @@ class EvaluationTests(unittest.TestCase):
         non_audit_skills = {
             s for s, st in skill_to_suite.items() if st != "repository-audits"
         }
-        self.assertEqual(18, len(non_audit_skills))
+        self.assertEqual(20, len(non_audit_skills))
         self.assertTrue(non_audit_skills.issubset(skills_covered))
 
         with tempfile.TemporaryDirectory() as temp:
             temp_path = Path(temp)
             result = evaluations.evaluate(temp_path, argv)
-            self.assertEqual(138, len(result["runs"]))
+            self.assertEqual(150, len(result["runs"]))
             self.assertTrue(
                 all(
                     row["state"] == "executed" and row["exact_match"]
@@ -73,14 +73,14 @@ class EvaluationTests(unittest.TestCase):
                 )
             )
 
-            # Verify all 18 non-audit skills recorded state=="executed" and exact_match==True
+            # Verify all 20 non-audit skills recorded state=="executed" and exact_match==True
             case_to_skill = {c["id"]: c["skill"] for c in manifest["cases"]}
             non_audit_runs = [
                 row
                 for row in result["runs"]
                 if case_to_skill[row["case"]] in non_audit_skills
             ]
-            self.assertEqual(108, len(non_audit_runs))
+            self.assertEqual(120, len(non_audit_runs))
             self.assertTrue(
                 all(
                     row["state"] == "executed" and row["exact_match"] is True
@@ -111,7 +111,7 @@ class EvaluationTests(unittest.TestCase):
                 self.assertIsNone(result["summary"][cfg]["total_tokens"])
                 self.assertIsNone(result["summary"][cfg]["mean_tokens"])
             lift = result["summary"]["skill_lift"]
-            self.assertEqual(69, lift["paired_runs"])
+            self.assertEqual(75, lift["paired_runs"])
             self.assertEqual(0.0, lift["exact_match_rate_delta"])
             self.assertEqual(0, lift["paired_token_runs"])
             self.assertIsNone(lift["total_tokens_delta"])
@@ -514,6 +514,8 @@ class EvaluationTests(unittest.TestCase):
             "test-gap-analysis-a",
             "spec-convergence-a",
             "repo-verify-finding-a",
+            "session-handoff-a",
+            "terse-output-commit-a",
         ]
         with tempfile.TemporaryDirectory() as temp:
             out_dir = Path(temp) / "bench"
@@ -536,7 +538,7 @@ class EvaluationTests(unittest.TestCase):
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
             bench = json.loads((out_dir / "benchmark.json").read_text(encoding="utf-8"))
-            self.assertEqual(10, len(bench["runs"]))
+            self.assertEqual(14, len(bench["runs"]))
             for row in bench["runs"]:
                 self.assertEqual("executed", row["state"])
                 self.assertTrue(row["exact_match"])
@@ -571,7 +573,7 @@ class EvaluationTests(unittest.TestCase):
         routing_cases = [
             c for c in manifest["cases"] if str(c["id"]).endswith("-routing")
         ]
-        self.assertEqual(23, len(routing_cases))
+        self.assertEqual(25, len(routing_cases))
         for case in routing_cases:
             low = str(case["prompt"]).lower()
             for hint in forbidden_hints:
@@ -580,7 +582,7 @@ class EvaluationTests(unittest.TestCase):
         scenario_files = sorted(
             (ROOT / "skills").glob("*/references/evaluation-scenarios.json")
         )
-        self.assertEqual(55, len(scenario_files))
+        self.assertEqual(57, len(scenario_files))
         for sf in scenario_files:
             doc = json.loads(sf.read_text(encoding="utf-8"))
             for sc in doc["scenarios"]:

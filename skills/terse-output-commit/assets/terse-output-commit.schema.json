@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Terse Output and Conventional Commit Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "compression_level",
+    "terse_response",
+    "preserved_exact_spans",
+    "commit_type",
+    "commit_subject",
+    "commit_body_bullets",
+    "git_mutated"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "compression_level": {
+      "type": "string",
+      "enum": [
+        "lite",
+        "full",
+        "ultra"
+      ]
+    },
+    "terse_response": {
+      "type": "string",
+      "minLength": 1
+    },
+    "preserved_exact_spans": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "commit_type": {
+      "type": "string",
+      "enum": [
+        "feat",
+        "fix",
+        "refactor",
+        "perf",
+        "test",
+        "docs",
+        "build",
+        "ci",
+        "chore",
+        "revert"
+      ]
+    },
+    "commit_scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commit_subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50,
+      "pattern": "^(feat|fix|refactor|perf|test|docs|build|ci|chore|revert)(\\([a-z0-9._/-]+\\))?!?: [^\\r\\n]+$"
+    },
+    "commit_body_bullets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "breaking_change_note": {
+      "type": "string",
+      "minLength": 1
+    },
+    "git_mutated": {
+      "type": "boolean"
+    }
+  }
+}

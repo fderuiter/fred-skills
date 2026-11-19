@@ -39,10 +39,8 @@ SleepFn = Callable[[float], None]
 class ActionPin:
     """A parsed GitHub Action reference from a workflow YAML file."""
 
-    workflow_path: Path
     relative_path: str
     line_no: int
-    uses: str
     repo: str
     sha: str
     version_comment: str
@@ -137,7 +135,6 @@ def _is_valid_repo_target(target: str) -> tuple[str | None, bool]:
 
 def _validate_single_uses(
     rel_path: str,
-    file_path: Path,
     line_no: int,
     uses_value: str,
     raw_line: str,
@@ -185,10 +182,8 @@ def _validate_single_uses(
     assert comment is not None
     return (
         ActionPin(
-            workflow_path=file_path,
             relative_path=rel_path,
             line_no=line_no,
-            uses=uses,
             repo=repo,
             sha=ref,
             version_comment=comment,
@@ -223,7 +218,6 @@ def inspect_workflow_file(
         raw_line = lines[line_idx] if 0 <= line_idx < len(lines) else ""
         pin, pin_errors = _validate_single_uses(
             rel_path,
-            file_path,
             line_no,
             uses_node.value,
             raw_line,

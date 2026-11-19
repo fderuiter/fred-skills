@@ -438,7 +438,7 @@ with tempfile.TemporaryDirectory() as temporary:
         count = page.locator("article.finding").count()
         assert count >= 41
         assert page.locator("details.task:visible").count() == len(recipes)
-        assert page.locator("article.pack-card").count() == len(expected_packs) == 12
+        assert page.locator("article.pack-card").count() == len(expected_packs) == 13
         assert page.locator("#hosts tbody tr").count() == len(expected_hosts)
         assert page.locator("#hosts tbody tr").count() >= 4
         page.set_viewport_size({"width": 375, "height": 812})
@@ -469,12 +469,12 @@ with tempfile.TemporaryDirectory() as temporary:
 
         # #toggle-details and print expansion in explorer
         page.get_by_label("Family").select_option("repository-workflows")
-        assert page.locator("article.finding:visible").count() == 6
+        assert page.locator("article.finding:visible").count() == 8
         exp_toggle = page.locator("#toggle-details")
         assert exp_toggle.get_attribute("aria-expanded") == "false"
         exp_toggle.click()
         assert exp_toggle.get_attribute("aria-expanded") == "true"
-        assert page.locator("article.finding:visible details[open]").count() == 6
+        assert page.locator("article.finding:visible details[open]").count() == 8
         assert page.locator("article.finding[hidden] details[open]").count() == 0
         exp_toggle.click()
         assert exp_toggle.get_attribute("aria-expanded") == "false"
@@ -530,7 +530,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
         # Verify cross-suite #anchor click reveals and scrolls to hidden card without resetting Family first
         page.get_by_label("Family").select_option("repository-workflows")
-        assert page.locator("article.finding:visible").count() == 6
+        assert page.locator("article.finding:visible").count() == 8
         assert page.locator("details#task-investigate-bug").is_visible()
         assert not page.locator("details#task-review-code-changes").is_visible()
         target_card = page.locator("article#repo-audit-concurrency")
@@ -572,7 +572,7 @@ with tempfile.TemporaryDirectory() as temporary:
         build_site(mounted_site, root=ROOT)
 
         class _QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
-            def log_message(self, format: str, *log_args: object) -> None:
+            def log_message(self, _format: str, *_log_args: object) -> None:
                 return
 
         handler_cls = functools.partial(_QuietStaticHandler, directory=str(web_root))
@@ -608,7 +608,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert (
                 web_page.locator("article.pack-card").count()
                 == len(expected_packs)
-                == 12
+                == 13
             )
             packs_text = web_page.locator("section#packs").inner_text()
             for pack_name in expected_packs:
@@ -628,7 +628,7 @@ with tempfile.TemporaryDirectory() as temporary:
                     .map(a => a.getAttribute('href'))
                     .filter(h => h && !h.startsWith('#') && !h.startsWith('http:') && !h.startsWith('https:'))"""
             )
-            assert len(file_hrefs) >= 55
+            assert len(file_hrefs) >= 57
             for href in file_hrefs:
                 assert not href.split("#")[0].endswith(".md"), href
                 target_url = urllib.parse.urljoin(explorer_base, href)
