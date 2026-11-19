@@ -731,7 +731,7 @@ Builds reproducible release distribution archives containing selected standalone
   - `skills` (`list[str] | None`, default: `None`): Explicit skill names list.
   - `root` (`Path`, default: repository root): Toolkit root directory.
   - `all_packs` (`bool`, default: `False`): If `True`, package all documented packs, standalone skill archives, and unified manifest.
-- **Returns:** `dict` — Manifest dictionary containing `"schema_version"`, `"version"`, `"pack"`, `"skills"`, `"licensing"`, and `"archives"` (listing filenames, byte counts, and SHA-256 hashes).
+- **Returns:** `dict` — Manifest dictionary containing `"schema_version"`, `"version"`, `"pack"`, `"skills"`, `"licensing"`, and `"archives"` (listing filenames, byte counts, SHA-256 hashes, and included `"skills"`).
 - **Exceptions:**
   - `ValueError`: Raised if `output` exists and is non-empty, or if pack label contains invalid characters.
 

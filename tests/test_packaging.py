@@ -216,17 +216,31 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
+        root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual(root_version, marketplace_default["version"])
+        self.assertEqual(root_version, marketplace_default["metadata"]["version"])
+        self.assertTrue(marketplace_default["description"])
 
         (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
         problems_version = build(self.root, check=True)
         self.assertTrue(
             any("gemini-extension.json" in problem for problem in problems_version)
         )
+        self.assertTrue(
+            any(
+                ".claude-plugin/marketplace.json" in problem
+                for problem in problems_version
+            )
+        )
         self.assertEqual([], build(self.root))
         self.assertEqual(
             "1.2.3",
             json.loads(gemini_ext_path.read_text(encoding="utf-8"))["version"],
         )
+        updated_marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual("1.2.3", updated_marketplace["version"])
+        self.assertEqual("1.2.3", updated_marketplace["metadata"]["version"])
 
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
         cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
@@ -358,6 +372,7 @@ class PackageTests(unittest.TestCase):
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
         ]
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         for rel_manifest in [
             ".claude-plugin/marketplace.json",
             ".cursor-plugin/marketplace.json",
@@ -366,6 +381,10 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(manifest_path.is_file())
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(data["name"], "fred-skills")
+            self.assertEqual(data["version"], active_version)
+            self.assertTrue(data["description"])
+            self.assertEqual(data["description"], data["metadata"]["description"])
+            self.assertEqual(data["metadata"]["version"], active_version)
             self.assertEqual(data["owner"]["name"], "fderuiter")
             plugins = data["plugins"]
             self.assertEqual(len(plugins), 1 + len(packs) + len(suite_skills))
@@ -878,9 +897,10 @@ class PackageTests(unittest.TestCase):
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
         self.assertIn("51 total packages", impl_text)
 
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
         self.assertIn("complete 51-package pack", usage_text)
-        self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
+        self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
             "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`)",
             usage_text,
@@ -922,9 +942,10 @@ class PackageTests(unittest.TestCase):
 
         exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
         self.assertIn(
-            "| `full-audit` | All 33 specialist audits plus coordinator and synthesis. | 35 |",
+            "| `full-audit` | All 33 specialist audits plus coordinator, diagnostics, and synthesis. | 36 |",
             exp_text,
         )
+        self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
             "| `complete` | Every audit and engineering workflow. | 51 |",
             exp_text,
