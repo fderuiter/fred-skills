@@ -18,6 +18,7 @@ from .common import (
     ROOT,
     WORKFLOW_DELIVERABLE_SCHEMAS,
     WORKFLOW_SKILL_DELIVERABLES,
+    FredCliError,
     _artifact_contract_for_run,
     _deliverable_for_run,
     _detect_domain_kind,
@@ -28,8 +29,10 @@ from .common import (
     atomic_json,
     digest,
     read_json,
+    read_json_object,
     relative_path,
     resolve_audit_path,
+    resolve_run_directory,
     version,
 )
 from .repository import changed_files, preflight, snapshot
@@ -37,6 +40,19 @@ from .repository import changed_files, preflight, snapshot
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _format_yaml_error(config_path: Path, exc: yaml.YAMLError) -> FredCliError:
+    mark = getattr(exc, "problem_mark", None)
+    problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+    loc = (
+        f" (line {mark.line + 1}, column {mark.column + 1})" if mark is not None else ""
+    )
+    return FredCliError(
+        f"Malformed YAML in project config '{config_path}'{loc}: {problem}",
+        code="invalid_yaml",
+        hint="Fix the YAML syntax in the project config file (supported keys: profile, exclude, critical_workflows).",
+    )
 
 
 def plan(
@@ -50,52 +66,100 @@ def plan(
     config: Path | None = None,
 ) -> tuple[dict, dict]:
     repo = repo.resolve()
-    settings = {}
+    profiles = read_json(ROOT / "catalog/profiles.json")["profiles"]
+    profile_list = ", ".join(sorted(profiles))
+    settings: dict[str, Any] = {}
     if config:
-        settings = yaml.safe_load(config.read_text(encoding="utf-8"))
-        if not isinstance(settings, dict) or set(settings) - {
+        config_path = Path(config)
+        if not config_path.exists():
+            raise FredCliError(
+                f"Project config file not found: {config_path}",
+                code="missing_config",
+                hint="Pass an existing YAML file path to --config (see examples/project-config.yaml).",
+            )
+        if config_path.is_dir():
+            raise FredCliError(
+                f"Expected a YAML config file at '{config_path}', got a directory",
+                code="invalid_config_path",
+                hint="Pass a YAML file path to --config instead of a directory.",
+            )
+        try:
+            raw_yaml = config_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise FredCliError(
+                f"Unable to read project config '{config_path}': {exc}",
+                code="io_error",
+                hint=f"Check file permissions for '{config_path}'.",
+            ) from exc
+        try:
+            loaded = yaml.safe_load(raw_yaml)
+        except yaml.YAMLError as exc:
+            raise _format_yaml_error(config_path, exc) from exc
+        if not isinstance(loaded, dict) or set(loaded) - {
             "profile",
             "exclude",
             "critical_workflows",
         }:
-            raise ValueError(
-                "Project config supports only profile, exclude, and critical_workflows; commands and authority are not read from repository config"
+            raise FredCliError(
+                "Project config supports only profile, exclude, and critical_workflows; commands and authority are not read from repository config",
+                code="invalid_config",
+                hint="Provide a YAML mapping containing only 'profile', 'exclude', and/or 'critical_workflows'.",
             )
+        settings = loaded
         for key in ["exclude", "critical_workflows"]:
             if key in settings and (
                 not isinstance(settings[key], list)
                 or any(not isinstance(s, str) or not s.strip() for s in settings[key])
             ):
-                raise ValueError(
-                    f"Project config {key} must be a list of nonempty strings"
+                raise FredCliError(
+                    f"Project config {key} must be a list of nonempty strings",
+                    code="invalid_config",
+                    hint=f"Set '{key}' to a YAML list of nonempty strings in '{config_path}'.",
                 )
         if "profile" in settings and not isinstance(settings["profile"], str):
-            raise ValueError("Project profile must be a string")
+            raise FredCliError(
+                f"Project profile must be a string (available profiles: {profile_list})",
+                code="invalid_profile",
+                hint=f"Set 'profile' to one of: {profile_list}.",
+            )
     profile = profile or settings.get("profile")
     exclude = list(dict.fromkeys(list(exclude or []) + settings.get("exclude", [])))
     recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
     if task not in recipes:
-        raise ValueError(f"Unknown task {task!r}; use fred.py tasks")
+        raise FredCliError(
+            f"Unknown task {task!r}; use fred.py tasks",
+            code="unknown_task",
+            hint=f"Available tasks: {', '.join(sorted(recipes))}.",
+        )
     if mode not in {
         "explore",
         "changes",
         "investigate",
         "comprehensive",
     } or budget not in {"brief", "balanced", "deep"}:
-        raise ValueError("Invalid execution mode or budget")
+        raise FredCliError(
+            "Invalid execution mode or budget",
+            code="invalid_mode_or_budget",
+            hint="Choose --mode from explore, changes, investigate, comprehensive and --budget from brief, balanced, deep.",
+        )
+    if profile and profile not in profiles:
+        raise FredCliError(
+            f"Unknown profile: {profile} (available profiles: {profile_list})",
+            code="invalid_profile",
+            hint=f"Choose one of the catalog profiles: {profile_list}.",
+        )
     recipe = recipes[task]
     detected = preflight(repo, exclude)
     changed: list[str] = []
     resolved_base: str | None = None
     if mode == "changes" or recipe.get("requires_base"):
         if not base:
-            raise ValueError(
-                "A change review requires --base <revision>; it will not silently audit the whole repository"
+            raise FredCliError(
+                "A change review requires --base <revision>; it will not silently audit the whole repository",
+                code="missing_base_revision",
+                hint="Pass --base <branch-or-commit> (for example, --base main).",
             )
         changed, resolved_base = changed_files(repo, base)
-    profiles = read_json(ROOT / "catalog/profiles.json")["profiles"]
-    if profile and profile not in profiles:
-        raise ValueError(f"Unknown profile: {profile}")
     selected = list(recipe["skills"])
     suite_name = _suite_for_skills(recipe["skills"])
     notes = [
@@ -365,9 +429,16 @@ def initialize(
     **options,
 ) -> dict:
     repo, output = repo.resolve(), output.resolve()
-    if output == repo or output == ROOT or (output.exists() and any(output.iterdir())):
-        raise ValueError(
-            "Choose a new or empty run directory; existing results are never overwritten"
+    if (
+        output == repo
+        or output == ROOT
+        or (output.exists() and not output.is_dir())
+        or (output.exists() and any(output.iterdir()))
+    ):
+        raise FredCliError(
+            "Choose a new or empty run directory; existing results are never overwritten",
+            code="non_empty_run_directory",
+            hint="Pass a new or empty --output directory path.",
         )
     excludes = list(options.pop("exclude", None) or [])
     if output.is_relative_to(repo):
@@ -466,45 +537,76 @@ def _schema_errors(payload: object, schema_rel: str) -> list[str]:
 def _require_audit_ledger(payload: object, command_name: str) -> dict:
     kind = _detect_domain_kind(payload)
     if kind is not None:
-        raise ValueError(
-            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain artifact '{kind}.json' is not supported"
+        raise FredCliError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain artifact '{kind}.json' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger from a repository-audits or repository-workflows run.",
         )
     if (
         not isinstance(payload, dict)
-        or "findings" not in payload
-        or "evidence" not in payload
+        or not isinstance(payload.get("findings"), list)
+        or not isinstance(payload.get("evidence"), list)
     ):
-        raise ValueError(
-            f"Audit command '{command_name}' requires an 'audit.json' ledger"
+        raise FredCliError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger",
+            code="invalid_audit_ledger",
+            hint="Ensure the input is a valid 'audit.json' object containing 'findings' and 'evidence' arrays.",
         )
     return payload
 
 
 def _require_audit_directory(directory: Path, command_name: str) -> dict:
-    audit_path = directory / "audit.json"
-    if audit_path.is_file():
-        return _require_audit_ledger(read_json(audit_path), command_name)
-    if directory.is_dir():
-        run_path = directory / "run.json"
-        if run_path.is_file():
-            expected = _deliverable_for_run(read_json(run_path))
-            if expected != "audit.json":
-                raise ValueError(
-                    f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{expected}' is not supported"
-                )
-        for domain_name in (*DOMAIN_DELIVERABLE_SCHEMAS, *WORKFLOW_DELIVERABLE_SCHEMAS):
-            if (directory / domain_name).is_file():
-                raise ValueError(
-                    f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{domain_name}' is not supported"
-                )
-        if run_path.is_file():
-            raise ValueError(
-                f"Audit ledger 'audit.json' not found in directory: {directory}; 'run.json' is run metadata, not an 'audit.json' ledger"
-            )
-        raise ValueError(
-            f"Audit ledger 'audit.json' not found in directory: {directory}"
+    p = Path(directory)
+    if not p.exists():
+        raise FredCliError(
+            f"Run directory not found: {p}",
+            code="missing_run_directory",
+            hint="Pass an existing audit run directory containing 'audit.json'.",
         )
-    return read_json(audit_path)
+    if not p.is_dir():
+        raise FredCliError(
+            f"Expected a run directory, got file: {p}",
+            code="invalid_run_directory",
+            hint="Pass the audit run directory rather than an individual file.",
+        )
+    audit_path = p / "audit.json"
+    if audit_path.is_file():
+        return _require_audit_ledger(
+            read_json_object(audit_path, label="Audit ledger 'audit.json'"),
+            command_name,
+        )
+    run_path = p / "run.json"
+    if run_path.is_file():
+        try:
+            expected = _deliverable_for_run(
+                read_json_object(run_path, label="Run metadata 'run.json'")
+            )
+        except ValueError:
+            expected = "audit.json"
+        if expected != "audit.json":
+            raise FredCliError(
+                f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{expected}' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Use a repository-audits run directory containing 'audit.json'.",
+            )
+    for domain_name in (*DOMAIN_DELIVERABLE_SCHEMAS, *WORKFLOW_DELIVERABLE_SCHEMAS):
+        if (p / domain_name).is_file():
+            raise FredCliError(
+                f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{domain_name}' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Use a repository-audits run directory containing 'audit.json'.",
+            )
+    if run_path.is_file():
+        raise FredCliError(
+            f"Audit ledger 'audit.json' not found in directory: {p}; 'run.json' is run metadata, not an 'audit.json' ledger",
+            code="missing_audit_ledger",
+            hint="Ensure the run directory contains 'audit.json'.",
+        )
+    raise FredCliError(
+        f"Audit ledger 'audit.json' not found in directory: {p}",
+        code="missing_audit_ledger",
+        hint="Ensure the run directory contains 'audit.json'.",
+    )
 
 
 def _validate_present_workflow_companions(directory: Path) -> list[str]:
@@ -560,31 +662,49 @@ def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _deliverable_errors(
+    deliverable: dict[str, Any], expected_name: str, schema_rel: str
+) -> list[str]:
+    if expected_name == "audit.json":
+        return audit_errors(deliverable)
+    schema_errs = _schema_errors(deliverable, schema_rel)
+    if schema_errs:
+        return schema_errs
+    return _domain_deliverable_errors(deliverable)
+
+
 def validate_run(directory: Path) -> list[str]:
-    run = read_json(directory / "run.json")
+    run_dir = resolve_run_directory(directory)
+    run = read_json_object(
+        run_dir / "run.json",
+        label="Run metadata 'run.json'",
+        hint="Ensure 'run.json' contains a JSON object matching schemas/run.schema.json.",
+    )
     contract = _artifact_contract_for_run(run)
     expected_name = str(contract["filename"])
     schema_rel = str(contract["schema"])
     deliverable_path = (
-        resolve_audit_path(directory)
-        if (directory / expected_name).is_file()
-        else directory / expected_name
+        resolve_audit_path(run_dir)
+        if (run_dir / expected_name).is_file()
+        else run_dir / expected_name
     )
-    deliverable = read_json(deliverable_path)
-    errors = _schema_errors(run, "schemas/run.schema.json")
+    deliverable = read_json_object(
+        deliverable_path,
+        label=f"Deliverable '{expected_name}'",
+        hint=f"Ensure '{deliverable_path}' exists and contains a JSON object matching {schema_rel}.",
+    )
+    run_errs = _schema_errors(run, "schemas/run.schema.json")
+    deliverable_errs = _deliverable_errors(deliverable, expected_name, schema_rel)
+    errors = [*run_errs, *deliverable_errs]
+    if run_errs:
+        return errors
     if run["snapshot"]["digest"] != digest(
         {key: run["snapshot"][key] for key in ["files", "skipped", "exclude"]}
     ):
         errors.append(
             "Snapshot content identity does not match its recorded file inventory"
         )
-    if expected_name != "audit.json":
-        schema_errs = _schema_errors(deliverable, schema_rel)
-        errors.extend(schema_errs)
-        if not schema_errs and isinstance(deliverable, dict):
-            errors.extend(_domain_deliverable_errors(deliverable))
-    else:
-        errors.extend(audit_errors(deliverable))
+    if expected_name == "audit.json" and not deliverable_errs:
         if run["run_id"] != deliverable.get("run_id"):
             errors.append("Run and audit IDs differ")
         if (
@@ -598,13 +718,23 @@ def validate_run(directory: Path) -> list[str]:
 
 def checkpoint(directory: Path, state: str, note: str) -> dict:
     if state not in {"running", "paused", "completed"} or not note.strip():
-        raise ValueError(
-            "Checkpoint needs a valid state and a concrete continuation/completion note"
+        raise FredCliError(
+            "Checkpoint needs a valid state and a concrete continuation/completion note",
+            code="invalid_checkpoint",
+            hint="Pass --state running|paused|completed and a nonempty --note.",
         )
-    run = read_json(directory / "run.json")
+    run_dir = resolve_run_directory(directory)
+    run = read_json_object(run_dir / "run.json", label="Run metadata 'run.json'")
+    checkpoints = run.get("checkpoints")
+    if not isinstance(checkpoints, list):
+        raise FredCliError(
+            "Run metadata 'run.json' is missing a valid 'checkpoints' list",
+            code="invalid_run_json",
+            hint="Run 'python scripts/fred.py validate-run <dir>' to inspect schema errors in 'run.json'.",
+        )
     run["state"] = state
-    run["checkpoints"].append({"at": now(), "state": state, "note": note})
-    atomic_json(directory / "run.json", run)
+    checkpoints.append({"at": now(), "state": state, "note": note})
+    atomic_json(run_dir / "run.json", run)
     return run
 
 
@@ -648,7 +778,15 @@ def _revalidate_domain_records(
 
 
 def revalidate(directory: Path) -> dict:
-    run = read_json(directory / "run.json")
+    run_dir = resolve_run_directory(directory)
+    run = read_json_object(run_dir / "run.json", label="Run metadata 'run.json'")
+    run_errs = _schema_errors(run, "schemas/run.schema.json")
+    if run_errs:
+        raise FredCliError(
+            "Invalid run.json: " + "; ".join(run_errs[:5]),
+            code="invalid_run_json",
+            hint="Run 'python scripts/fred.py validate-run <dir>' to inspect schema errors in 'run.json'.",
+        )
     contract = _artifact_contract_for_run(run)
     expected_name = str(contract["filename"])
     schema_rel = str(contract["schema"])
@@ -665,24 +803,46 @@ def revalidate(directory: Path) -> dict:
         if old["files"].get(path) != new["files"].get(path)
     )
     if expected_name != "audit.json":
-        target_path = resolve_audit_path(directory)
-        domain_doc = read_json(target_path)
+        target_path = resolve_audit_path(run_dir)
+        domain_doc = read_json_object(
+            target_path, label=f"Deliverable '{expected_name}'"
+        )
         schema_errs = _schema_errors(domain_doc, schema_rel)
         if schema_errs:
-            raise ValueError(f"Invalid {expected_name}: " + "; ".join(schema_errs[:5]))
+            raise FredCliError(
+                f"Invalid {expected_name}: " + "; ".join(schema_errs[:5]),
+                code="invalid_deliverable",
+                hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors in '{expected_name}'.",
+            )
         stale, impact_ids = _revalidate_domain_records(
             domain_doc, expected_name, changed, new["skipped"], new["complete"]
         )
     else:
-        audit = read_json(resolve_audit_path(directory))
-        evidence = {item["id"]: item for item in audit["evidence"]}
+        audit = _require_audit_ledger(
+            read_json_object(resolve_audit_path(run_dir), label="Audit ledger"),
+            "resume",
+        )
+        evidence = {
+            item["id"]: item
+            for item in audit["evidence"]
+            if isinstance(item, dict) and "id" in item and "path" in item
+        }
         stale = []
         for finding in audit["findings"]:
-            paths = [
-                evidence[eid]["path"]
-                for eid in finding["evidence_ids"]
-                if eid in evidence
-            ]
+            if not isinstance(finding, dict) or "id" not in finding:
+                raise FredCliError(
+                    "Invalid audit.json: finding record must be an object with 'id'",
+                    code="invalid_audit_ledger",
+                    hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors in 'audit.json'.",
+                )
+            eids = finding.get("evidence_ids")
+            if not isinstance(eids, list):
+                raise FredCliError(
+                    f"Invalid audit.json: finding '{finding['id']}' is missing 'evidence_ids' array",
+                    code="invalid_audit_ledger",
+                    hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors in 'audit.json'.",
+                )
+            paths = [evidence[eid]["path"] for eid in eids if eid in evidence]
             if (
                 any(path in changed or path in new["skipped"] for path in paths)
                 or not new["complete"]
@@ -700,17 +860,47 @@ def revalidate(directory: Path) -> dict:
         "complete": new["complete"],
         "next_action": "Review changed paths and affected callers/configuration; retain the original snapshot until a new run is established.",
     }
-    atomic_json(directory / "revalidation.json", result)
+    atomic_json(run_dir / "revalidation.json", result)
     return result
 
 
 def fingerprint(finding: dict, audit: dict) -> str:
-    evidence = {item["id"]: item for item in audit["evidence"]}
+    if not isinstance(audit, dict) or not isinstance(audit.get("evidence"), list):
+        raise FredCliError(
+            "Invalid audit ledger: missing 'evidence' array",
+            code="invalid_audit_ledger",
+            hint="Ensure the audit ledger conforms to audit.schema.json.",
+        )
+    if (
+        not isinstance(finding, dict)
+        or not isinstance(finding.get("evidence_ids"), list)
+        or "topic" not in finding
+        or "root_cause" not in finding
+    ):
+        raise FredCliError(
+            "Invalid finding record: expected object with 'topic', 'root_cause', and 'evidence_ids'",
+            code="invalid_audit_ledger",
+            hint="Ensure all findings in 'audit.json' conform to audit.schema.json.",
+        )
+    evidence: dict[str, dict] = {}
+    for item in audit["evidence"]:
+        if (
+            not isinstance(item, dict)
+            or "id" not in item
+            or "path" not in item
+            or "symbol" not in item
+        ):
+            raise FredCliError(
+                "Invalid evidence record in audit ledger: expected object with 'id', 'path', and 'symbol'",
+                code="invalid_audit_ledger",
+                hint="Ensure all evidence items in 'audit.json' conform to audit.schema.json.",
+            )
+        evidence[item["id"]] = item
     locations = sorted(
         {
             (evidence[eid]["path"], evidence[eid]["symbol"])
             for eid in finding["evidence_ids"]
-            if eid in evidence
+            if isinstance(eid, str) and eid in evidence
         }
     )
     return digest(
@@ -731,6 +921,16 @@ def compare(before: dict, after: dict) -> dict:
     def indexed(audit):
         groups = {}
         for finding in audit["findings"]:
+            if (
+                not isinstance(finding, dict)
+                or "id" not in finding
+                or "status" not in finding
+            ):
+                raise FredCliError(
+                    "Invalid finding record in 'audit.json': expected object with 'id' and 'status'",
+                    code="invalid_audit_ledger",
+                    hint="Validate both audit ledgers against audit.schema.json before comparing.",
+                )
             groups.setdefault(fingerprint(finding, audit), []).append(finding)
         return groups
 
@@ -781,7 +981,14 @@ def reconcile(
     verification: Path | None = None,
 ) -> dict:
     audit = _require_audit_directory(directory, "reconcile")
-    finding = next((f for f in audit["findings"] if f["id"] == finding_id), None)
+    finding = next(
+        (
+            f
+            for f in audit["findings"]
+            if isinstance(f, dict) and f.get("id") == finding_id
+        ),
+        None,
+    )
     if finding is None or state not in {
         "open",
         "in-progress",
@@ -790,20 +997,30 @@ def reconcile(
         "regressed",
         "accepted-risk",
     }:
-        raise ValueError("Unknown finding or remediation state")
+        raise FredCliError(
+            "Unknown finding or remediation state",
+            code="invalid_reconciliation",
+            hint="Verify the finding ID exists in 'audit.json' and pass a valid remediation --state.",
+        )
     proof = None
     if state == "verified-fixed":
         if verification is None:
-            raise ValueError("verified-fixed requires a verification JSON artifact")
-        proof = read_json(verification)
+            raise FredCliError(
+                "verified-fixed requires a verification JSON artifact",
+                code="missing_verification",
+                hint="Pass --verification <verification.json> matching verification.schema.json.",
+            )
+        proof = read_json_object(verification, label="Verification artifact")
         schema = read_json(
             ROOT / "skills/repo-verify-fix/assets/verification.schema.json"
         )
         failures = list(jsonschema.Draft202012Validator(schema).iter_errors(proof))
         if failures:
-            raise ValueError(
+            raise FredCliError(
                 "Verification artifact does not satisfy the proof schema: "
-                + failures[0].message
+                + failures[0].message,
+                code="invalid_verification",
+                hint="Update the verification artifact to satisfy skills/repo-verify-fix/assets/verification.schema.json.",
             )
         required = [
             "before_revision",
@@ -826,20 +1043,24 @@ def reconcile(
             )
             or not proof["commands"]
         ):
-            raise ValueError(
-                "Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result"
+            raise FredCliError(
+                "Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result",
+                code="invalid_verification",
+                hint="Ensure original_reproduced, regression_passed, and safe_controls_passed are true and commands is nonempty.",
             )
     path = directory / "remediation.json"
-    existing = (
-        read_json(path) if path.exists() else {"schema_version": "1.0", "records": []}
+    records: dict[str, Any] = (
+        read_json_object(path, label="Remediation ledger 'remediation.json'")
+        if path.exists()
+        else {"schema_version": "1.0", "records": []}
     )
-    if not isinstance(existing, dict):
-        raise TypeError("Existing remediation.json must be a JSON object")
-    if "records" not in existing:
-        raise ValueError("Existing remediation.json must contain a 'records' array")
-    if not isinstance(existing["records"], list):
-        raise TypeError("Existing remediation.json 'records' must be a JSON array")
-    records: dict[str, Any] = copy.deepcopy(existing)
+    if not isinstance(records.get("records"), list):
+        raise FredCliError(
+            f"Malformed remediation ledger '{path}': 'records' must be a JSON array",
+            code="invalid_remediation_ledger",
+            hint="Inspect 'remediation.json' and ensure 'records' is an array.",
+        )
+    records = copy.deepcopy(records)
     records.setdefault("schema_version", "1.0")
     record: dict[str, Any] = {
         "at": now(),
@@ -854,9 +1075,11 @@ def reconcile(
         records, WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
     )
     if remediation_errors:
-        raise ValueError(
+        raise FredCliError(
             "Remediation ledger does not satisfy reconciliation.schema.json: "
-            + remediation_errors[0]
+            + remediation_errors[0],
+            code="invalid_remediation_ledger",
+            hint="Ensure verification evidence conforms to 'skills/repo-verify-fix/assets/verification.schema.json'.",
         )
     atomic_json(path, records)
     return record
@@ -864,7 +1087,22 @@ def reconcile(
 
 def memory(directory: Path) -> dict:
     audit = _require_audit_directory(directory, "memory")
-    run = read_json(directory / "run.json")
+    run_dir = resolve_run_directory(directory)
+    run = read_json_object(run_dir / "run.json", label="Run metadata 'run.json'")
+    run_errs = _schema_errors(run, "schemas/run.schema.json")
+    if run_errs:
+        raise FredCliError(
+            "Invalid run.json: " + "; ".join(run_errs[:5]),
+            code="invalid_run_json",
+            hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors.",
+        )
+    audit_errs = audit_errors(audit)
+    if audit_errs:
+        raise FredCliError(
+            "Invalid audit.json: " + "; ".join(audit_errs[:5]),
+            code="invalid_audit_ledger",
+            hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors.",
+        )
     return {
         "schema_version": "1.0",
         "source_run": run["run_id"],
@@ -1458,9 +1696,21 @@ def _clean_fingerprint_map(raw_map: object) -> dict[str, str] | None:
 
 
 def import_sarif(path: Path, root: Path | None = None) -> dict:
-    document, observations = read_json(path), []
+    document = read_json_object(
+        path,
+        label="SARIF file",
+        hint="Pass a valid SARIF 2.1.0 JSON object containing a 'runs' array.",
+    )
+    raw_runs = document.get("runs", [])
+    if not isinstance(raw_runs, list):
+        raise FredCliError(
+            f"Malformed SARIF file '{path}': 'runs' must be a JSON array",
+            code="invalid_sarif",
+            hint="Ensure the SARIF document conforms to SARIF 2.1.0 with a top-level 'runs' array.",
+        )
+    observations = []
     explicit_roots = _normalize_fs_roots(Path(root)) if root is not None else None
-    for run in document.get("runs", []):
+    for run in raw_runs:
         if not isinstance(run, dict):
             continue
         raw_tool = run.get("tool")
@@ -1476,7 +1726,14 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
         base_map = _resolve_base_map(run.get("originalUriBaseIds"))
         default_sarif_roots = _collect_sarif_roots(run, base_map)
 
-        for result in run.get("results", []):
+        raw_results = run.get("results", [])
+        if not isinstance(raw_results, list):
+            raise FredCliError(
+                f"Malformed SARIF file '{path}': 'results' in run must be a JSON array",
+                code="invalid_sarif",
+                hint="Ensure each SARIF run's 'results' property is a JSON array.",
+            )
+        for result in raw_results:
             if not isinstance(result, dict):
                 continue
             inv_idx = result.get("invocationIndex")
@@ -1497,11 +1754,21 @@ def import_sarif(path: Path, root: Path | None = None) -> dict:
                 or "unknown"
             )
             reported_level = _resolve_sarif_level(
-                result, matched_rule, run, rule_id if rule_id != "unknown" else None
+                result,
+                matched_rule,
+                run,
+                rule_id if isinstance(rule_id, str) and rule_id != "unknown" else None,
             )
 
+            raw_locations = result.get("locations", [])
+            if not isinstance(raw_locations, list):
+                raise FredCliError(
+                    f"Malformed SARIF file '{path}': 'locations' in result must be a JSON array",
+                    code="invalid_sarif",
+                    hint="Ensure each SARIF result's 'locations' property is a JSON array.",
+                )
             locations = []
-            for item in result.get("locations", []):
+            for item in raw_locations:
                 if not isinstance(item, dict):
                     continue
                 raw_physical = item.get("physicalLocation")
