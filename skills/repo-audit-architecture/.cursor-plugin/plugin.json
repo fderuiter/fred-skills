@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-architecture",
-  "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+  "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when investigating import cycles, layering inversions, forbidden package coupling, or leaky subsystem seams.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

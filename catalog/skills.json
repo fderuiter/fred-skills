@@ -4,7 +4,7 @@
     {
       "name": "arch-boundary-specification",
       "title": "Boundary Specification",
-      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "description": "Specify service encapsulation contracts, module interfaces, and failure-domain isolation rules in architecture artifacts. Use when designing new subsystem perimeters, authoring API gateway specs, or documenting inter-service communication protocols.",
       "path": "skills/arch-boundary-specification/SKILL.md",
       "suite": "software-architecture",
       "phase": 1,
@@ -31,7 +31,7 @@
     {
       "name": "arch-component-decomposition",
       "title": "Component Decomposition",
-      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "description": "Partition software systems into cohesive modules, narrow collaboration interfaces, and staged monolith-splitting plans. Use when breaking apart tightly coupled packages, assigning component ownership, or planning modular restructuring.",
       "path": "skills/arch-component-decomposition/SKILL.md",
       "suite": "software-architecture",
       "phase": 2,
@@ -163,7 +163,7 @@
     {
       "name": "repo-audit-api-consistency",
       "title": "API Design Consistency",
-      "description": "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+      "description": "Audit API design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
       "path": "skills/repo-audit-api-consistency/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -190,7 +190,7 @@
     {
       "name": "repo-audit-architecture",
       "title": "Architectural Boundaries and Dependency Direction",
-      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when investigating import cycles, layering inversions, forbidden package coupling, or leaky subsystem seams.",
       "path": "skills/repo-audit-architecture/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -217,7 +217,7 @@
     {
       "name": "repo-audit-behavioral-contracts",
       "title": "Behavioral Contract Reconstruction",
-      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
+      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when mapping undocumented guarantees, preconditions, postconditions, caller obligations, or cross-subsystem expectations from source.",
       "path": "skills/repo-audit-behavioral-contracts/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -546,7 +546,7 @@
     {
       "name": "repo-audit-dead-code",
       "title": "Dead Code and Obsolete Compatibility Paths",
-      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths.",
+      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when investigating unreachable branches, stale feature toggles, unreferenced exports, retired shims, or orphaned fallbacks.",
       "path": "skills/repo-audit-dead-code/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -573,7 +573,7 @@
     {
       "name": "repo-audit-diagnostics",
       "title": "Repository Audit Session Diagnostics",
-      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
+      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles. Use when triaging interrupted audit runs, inspecting failed session logs, redacting transcript secrets, or producing checkpoint resume instructions.",
       "path": "skills/repo-audit-diagnostics/SKILL.md",
       "suite": "repository-audits",
       "phase": 0,
@@ -600,7 +600,7 @@
     {
       "name": "repo-audit-domain-models",
       "title": "Implicit Domain Models",
-      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, conflated identifiers or units, unmodeled value objects, or scattered entity rules.",
       "path": "skills/repo-audit-domain-models/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -708,7 +708,7 @@
     {
       "name": "repo-audit-invariants",
       "title": "Implicit Invariants",
-      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values.",
+      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced aggregate rules, bypassed constructor guards, or illegal combinations of persisted fields.",
       "path": "skills/repo-audit-invariants/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -925,7 +925,7 @@
     {
       "name": "repo-audit-state-machines",
       "title": "Implicit State Machines",
-      "description": "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior.",
+      "description": "Audit implicit state machines with code evidence and counterexamples. Use when investigating ad-hoc status flags, unreachable or missing transitions, unguarded mode switches, or illegal lifecycle combinations.",
       "path": "skills/repo-audit-state-machines/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -952,7 +952,7 @@
     {
       "name": "repo-audit-synthesis",
       "title": "Audit Findings and Issue Planning",
-      "description": "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan.",
+      "description": "Consolidate specialist audit outputs into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use when synthesizing completed audit passes or turning topic reports into a prioritized issue backlog.",
       "path": "skills/repo-audit-synthesis/SKILL.md",
       "suite": "repository-audits",
       "phase": 4,
@@ -1006,7 +1006,7 @@
     {
       "name": "repo-audit-test-contracts",
       "title": "Untested Behavioral Contracts",
-      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
+      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping unverified requirement guarantees, missing negative-path checks, or unasserted recovery obligations.",
       "path": "skills/repo-audit-test-contracts/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -1089,7 +1089,7 @@
     {
       "name": "repo-audit-trust-boundaries",
       "title": "Trust and Authorization Boundaries",
-      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
+      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping unvalidated external inputs, privilege escalation paths, cross-tenant data leaks, or unguarded sinks.",
       "path": "skills/repo-audit-trust-boundaries/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -1275,7 +1275,7 @@
     {
       "name": "review-diff-analysis",
       "title": "Diff Analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "description": "Use when analyzing pull request diffs to evaluate behavioral impact, blast radius, and unintended regressions.",
       "path": "skills/review-diff-analysis/SKILL.md",
       "suite": "code-review",
       "phase": 0,
@@ -1300,8 +1300,8 @@
     },
     {
       "name": "review-invariant-violations",
-      "title": "Invariant Verification",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "title": "Invariant Violations",
+      "description": "Verify pull request patches for broken safety assumptions, rollback regressions, and unbalanced resource lifecycles. Use when inspecting proposed diff hunks for broken preconditions, race hazards, or corrupted state transitions before merge.",
       "path": "skills/review-invariant-violations/SKILL.md",
       "suite": "code-review",
       "phase": 1,
@@ -1457,7 +1457,7 @@
     {
       "name": "test-case-generation",
       "title": "Test Case Generation",
-      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "description": "Author deterministic unit, integration, and regression tests with isolated fixtures and independent assertion oracles. Use when writing executable test suites from gap backlogs or turning reproduced bug specs into automated checks.",
       "path": "skills/test-case-generation/SKILL.md",
       "suite": "automated-testing",
       "phase": 1,
@@ -1483,7 +1483,7 @@
     {
       "name": "test-gap-analysis",
       "title": "Test Gap Analysis",
-      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "description": "Prioritize unexercised code branches, exception handlers, and edge-value ranges into a structured test backlog. Use when planning automated test expansion, ranking untested failure branches, or scoping regression scenarios for a module.",
       "path": "skills/test-gap-analysis/SKILL.md",
       "suite": "automated-testing",
       "phase": 0,

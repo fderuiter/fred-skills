@@ -1,6 +1,6 @@
 ---
 name: repo-audit-diagnostics
-description: "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles."
+description: "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles. Use when triaging interrupted audit runs, inspecting failed session logs, redacting transcript secrets, or producing checkpoint resume instructions."
 ---
 
 # Repository Audit Session Diagnostics
@@ -47,6 +47,6 @@ Consult [protocol](references/protocol.md) for multi-pass coordination invariant
 
 ## Deliverables
 
-Run `python <this-skill>/scripts/triage.py <transcript> --workspace <run-dir> --output-dir <bundle-dir>`.
+Run the [triage script](scripts/triage.py) (`python3 <this-skill>/scripts/triage.py <transcript> --workspace <run-dir> --output-dir <bundle-dir>`) to parse transcripts and emit scrubbed recovery bundles, and verify any accompanying `audit.json` ledger with the [audit validator](scripts/validate_audit.py) when checking schema errors.
 Use [prompt template](assets/prompt.md) to initialize operator diagnosis.
 Provide the scrubbed diagnostic bundle, failure root-cause analysis, and exact next resumption commands.

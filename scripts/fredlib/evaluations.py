@@ -9,7 +9,7 @@ import statistics
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,7 @@ class _GradeOutcome:
     expected: set[str]
     uncertain_count: int
     assertions_ok: bool
+    normalized_records: list[dict[str, str]] = field(default_factory=list)
     malformed_error: str | None = None
 
 
@@ -320,16 +321,358 @@ def _expected_keys_from_case(case: dict[str, Any]) -> set[str]:
     return base
 
 
+def _make_normalized_record(key: str, status: str, evidence: str) -> dict[str, str]:
+    normalized_status = status if status in _AUDIT_STATUSES else "supported"
+    return {
+        "key": key,
+        "status": normalized_status,
+        "evidence": evidence.strip(),
+    }
+
+
+def _project_audit_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+    items = payload.get("findings")
+    if not isinstance(items, list):
+        raise TypeError("Malformed findings response")
+    records: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise TypeError("Malformed findings response")
+        raw_status = item.get("status")
+        if not isinstance(raw_status, str) or raw_status not in _AUDIT_STATUSES:
+            raise ValueError("Malformed findings response")
+        raw_key = item.get("key")
+        if not isinstance(raw_key, str) or not raw_key:
+            if "schema_version" in payload and isinstance(item.get("id"), str):
+                raw_key = str(item.get("category") or item["id"])
+            else:
+                raise ValueError("Malformed findings response")
+        raw_ev = item.get("evidence")
+        if isinstance(raw_ev, str):
+            evidence = raw_ev
+        elif isinstance(item.get("evidence_ids"), list):
+            evidence = "; ".join(
+                str(eid).strip() for eid in item["evidence_ids"] if str(eid).strip()
+            )
+        else:
+            evidence = ""
+        records.append(_make_normalized_record(raw_key, raw_status, evidence))
+    return records
+
+
+def _project_architecture_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+    doc_status = payload.get("status")
+    record_status = (
+        "needs-validation"
+        if doc_status == "draft"
+        else "supported"
+        if doc_status == "accepted"
+        else "grouped"
+    )
+    records: list[dict[str, str]] = []
+    for boundary in payload.get("boundaries", []):
+        if not isinstance(boundary, dict) or not isinstance(boundary.get("name"), str):
+            continue
+        desc = (
+            boundary["description"].strip()
+            if isinstance(boundary.get("description"), str)
+            else ""
+        )
+        inv_parts = (
+            [
+                inv.strip()
+                for inv in boundary["invariants"]
+                if isinstance(inv, str) and inv.strip()
+            ]
+            if isinstance(boundary.get("invariants"), list)
+            else []
+        )
+        evidence = desc or "; ".join(inv_parts)
+        records.append(
+            _make_normalized_record(str(boundary["name"]), record_status, evidence)
+        )
+    decision_status = "confirmed" if doc_status == "accepted" else record_status
+    for decision in payload.get("decisions", []):
+        if not isinstance(decision, dict) or not isinstance(decision.get("id"), str):
+            continue
+        dec_text = (
+            decision["decision"].strip()
+            if isinstance(decision.get("decision"), str)
+            else ""
+        )
+        ctx_text = (
+            decision["context"].strip()
+            if isinstance(decision.get("context"), str)
+            else ""
+        )
+        cons_parts = (
+            [
+                c.strip()
+                for c in decision["consequences"]
+                if isinstance(c, str) and c.strip()
+            ]
+            if isinstance(decision.get("consequences"), list)
+            else []
+        )
+        rationale = ctx_text or "; ".join(cons_parts)
+        evidence = f"{dec_text} ({rationale})" if (dec_text and rationale) else ""
+        records.append(
+            _make_normalized_record(str(decision["id"]), decision_status, evidence)
+        )
+    return records
+
+
+def _project_review_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for finding in payload.get("findings", []):
+        if not isinstance(finding, dict) or not isinstance(finding.get("id"), str):
+            continue
+        sev = finding.get("severity")
+        status = (
+            "needs-validation"
+            if sev == "advisory"
+            else "confirmed"
+            if sev in {"critical", "high"}
+            else "supported"
+        )
+        file_ref = (
+            finding["file"].strip() if isinstance(finding.get("file"), str) else ""
+        )
+        desc = (
+            finding["description"].strip()
+            if isinstance(finding.get("description"), str)
+            else ""
+        )
+        evidence = f"{file_ref}: {desc}" if (file_ref and desc) else ""
+        records.append(_make_normalized_record(str(finding["id"]), status, evidence))
+    return records
+
+
+def _project_testing_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    valid_oracles = {"state", "exception", "output", "boundary"}
+    for tc in payload.get("test_cases", []):
+        if not isinstance(tc, dict) or not isinstance(tc.get("id"), str):
+            continue
+        verified = tc.get("verified")
+        status = (
+            "confirmed"
+            if verified is True
+            else "needs-validation"
+            if verified is False
+            else "supported"
+        )
+        desc = (
+            tc["description"].strip() if isinstance(tc.get("description"), str) else ""
+        )
+        oracle = tc.get("oracle_type")
+        evidence = f"{oracle}: {desc}" if (desc and oracle in valid_oracles) else ""
+        records.append(_make_normalized_record(str(tc["id"]), status, evidence))
+    return records
+
+
+def _project_spec_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+    doc_status = payload.get("status")
+    in_progress = doc_status in {"draft", "interviewing"}
+    records: list[dict[str, str]] = []
+    for decision in payload.get("interview_decisions", []):
+        if not isinstance(decision, dict) or not isinstance(decision.get("id"), str):
+            continue
+        question = (
+            decision["question"].strip()
+            if isinstance(decision.get("question"), str)
+            else ""
+        )
+        chosen = (
+            decision["decision"].strip()
+            if isinstance(decision.get("decision"), str)
+            else ""
+        )
+        evidence = f"{question} -> {chosen}" if (question and chosen) else ""
+        status = "needs-validation" if in_progress else "confirmed"
+        records.append(_make_normalized_record(str(decision["id"]), status, evidence))
+    for check in payload.get("convergence_checks", []):
+        if not isinstance(check, dict) or not isinstance(check.get("id"), str):
+            continue
+        target = check["target"].strip() if isinstance(check.get("target"), str) else ""
+        ev_text = (
+            check["evidence"].strip() if isinstance(check.get("evidence"), str) else ""
+        )
+        evidence = f"{target}: {ev_text}" if (target and ev_text) else ""
+        status = (
+            "needs-validation"
+            if in_progress
+            else ("confirmed" if check.get("status") == "aligned" else "supported")
+        )
+        records.append(_make_normalized_record(str(check["id"]), status, evidence))
+    return records
+
+
+def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    if "reproduction_status" in payload:
+        fid = str(payload.get("finding_id", ""))
+        raw_status = str(payload.get("reproduction_status", "needs-validation"))
+        ev_parts: list[str] = []
+        for text_key in ("result", "notes"):
+            val = payload.get(text_key)
+            if isinstance(val, str) and val.strip():
+                ev_parts.append(val.strip())
+        if not ev_parts and payload.get("commands"):
+            ev_parts.append("; ".join(str(c) for c in payload["commands"]))
+        if not ev_parts and payload.get("safe_control_outcomes"):
+            ev_parts.append("safe_control_outcomes recorded")
+        if fid and fid != "none":
+            records.append(
+                _make_normalized_record(fid, raw_status, "; ".join(ev_parts))
+            )
+    elif "failure_boundaries" in payload:
+        fid = str(payload.get("finding_id", ""))
+        if fid and fid != "none":
+            grounded_ok = (
+                bool(payload.get("failure_boundaries"))
+                and bool(payload.get("test_command_traces"))
+                and bool(payload.get("assertion_expectations"))
+            )
+            ev = (
+                "; ".join(str(b) for b in payload["failure_boundaries"])
+                if grounded_ok
+                else ""
+            )
+            records.append(_make_normalized_record(fid, "confirmed", ev))
+    elif "task_breakdowns" in payload:
+        for task in payload.get("task_breakdowns", []):
+            if (
+                not isinstance(task, dict)
+                or not isinstance(task.get("task_id"), str)
+                or task["task_id"] == "noop"
+            ):
+                continue
+            scopes = task.get("file_scopes")
+            criteria = task.get("acceptance_criteria")
+            ev = (
+                f"scopes={scopes}; criteria={criteria}" if (scopes and criteria) else ""
+            )
+            records.append(
+                _make_normalized_record(str(task["task_id"]), "supported", ev)
+            )
+    elif "file_changes" in payload:
+        exec_ok = any(
+            isinstance(er, dict) and er.get("passed") is True
+            for er in payload.get("execution_results", [])
+        )
+        has_diffs = bool(payload.get("diff_summaries"))
+        for item in payload.get("file_changes", []):
+            if not isinstance(item, str | dict):
+                continue
+            path_val = item if isinstance(item, str) else str(item.get("path", ""))
+            if not path_val or path_val == "none":
+                continue
+            ev = f"{path_val}: verified diff" if (has_diffs and exec_ok) else ""
+            records.append(_make_normalized_record(path_val, "confirmed", ev))
+    elif "original_reproduced" in payload and "safe_controls_passed" in payload:
+        res_label = str(payload.get("result", ""))
+        if res_label and res_label != "abstained":
+            cmds = payload.get("commands")
+            ev = "; ".join(str(c) for c in cmds) if cmds else ""
+            status = "confirmed" if res_label == "verified-fixed" else "supported"
+            records.append(_make_normalized_record(res_label, status, ev))
+    elif "remediation_state_transitions" in payload:
+        matched_ids = {
+            m.get("finding_id")
+            for m in payload.get("finding_fingerprint_matches", [])
+            if isinstance(m, dict)
+        }
+        for trans in payload.get("remediation_state_transitions", []):
+            if not isinstance(trans, dict):
+                continue
+            fid = str(trans.get("finding_id", ""))
+            new_state = str(trans.get("new_state", ""))
+            if not fid or not new_state:
+                continue
+            key = f"{fid}:{new_state}"
+            proof = (
+                trans["verification_proof"].strip()
+                if isinstance(trans.get("verification_proof"), str)
+                else ""
+            )
+            reason = (
+                trans["reason"].strip() if isinstance(trans.get("reason"), str) else ""
+            )
+            if new_state == "verified-fixed":
+                ev = proof
+                status = "confirmed"
+            else:
+                ev = proof or reason or (f"matched:{fid}" if fid in matched_ids else "")
+                status = "supported"
+            records.append(_make_normalized_record(key, status, ev))
+    elif "dead_ends" in payload and "verified_facts" in payload:
+        next_act = payload.get("next_action")
+        grounded_ok = (
+            bool(payload.get("verified_facts"))
+            and bool(payload.get("commands_run"))
+            and isinstance(next_act, str)
+            and bool(next_act.strip())
+        )
+        action_text = next_act.strip() if isinstance(next_act, str) else ""
+        for p in payload.get("touched_files", []):
+            if isinstance(p, str) and p and p != "none":
+                ev = f"{p}: {action_text}" if grounded_ok else ""
+                records.append(_make_normalized_record(p, "confirmed", ev))
+    elif "commit_subject" in payload and "compression_level" in payload:
+        subj = str(payload.get("commit_subject", ""))
+        ctype = str(payload.get("commit_type", ""))
+        if subj and not subj.startswith("chore: abstain") and ctype:
+            grounded_ok = (
+                0 < len(subj) <= 50
+                and bool(payload.get("preserved_exact_spans"))
+                and payload.get("git_mutated") is False
+            )
+            ev = subj if grounded_ok else ""
+            records.append(_make_normalized_record(ctype, "confirmed", ev))
+    return records
+
+
+def _project_normalized_records(
+    contract: str, payload: dict[str, Any]
+) -> list[dict[str, str]]:
+    if contract == "architecture":
+        return _project_architecture_records(payload)
+    if contract == "review":
+        return _project_review_records(payload)
+    if contract == "testing":
+        return _project_testing_records(payload)
+    if contract == "spec":
+        return _project_spec_records(payload)
+    if contract == "workflow":
+        return _project_workflow_records(payload)
+    return _project_audit_records(payload)
+
+
+def _score_normalized_records(
+    records: list[dict[str, str]],
+    *,
+    report_needs_validation: bool = False,
+    cap_uncertain_at_one: bool = False,
+) -> tuple[set[str], set[str], int]:
+    reportable = (
+        _ACTIONABLE_AUDIT_STATUSES | {"needs-validation"}
+        if report_needs_validation
+        else _ACTIONABLE_AUDIT_STATUSES
+    )
+    reported = {rec["key"] for rec in records if rec["status"] in reportable}
+    grounded = {rec["key"] for rec in records if rec["evidence"].strip()}
+    uncertain = sum(rec["status"] == "needs-validation" for rec in records)
+    if cap_uncertain_at_one:
+        uncertain = min(uncertain, 1)
+    return reported, grounded, uncertain
+
+
 def _grade_audit(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome:
     expected = set(case.get("expected_keys", []))
-    items = payload.get("findings", [])
-    malformed = not isinstance(items, list) or any(
-        not isinstance(item, dict)
-        or not isinstance(item.get("key"), str)
-        or item.get("status") not in _AUDIT_STATUSES
-        for item in items
-    )
-    if malformed:
+    try:
+        records = _project_audit_records(payload)
+    except (ValueError, TypeError):
         return _GradeOutcome(
             reported=set(),
             grounded=set(),
@@ -338,59 +681,28 @@ def _grade_audit(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome
             assertions_ok=False,
             malformed_error="Malformed findings response",
         )
-    reported = {
-        item["key"]
-        for item in items
-        if item.get("status") in _ACTIONABLE_AUDIT_STATUSES
-    }
-    grounded = {
-        item["key"]
-        for item in items
-        if isinstance(item.get("evidence"), str) and item["evidence"].strip()
-    }
-    uncertain = sum(item.get("status") == "needs-validation" for item in items)
+    reported, grounded, uncertain = _score_normalized_records(records)
     return _GradeOutcome(
         reported=reported,
         grounded=grounded,
         expected=expected,
         uncertain_count=uncertain,
         assertions_ok=True,
+        normalized_records=records,
     )
 
 
 def _grade_architecture(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome:
+    records = _project_architecture_records(payload)
+    reported, grounded, uncertain = _score_normalized_records(
+        records, report_needs_validation=True, cap_uncertain_at_one=True
+    )
     boundaries = [b for b in payload.get("boundaries", []) if isinstance(b, dict)]
     decisions = [d for d in payload.get("decisions", []) if isinstance(d, dict)]
     boundary_keys = {
         str(b["name"]) for b in boundaries if isinstance(b.get("name"), str)
     }
     decision_keys = {str(d["id"]) for d in decisions if isinstance(d.get("id"), str)}
-    reported = boundary_keys | decision_keys
-
-    grounded: set[str] = set()
-    for b in boundaries:
-        bname = b.get("name")
-        if not isinstance(bname, str):
-            continue
-        has_desc = isinstance(b.get("description"), str) and bool(
-            b["description"].strip()
-        )
-        has_inv = isinstance(b.get("invariants"), list) and any(
-            isinstance(inv, str) and inv.strip() for inv in b["invariants"]
-        )
-        if has_desc or has_inv:
-            grounded.add(bname)
-    for d in decisions:
-        did = d.get("id")
-        if not isinstance(did, str):
-            continue
-        has_dec = isinstance(d.get("decision"), str) and bool(d["decision"].strip())
-        has_ctx = isinstance(d.get("context"), str) and bool(d["context"].strip())
-        has_cons = isinstance(d.get("consequences"), list) and any(
-            isinstance(c, str) and c.strip() for c in d["consequences"]
-        )
-        if has_dec and (has_ctx or has_cons):
-            grounded.add(did)
 
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
@@ -428,29 +740,22 @@ def _grade_architecture(payload: dict[str, Any], case: dict[str, Any]) -> _Grade
             if cons_total < int(assertions["min_consequences"]):
                 assertions_ok = False
 
-    uncertain = int(payload.get("status") == "draft" and bool(reported))
     return _GradeOutcome(
         reported=reported,
         grounded=grounded,
         expected=expected,
         uncertain_count=uncertain,
         assertions_ok=assertions_ok,
+        normalized_records=records,
     )
 
 
 def _grade_review(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome:
+    records = _project_review_records(payload)
+    reported, grounded, uncertain = _score_normalized_records(
+        records, report_needs_validation=True
+    )
     findings = [f for f in payload.get("findings", []) if isinstance(f, dict)]
-    reported = {str(f["id"]) for f in findings if isinstance(f.get("id"), str)}
-    grounded = {
-        str(f["id"])
-        for f in findings
-        if isinstance(f.get("id"), str)
-        and isinstance(f.get("file"), str)
-        and f["file"].strip()
-        and isinstance(f.get("description"), str)
-        and f["description"].strip()
-    }
-    uncertain = sum(f.get("severity") == "advisory" for f in findings)
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
     assertions_ok = True
@@ -484,6 +789,7 @@ def _grade_review(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcom
         expected=expected,
         uncertain_count=uncertain,
         assertions_ok=assertions_ok,
+        normalized_records=records,
     )
 
 
@@ -493,17 +799,11 @@ def _grade_testing(
     changed_paths: set[str],
     source_dir: Path,
 ) -> _GradeOutcome:
+    records = _project_testing_records(payload)
+    reported, grounded, uncertain = _score_normalized_records(
+        records, report_needs_validation=True
+    )
     test_cases = [tc for tc in payload.get("test_cases", []) if isinstance(tc, dict)]
-    reported = {str(tc["id"]) for tc in test_cases if isinstance(tc.get("id"), str)}
-    grounded = {
-        str(tc["id"])
-        for tc in test_cases
-        if isinstance(tc.get("id"), str)
-        and isinstance(tc.get("description"), str)
-        and tc["description"].strip()
-        and tc.get("oracle_type") in {"state", "exception", "output", "boundary"}
-    }
-    uncertain = sum(tc.get("verified") is False for tc in test_cases)
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
     assertions_ok = True
@@ -542,6 +842,7 @@ def _grade_testing(
         expected=expected,
         uncertain_count=uncertain,
         assertions_ok=assertions_ok,
+        normalized_records=records,
     )
 
 
@@ -551,39 +852,17 @@ def _grade_spec(
     changed_paths: set[str],
     source_dir: Path,
 ) -> _GradeOutcome:
+    records = _project_spec_records(payload)
+    reported, grounded, uncertain = _score_normalized_records(
+        records, report_needs_validation=True, cap_uncertain_at_one=True
+    )
     decisions = [
         d for d in payload.get("interview_decisions", []) if isinstance(d, dict)
     ]
     checks = [c for c in payload.get("convergence_checks", []) if isinstance(c, dict)]
     decision_ids = {str(d["id"]) for d in decisions if isinstance(d.get("id"), str)}
     check_ids = {str(c["id"]) for c in checks if isinstance(c.get("id"), str)}
-    reported = decision_ids | check_ids
 
-    grounded: set[str] = set()
-    for d in decisions:
-        did = d.get("id")
-        if (
-            isinstance(did, str)
-            and isinstance(d.get("question"), str)
-            and d["question"].strip()
-            and isinstance(d.get("decision"), str)
-            and d["decision"].strip()
-        ):
-            grounded.add(did)
-    for c in checks:
-        cid = c.get("id")
-        if (
-            isinstance(cid, str)
-            and isinstance(c.get("target"), str)
-            and c["target"].strip()
-            and isinstance(c.get("evidence"), str)
-            and c["evidence"].strip()
-        ):
-            grounded.add(cid)
-
-    uncertain = int(
-        payload.get("status") in {"draft", "interviewing"} and bool(reported)
-    )
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
     assertions_ok = True
@@ -613,6 +892,7 @@ def _grade_spec(
         expected=expected,
         uncertain_count=uncertain,
         assertions_ok=assertions_ok,
+        normalized_records=records,
     )
 
 
@@ -660,129 +940,20 @@ def _grade_workflow(
     changed_paths: set[str],
     source_dir: Path,
 ) -> _GradeOutcome:
-    reported: set[str] = set()
-    grounded: set[str] = set()
-    uncertain = 0
-
-    if "reproduction_status" in payload:
-        fid = str(payload.get("finding_id", ""))
-        status = payload.get("reproduction_status")
-        if status in {"confirmed", "supported"} and fid and fid != "none":
-            reported.add(fid)
-        has_evidence = (
-            bool(payload.get("safe_control_outcomes"))
-            or bool(payload.get("commands"))
-            or (
-                isinstance(payload.get("result"), str)
-                and bool(payload["result"].strip())
-            )
-            or (
-                isinstance(payload.get("notes"), str) and bool(payload["notes"].strip())
-            )
-        )
-        if has_evidence:
-            grounded.update(reported)
-        uncertain = int(status == "needs-validation")
-    elif "failure_boundaries" in payload:
-        fid = str(payload.get("finding_id", ""))
-        if fid and fid != "none":
-            reported.add(fid)
-        if (
-            bool(payload.get("failure_boundaries"))
-            and bool(payload.get("test_command_traces"))
-            and bool(payload.get("assertion_expectations"))
-        ):
-            grounded.update(reported)
-    elif "task_breakdowns" in payload:
-        tasks = [
-            t
-            for t in payload.get("task_breakdowns", [])
-            if isinstance(t, dict) and t.get("task_id") != "noop"
-        ]
-        reported = {
-            str(t["task_id"]) for t in tasks if isinstance(t.get("task_id"), str)
-        }
-        grounded = {
-            str(t["task_id"])
-            for t in tasks
-            if isinstance(t.get("task_id"), str)
-            and bool(t.get("file_scopes"))
-            and bool(t.get("acceptance_criteria"))
-        }
-    elif "file_changes" in payload:
-        paths = [
-            item if isinstance(item, str) else str(item.get("path", ""))
-            for item in payload.get("file_changes", [])
-            if isinstance(item, str | dict)
-        ]
-        reported = {p for p in paths if p and p != "none"}
-        exec_ok = any(
-            isinstance(er, dict) and er.get("passed") is True
-            for er in payload.get("execution_results", [])
-        )
-        if bool(payload.get("diff_summaries")) and exec_ok:
-            grounded.update(reported)
-    elif "original_reproduced" in payload and "safe_controls_passed" in payload:
-        res_label = str(payload.get("result", ""))
-        if res_label and res_label != "abstained":
-            reported.add(res_label)
-        if bool(payload.get("commands")):
-            grounded.update(reported)
+    records = _project_workflow_records(payload)
+    reported, grounded, uncertain = _score_normalized_records(records)
+    if (
+        "reproduction_status" in payload
+        and payload.get("reproduction_status") == "needs-validation"
+    ):
+        uncertain = max(uncertain, 1)
     elif "remediation_state_transitions" in payload:
-        matched_ids = {
-            m.get("finding_id")
-            for m in payload.get("finding_fingerprint_matches", [])
-            if isinstance(m, dict)
-        }
-        for trans in payload.get("remediation_state_transitions", []):
-            if not isinstance(trans, dict):
-                continue
-            fid = str(trans.get("finding_id", ""))
-            new_state = str(trans.get("new_state", ""))
-            if not fid or not new_state:
-                continue
-            key = f"{fid}:{new_state}"
-            reported.add(key)
-            has_proof = isinstance(trans.get("verification_proof"), str) and bool(
-                trans["verification_proof"].strip()
-            )
-            has_reason = isinstance(trans.get("reason"), str) and bool(
-                trans["reason"].strip()
-            )
-            if new_state == "verified-fixed":
-                if has_proof:
-                    grounded.add(key)
-            elif has_proof or has_reason or fid in matched_ids:
-                grounded.add(key)
-        uncertain = sum(
+        uncertain += sum(
             isinstance(m, dict) and m.get("match_status") == "ambiguous"
             for m in payload.get("finding_fingerprint_matches", [])
         )
     elif "dead_ends" in payload and "verified_facts" in payload:
-        reported = {
-            str(p)
-            for p in payload.get("touched_files", [])
-            if isinstance(p, str) and p and p != "none"
-        }
-        if (
-            bool(payload.get("verified_facts"))
-            and bool(payload.get("commands_run"))
-            and isinstance(payload.get("next_action"), str)
-            and bool(payload["next_action"].strip())
-        ):
-            grounded.update(reported)
         uncertain = len(payload.get("assumptions", []))
-    elif "commit_subject" in payload and "compression_level" in payload:
-        subj = str(payload.get("commit_subject", ""))
-        ctype = str(payload.get("commit_type", ""))
-        if subj and not subj.startswith("chore: abstain") and ctype:
-            reported.add(ctype)
-        if (
-            0 < len(subj) <= 50
-            and bool(payload.get("preserved_exact_spans"))
-            and payload.get("git_mutated") is False
-        ):
-            grounded.update(reported)
 
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
@@ -857,6 +1028,7 @@ def _grade_workflow(
         expected=expected,
         uncertain_count=uncertain,
         assertions_ok=assertions_ok,
+        normalized_records=records,
     )
 
 
@@ -1104,6 +1276,7 @@ def evaluate(
                     "false_negatives": len(expected - reported),
                     "unsubstantiated_claims": len(reported - grounded),
                     "uncertain_count": outcome.uncertain_count,
+                    "normalized_records": outcome.normalized_records,
                     "actor": actor,
                     "exact_match": state == "executed"
                     and outcome.assertions_ok

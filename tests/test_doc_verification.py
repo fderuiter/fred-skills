@@ -991,10 +991,15 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_default_verify_all_snippets_executes_all_seven_guides(self) -> None:
-        """Default verify_all_snippets executes commands in AGENTS.md, docs/toolkit.md, and docs/usage.md."""
+        """Default verify_all_snippets executes commands in AGENTS.md, CONTRIBUTING.md, docs/toolkit.md, and docs/usage.md."""
         executed_targets: list[str] = []
+        orig_make = TOOL_DISPATCHERS[("make",)]
         orig_tar = TOOL_DISPATCHERS[("tar",)]
         orig_py = TOOL_DISPATCHERS[("python",)]
+
+        def spy_make(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+            executed_targets.append(cmd)
+            return orig_make(parts, root, cmd)
 
         def spy_tar(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
             executed_targets.append(cmd)
@@ -1004,19 +1009,25 @@ class DocSnippetVerificationTests(unittest.TestCase):
             executed_targets.append(cmd)
             return orig_py(parts, root, cmd)
 
+        TOOL_DISPATCHERS[("make",)] = spy_make
         TOOL_DISPATCHERS[("tar",)] = spy_tar
         TOOL_DISPATCHERS[("python",)] = spy_py
         try:
             errors = verify_all_snippets(root=ROOT)
             self.assertEqual([], errors)
         finally:
+            TOOL_DISPATCHERS[("make",)] = orig_make
             TOOL_DISPATCHERS[("tar",)] = orig_tar
             TOOL_DISPATCHERS[("python",)] = orig_py
 
-        # AGENTS.md has package_skills.py --output /tmp/release-verify
+        # AGENTS.md has concise Makefile and run_checks.py wrappers
+        self.assertIn("make check", executed_targets)
+        self.assertIn("make fix", executed_targets)
+        self.assertIn("python scripts/run_checks.py", executed_targets)
+        # CONTRIBUTING.md has package_skills.py --output /tmp/release-verify
         self.assertTrue(
             any("package_skills.py" in cmd for cmd in executed_targets),
-            "Expected AGENTS.md snippets to execute on default run",
+            "Expected CONTRIBUTING.md package_skills.py snippet to execute on default run",
         )
         # docs/toolkit.md has audit_to_sarif.py
         self.assertTrue(
@@ -1147,7 +1158,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertFalse(ok_bad_target)
 
     def test_agents_md_includes_doc_verification_scripts(self) -> None:
-        """AGENTS.md stays within 30 lines, includes doc verification scripts, and has thin vendor shims."""
+        """AGENTS.md stays concise with top-level wrappers, delegates scripts to CONTRIBUTING.md, and has @AGENTS.md host shims."""
         agents_text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         agents_lines = agents_text.splitlines()
         self.assertLessEqual(
@@ -1155,10 +1166,29 @@ class DocSnippetVerificationTests(unittest.TestCase):
             30,
             f"Expected AGENTS.md to stay at 30 lines or fewer, got {len(agents_lines)}",
         )
-        self.assertIn("python scripts/check_doc_links.py", agents_text)
-        self.assertIn("python scripts/verify_doc_snippets.py", agents_text)
+        self.assertIn("[CONTRIBUTING.md](CONTRIBUTING.md)", agents_text)
+        agents_blocks = extract_blocks_from_file(ROOT / "AGENTS.md", root=ROOT)
+        self.assertEqual(1, len(agents_blocks))
+        self.assertEqual(
+            ["make check", "make fix", "python scripts/run_checks.py"],
+            [cmd for _, cmd in agents_blocks[0].commands],
+        )
+        self.assertNotIn("python scripts/check_doc_links.py", agents_text)
+        self.assertNotIn("python scripts/verify_doc_snippets.py", agents_text)
+        self.assertNotIn("python scripts/package_skills.py", agents_text)
+
+        contributing_text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        self.assertIn("python scripts/check_doc_links.py", contributing_text)
+        self.assertIn("python scripts/verify_doc_snippets.py", contributing_text)
+        self.assertIn(
+            "python scripts/package_skills.py --output /tmp/release-verify",
+            contributing_text,
+        )
+
         claude_text = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertEqual("@AGENTS.md", claude_text.strip())
+        gemini_text = (ROOT / "GEMINI.md").read_text(encoding="utf-8")
+        self.assertEqual("@AGENTS.md", gemini_text.strip())
         copilot_text = (ROOT / ".github/copilot-instructions.md").read_text(
             encoding="utf-8"
         )
