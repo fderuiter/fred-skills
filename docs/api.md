@@ -624,7 +624,7 @@ def evaluate(
 ) -> dict
 ```
 
-Runs a user-supplied adapter executable over evaluation test cases, executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, and grading output against expected rubrics.
+Runs a user-supplied adapter executable over evaluation test cases across all five suites (`audit`, `architecture`, `review`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
 
 - **Parameters:**
   - `output` (`Path`): Output directory for evaluation logs and `benchmark.json`. Must be a new or empty directory.
@@ -639,7 +639,7 @@ Runs a user-supplied adapter executable over evaluation test cases, executing bo
   - `"adapter_argv"`: Command arguments used
   - `"cases_digest"`: SHA-256 digest of cases definition
   - `"runs"`: List of individual run grading records
-  - `"summary"`: Statistical aggregate by configuration (`"runs"`, `"exact_match_rate"`, `"mean_seconds"`, `"failures"`)
+  - `"summary"`: Statistical aggregate by configuration (`"runs"`, `"exact_match_rate"`, `"mean_seconds"`, `"failures"`, `"tokens_reported_runs"`, `"total_tokens"`, `"mean_tokens"`) plus paired `"skill_lift"` deltas across `without_skill` and `with_skill` (`"paired_runs"`, `"exact_match_rate_delta"`, `"mean_seconds_delta"`, `"failures_delta"`, `"true_positives_delta"`, `"false_positives_delta"`, `"false_negatives_delta"`, `"paired_token_runs"`, `"total_tokens_delta"`, `"mean_tokens_delta"`, preserving `None` when token usage is omitted)
   - `"limitations"`: Evaluation boundary notices
 - **Exceptions:**
   - `ValueError`: Raised if `command` is missing or empty; if `repeats` or `timeout` is outside valid ranges; if `output` exists and is non-empty; or if unknown case IDs are specified.
@@ -668,18 +668,24 @@ Escapes a value into an HTML-safe string with double and single quotes escaped.
 ### `render`
 
 ```python
-def render(audit: dict, output: Path, prior: dict | None = None) -> None
+def render(
+    audit: dict,
+    output: Path,
+    prior: dict | None = None,
+    remediation: dict | None = None,
+) -> Path
 ```
 
-Renders a standalone, single-file interactive HTML report from an audit ledger and optional prior audit ledger for diff comparison.
+Renders a standalone, single-file interactive HTML report from an audit ledger, optional prior audit ledger for structured diff comparison tables, and optional remediation ledger for reconciled fix states.
 
 - **Parameters:**
-  - `audit` (`dict`): Current audit ledger dictionary.
-  - `output` (`Path`): Output file path for the generated HTML report.
-  - `prior` (`dict | None`, default: `None`): Prior audit ledger dictionary to render comparison sections.
-- **Returns:** `None`
+  - `audit` (`dict`): Current audit ledger dictionary (or domain deliverable dictionary).
+  - `output` (`Path`): Output directory or file path for the generated HTML report.
+  - `prior` (`dict | None`, default: `None`): Prior audit ledger dictionary to render structured comparison tables.
+  - `remediation` (`dict | None`, default: `None`): Optional `remediation.json` dictionary containing reconciled finding state and note records, rendered separately from evidence certainty.
+- **Returns:** `Path` — Resolved file path of the written HTML report.
 - **Exceptions:**
-  - `ValueError`: Raised if `audit` fails schema or consistency validation.
+  - `ValueError`: Raised if `audit` or `remediation` fails schema or consistency validation, or if `prior` or `remediation` is supplied for a non-audit domain artifact.
 
 ---
 
@@ -725,7 +731,7 @@ Builds reproducible release distribution archives containing selected standalone
   - `skills` (`list[str] | None`, default: `None`): Explicit skill names list.
   - `root` (`Path`, default: repository root): Toolkit root directory.
   - `all_packs` (`bool`, default: `False`): If `True`, package all documented packs, standalone skill archives, and unified manifest.
-- **Returns:** `dict` — Manifest dictionary containing `"schema_version"`, `"version"`, `"pack"`, `"skills"`, `"licensing"`, and `"archives"` (listing filenames, byte counts, and SHA-256 hashes).
+- **Returns:** `dict` — Manifest dictionary containing `"schema_version"`, `"version"`, `"pack"`, `"skills"`, `"licensing"`, and `"archives"` (listing filenames, byte counts, SHA-256 hashes, and included `"skills"`).
 - **Exceptions:**
   - `ValueError`: Raised if `output` exists and is non-empty, or if pack label contains invalid characters.
 
@@ -737,13 +743,13 @@ Builds reproducible release distribution archives containing selected standalone
 def verify(manifest: Path) -> dict
 ```
 
-Validates the integrity of release archives against a committed or generated `manifest.json`.
+Validates the integrity of release archives (and adjacent `SHA256SUMS` and `checksums.sha256` files when present) against a committed or generated `manifest.json`.
 
 - **Parameters:**
   - `manifest` (`Path`): Path to `manifest.json`.
 - **Returns:** `dict` — Verification summary dictionary containing `"verified_archives"`, `"version"`, and `"authenticity"`.
 - **Exceptions:**
-  - `ValueError`: Raised if an archive path escapes the manifest directory, or if an archive file's SHA-256 checksum does not match the manifest.
+  - `ValueError`: Raised if an archive path escapes the manifest directory or is missing; if an archive's byte count or SHA-256 checksum does not match `manifest.json`; or if a present `SHA256SUMS` or `checksums.sha256` file is a symlink, contains malformed lines, or disagrees with `manifest.json`.
 
 ---
 

@@ -21,3 +21,4 @@ Focus on change impact surfaces, API compatibility, and contract modifications.
 Structure change findings with the [review template](assets/review-template.md).
 Validate findings format against the [review schema](assets/review.schema.json).
 Report change impact surfaces with precise file paths and line ranges.
+Do not modify application code or claim unexecuted tests ran; preserve the audit-only review default unless explicitly authorized.

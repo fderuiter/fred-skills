@@ -15,7 +15,13 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 from fredlib import evaluations, installation, releases, reports, repository, runs
-from fredlib.common import ROOT, atomic_json, read_json, resolve_audit_path
+from fredlib.common import (
+    ROOT,
+    _detect_domain_kind,
+    atomic_json,
+    read_json,
+    resolve_audit_path,
+)
 
 HOST_CHOICES = sorted(read_json(ROOT / "catalog/hosts.json")["hosts"].keys())
 TASK_CHOICES = sorted(read_json(ROOT / "catalog/recipes.json")["recipes"].keys())
@@ -803,6 +809,12 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional prior audit.json to highlight newly introduced or resolved findings",
     )
+    sub_rep.add_argument(
+        "--remediation",
+        type=Path,
+        default=None,
+        help="Optional remediation.json ledger with reconciled finding states",
+    )
 
     sub_iss = commands.add_parser(
         "issues",
@@ -1347,18 +1359,32 @@ def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
 def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
         prior_data = None
+        explicit_remediation = getattr(a, "remediation", None)
         if a.prior:
             audit_path = _resolve_audit_only_input(a.audit, "report --prior")
             prior_path = _resolve_audit_only_input(a.prior, "report --prior")
             prior_data = runs._require_audit_ledger(
                 read_json(prior_path), "report --prior"
             )
+        elif explicit_remediation is not None:
+            audit_path = _resolve_audit_only_input(a.audit, "report --remediation")
         else:
             audit_path = resolve_audit_path(a.audit)
+        audit_data = read_json(audit_path)
+        remediation_data = None
+        if explicit_remediation is not None:
+            remediation_data = read_json(explicit_remediation)
+        elif _detect_domain_kind(audit_data) is None and (
+            a.audit.is_dir() or audit_path.name == "audit.json"
+        ):
+            sibling_remediation = audit_path.parent / "remediation.json"
+            if sibling_remediation.is_file():
+                remediation_data = read_json(sibling_remediation)
         target = reports.render(
-            read_json(audit_path),
+            audit_data,
             a.output,
             prior_data,
+            remediation=remediation_data,
         )
         return {"output": str(target)}
     if a.command == "issues":
