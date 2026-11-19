@@ -77,6 +77,33 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
                     f"Path must be repository-relative (diff_summaries): {diff_path}"
                 )
 
+    for touched_path in data.get("touched_files", []):
+        if isinstance(touched_path, str) and not _is_repo_relative(touched_path):
+            errors.append(
+                f"Path must be repository-relative (touched_files): {touched_path}"
+            )
+
+    commit_type = data.get("commit_type")
+    commit_subject = data.get("commit_subject")
+    if isinstance(commit_type, str) and isinstance(commit_subject, str):
+        commit_scope = data.get("commit_scope")
+        expected_prefixes: tuple[str, ...]
+        if isinstance(commit_scope, str):
+            expected_prefixes = (
+                f"{commit_type}({commit_scope}): ",
+                f"{commit_type}({commit_scope})!: ",
+            )
+        else:
+            expected_prefixes = (
+                f"{commit_type}: ",
+                f"{commit_type}!: ",
+                f"{commit_type}(",
+            )
+        if not commit_subject.startswith(expected_prefixes):
+            errors.append(
+                f"commit_subject must match commit_type/commit_scope prefix ({commit_type}): {commit_subject}"
+            )
+
     # 2. Finding verification execution consistency
     if data.get("reproduction_status") == "confirmed":
         if data.get("reproduced") is False:

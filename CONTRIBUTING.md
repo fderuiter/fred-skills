@@ -10,12 +10,12 @@ Canonical suite protocols, schemas, templates, and synced validator targets live
 all 6 `shared/` suites (`shared/repo-audit/`, `shared/repo-workflows/`,
 `shared/software-architecture/`, `shared/code-review/`, `shared/automated-testing/`, and
 `shared/spec-driven-development/`). Each suite's `manifest.json` names every generated
-destination across the 55 skills. The copies inside each skill are committed to make a
+destination across the 57 skills. The copies inside each skill are committed to make a
 single exported skill self-contained, without symlinks, a network dependency, or paths
 escaping its directory. CI rejects drift.
 
 `catalog/suites.json` owns family membership and pass ordering across 6 suites, paired
-with 12 packs in `catalog/packs.json` and 9 host adapters in `catalog/hosts.json`.
+with 13 packs in `catalog/packs.json` and 9 host adapters in `catalog/hosts.json`.
 `scripts/build_catalog.py` emits deterministic generated discovery and plugin manifests:
 `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`,
 `.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json` (plus per-skill

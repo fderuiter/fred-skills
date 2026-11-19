@@ -1214,19 +1214,19 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(55, len(suite_skills))
+        self.assertEqual(57, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("55 total packages", arch_text)
+        self.assertIn("57 total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("55 total packages", val_text)
+        self.assertIn("57 total packages", val_text)
         self.assertIn(
-            "Each of the 55 skills in the suite includes three scenario specifications",
+            "Each of the 57 skills in the suite includes three scenario specifications",
             val_text,
         )
         self.assertIn(
-            "These 165 specifications are not 165 executed evaluations",
+            "These 171 specifications are not 171 executed evaluations",
             val_text,
         )
         self.assertNotIn("42 skills in the suite", val_text)
@@ -1235,14 +1235,14 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("55 total packages", impl_text)
+        self.assertIn("57 total packages", impl_text)
 
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 55-package pack", usage_text)
+        self.assertIn("complete 57-package pack", usage_text)
         self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
-            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 55 packages or `starter`)",
+            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 57 packages or `starter`)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
@@ -1259,7 +1259,7 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 55 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 57 skills or `starter` for 6 core audit skills)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
@@ -1369,7 +1369,7 @@ class PackageTests(unittest.TestCase):
         )
         self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 55 |",
+            "| `complete` | Every audit and engineering workflow. | 57 |",
             exp_text,
         )
 
@@ -1442,7 +1442,7 @@ class PackageTests(unittest.TestCase):
             ),
             (
                 rel_notes,
-                "Total: 55 skills.",
+                "Total: 57 skills.",
                 "Total: 42 skills.",
                 "stale skill count 42",
             ),
@@ -1456,7 +1456,7 @@ class PackageTests(unittest.TestCase):
                 "README.md",
                 "34 audit\ndomains",
                 "33 audit\ndomains",
-                "itemized skill sum 54",
+                "itemized skill sum 56",
             ),
             (
                 "README.md",
@@ -1540,7 +1540,7 @@ class PackageTests(unittest.TestCase):
 
         # Also verify CLI exit code 1 when stale count is injected into release notes
         (fixture_root / rel_notes).write_text(
-            originals[rel_notes].replace("Total: 55 skills.", "Total: 51 skills.", 1),
+            originals[rel_notes].replace("Total: 57 skills.", "Total: 51 skills.", 1),
             encoding="utf-8",
         )
         stale_proc = subprocess.run(
@@ -1891,7 +1891,7 @@ class PackageTests(unittest.TestCase):
             suite_to_skills[suite["name"]] = skills_in_suite
             all_suite_skills.extend(skills_in_suite)
 
-        self.assertEqual(55, len(all_suite_skills))
+        self.assertEqual(57, len(all_suite_skills))
         self.assertEqual(
             {
                 "repository-audits",
@@ -1976,7 +1976,7 @@ class PackageTests(unittest.TestCase):
                 self.assertIsNone(heading_re.search(prompt_text), skill_name)
 
         # Every skill has a distinct SVG and each suite uses one distinct palette color
-        self.assertEqual(55, len(svg_hashes))
+        self.assertEqual(57, len(svg_hashes))
         for suite_name, colors in suite_bg_colors.items():
             self.assertEqual(
                 1,
@@ -2319,8 +2319,8 @@ class PackageTests(unittest.TestCase):
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)
         self.assertEqual([], errors)
-        self.assertEqual(55, telemetry["total_packages"])
-        self.assertEqual(55, telemetry["passed_packages"])
+        self.assertEqual(57, telemetry["total_packages"])
+        self.assertEqual(57, telemetry["passed_packages"])
         self.assertEqual(0, telemetry["failed_packages"])
         self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
         self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
@@ -2347,7 +2347,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
         self.assertTrue(telemetry_file.is_file())
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
-        self.assertEqual(55, exported["total_packages"])
+        self.assertEqual(57, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
         self.assertEqual(1.0, exported["routing_trigger_coverage"])
         self.assertEqual(100.0, exported["routing_trigger_coverage_percentage"])
@@ -2357,7 +2357,7 @@ class PackageTests(unittest.TestCase):
         packages = sorted(
             p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
         )
-        self.assertEqual(len(packages), 55)
+        self.assertEqual(len(packages), 57)
         for package in packages:
             schemas = sorted(package.glob("assets/*.schema.json"))
             self.assertGreater(
@@ -2839,7 +2839,7 @@ class PackageTests(unittest.TestCase):
     def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)
-        self.assertEqual(55, telemetry["total_packages"])
+        self.assertEqual(57, telemetry["total_packages"])
 
         bodies_by_skill: dict[str, str] = {}
         for prompt_path in sorted((ROOT / "skills").glob("*/assets/prompt.md")):
@@ -2851,7 +2851,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(normalized, f"{prompt_path} body after line 1 is empty")
             bodies_by_skill[prompt_path.parent.parent.name] = normalized
 
-        self.assertEqual(55, len(bodies_by_skill))
+        self.assertEqual(57, len(bodies_by_skill))
         self.assertEqual(
             len(bodies_by_skill),
             len(set(bodies_by_skill.values())),
@@ -2936,9 +2936,9 @@ class PackageTests(unittest.TestCase):
 
         from skill_tools import read_frontmatter
 
-        # 1. All 55 repository skills include an explicit 'Use when' trigger clause.
+        # 1. All 57 repository skills include an explicit 'Use when' trigger clause.
         repo_skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(55, len(repo_skills))
+        self.assertEqual(57, len(repo_skills))
         for skill_md in repo_skills:
             meta, _ = read_frontmatter(skill_md)
             self.assertRegex(
@@ -3307,7 +3307,7 @@ class PackageTests(unittest.TestCase):
             missing_script_errors,
         )
 
-    def test_all_55_skills_worked_examples_protocols_and_validators_parity(
+    def test_all_57_skills_worked_examples_protocols_and_validators_parity(
         self,
     ) -> None:
         import re
@@ -3315,7 +3315,7 @@ class PackageTests(unittest.TestCase):
 
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)
-        self.assertEqual(55, telemetry["total_packages"])
+        self.assertEqual(57, telemetry["total_packages"])
         self.assertEqual(100.0, telemetry["skill_worked_example_coverage_percentage"])
         self.assertEqual(100.0, telemetry["validator_script_coverage_percentage"])
         self.assertEqual(0.0, telemetry["method_boilerplate_duplication_percentage"])
@@ -3330,7 +3330,7 @@ class PackageTests(unittest.TestCase):
             members = [sk for p in s_obj["phases"] for sk in p["skills"]]
             if s_obj["name"] != "repository-audits":
                 non_audit_skills.extend(members)
-        self.assertEqual(18, len(non_audit_skills))
+        self.assertEqual(20, len(non_audit_skills))
 
         for skill_name in non_audit_skills:
             pkg = ROOT / "skills" / skill_name

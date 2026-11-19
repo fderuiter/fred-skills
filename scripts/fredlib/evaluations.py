@@ -758,6 +758,31 @@ def _grade_workflow(
             isinstance(m, dict) and m.get("match_status") == "ambiguous"
             for m in payload.get("finding_fingerprint_matches", [])
         )
+    elif "dead_ends" in payload and "verified_facts" in payload:
+        reported = {
+            str(p)
+            for p in payload.get("touched_files", [])
+            if isinstance(p, str) and p and p != "none"
+        }
+        if (
+            bool(payload.get("verified_facts"))
+            and bool(payload.get("commands_run"))
+            and isinstance(payload.get("next_action"), str)
+            and bool(payload["next_action"].strip())
+        ):
+            grounded.update(reported)
+        uncertain = len(payload.get("assumptions", []))
+    elif "commit_subject" in payload and "compression_level" in payload:
+        subj = str(payload.get("commit_subject", ""))
+        ctype = str(payload.get("commit_type", ""))
+        if subj and not subj.startswith("chore: abstain") and ctype:
+            reported.add(ctype)
+        if (
+            0 < len(subj) <= 50
+            and bool(payload.get("preserved_exact_spans"))
+            and payload.get("git_mutated") is False
+        ):
+            grounded.update(reported)
 
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
@@ -773,12 +798,24 @@ def _grade_workflow(
             "regression_passed",
             "safe_controls_passed",
             "result",
+            "next_action",
+            "compression_level",
+            "commit_type",
+            "git_mutated",
         ):
             if (
                 direct_field in assertions
                 and payload.get(direct_field) != assertions[direct_field]
             ):
                 assertions_ok = False
+        if "dead_end_count" in assertions and len(payload.get("dead_ends", [])) != int(
+            assertions["dead_end_count"]
+        ):
+            assertions_ok = False
+        if "max_subject_length" in assertions and len(
+            str(payload.get("commit_subject", ""))
+        ) > int(assertions["max_subject_length"]):
+            assertions_ok = False
         if "safe_controls_all_passed" in assertions:
             outcomes = payload.get("safe_control_outcomes", [])
             all_passed = bool(outcomes) and all(

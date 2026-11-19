@@ -69,9 +69,11 @@
         "./skills/review-actionable-feedback",
         "./skills/review-diff-analysis",
         "./skills/review-invariant-violations",
+        "./skills/session-handoff",
         "./skills/spec-authoring",
         "./skills/spec-convergence",
         "./skills/spec-interview",
+        "./skills/terse-output-commit",
         "./skills/test-case-generation",
         "./skills/test-gap-analysis",
         "./skills/test-suite-verification"
@@ -184,6 +186,20 @@
         "./skills/repo-apply-fix",
         "./skills/repo-verify-fix",
         "./skills/repo-reconcile-findings"
+      ]
+    },
+    {
+      "name": "session-hygiene",
+      "description": "Fresh-window session handoff compaction and terse exact-code replies with 50-character commits.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/session-handoff",
+        "./skills/terse-output-commit"
       ]
     },
     {
@@ -354,9 +370,11 @@
         "./skills/review-actionable-feedback",
         "./skills/review-diff-analysis",
         "./skills/review-invariant-violations",
+        "./skills/session-handoff",
         "./skills/spec-authoring",
         "./skills/spec-convergence",
         "./skills/spec-interview",
+        "./skills/terse-output-commit",
         "./skills/test-case-generation",
         "./skills/test-gap-analysis",
         "./skills/test-suite-verification"
@@ -951,6 +969,18 @@
       ]
     },
     {
+      "name": "session-handoff",
+      "description": "Use when compacting an active investigation or implementation session into a validated exit handoff for a fresh context window.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "source": "./skills/session-handoff",
+      "skills": [
+        "."
+      ]
+    },
+    {
       "name": "spec-authoring",
       "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
       "version": "0.2.0",
@@ -982,6 +1012,18 @@
         "name": "fderuiter"
       },
       "source": "./skills/spec-interview",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "terse-output-commit",
+      "description": "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "source": "./skills/terse-output-commit",
       "skills": [
         "."
       ]

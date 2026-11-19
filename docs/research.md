@@ -1,7 +1,7 @@
 # Existing approaches and adoption decisions
 
-Research date: 2026-11-13. This capability comparison informs how the 6 suites, 12 packs,
-9 host adapters, and 55 skills set external tool boundaries. Inspect licenses and versions
+Research date: 2026-11-13. This capability comparison informs how the 6 suites, 13 packs,
+9 host adapters, and 57 skills set external tool boundaries. Inspect licenses and versions
 before adopting third-party code. No external package is installed by this toolkit.
 
 | Existing approach | Useful coverage | Boundary and suite decision |

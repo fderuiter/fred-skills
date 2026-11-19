@@ -77,7 +77,7 @@ class ExperienceTests(unittest.TestCase):
         for suite in suites:
             self.assertIn(f'<option value="{suite["name"]}">', select_html)
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
-        self.assertEqual(len(packs), 12)
+        self.assertEqual(len(packs), 13)
         for pack_name in packs:
             self.assertIn(f'id="pack-{pack_name}"', page)
             self.assertIn(f"--pack {pack_name}", page)

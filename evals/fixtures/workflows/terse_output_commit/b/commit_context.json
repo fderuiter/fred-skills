@@ -1,0 +1,8 @@
+{
+  "active_change": false,
+  "compression_level": "lite",
+  "summary": "Working tree clean; no commit drafted.",
+  "exact_spans": [
+    "git status"
+  ]
+}
