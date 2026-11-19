@@ -50,6 +50,10 @@ class ExperienceTests(unittest.TestCase):
         self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
         self.assertIn('id="reset-filters"', page)
         self.assertIn(
+            '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>',
+            page,
+        )
+        self.assertIn(
             '<a href="#repo-audit-concurrency">repo-audit-concurrency</a>', page
         )
         self.assertIn('<article class="finding" id="repo-audit-concurrency"', page)
