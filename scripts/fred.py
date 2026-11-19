@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any
 
 sys.dont_write_bytecode = True
-from fredlib import evaluations, installation, releases, reports, repository, runs
+from fredlib import (
+    evaluations,
+    installation,
+    releases,
+    reports,
+    repository,
+    runs,
+    vetting,
+)
 from fredlib.common import (
     ROOT,
     WORKFLOW_DELIVERABLE_SCHEMAS,
@@ -57,6 +65,7 @@ LIFECYCLE_GROUPS = {
         "triage",
     ],
     "Installation": [
+        "vet",
         "installed",
         "install",
         "update",
@@ -264,14 +273,16 @@ def _installed_rows_for_host(host_label: str, entry: dict[str, Any]) -> list[lis
         ]
         for name, info in skills_dict.items()
     ]
+    risky_set = set(entry.get("risky_untracked", []))
     for item in untracked_list:
         name = item if isinstance(item, str) else item.get("name", "")
+        status_label = "untracked (risky)" if name in risky_set else "untracked"
         rows.append(
             [
                 host_label,
                 name,
                 "-",
-                "untracked",
+                status_label,
                 str(Path(target) / name) if target else "",
             ]
         )
@@ -562,12 +573,32 @@ def _render_triage_tty(
     return "\n".join(lines)
 
 
+def _render_vet_tty(data: dict[str, Any]) -> str:
+    target = str(data.get("target", "."))
+    kind = str(data.get("kind", "target"))
+    scanned = data.get("scanned_files", 0)
+    findings = data.get("findings", [])
+    if data.get("passed", True) and not findings:
+        return f"Vetted {kind} {target}: {scanned} files scanned, 0 findings (passed)"
+    lines = [
+        f"Vetting failed for {kind} {target}: {len(findings)} findings across {scanned} scanned files"
+    ]
+    for item in findings:
+        if isinstance(item, dict):
+            lines.append(
+                f"  {item.get('file', '')}:{item.get('line', 1)} [{item.get('rule', 'finding')}] {item.get('message', '')}"
+            )
+    return "\n".join(lines)
+
+
 def render_tty_output(
     command: str, data: Any, args: argparse.Namespace | None = None
 ) -> str:
     if command in {"tasks", "packs", "hosts", "search", "installed"}:
         return render_discovery_table(command, data)
     payload = data if isinstance(data, dict) else {}
+    if command == "vet":
+        return _render_vet_tty(payload)
     if command in {"preflight", "plan", "init"}:
         return _render_planning_tty(command, payload)
     if command == "triage":
@@ -1007,6 +1038,26 @@ def parser() -> argparse.ArgumentParser:
     )
 
     # 4. Installation commands
+    sub_vet = commands.add_parser(
+        "vet",
+        parents=[sub_common],
+        help="Statically vet a skill folder or repository agent configuration offline",
+    )
+    sub_vet.add_argument(
+        "target",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Skill directory, configuration file, or repository root to vet (default: current working directory)",
+    )
+    sub_vet.add_argument(
+        "--allow-capability",
+        action="append",
+        default=[],
+        metavar="CAPABILITY",
+        help="Explicit capability allowlist entry such as read:~/.claude/projects (can be repeated)",
+    )
+
     install_helps = {
         "installed": "List installed skills, source versions, and harness paths for a target destination",
         "install": "Install audit skills or packs into an agent host environment",
@@ -1331,6 +1382,11 @@ def handle_runs(a: argparse.Namespace) -> Any:
 
 
 def handle_installation(a: argparse.Namespace) -> Any:
+    if a.command == "vet":
+        return vetting.vet_target(
+            a.target,
+            allowed_capabilities=getattr(a, "allow_capability", None),
+        )
     target = installation.TargetEnvironment(a.destination, a.host, a.scope)
     if a.command == "installed":
         return installation.query_installed(target)
@@ -1565,6 +1621,7 @@ COMMAND_REGISTRY: dict[str, Callable[[argparse.Namespace], Any]] = {
     "reconcile": handle_runs,
     "import-sarif": handle_runs,
     # Installation
+    "vet": handle_installation,
     "installed": handle_installation,
     "install": handle_installation,
     "update": handle_installation,
@@ -1662,6 +1719,12 @@ def main() -> int:
         and getattr(args, "check", False)
         and isinstance(result, dict)
         and not result.get("healthy", True)
+    ):
+        return 1
+    if (
+        args.command == "vet"
+        and isinstance(result, dict)
+        and not result.get("passed", True)
     ):
         return 1
     return 0

@@ -16,6 +16,7 @@ from typing import Any
 
 import jsonschema
 import yaml
+from fredlib import vetting
 from skill_tools import (
     ROOT,
     estimate_tokens,
@@ -855,6 +856,18 @@ def _scan_package_files(
     for chain in find_deep_reference_chains(package, max_hops=1):
         errors.append(
             f"Reference chain exceeds 1-hop depth limit from SKILL.md: {chain}"
+        )
+    vet_res = vetting.vet_skill(
+        package,
+        trust_builtin_allowlists=True,
+        root=package.parent.parent,
+    )
+    for finding in vet_res["findings"]:
+        rule = str(finding.get("rule", ""))
+        if rule.startswith("symlink-") or rule == "missing-skill-manifest":
+            continue
+        errors.append(
+            f"{finding['file']}:{finding['line']} [{rule}]: {finding['message']}"
         )
     return errors, valid_closed_schemas
 
