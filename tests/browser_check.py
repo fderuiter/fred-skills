@@ -1,14 +1,20 @@
 """Exercise generated local pages in a real browser, including hostile report text."""
 
 import argparse
+import functools
+import http.server
 import shutil
 import sys
 import tempfile
+import threading
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
+from build_site import build_site
 from fredlib.common import read_json
 from fredlib.reports import render
 from playwright.sync_api import sync_playwright
@@ -204,9 +210,14 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("article.finding:visible").count() == 2
         page.screenshot(path="/tmp/testing_report.png")
 
+        expected_packs = read_json(ROOT / "catalog/packs.json")["packs"]
+        expected_hosts = read_json(ROOT / "catalog/hosts.json")["hosts"]
         page.goto((ROOT / "docs/explorer.html").as_uri())
         count = page.locator("article.finding").count()
         assert count >= 41
+        assert page.locator("article.pack-card").count() == len(expected_packs) == 12
+        assert page.locator("#hosts tbody tr").count() == len(expected_hosts)
+        assert page.locator("#hosts tbody tr").count() >= 4
         page.get_by_label("Task or symptom").fill("stale response")
         assert 0 < page.locator("article.finding:visible").count() < count
         page.get_by_label("Task or symptom").fill("")
@@ -230,6 +241,111 @@ with tempfile.TemporaryDirectory() as temporary:
             args.screenshot.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(args.screenshot))
         assert not network
+
+        web_root = Path(temporary) / "web_root"
+        mounted_site = web_root / "fred-skills"
+        build_site(mounted_site, root=ROOT)
+
+        class _QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, format: str, *log_args: object) -> None:
+                return
+
+        handler_cls = functools.partial(_QuietStaticHandler, directory=str(web_root))
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+        server_port = httpd.server_address[1]
+        server_origin = f"http://127.0.0.1:{server_port}"
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            web_page = browser.new_page(viewport={"width": 1100, "height": 850})
+            web_errors: list[str] = []
+            external_requests: list[str] = []
+            web_page.on("pageerror", lambda err: web_errors.append(str(err)))
+            web_page.on(
+                "request",
+                lambda req: (
+                    external_requests.append(req.url)
+                    if req.url.startswith(("http:", "https:"))
+                    and not req.url.startswith(server_origin)
+                    else None
+                ),
+            )
+
+            root_resp = web_page.goto(f"{server_origin}/fred-skills/")
+            assert root_resp is not None and root_resp.status == 200
+            assert "text/html" in (root_resp.headers.get("content-type") or "")
+            assert web_page.locator("header nav a").count() >= 5
+            assert web_page.locator("h1").first.inner_text() == "fred-skills"
+            web_page.screenshot(path="/tmp/site_index.png")
+
+            web_page.locator('header nav a[href="docs/explorer.html"]').click()
+            web_page.wait_for_url(f"{server_origin}/fred-skills/docs/explorer.html")
+            assert (
+                web_page.locator("article.pack-card").count()
+                == len(expected_packs)
+                == 12
+            )
+            packs_text = web_page.locator("section#packs").inner_text()
+            for pack_name in expected_packs:
+                assert f"--pack {pack_name}" in packs_text
+            assert web_page.locator("#hosts tbody tr").count() == len(expected_hosts)
+            hosts_text = web_page.locator("section#hosts").inner_text()
+            for host_name, host_cfg in expected_hosts.items():
+                assert host_name in hosts_text
+                assert host_cfg["project_path"] in hosts_text
+                assert "not-executed" in host_cfg["behavior_test"]
+            assert "not-executed" in hosts_text
+            web_page.screenshot(path="/tmp/site_explorer_packs_hosts.png")
+
+            explorer_base = f"{server_origin}/fred-skills/docs/explorer.html"
+            file_hrefs: list[str] = web_page.evaluate(
+                """() => Array.from(document.querySelectorAll('a[href]'))
+                    .map(a => a.getAttribute('href'))
+                    .filter(h => h && !h.startsWith('#') && !h.startsWith('http:') && !h.startsWith('https:'))"""
+            )
+            assert len(file_hrefs) >= 54
+            for href in file_hrefs:
+                assert not href.split("#")[0].endswith(".md"), href
+                target_url = urllib.parse.urljoin(explorer_base, href)
+                assert target_url.startswith(f"{server_origin}/fred-skills/"), (
+                    target_url
+                )
+                with urllib.request.urlopen(target_url, timeout=5) as http_resp:
+                    assert http_resp.status == 200, target_url
+                    content_type = http_resp.headers.get("Content-Type", "")
+                    assert "text/html" in content_type, (target_url, content_type)
+
+            web_page.locator("header nav a", has_text="Task guide").click()
+            web_page.wait_for_url(f"{server_origin}/fred-skills/docs/experience.html")
+            assert "Choose a task or pack" in web_page.locator("h1").first.inner_text()
+
+            web_page.locator("header nav a", has_text="Catalog").click()
+            web_page.wait_for_url(f"{server_origin}/fred-skills/docs/catalog.html")
+            assert (
+                web_page.locator('table a[href$="/SKILL.html"]').count() == count >= 51
+            )
+
+            web_page.locator("header nav a", has_text="Skill explorer").click()
+            web_page.wait_for_url(f"{server_origin}/fred-skills/docs/explorer.html")
+
+            skill_h2_link = web_page.locator("article#repo-audit-concurrency h2 a")
+            assert skill_h2_link.is_visible()
+            skill_h2_link.click()
+            web_page.wait_for_url(
+                f"{server_origin}/fred-skills/skills/repo-audit-concurrency/SKILL.html"
+            )
+            meta_text = web_page.locator("section.skill-metadata").inner_text()
+            assert "repo-audit-concurrency" in meta_text
+            assert "repository-audits" in meta_text
+            body_text = web_page.locator("body").inner_text()
+            assert "---" not in body_text
+            web_page.screenshot(path="/tmp/site_skill_page.png")
+
+            assert not web_errors
+            assert not external_requests
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
         browser.close()
 print(
     "PASS: report/explorer filtering, safe text, no external requests, and workflow discovery"
