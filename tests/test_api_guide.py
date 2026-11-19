@@ -30,12 +30,13 @@ class ApiGuideTests(unittest.TestCase):
             "reports",
             "repository",
             "runs",
+            "vetting",
         }
         self.assertTrue(expected_modules.issubset(set(fredlib.__all__)))
         for mod_name in expected_modules:
             self.assertTrue(hasattr(fredlib, mod_name))
 
-    def test_all_six_modules_have_sections(self):
+    def test_all_seven_modules_have_sections(self):
         modules = [
             "fredlib.runs",
             "fredlib.installation",
@@ -43,6 +44,7 @@ class ApiGuideTests(unittest.TestCase):
             "fredlib.reports",
             "fredlib.releases",
             "fredlib.repository",
+            "fredlib.vetting",
         ]
         for mod in modules:
             self.assertIn(
@@ -59,6 +61,7 @@ class ApiGuideTests(unittest.TestCase):
             "reports",
             "releases",
             "repository",
+            "vetting",
         ]
         total_functions = 0
         for mod_name in modules:
@@ -88,7 +91,7 @@ class ApiGuideTests(unittest.TestCase):
                         any(m in self.api_text for m in valid_markers),
                         f"Parameter {param.name} of {mod_name}.{fname} must be documented",
                     )
-        self.assertEqual(total_functions, 35, "Expected exactly 35 public functions")
+        self.assertEqual(total_functions, 40, "Expected exactly 40 public functions")
 
     def test_private_helpers_are_not_publicly_documented(self):
         self.assertNotIn("### `_receipt_identifies_host`", self.api_text)

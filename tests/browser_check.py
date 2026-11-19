@@ -628,7 +628,7 @@ with tempfile.TemporaryDirectory() as temporary:
                     .map(a => a.getAttribute('href'))
                     .filter(h => h && !h.startsWith('#') && !h.startsWith('http:') && !h.startsWith('https:'))"""
             )
-            assert len(file_hrefs) >= 54
+            assert len(file_hrefs) >= 55
             for href in file_hrefs:
                 assert not href.split("#")[0].endswith(".md"), href
                 target_url = urllib.parse.urljoin(explorer_base, href)

@@ -84,13 +84,13 @@ class BuildSiteTests(unittest.TestCase):
                 )
 
         skill_dirs = sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(54, len(skill_dirs))
+        self.assertEqual(55, len(skill_dirs))
         for skill_name in skill_dirs:
             skill_html_path = self.site_dir / "skills" / skill_name / "SKILL.html"
             self.assertTrue(skill_html_path.is_file(), skill_name)
 
     def test_compiled_skill_pages_strip_frontmatter_and_render_metadata(self) -> None:
-        """All 54 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
+        """All 55 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
         for skill_html_path in sorted((self.site_dir / "skills").glob("*/SKILL.html")):
             skill_name = skill_html_path.parent.name
             html_text = skill_html_path.read_text(encoding="utf-8")
@@ -192,11 +192,11 @@ class BuildSiteTests(unittest.TestCase):
                 self.assertIn(escape(host_data["behavior_test"]), html_text, label)
 
         offline_links = extract_relative_links(offline_explorer)
-        self.assertGreaterEqual(len(offline_links), 54)
+        self.assertGreaterEqual(len(offline_links), 55)
         self.assertTrue(all(lnk.endswith(".md") for lnk in offline_links))
 
         web_links = extract_relative_links(web_explorer)
-        self.assertGreaterEqual(len(web_links), 54)
+        self.assertGreaterEqual(len(web_links), 55)
         self.assertTrue(all(lnk.endswith(".html") for lnk in web_links))
 
     def test_serving_under_fred_skills_returns_http_200_text_html_for_all_routes(
@@ -230,7 +230,7 @@ class BuildSiteTests(unittest.TestCase):
                 encoding="utf-8"
             )
             links = extract_relative_links(web_explorer)
-            self.assertGreaterEqual(len(links), 54)
+            self.assertGreaterEqual(len(links), 55)
             for href in links:
                 resolved_url = urllib.parse.urljoin(explorer_url, href)
                 with urllib.request.urlopen(resolved_url, timeout=5) as resp:

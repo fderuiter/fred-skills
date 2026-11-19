@@ -1,7 +1,7 @@
 # fred-skills
 
 Portable engineering workflows for investigating repositories, planning useful fixes,
-and verifying that those fixes work. **54 standalone skills**: 33 audit domains,
+and verifying that those fixes work. **55 standalone skills**: 34 audit domains,
 a coordinator, diagnostics, findings synthesis, six workflows from finding verification
 to remediation reconciliation, and twelve software architecture, code review, automated
 testing, and spec-driven development skills. All packages currently have experimental maturity.
@@ -24,7 +24,7 @@ Start with a task in the [task guide](docs/experience.md), browse the
 
 ## Installation
 
-Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 54 skills or `starter` for 6 core audit skills), or any individual skill:
+Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 55 skills or `starter` for 6 core audit skills), or any individual skill:
 
 ### Claude Code
 
@@ -102,7 +102,7 @@ remains supported; Python is unnecessary for instruction-only use.
 
 ## Release archives and supply chain verification
 
-Official releases provide standalone tarball archives for each of the 54 skills
+Official releases provide standalone tarball archives for each of the 55 skills
 (e.g., `repo-audit-concurrency.tar.gz`), as well as a consolidated suite archive
 (`fred-skills-suite.tar.gz`). Every published archive is accompanied by a SHA-256
 checksum manifest (`checksums.sha256`) and cryptographically signed SLSA provenance
@@ -144,7 +144,7 @@ mkdir -p /path/to/project/.agents/skills/
 # Extract single specialist (creates repo-audit-concurrency/ directory)
 tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/
 
-# Extract complete suite (creates all 54 skill directories)
+# Extract complete suite (creates all 55 skill directories)
 tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agents/skills/
 ```
 

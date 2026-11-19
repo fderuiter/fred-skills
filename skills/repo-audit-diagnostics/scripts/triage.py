@@ -11,7 +11,7 @@ import os
 import platform
 import re
 import sys
-from collections.abc import Collection
+from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -252,7 +252,7 @@ GENERAL_ERROR_RE = re.compile(
     r"(?i)(?<![a-zA-Z0-9_-])(?:fatal|traceback|error|exception)(?![a-zA-Z0-9_-])"
 )
 
-_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
+_DEFAULT_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
     "repository-audits": (
         "repo-audit-program",
         "repo-audit-diagnostics",
@@ -265,6 +265,7 @@ _SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "repo-audit-domain-models",
         "repo-audit-failure-modes",
         "repo-audit-trust-boundaries",
+        "repo-audit-agent-configs",
         "repo-audit-transactions",
         "repo-audit-idempotency",
         "repo-audit-error-semantics",
@@ -321,17 +322,7 @@ _SUITE_SKILLS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-KNOWN_SPECIALISTS: list[str] = [
-    skill for skills in _SUITE_SKILLS.values() for skill in skills
-]
-
-_SKILL_TO_SUITE: dict[str, str] = {
-    skill: suite_name
-    for suite_name, skills in _SUITE_SKILLS.items()
-    for skill in skills
-}
-
-_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
+_DEFAULT_SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
     "repository-audits": (
         "audit.json",
         "shared/repo-audit/resources/assets/audit.schema.json",
@@ -342,35 +333,285 @@ _SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
     ),
     "software-architecture": (
         "architecture.json",
-        "skills/arch-decision-record/assets/architecture.schema.json",
+        "shared/software-architecture/resources/assets/architecture.schema.json",
     ),
     "code-review": (
         "review.json",
-        "skills/review-diff-analysis/assets/review.schema.json",
+        "shared/code-review/resources/assets/review.schema.json",
     ),
     "automated-testing": (
         "testing.json",
-        "skills/test-case-generation/assets/testing.schema.json",
+        "shared/automated-testing/resources/assets/testing.schema.json",
     ),
     "spec-driven-development": (
         "spec.json",
-        "skills/spec-authoring/assets/spec.schema.json",
+        "shared/spec-driven-development/resources/assets/spec.schema.json",
     ),
+}
+
+_DEFAULT_TASK_TO_SUITE: dict[str, str] = {
+    "review-pr": "repository-audits",
+    "investigate-bug": "repository-audits",
+    "release-ready": "repository-audits",
+    "understand-repo": "repository-audits",
+    "plan-findings": "repository-audits",
+    "verify-fix": "repository-workflows",
+    "review-ai-code": "repository-audits",
+    "upgrade-dependency": "repository-audits",
+    "database-migration": "repository-audits",
+    "flaky-tests": "repository-audits",
+    "api-change": "repository-audits",
+    "docs-drift": "repository-audits",
+    "apply-fix": "repository-workflows",
+    "recover-audit": "repository-audits",
+    "design-architecture": "software-architecture",
+    "review-code-changes": "code-review",
+    "expand-automated-tests": "automated-testing",
+    "specify-feature": "spec-driven-development",
+}
+
+_DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("remediation", frozenset({"records"})),
+    (
+        "reconciliation",
+        frozenset(
+            {
+                "finding_fingerprint_matches",
+                "fingerprint_matches",
+                "remediation_state_transitions",
+                "state_transitions",
+                "unmapped_records",
+            }
+        ),
+    ),
+    (
+        "finding-verification",
+        frozenset(
+            {
+                "reproduction_status",
+                "safe_control_outcomes",
+                "confidence_rating",
+            }
+        ),
+    ),
+    (
+        "regression",
+        frozenset(
+            {
+                "failure_boundaries",
+                "failure_boundary",
+                "test_command_traces",
+                "assertion_expectations",
+            }
+        ),
+    ),
+    (
+        "plan",
+        frozenset(
+            {
+                "task_breakdowns",
+                "dependency_order",
+                "file_scopes",
+                "plan_id",
+            }
+        ),
+    ),
+    (
+        "fix",
+        frozenset(
+            {
+                "file_changes",
+                "diff_summaries",
+                "diff_summary",
+                "execution_results",
+                "compatibility_limits",
+            }
+        ),
+    ),
+    (
+        "verification",
+        frozenset(
+            {
+                "original_reproduced",
+                "regression_passed",
+                "before_revision",
+                "after_revision",
+                "safe_controls_passed",
+            }
+        ),
+    ),
+    ("review", frozenset({"verdict"})),
+    ("testing", frozenset({"test_cases"})),
+    (
+        "spec",
+        frozenset(
+            {
+                "interview_decisions",
+                "new_file_scopes",
+                "out_of_scope",
+                "verification_commands",
+            }
+        ),
+    ),
+    ("architecture", frozenset({"boundaries", "decisions"})),
+    ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
+)
+
+_DOMAIN_KIND_TO_SUITE: dict[str, str] = {
+    "architecture": "software-architecture",
+    "review": "code-review",
+    "testing": "automated-testing",
+    "spec": "spec-driven-development",
+    "remediation": "repository-workflows",
+    "reconciliation": "repository-workflows",
+    "finding-verification": "repository-workflows",
+    "regression": "repository-workflows",
+    "plan": "repository-workflows",
+    "fix": "repository-workflows",
+    "verification": "repository-workflows",
+}
+
+_CATALOG_DIR = Path(__file__).resolve().parents[3] / "catalog"
+
+
+def _suite_for_skill_list(
+    skills: Iterable[str], skill_to_suite: Mapping[str, str]
+) -> str:
+    suites = list(
+        dict.fromkeys(skill_to_suite[s] for s in skills if s in skill_to_suite)
+    )
+    if "repository-audits" in suites:
+        return "repository-audits"
+    return suites[0] if suites else "repository-audits"
+
+
+def _load_catalog_metadata(
+    catalog_dir: Path | None = _CATALOG_DIR,
+) -> tuple[
+    dict[str, tuple[str, ...]],
+    dict[str, tuple[str, str]],
+    dict[str, str],
+]:
+    suite_skills = dict(_DEFAULT_SUITE_SKILLS)
+    suite_artifacts = dict(_DEFAULT_SUITE_ARTIFACTS)
+    task_to_suite = dict(_DEFAULT_TASK_TO_SUITE)
+    if catalog_dir is None or not catalog_dir.is_dir():
+        return suite_skills, suite_artifacts, task_to_suite
+
+    suites_path = catalog_dir / "suites.json"
+    if suites_path.is_file():
+        with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
+            suites_doc = json.loads(suites_path.read_text(encoding="utf-8"))
+            if isinstance(suites_doc, dict) and isinstance(
+                suites_doc.get("suites"), list
+            ):
+                for suite in suites_doc["suites"]:
+                    if not isinstance(suite, dict):
+                        continue
+                    sname = suite.get("name")
+                    if not isinstance(sname, str) or not sname:
+                        continue
+                    artifact = suite.get("artifact")
+                    if (
+                        isinstance(artifact, dict)
+                        and isinstance(artifact.get("filename"), str)
+                        and isinstance(artifact.get("schema"), str)
+                    ):
+                        suite_artifacts[sname] = (
+                            artifact["filename"],
+                            artifact["schema"],
+                        )
+                    phases = suite.get("phases")
+                    if isinstance(phases, list):
+                        ordered = sorted(
+                            enumerate(phases),
+                            key=lambda item: (
+                                (0, item[1]["id"])
+                                if isinstance(item[1], dict)
+                                and isinstance(item[1].get("id"), int)
+                                else (1, item[0])
+                            ),
+                        )
+                        members: list[str] = []
+                        for _, phase in ordered:
+                            if not isinstance(phase, dict):
+                                continue
+                            raw_skills = phase.get("skills", [])
+                            if isinstance(raw_skills, list):
+                                for sk in raw_skills:
+                                    if isinstance(sk, str) and sk and sk not in members:
+                                        members.append(sk)
+                        suite_skills[sname] = tuple(members)
+
+    skill_to_suite = {
+        skill: sname for sname, skills in suite_skills.items() for skill in skills
+    }
+
+    recipes_path = catalog_dir / "recipes.json"
+    if recipes_path.is_file():
+        with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
+            recipes_doc = json.loads(recipes_path.read_text(encoding="utf-8"))
+            if isinstance(recipes_doc, dict) and isinstance(
+                recipes_doc.get("recipes"), dict
+            ):
+                live_tasks: dict[str, str] = {}
+                for rname, robj in recipes_doc["recipes"].items():
+                    if not isinstance(rname, str) or not isinstance(robj, dict):
+                        continue
+                    explicit_suite = robj.get("suite")
+                    if isinstance(explicit_suite, str) and explicit_suite:
+                        rsuite = explicit_suite
+                    else:
+                        raw_skills = robj.get("skills", [])
+                        str_skills = (
+                            [s for s in raw_skills if isinstance(s, str)]
+                            if isinstance(raw_skills, list)
+                            else []
+                        )
+                        rsuite = _suite_for_skill_list(str_skills, skill_to_suite)
+                    live_tasks[rname] = rsuite
+                    raw_aliases = robj.get("aliases", [])
+                    if isinstance(raw_aliases, list):
+                        for alias in raw_aliases:
+                            if (
+                                isinstance(alias, str)
+                                and alias
+                                and alias not in live_tasks
+                            ):
+                                live_tasks[alias] = rsuite
+                top_aliases = recipes_doc.get("aliases")
+                if isinstance(top_aliases, dict):
+                    for alias, target in top_aliases.items():
+                        if (
+                            isinstance(alias, str)
+                            and alias
+                            and isinstance(target, str)
+                            and target in live_tasks
+                            and alias not in live_tasks
+                        ):
+                            live_tasks[alias] = live_tasks[target]
+                if live_tasks:
+                    task_to_suite.update(live_tasks)
+
+    return suite_skills, suite_artifacts, task_to_suite
+
+
+_SUITE_SKILLS, _SUITE_ARTIFACTS, _TASK_TO_SUITE = _load_catalog_metadata()
+
+KNOWN_SPECIALISTS: list[str] = [
+    skill for skills in _SUITE_SKILLS.values() for skill in skills
+]
+
+_SKILL_TO_SUITE: dict[str, str] = {
+    skill: suite_name
+    for suite_name, skills in _SUITE_SKILLS.items()
+    for skill in skills
 }
 
 _DOMAIN_ARTIFACTS: dict[str, tuple[str, str]] = {
     fname: (suite_name, schema_rel)
     for suite_name, (fname, schema_rel) in _SUITE_ARTIFACTS.items()
     if fname != "audit.json"
-}
-
-_TASK_TO_SUITE: dict[str, str] = {
-    "design-architecture": "software-architecture",
-    "review-code-changes": "code-review",
-    "expand-automated-tests": "automated-testing",
-    "specify-feature": "spec-driven-development",
-    "verify-fix": "repository-workflows",
-    "apply-fix": "repository-workflows",
 }
 
 _COORDINATOR_SKILLS = frozenset({"repo-audit-program", "repo-audit-diagnostics"})
@@ -1412,38 +1653,35 @@ def _find_topic_keyword_in_segment(text: str) -> tuple[str, str] | None:
     return matches[0][1], matches[0][2]
 
 
-def _detect_artifact_suite(audit_data: dict[str, Any] | None) -> str | None:
-    if not isinstance(audit_data, dict) or "run_id" in audit_data:
+def _is_audit_ledger_shape(data: Mapping[str, Any]) -> bool:
+    return "findings" in data and any(
+        key in data for key in ("evidence", "coverage", "contracts", "run_id")
+    )
+
+
+def _classify_domain_payload(data: object) -> str | None:
+    if not isinstance(data, dict) or _is_audit_ledger_shape(data):
         return None
-    if "verdict" in audit_data or (
-        "summary" in audit_data and "findings" in audit_data
-    ):
-        return "code-review"
-    if "test_cases" in audit_data or (
-        "component" in audit_data and "framework" in audit_data
-    ):
-        return "automated-testing"
-    if any(
-        key in audit_data
-        for key in (
-            "interview_decisions",
-            "new_file_scopes",
-            "out_of_scope",
-            "verification_commands",
-        )
-    ):
-        return "spec-driven-development"
-    if (
-        "boundaries" in audit_data
-        or "decisions" in audit_data
-        or (
-            "title" in audit_data
-            and "status" in audit_data
-            and "findings" not in audit_data
-        )
-    ):
-        return "software-architecture"
+    keys = set(data)
+    for kind, markers in _DOMAIN_KIND_KEY_SETS:
+        if keys & markers:
+            return kind
+    if "summary" in data and "findings" in data:
+        return "review"
+    if "component" in data and "framework" in data:
+        return "testing"
+    if "title" in data and "status" in data and "findings" not in data:
+        return "architecture"
+    if "run_id" in data:
+        return "run"
     return None
+
+
+def _detect_artifact_suite(audit_data: object) -> str | None:
+    kind = _classify_domain_payload(audit_data)
+    if kind is None:
+        return None
+    return _DOMAIN_KIND_TO_SUITE.get(kind)
 
 
 def _suite_from_run_data(run_data: dict[str, Any] | None) -> str | None:
@@ -1642,16 +1880,16 @@ def correlate_audit_domain(
                     specialist_found, topic_found = kw_match
                     break
 
-    effective_domain_suite = artifact_suite or (
-        run_suite
-        if run_suite
-        in {
-            "software-architecture",
-            "code-review",
-            "automated-testing",
-            "spec-driven-development",
-        }
-        else None
+    _domain_suites = {
+        "software-architecture",
+        "code-review",
+        "automated-testing",
+        "spec-driven-development",
+    }
+    effective_domain_suite = (
+        artifact_suite
+        if artifact_suite in _domain_suites
+        else (run_suite if run_suite in _domain_suites else None)
     )
     if specialist_found and not topic_found:
         topic_found = _topic_for_specialist(specialist_found)
@@ -1692,7 +1930,9 @@ def _resolve_recovery_suite(
         return "repository-audits", fname, schema_rel
     run_suite = _suite_from_run_data(run_data)
     if run_suite is not None:
-        fname, schema_rel = _SUITE_ARTIFACTS[run_suite]
+        fname, schema_rel = _SUITE_ARTIFACTS.get(
+            run_suite, _SUITE_ARTIFACTS["repository-audits"]
+        )
         return run_suite, fname, schema_rel
     if workspace_dir is not None and workspace_dir.is_dir():
         for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
@@ -1700,7 +1940,9 @@ def _resolve_recovery_suite(
                 return sname, fname, schema_rel
     if specialist_skill and specialist_skill in _SKILL_TO_SUITE:
         sname = _SKILL_TO_SUITE[specialist_skill]
-        fname, schema_rel = _SUITE_ARTIFACTS[sname]
+        fname, schema_rel = _SUITE_ARTIFACTS.get(
+            sname, _SUITE_ARTIFACTS["repository-audits"]
+        )
         return sname, fname, schema_rel
     fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
     return "repository-audits", fname, schema_rel

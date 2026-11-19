@@ -1,7 +1,7 @@
 # Usability implementation status
 
 This release develops the original 35-package audit suite into a local toolkit with
-54 total packages. Features below are implemented, while quality claims remain bounded by
+55 total packages. Features below are implemented, while quality claims remain bounded by
 actual validation. There is no claim of being the world's best skill repository.
 
 | Improvement | Delivered | Remaining evidence or decision |

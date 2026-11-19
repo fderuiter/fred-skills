@@ -21,6 +21,26 @@
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
+    "repo-audit-agent-configs": {
+      "maturity": "experimental",
+      "symptoms": [
+        "prompt injection in AGENTS.md or .cursorrules",
+        "unvetted skill script in .claude/skills or .agents/skills",
+        "unsafe MCP server command or inline secret in .mcp.json",
+        "hidden unicode or html comments in agent prompts",
+        "remote markdown image exfiltration"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "task scope",
+        "existing evidence if available"
+      ],
+      "outcomes": [
+        "Evidence-backed audit agent configs handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
     "repo-audit-api-consistency": {
       "maturity": "experimental",
       "symptoms": [

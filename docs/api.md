@@ -1,6 +1,6 @@
 # Developer API Guide
 
-This document provides the authoritative programmatic API reference for the six library modules in `scripts/fredlib/`. These modules provide reusable, scriptable components for run lifecycle management, skill installation, evaluation benchmarking, HTML/draft reporting, release packaging, and repository inspection.
+This document provides the authoritative programmatic API reference for the seven library modules in `scripts/fredlib/`. These modules provide reusable, scriptable components for run lifecycle management, skill installation, evaluation benchmarking, HTML/draft reporting, release packaging, repository inspection, and offline security vetting.
 
 For command-line usage and CLI workflows, see the [Local Toolkit Guide](toolkit.md). For conceptual design and security boundaries, see the [Architecture Guide](architecture.md).
 
@@ -50,6 +50,12 @@ For command-line usage and CLI workflows, see the [Local Toolkit Guide](toolkit.
    - [`snapshot`](#snapshot)
    - [`changed_files`](#changed_files)
    - [`preflight`](#preflight)
+8. [Module: `fredlib.vetting`](#module-fredlibvetting)
+   - [`vet_script`](#vet_script)
+   - [`vet_markdown`](#vet_markdown)
+   - [`vet_mcp_config`](#vet_mcp_config)
+   - [`vet_skill`](#vet_skill)
+   - [`vet_target`](#vet_target)
 
 ---
 
@@ -64,7 +70,15 @@ from pathlib import Path
 # Ensure the scripts directory is on sys.path
 sys.path.insert(0, str(Path("/path/to/fred-skills/scripts")))
 
-from fredlib import evaluations, installation, releases, reports, repository, runs
+from fredlib import (
+    evaluations,
+    installation,
+    releases,
+    reports,
+    repository,
+    runs,
+    vetting,
+)
 ```
 
 All functions adhere to predictable error handling:
@@ -855,3 +869,112 @@ Performs read-only inspection of the repository checkout and host environment to
   - `"capabilities"`: Map of detected binaries and environmental features (`"source_read"`, `"git"`, `"gh"`, `"tool_binaries"`, `"agent_binaries"`)
   - `"limitations"`: Explicit boundary notices
 - **Exceptions:** None (returns gracefully even if Git is absent).
+
+---
+
+## Module: `fredlib.vetting`
+
+The `fredlib.vetting` module runs offline static AST and regex security vetting on skill scripts, Markdown prompts, MCP server configurations, standalone skill packages, and repository agent configurations using only the Python 3.12 standard library and zero network requests.
+
+### `vet_script`
+
+```python
+def vet_script(
+    path: Path,
+    allowed_capabilities: Collection[str] | None = None,
+    *,
+    root: Path | None = None,
+) -> list[dict[str, Any]]
+```
+
+Inspects a Python or shell script offline for network clients, `shell=True` or dynamic `eval`/`exec` calls, hidden Unicode controls, and undeclared credential or sensitive host path reads.
+
+- **Parameters:**
+  - `path` (`Path`): Path to the Python or shell script file.
+  - `allowed_capabilities` (`Collection[str] | None`, default: `None`): Explicit capability allowlist entries (such as `"read:~/.claude/projects"` or `"read:~/.codex/sessions"`).
+  - `root` (`Path | None`, default: `None`): Optional base directory used to format relative `"file"` labels in returned findings.
+- **Returns:** `list[dict[str, Any]]` — List of structured finding dictionaries (`"file"`, `"line"`, `"rule"`, `"severity"`, `"category"`, `"message"`).
+- **Exceptions:**
+  - `ValueError`: Raised if `path` is not an existing file (non-symlink).
+
+---
+
+### `vet_markdown`
+
+```python
+def vet_markdown(path: Path, *, root: Path | None = None) -> list[dict[str, Any]]
+```
+
+Scans a Markdown prompt or agent instruction file (`SKILL.md`, `references/*.md`, `assets/prompt.md`, `AGENTS.md`, `.cursorrules`, etc.) for hidden bidirectional or zero-width Unicode characters, HTML comments outside fenced code blocks, prompt-override phrases, and remote Markdown or HTML images.
+
+- **Parameters:**
+  - `path` (`Path`): Path to the Markdown or instruction file.
+  - `root` (`Path | None`, default: `None`): Optional base directory used to format relative `"file"` labels in returned findings.
+- **Returns:** `list[dict[str, Any]]` — List of structured finding dictionaries.
+- **Exceptions:**
+  - `ValueError`: Raised if `path` is not an existing file (non-symlink).
+
+---
+
+### `vet_mcp_config`
+
+```python
+def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, Any]]
+```
+
+Inspects a Model Context Protocol configuration file (such as `.mcp.json`, `.cursor/mcp.json`, or `.vscode/mcp.json`) for shell-wrapped server commands, unpinned `npx -y` package execution, unencrypted or remote network endpoints, inline secret tokens, and hidden Unicode or prompt-override strings.
+
+- **Parameters:**
+  - `path` (`Path`): Path to the MCP JSON configuration file.
+  - `root` (`Path | None`, default: `None`): Optional base directory used to format relative `"file"` labels in returned findings.
+- **Returns:** `list[dict[str, Any]]` — List of structured finding dictionaries.
+- **Exceptions:**
+  - `ValueError`: Raised if `path` is not an existing file (non-symlink).
+
+---
+
+### `vet_skill`
+
+```python
+def vet_skill(
+    package: Path,
+    allowed_capabilities: Collection[str] | None = None,
+    *,
+    trust_builtin_allowlists: bool = True,
+    root: Path = ROOT,
+) -> dict[str, Any]
+```
+
+Vets a standalone skill package directory across `SKILL.md`, `references/*.md`, `assets/prompt.md`, bundled `scripts/*` files, and filesystem containment boundaries without requiring repository authoring schemas.
+
+- **Parameters:**
+  - `package` (`Path`): Skill package directory path.
+  - `allowed_capabilities` (`Collection[str] | None`, default: `None`): Additional capability allowlist entries merged into the effective allowlist.
+  - `trust_builtin_allowlists` (`bool`, default: `True`): Whether to merge `SKILL_CAPABILITY_ALLOWLIST` for trusted toolkit skills (set to `False` when scanning untracked third-party skills).
+  - `root` (`Path`, default: repository root): Toolkit root directory.
+- **Returns:** `dict[str, Any]` — Vetting summary dictionary containing `"target"`, `"kind"`, `"skill"`, `"passed"`, `"scanned_files"`, and `"findings"`.
+- **Exceptions:**
+  - `ValueError`: Raised if `package` is not a directory.
+
+---
+
+### `vet_target`
+
+```python
+def vet_target(
+    target: Path,
+    allowed_capabilities: Collection[str] | None = None,
+    *,
+    root: Path = ROOT,
+) -> dict[str, Any]
+```
+
+Vets a standalone skill directory, an individual script/instruction/MCP file, or all agent configurations and host skill folders (`.claude/skills`, `.agents/skills`, `.cursor/skills`, `AGENTS.md`, `.cursorrules`, `.mcp.json`, and configured `catalog/hosts.json` project paths) in a target repository.
+
+- **Parameters:**
+  - `target` (`Path`): Skill folder, configuration file, or repository root directory to inspect.
+  - `allowed_capabilities` (`Collection[str] | None`, default: `None`): Explicit capability allowlist entries applied to scanned scripts.
+  - `root` (`Path`, default: repository root): Toolkit root directory used to load `catalog/hosts.json` and identify trusted toolkit skill directories.
+- **Returns:** `dict[str, Any]` — Structured vetting report dictionary containing `"target"`, `"kind"`, `"passed"`, `"scanned_files"`, `"skills_scanned"`, `"configs_scanned"`, and `"findings"`.
+- **Exceptions:**
+  - `FileNotFoundError`: Raised if `target` does not exist.

@@ -20,7 +20,12 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import build_catalog
 import build_experience
 import sync_audit_resources
-from skill_tools import ROOT, read_frontmatter
+from skill_tools import (
+    ROOT,
+    infer_suite_name,
+    read_frontmatter,
+    suite_skills_by_suite,
+)
 from validate_skills import NAME
 
 VALID_MATURITIES: tuple[str, ...] = ("experimental", "beta", "stable")
@@ -71,55 +76,17 @@ def _default_symptoms(name: str) -> list[str]:
     return tokens[:4] if tokens else [name]
 
 
-def _infer_suite_name(name: str, available_suites: Sequence[str]) -> str:
-    """Choose a sensible suite name based on skill prefix and available suites."""
-    available = set(available_suites)
-    prefix_map = (
-        ("repo-audit-", "repository-audits"),
-        ("arch-", "software-architecture"),
-        ("review-", "code-review"),
-        ("test-", "automated-testing"),
-        ("spec-", "spec-driven-development"),
-        ("repo-", "repository-workflows"),
-    )
-    for prefix, suite_name in prefix_map:
-        if name.startswith(prefix) and (not available or suite_name in available):
-            return suite_name
-    if "repository-workflows" in available:
-        return "repository-workflows"
-    if available_suites:
-        return available_suites[0]
-    return "repository-audits"
-
-
 def _resolve_suite_and_sibling(
     root: Path,
     name: str,
     explicit_suite: str | None,
 ) -> tuple[str, str]:
     """Resolve the target suite name and a valid near-neighbor sibling_skill."""
-    suites_path = root / "catalog/suites.json"
-    available_names: list[str] = []
-    suite_skills: dict[str, list[str]] = {}
-    if suites_path.is_file():
-        try:
-            doc = json.loads(suites_path.read_text(encoding="utf-8"))
-            for s_obj in doc.get("suites", []):
-                s_name = s_obj.get("name")
-                if not isinstance(s_name, str):
-                    continue
-                available_names.append(s_name)
-                members: list[str] = []
-                for p_obj in s_obj.get("phases", []):
-                    for sk in p_obj.get("skills", []):
-                        if isinstance(sk, str):
-                            members.append(sk)
-                suite_skills[s_name] = members
-        except (OSError, ValueError, TypeError):
-            pass
+    suite_skills = suite_skills_by_suite(root) or {}
+    available_names = list(suite_skills)
 
-    target_suite = explicit_suite or _infer_suite_name(name, available_names)
-    for candidate in suite_skills.get(target_suite, []):
+    target_suite = explicit_suite or infer_suite_name(name, available_names)
+    for candidate in suite_skills.get(target_suite, ()):
         if candidate != name:
             return target_suite, candidate
 
@@ -508,7 +475,7 @@ def _sync_catalog_files(
 
     suites_list = suites_doc.get("suites", [])
     available_names = [s["name"] for s in suites_list if isinstance(s.get("name"), str)]
-    target_suite_name = suite_name or _infer_suite_name(name, available_names)
+    target_suite_name = suite_name or infer_suite_name(name, available_names)
 
     target_suite = next(
         (s for s in suites_list if s.get("name") == target_suite_name),

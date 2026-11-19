@@ -379,11 +379,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 if e_line is not None:
                     self.assertLessEqual(block.start_line, e_line)
 
-        # Full-file discovery coverage for api (36 blocks), runbooks (65 blocks), and integration (32 blocks)
+        # Full-file discovery coverage for api (41 blocks), runbooks (65 blocks), and integration (32 blocks)
         self.assertEqual(
             len(discovered["docs/api.md"]),
-            36,
-            "Must discover all 36 Python blocks in docs/api.md",
+            41,
+            "Must discover all 41 Python blocks in docs/api.md",
         )
 
         # Full-file discovery coverage for runbooks (65 blocks) and integration (32 blocks)
@@ -409,11 +409,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
         groups = get_registered_fred_subcommands(root=ROOT)
         registered = {cmd for cmds in groups.values() for cmd in cmds}
 
-        # Assert complete coverage of all 27 registered subcommands
+        # Assert complete coverage of all 28 registered subcommands
         self.assertEqual(
             len(registered),
-            27,
-            f"Expected exactly 27 registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
+            28,
+            f"Expected exactly 28 registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
         )
 
         start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 195))
@@ -1272,18 +1272,18 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 files=["README.md", "docs/usage.md", "docs/release-notes-0.2.0.md"],
             )
             self.assertTrue(
-                any("README.md:L4:" in err and "53" in err for err in count_errors),
+                any("README.md:L4:" in err and "54" in err for err in count_errors),
                 f"Expected README.md:L4 count drift failure, got: {count_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L20:" in err and "53" in err for err in count_errors
+                    "docs/usage.md:L20:" in err and "54" in err for err in count_errors
                 ),
                 f"Expected docs/usage.md:L20 count drift failure, got: {count_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/release-notes-0.2.0.md:L6:" in err and "53" in err
+                    "docs/release-notes-0.2.0.md:L6:" in err and "54" in err
                     for err in count_errors
                 ),
                 f"Expected release-notes L6 count drift failure, got: {count_errors}",

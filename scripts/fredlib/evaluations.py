@@ -17,6 +17,8 @@ import jsonschema
 
 from .common import (
     ROOT,
+    _infer_suite_name,
+    _skill_to_suite_map,
     atomic_json,
     digest,
     package_files,
@@ -62,24 +64,6 @@ class _GradeOutcome:
     malformed_error: str | None = None
 
 
-def _skill_to_suite_map(root: Path) -> dict[str, str]:
-    suites_path = root / "catalog/suites.json"
-    mapping: dict[str, str] = {}
-    if suites_path.is_file():
-        try:
-            doc = read_json(suites_path)
-            for suite in doc.get("suites", []):
-                sname = suite.get("name")
-                if isinstance(sname, str):
-                    for phase in suite.get("phases", []):
-                        for skill in phase.get("skills", []):
-                            if isinstance(skill, str):
-                                mapping[skill] = sname
-        except (OSError, ValueError, TypeError):
-            mapping.clear()
-    return mapping
-
-
 def _resolve_case_contract(
     case: dict[str, Any], root: Path, suite_map: dict[str, str]
 ) -> str:
@@ -90,19 +74,9 @@ def _resolve_case_contract(
         return explicit
     skill_name = str(case.get("skill", ""))
     suite_name = suite_map.get(skill_name)
-    if suite_name in _SUITE_TO_CONTRACT:
-        return _SUITE_TO_CONTRACT[suite_name]
-    if skill_name.startswith("arch-"):
-        return "architecture"
-    if skill_name.startswith("review-"):
-        return "review"
-    if skill_name.startswith("test-"):
-        return "testing"
-    if skill_name.startswith("spec-"):
-        return "spec"
-    if skill_name.startswith("repo-") and not skill_name.startswith("repo-audit-"):
-        return "workflow"
-    return "audit"
+    if suite_name not in _SUITE_TO_CONTRACT:
+        suite_name = _infer_suite_name(skill_name)
+    return _SUITE_TO_CONTRACT.get(suite_name, "audit")
 
 
 def _resolve_case_schema(

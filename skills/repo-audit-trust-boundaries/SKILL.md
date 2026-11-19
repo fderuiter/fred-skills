@@ -51,6 +51,6 @@ Use [handoff template](assets/handoff-template.md) for continuation and
 [invocation prompt](assets/prompt.md) for a standalone or resumed audit.
 
 Tag cross-cutting findings and nominate one root cause. Offer deeper handoffs to
-`repo-audit-canonicalization`, `repo-audit-data-integrity`, `repo-audit-configuration` when the evidence warrants them.
+`repo-audit-agent-configs`, `repo-audit-canonicalization`, `repo-audit-data-integrity`, `repo-audit-configuration` when the evidence warrants them.
 Do not automatically load these skills, create remote issues, or modify application code.
 Use `repo-audit-synthesis` to consolidate results into a prioritized issue plan.

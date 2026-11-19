@@ -51,7 +51,7 @@ code changes and remote issue publication remain controlled by the user's task.
 Repository checks cover metadata, directory names, schemas, relative links, optional
 UI metadata, shared-copy drift, generated indexes, and selected ledger failure modes.
 Tests use synthetic records and malformed packages, including known unsafe fixtures;
-none constitute proof that all 33 specialists detect every defect on every host.
+none constitute proof that all 34 specialists detect every defect on every host.
 
 CI runs on ordinary pull requests and main-branch pushes with read-only repository
 permissions, pinned action revisions, and checkout credential persistence disabled.
@@ -59,7 +59,7 @@ It validates the repository without invoking an external agent or requiring secr
 
 ## Optional local toolkit
 
-The 36-package audit family, six-package workflow family, and twelve engineering suite packages provide 54 total packages
+The 37-package audit family, six-package workflow family, and twelve engineering suite packages provide 55 total packages
 across the repository. The workflow family uses `shared/repo-workflows/` for finding
 verification, independent regression specification, fix planning/application/verification,
 and reconciliation. The resource synchronizer reads family manifests; each resulting
@@ -67,7 +67,7 @@ package is independently portable.
 
 Root `scripts/fred.py` provides discovery and explicitly selected local operations.
 `fredlib` separates source inventory/Git metadata, planning/run state, installation,
-rendering, evaluation, and release archives (documented authoritatively in the
+static security vetting, rendering, evaluation, and release archives (documented authoritatively in the
 [Developer API Guide](api.md)). Operational recovery workflows and troubleshooting
 procedures for locks, receipts, and git resolution are documented in [operational runbooks](runbooks.md).
 It neither dispatches an agent nor installs

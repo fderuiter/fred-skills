@@ -803,6 +803,13 @@ class FredCLITests(unittest.TestCase):
                 "recovery": {"instructions": ["1. Retry narrowly"]},
                 "scrubbed_transcript": "LARGE_TRANSCRIPT_BODY",
             },
+            "vet": {
+                "target": "/dest/skill",
+                "kind": "skill",
+                "passed": True,
+                "scanned_files": 2,
+                "findings": [],
+            },
             "installed": {
                 "target": "/dest/.agents/skills",
                 "skills": {"s1": {"source_version": "0.2.0", "status": "tracked"}},
@@ -855,7 +862,7 @@ class FredCLITests(unittest.TestCase):
             },
         }
         all_commands = [cmd for cmds in fred.LIFECYCLE_GROUPS.values() for cmd in cmds]
-        self.assertEqual(27, len(all_commands))
+        self.assertEqual(28, len(all_commands))
         for cmd in all_commands:
             with self.subTest(command=cmd):
                 rendered = fred.render_tty_output(
@@ -2214,12 +2221,12 @@ class FredDispatchRegistryTests(unittest.TestCase):
         depth = max_nesting_depth(dispatch_node)
         self.assertLessEqual(depth, 1, f"dispatch nesting depth {depth} exceeds 1")
 
-    def test_dispatch_registry_maps_all_twenty_seven_commands(self):
-        """COMMAND_REGISTRY must contain all 27 subcommands across all lifecycle groups."""
+    def test_dispatch_registry_maps_all_twenty_eight_commands(self):
+        """COMMAND_REGISTRY must contain all 28 subcommands across all lifecycle groups."""
         expected_commands = {
             cmd for cmds in self.fred.LIFECYCLE_GROUPS.values() for cmd in cmds
         }
-        self.assertEqual(27, len(expected_commands))
+        self.assertEqual(28, len(expected_commands))
         self.assertEqual(expected_commands, set(self.fred.COMMAND_REGISTRY.keys()))
         self.assertEqual(self.fred.COMMAND_REGISTRY, self.fred.DISPATCH_REGISTRY)
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import vetting
 from .common import (
     ROOT,
     FredCliError,
@@ -429,8 +430,31 @@ def _is_state_locked(dest: Path, state: Path | None, scope: str) -> bool:
     return any(state_root.glob(f"*-{scope}/operation.lock"))
 
 
+def _vet_untracked_skills(
+    target: Path | None, untracked: list[str], root: Path = ROOT
+) -> dict[str, list[dict[str, Any]]]:
+    if target is None or not untracked:
+        return {}
+    findings_by_skill: dict[str, list[dict[str, Any]]] = {}
+    for name in untracked:
+        candidate = target / name
+        res = vetting.vet_skill(
+            candidate,
+            trust_builtin_allowlists=False,
+            root=root,
+        )
+        if not res["passed"]:
+            findings_by_skill[name] = res["findings"]
+    return findings_by_skill
+
+
 def _enrich_query_result(
-    dest: Path, target: Path | None, state: Path | None, base: dict
+    dest: Path,
+    target: Path | None,
+    state: Path | None,
+    base: dict,
+    *,
+    root: Path = ROOT,
 ) -> dict:
     raw_skills = base.get("skills", {})
     enriched_skills: dict[str, dict] = {}
@@ -440,13 +464,19 @@ def _enrich_query_result(
             entry["status"] = _skill_disk_status(target, name, rec)
             enriched_skills[name] = entry
     untracked = _scan_untracked_skills(target, set(raw_skills))
+    untracked_findings = _vet_untracked_skills(target, untracked, root=root)
+    risky_untracked = sorted(untracked_findings)
     locked = _is_state_locked(dest, state, base["scope"])
-    healthy = not locked and all(
-        item["status"] == "tracked" for item in enriched_skills.values()
+    healthy = (
+        not locked
+        and not risky_untracked
+        and all(item["status"] == "tracked" for item in enriched_skills.values())
     )
     res = dict(base)
     res["skills"] = enriched_skills
     res["untracked"] = untracked
+    res["risky_untracked"] = risky_untracked
+    res["untracked_findings"] = untracked_findings
     res["locked"] = locked
     res["healthy"] = healthy
     return res
@@ -468,7 +498,7 @@ def _query_for_explicit_host(dest: Path, host: str, scope: str, root: Path) -> d
             "skills": {},
             "message": f"No installation receipt found at destination for host '{host}'",
         }
-        return _enrich_query_result(dest, target, state, base)
+        return _enrich_query_result(dest, target, state, base, root=root)
     skills = receipt(state).get("skills", {})
     base = {
         "destination": str(dest),
@@ -480,7 +510,7 @@ def _query_for_explicit_host(dest: Path, host: str, scope: str, root: Path) -> d
     }
     if not skills:
         base["message"] = f"No skills installed at destination for host '{host}'"
-    return _enrich_query_result(dest, target, state, base)
+    return _enrich_query_result(dest, target, state, base, root=root)
 
 
 def _find_receipt_hosts(dest: Path, scope: str, hosts: dict) -> list[str]:
@@ -518,7 +548,7 @@ def _query_detected_host(dest: Path, scope: str, root: Path) -> dict[str, Any]:
             "skills": {},
             "message": f"No installation receipt found at destination for host '{detected_host}'",
         }
-        return _enrich_query_result(dest, target, state, base)
+        return _enrich_query_result(dest, target, state, base, root=root)
     except ValueError as exc:
         if "No host markers" in str(exc):
             base = {
@@ -530,7 +560,7 @@ def _query_detected_host(dest: Path, scope: str, root: Path) -> dict[str, Any]:
                 "skills": {},
                 "message": f"No installation receipt found at destination '{dest}'",
             }
-            return _enrich_query_result(dest, None, None, base)
+            return _enrich_query_result(dest, None, None, base, root=root)
         raise
 
 
@@ -611,8 +641,17 @@ def _aggregate_multi_host_queries(
     dest: Path, scope: str, per_host: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
     merged_skills, untracked = _merge_multi_host_skills(per_host)
+    untracked_findings: dict[str, list[dict[str, Any]]] = {}
+    for h_res in per_host.values():
+        for s_name, f_list in h_res.get("untracked_findings", {}).items():
+            untracked_findings.setdefault(s_name, []).extend(f_list)
+    risky_untracked = sorted(untracked_findings)
     locked = any(h_res["locked"] for h_res in per_host.values())
-    healthy = not locked and all(h_res["healthy"] for h_res in per_host.values())
+    healthy = (
+        not locked
+        and not risky_untracked
+        and all(h_res["healthy"] for h_res in per_host.values())
+    )
     res: dict[str, Any] = {
         "destination": str(dest),
         "target": None,
@@ -624,6 +663,8 @@ def _aggregate_multi_host_queries(
         "scope": scope,
         "skills": merged_skills,
         "untracked": untracked,
+        "risky_untracked": risky_untracked,
+        "untracked_findings": untracked_findings,
         "locked": locked,
         "healthy": healthy,
     }
@@ -713,12 +754,23 @@ def _validate_managed_target(path: Path, record: dict | None, force: bool) -> No
         require_unmodified(path, record)
 
 
+def _require_vetted_skill(package: Path, root: Path) -> None:
+    vet_res = vetting.vet_skill(package, trust_builtin_allowlists=True, root=root)
+    if not vet_res["passed"]:
+        first = vet_res["findings"][0]
+        raise ValueError(
+            f"Security vetting failed for skill '{package.name}' "
+            f"({first['file']}:{first['line']} [{first['rule']}]): {first['message']}"
+        )
+
+
 def _check_install_candidate(
     target: Path, name: str, record: dict | None, context: tuple[Path, bool]
 ) -> None:
     root, force = context
     source = root / "skills" / name
     package_files(source)  # reject source symlinks before any writes
+    _require_vetted_skill(source, root)
     path = checked_target(target, name)
     _validate_managed_target(path, record, force)
 
@@ -753,12 +805,18 @@ def _stage_skills(
     backups = state / "backups" / operation
     staged.mkdir(parents=True)
     backups.mkdir(parents=True)
-    for name in selected:
-        shutil.copytree(
-            root / "skills" / name,
-            staged / name,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
+    try:
+        for name in selected:
+            shutil.copytree(
+                root / "skills" / name,
+                staged / name,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            _require_vetted_skill(staged / name, root)
+    except BaseException:
+        shutil.rmtree(staged, ignore_errors=True)
+        shutil.rmtree(backups, ignore_errors=True)
+        raise
     return staged, backups
 
 
