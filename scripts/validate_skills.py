@@ -21,6 +21,7 @@ from skill_tools import (
     estimate_tokens,
     extract_relative_links,
     find_deep_reference_chains,
+    infer_suite_and_siblings,
     read_frontmatter,
     resolve_relative_link_target,
     suite_members,
@@ -143,45 +144,6 @@ def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]
     return _validate_svg_file(candidate, field, raw_value)
 
 
-def _fallback_suite_name(skill_name: str) -> str:
-    if skill_name.startswith("arch-"):
-        return "software-architecture"
-    if skill_name.startswith("review-"):
-        return "code-review"
-    if skill_name.startswith("test-"):
-        return "automated-testing"
-    if skill_name.startswith("repo-") and not skill_name.startswith("repo-audit-"):
-        return "repository-workflows"
-    return "repository-audits"
-
-
-def _lookup_catalog_siblings(
-    candidate_root: Path, skill_name: str
-) -> tuple[str, set[str]] | None:
-    try:
-        members = suite_members(candidate_root)
-        if skill_name not in members:
-            return None
-        suite_name = str(members[skill_name]["suite"])
-        siblings = {
-            s
-            for s, info in members.items()
-            if info.get("suite") == suite_name and s != skill_name
-        }
-        return suite_name, siblings
-    except (OSError, ValueError, TypeError, KeyError):
-        return None
-
-
-def _infer_suite_and_siblings(package: Path, skill_name: str) -> tuple[str, set[str]]:
-    candidate_root = package.parent.parent
-    if (candidate_root / "catalog/suites.json").is_file():
-        catalog_match = _lookup_catalog_siblings(candidate_root, skill_name)
-        if catalog_match is not None:
-            return catalog_match
-    return _fallback_suite_name(skill_name), set()
-
-
 def _check_scenario_note_terminology(sid: str, suite_name: str, note: str) -> list[str]:
     problems: list[str] = []
     if LEGACY_AUDIT_ACTIVATION_NOTE_PATTERN.search(note):
@@ -270,7 +232,7 @@ def _validate_scenario_semantics(
     package: Path, skill_name: str, scenarios: list[object]
 ) -> list[str]:
     problems: list[str] = []
-    suite_name, siblings = _infer_suite_and_siblings(package, skill_name)
+    suite_name, siblings = infer_suite_and_siblings(skill_name, package.parent.parent)
     non_routing_prompts: set[str] = set()
     routing_scenarios: list[dict[str, Any]] = []
 
