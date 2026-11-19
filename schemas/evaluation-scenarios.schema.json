@@ -19,6 +19,50 @@
       "type": "array",
       "minItems": 3,
       "maxItems": 3,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^.+-failure$"
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^.+-safe$"
+              }
+            }
+          }
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^.+-routing$"
+              }
+            }
+          }
+        }
+      ],
       "items": {
         "type": "object",
         "additionalProperties": false,
