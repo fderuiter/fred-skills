@@ -192,12 +192,6 @@ CREDENTIAL_PATTERNS_CATEGORIZED: list[tuple[re.Pattern[str], str, str]] = [
     ),
 ]
 
-# Backward-compatible export of (pattern, replacement) tuples
-CREDENTIAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (pattern, replacement)
-    for pattern, replacement, _ in CREDENTIAL_PATTERNS_CATEGORIZED
-]
-
 # Signatures for failure detection
 TIMEOUT_PATTERNS = [
     re.compile(

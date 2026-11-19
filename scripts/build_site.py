@@ -27,7 +27,7 @@ from build_experience import (
     outputs as experience_outputs,
 )
 from fredlib.common import read_json
-from fredlib.reports import SCRIPT, STYLE, _csp_value, _page_shell
+from fredlib.reports import SCRIPT, STYLE, _page_shell
 from skill_tools import (
     ROOT,
     read_frontmatter,
@@ -35,7 +35,6 @@ from skill_tools import (
 )
 
 __all__ = [
-    "CSP_HEADER",
     "SCRIPT",
     "STYLE",
     "build_site",
@@ -43,8 +42,6 @@ __all__ = [
     "rewrite_link_target",
     "slugify",
 ]
-
-CSP_HEADER = _csp_value()
 
 AUXILIARY_ROOT_MARKDOWN: tuple[str, ...] = (
     "CONTRIBUTING.md",

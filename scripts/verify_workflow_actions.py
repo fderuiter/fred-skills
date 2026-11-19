@@ -40,44 +40,14 @@ __all__ = [
     "LockedActionPin",
     "discover_workflow_files",
     "extract_inline_comment",
-    "fetch_remote_refs",
     "inspect_workflow_file",
     "load_lockfile",
     "main",
     "parse_ls_remote_output",
     "tag_matches_version_comment",
     "verify_lockfile_parity",
-    "verify_pins_online",
     "verify_workflows",
 ]
-
-
-def fetch_remote_refs(
-    repo: str,
-    timeout: float = DEFAULT_TIMEOUT,
-    retries: int = 0,
-) -> tuple[dict[str, str] | None, set[str] | None, str | None]:
-    """Query upstream repository refs via `git ls-remote`."""
-    return check_workflow_pins.fetch_remote_refs(
-        repo,
-        timeout=timeout,
-        retries=retries,
-        run_fn=subprocess.run,
-    )
-
-
-def verify_pins_online(
-    pins: Sequence[ActionPin],
-    timeout: float = DEFAULT_TIMEOUT,
-    retries: int = 0,
-) -> list[str]:
-    """Verify action commit SHAs and version comments against upstream repositories."""
-    return check_workflow_pins.verify_pins_online(
-        pins,
-        timeout=timeout,
-        retries=retries,
-        run_fn=subprocess.run,
-    )
 
 
 def verify_workflows(

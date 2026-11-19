@@ -1174,9 +1174,9 @@ class PackageTests(unittest.TestCase):
 
         def fake_run(
             cmd: list[str],
-            cwd: Path | None = None,
+            *_args: object,
             env: dict[str, str] | None = None,
-            check: bool = False,
+            **_kwargs: object,
         ) -> subprocess.CompletedProcess[str]:
             invoked.append((list(cmd), dict(env or {})))
             return subprocess.CompletedProcess(cmd, returncode=2)
