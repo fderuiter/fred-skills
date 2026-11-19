@@ -1500,7 +1500,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
         )["skills"]
         expected_names = {item["name"] for item in catalog_skills}
-        self.assertEqual(51, len(expected_names))
+        self.assertEqual(52, len(expected_names))
         self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
 
         # Every single catalog skill correlates cleanly before any keyword fallback
@@ -1603,7 +1603,7 @@ Bearer sk-proj-1234567890abcdef1234567890
                 None,
                 "arch-decision-record",
                 "architecture.json",
-                "skills/arch-decision-record/assets/architecture.schema.json",
+                "shared/software-architecture/resources/assets/architecture.schema.json",
                 {
                     "schema_version": "1.0",
                     "title": "Order Service Architecture",
@@ -1634,7 +1634,7 @@ Bearer sk-proj-1234567890abcdef1234567890
                 base_rev,
                 "review-diff-analysis",
                 "review.json",
-                "skills/review-diff-analysis/assets/review.schema.json",
+                "shared/code-review/resources/assets/review.schema.json",
                 {
                     "schema_version": "1.0",
                     "verdict": "request_changes",
@@ -1658,7 +1658,7 @@ Bearer sk-proj-1234567890abcdef1234567890
                 None,
                 "test-case-generation",
                 "testing.json",
-                "skills/test-case-generation/assets/testing.schema.json",
+                "shared/automated-testing/resources/assets/testing.schema.json",
                 {
                     "schema_version": "1.0",
                     "component": "service.handle",
@@ -1960,6 +1960,302 @@ Bearer sk-proj-1234567890abcdef1234567890
         win_steps = "\n".join(win_rec["instructions"])
         self.assertIn(f"validate_audit.py {win_clean_ws}/audit.json", win_steps)
         self.assertIn(f"python scripts/fred.py resume {win_clean_ws}", win_steps)
+
+    def test_triage_catalog_and_payload_parity_with_common_and_standalone_fallback(
+        self,
+    ) -> None:
+        import ast
+
+        import skill_tools
+        from fredlib import common
+
+        # 1. Standalone triage.py must not import fredlib or skill_tools
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.assertFalse(
+                        alias.name.startswith(("fredlib", "skill_tools")),
+                        f"Forbidden import in triage.py: {alias.name}",
+                    )
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                self.assertFalse(
+                    node.module.startswith(("fredlib", "skill_tools")),
+                    f"Forbidden import in triage.py: {node.module}",
+                )
+
+        # 2. Suite skills, schema paths, and task maps match catalog/*.json and fredlib.common
+        expected_suite_skills = skill_tools.suite_skills_by_suite(ROOT)
+        self.assertIsNotNone(expected_suite_skills)
+        assert expected_suite_skills is not None
+        self.assertEqual(5, len(expected_suite_skills))
+        self.assertEqual(expected_suite_skills, triage._DEFAULT_SUITE_SKILLS)
+        self.assertEqual(expected_suite_skills, triage._SUITE_SKILLS)
+        self.assertEqual(common._skill_to_suite_map(ROOT), triage._SKILL_TO_SUITE)
+
+        suites_doc = json.loads(
+            (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
+        )
+        expected_suite_artifacts = {
+            s["name"]: (s["artifact"]["filename"], s["artifact"]["schema"])
+            for s in suites_doc["suites"]
+        }
+        self.assertEqual(5, len(expected_suite_artifacts))
+        self.assertEqual(expected_suite_artifacts, common.SUITE_DELIVERABLES)
+        self.assertEqual(expected_suite_artifacts, triage._DEFAULT_SUITE_ARTIFACTS)
+        self.assertEqual(expected_suite_artifacts, triage._SUITE_ARTIFACTS)
+        self.assertEqual(
+            common.DOMAIN_DELIVERABLE_SCHEMAS,
+            {
+                fname: schema_rel
+                for fname, (_suite, schema_rel) in triage._DOMAIN_ARTIFACTS.items()
+            },
+        )
+
+        expected_tasks = common._task_to_suite_map(ROOT)
+        self.assertEqual(17, len(expected_tasks))
+        self.assertEqual(expected_tasks, triage._DEFAULT_TASK_TO_SUITE)
+        self.assertEqual(expected_tasks, triage._TASK_TO_SUITE)
+
+        for task_name, expected_suite in expected_tasks.items():
+            with self.subTest(task=task_name):
+                run_doc = {"plan": {"task": task_name}}
+                self.assertEqual(
+                    expected_suite,
+                    common._suite_for_run(run_doc, root=ROOT),
+                )
+                self.assertEqual(
+                    expected_suite,
+                    triage._suite_from_run_data(run_doc),
+                )
+
+        # 3. _detect_artifact_suite matches fredlib.common._detect_artifact_suite across payloads
+        representative_payloads: list[tuple[str, object, str | None]] = [
+            ("none", None, None),
+            ("empty", {}, None),
+            (
+                "audit_starter",
+                suites_doc["suites"][0]["artifact"]["starter"],
+                None,
+            ),
+            (
+                "audit_with_summary_and_evidence",
+                {
+                    "schema_version": "1.0",
+                    "summary": "Audit summary",
+                    "findings": [],
+                    "evidence": [],
+                },
+                None,
+            ),
+            (
+                "audit_with_run_id",
+                {"run_id": "run-1", "findings": []},
+                None,
+            ),
+            ("run_json", {"run_id": "run-1", "plan": {"task": "review-pr"}}, None),
+            (
+                "arch_starter",
+                suites_doc["suites"][2]["artifact"]["starter"],
+                "software-architecture",
+            ),
+            (
+                "arch_minimal",
+                {"title": "System Arch", "status": "draft"},
+                "software-architecture",
+            ),
+            (
+                "review_starter",
+                suites_doc["suites"][3]["artifact"]["starter"],
+                "code-review",
+            ),
+            (
+                "review_minimal",
+                {"summary": "Diff review", "findings": []},
+                "code-review",
+            ),
+            (
+                "testing_starter",
+                suites_doc["suites"][4]["artifact"]["starter"],
+                "automated-testing",
+            ),
+            (
+                "testing_minimal",
+                {"component": "auth", "framework": "unittest"},
+                "automated-testing",
+            ),
+            (
+                "finding_verification",
+                {
+                    "reproduction_status": "supported",
+                    "safe_control_outcomes": [],
+                    "confidence_rating": "high",
+                },
+                "repository-workflows",
+            ),
+            (
+                "regression",
+                {"failure_boundaries": ["race"]},
+                "repository-workflows",
+            ),
+            (
+                "plan",
+                {"task_breakdowns": [], "dependency_order": []},
+                "repository-workflows",
+            ),
+            (
+                "fix",
+                {"file_changes": ["a.py"], "diff_summaries": ["fix"]},
+                "repository-workflows",
+            ),
+            (
+                "verification",
+                {"original_reproduced": True, "regression_passed": True},
+                "repository-workflows",
+            ),
+            (
+                "reconciliation",
+                {"run_id": "run-1", "finding_fingerprint_matches": []},
+                "repository-workflows",
+            ),
+            (
+                "remediation",
+                {"records": []},
+                "repository-workflows",
+            ),
+        ]
+        self.assertEqual(common._DOMAIN_KIND_KEY_SETS, triage._DOMAIN_KIND_KEY_SETS)
+        for label, payload, expected_suite_or_none in representative_payloads:
+            with self.subTest(payload=label):
+                common_suite = common._detect_artifact_suite(payload)
+                triage_suite = triage._detect_artifact_suite(payload)
+                self.assertEqual(expected_suite_or_none, common_suite)
+                self.assertEqual(common_suite, triage_suite)
+
+    def test_triage_live_catalog_aliases_and_standalone_claude_skills_execution(
+        self,
+    ) -> None:
+        from fredlib import common
+
+        # 1. Live catalog loading resolves custom recipe aliases identically to fredlib.common
+        synthetic_root = self.temp_path / "synthetic_repo"
+        catalog_dir = synthetic_root / "catalog"
+        catalog_dir.mkdir(parents=True)
+        (catalog_dir / "suites.json").write_bytes(
+            (ROOT / "catalog/suites.json").read_bytes()
+        )
+        recipes_doc = json.loads(
+            (ROOT / "catalog/recipes.json").read_text(encoding="utf-8")
+        )
+        recipes_doc["recipes"]["review-code-changes"]["aliases"] = ["review-changes"]
+        recipes_doc["recipes"]["expand-automated-tests"]["aliases"] = [
+            "strengthen-tests"
+        ]
+        (catalog_dir / "recipes.json").write_text(
+            json.dumps(recipes_doc, indent=2) + "\n", encoding="utf-8"
+        )
+
+        common_tasks = common._task_to_suite_map(synthetic_root)
+        _, live_artifacts, live_tasks = triage._load_catalog_metadata(catalog_dir)
+        self.assertEqual(common_tasks, live_tasks)
+        self.assertEqual("code-review", live_tasks["review-changes"])
+        self.assertEqual("automated-testing", live_tasks["strengthen-tests"])
+        self.assertEqual(
+            "code-review",
+            common._suite_for_run(
+                {"plan": {"task": "review-changes"}}, root=synthetic_root
+            ),
+        )
+        self.assertEqual(
+            "automated-testing",
+            common._suite_for_run(
+                {"plan": {"task": "strengthen-tests"}}, root=synthetic_root
+            ),
+        )
+        self.assertEqual(triage._DEFAULT_SUITE_ARTIFACTS, live_artifacts)
+
+        # Missing or malformed catalog falls back cleanly to _DEFAULT_*
+        fb_skills, fb_artifacts, fb_tasks = triage._load_catalog_metadata(
+            self.temp_path / "nonexistent_catalog"
+        )
+        self.assertEqual(triage._DEFAULT_SUITE_SKILLS, fb_skills)
+        self.assertEqual(triage._DEFAULT_SUITE_ARTIFACTS, fb_artifacts)
+        self.assertEqual(triage._DEFAULT_TASK_TO_SUITE, fb_tasks)
+
+        # 2. Standalone execution inside an installed .claude/skills/ copy (no catalog/ or PYTHONPATH)
+        installed_script = (
+            self.temp_path / ".claude/skills/repo-audit-diagnostics/scripts/triage.py"
+        )
+        installed_script.parent.mkdir(parents=True)
+        installed_script.write_bytes(SCRIPT.read_bytes())
+
+        ws_dir = self.temp_path / "standalone_review_ws"
+        ws_dir.mkdir()
+        (ws_dir / "run.json").write_text(
+            json.dumps(
+                {"run_id": "run-standalone", "plan": {"task": "review-code-changes"}}
+            ),
+            encoding="utf-8",
+        )
+        transcript = ws_dir / "transcript.log"
+        transcript.write_text(
+            "Validating review.json\n'verdict' is a required property\n",
+            encoding="utf-8",
+        )
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(installed_script),
+                str(transcript),
+                "--workspace",
+                str(ws_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(self.temp_path),
+            env=env,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        bundle = json.loads(proc.stdout)
+        instructions_blob = "\n".join(bundle["recovery"]["instructions"])
+        self.assertIn(
+            "shared/code-review/resources/assets/review.schema.json",
+            instructions_blob,
+        )
+
+    def test_scripts_delegate_suites_json_walking_to_skill_tools(self) -> None:
+        delegated_files = (
+            ROOT / "scripts/fredlib/common.py",
+            ROOT / "scripts/fredlib/evaluations.py",
+            ROOT / "scripts/fredlib/releases.py",
+            ROOT / "scripts/fredlib/runs.py",
+            ROOT / "scripts/validate_skills.py",
+        )
+        for path in delegated_files:
+            with self.subTest(script=path.relative_to(ROOT).as_posix()):
+                content = path.read_text(encoding="utf-8")
+                self.assertNotIn('for phase in suite.get("phases"', content)
+                self.assertNotIn('for phase in suite["phases"]', content)
+                self.assertNotIn('sorted(suite["phases"]', content)
+
+        self.assertNotIn(
+            "def _skill_to_suite_map(",
+            (ROOT / "scripts/fredlib/evaluations.py").read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "def _infer_suite_name(",
+            (ROOT / "scripts/scaffold_skill.py").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "suite_skills_by_suite",
+            (ROOT / "scripts/scaffold_skill.py").read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "def _fallback_suite_name(",
+            (ROOT / "scripts/validate_skills.py").read_text(encoding="utf-8"),
+        )
 
 
 if __name__ == "__main__":

@@ -93,9 +93,10 @@
       ]
     },
     "full-audit": {
-      "description": "All 33 specialist audits plus coordinator, diagnostics, and synthesis.",
+      "description": "All 34 specialist audits plus coordinator, diagnostics, and synthesis.",
       "skills": [
         "repo-audit-accessibility-state",
+        "repo-audit-agent-configs",
         "repo-audit-api-consistency",
         "repo-audit-architecture",
         "repo-audit-behavioral-contracts",
@@ -140,6 +141,7 @@
         "arch-component-decomposition",
         "arch-decision-record",
         "repo-audit-accessibility-state",
+        "repo-audit-agent-configs",
         "repo-audit-api-consistency",
         "repo-audit-architecture",
         "repo-audit-behavioral-contracts",

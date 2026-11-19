@@ -1,0 +1,14 @@
+interface:
+  display_name: Agent Configurations and Skill Bundles
+  short_description: Audit agent instruction files, skills, and MCP configs
+  default_prompt: Use $repo-audit-agent-configs to audit this repository with evidence
+    and a reviewable handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

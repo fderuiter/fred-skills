@@ -733,9 +733,11 @@ class AuditToSarifTests(unittest.TestCase):
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        self.assertFalse(alias.name.startswith("fredlib"))
+                        self.assertFalse(
+                            alias.name.startswith(("fredlib", "skill_tools"))
+                        )
                 elif isinstance(node, ast.ImportFrom) and node.module:
-                    self.assertFalse(node.module.startswith("fredlib"))
+                    self.assertFalse(node.module.startswith(("fredlib", "skill_tools")))
 
         isolated_dir = self.temp_path / "isolated_skill"
         isolated_dir.mkdir()
@@ -886,6 +888,75 @@ class AuditToSarifTests(unittest.TestCase):
         with self.assertRaises(ValueError) as empty_ctx:
             audit_to_sarif({})
         self.assertIn("audit.json", str(empty_ctx.exception))
+
+    def test_domain_artifact_tables_and_detector_match_common_and_catalog(
+        self,
+    ) -> None:
+        import audit_to_sarif as sarif_mod
+        from fredlib import common
+
+        expected_markers = tuple(
+            (f"{kind}.json", markers) for kind, markers in common._DOMAIN_KIND_KEY_SETS
+        )
+        self.assertEqual(expected_markers, sarif_mod._NON_AUDIT_ARTIFACT_MARKERS)
+
+        expected_names = (
+            set(common.DOMAIN_DELIVERABLE_SCHEMAS)
+            | set(common.WORKFLOW_DELIVERABLE_SCHEMAS)
+            | {"run.json"}
+        )
+        self.assertEqual(expected_names, set(sarif_mod._NON_AUDIT_ARTIFACT_NAMES))
+        self.assertEqual(
+            len(sarif_mod._NON_AUDIT_ARTIFACT_NAMES),
+            len(set(sarif_mod._NON_AUDIT_ARTIFACT_NAMES)),
+        )
+
+        suites_doc = json.loads(
+            (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
+        )
+        samples: list[tuple[str, object]] = [
+            ("none", None),
+            ("list", []),
+            ("empty_dict", {}),
+            (
+                "audit_with_summary",
+                {
+                    "schema_version": "1.0",
+                    "summary": "Audit summary",
+                    "findings": [],
+                    "evidence": [],
+                },
+            ),
+            ("audit_with_run_id", {"run_id": "r-1", "findings": []}),
+            ("run_minimal", {"run_id": "r-1"}),
+            ("review_minimal", {"summary": "Review", "findings": []}),
+            ("testing_minimal", {"component": "api", "framework": "pytest"}),
+            ("arch_minimal", {"title": "Arch", "status": "draft"}),
+            (
+                "finding_verification",
+                {"reproduction_status": "supported"},
+            ),
+            ("regression", {"failure_boundary": "edge"}),
+            ("plan", {"plan_id": "P-1"}),
+            ("fix", {"diff_summary": "patched"}),
+            ("verification", {"safe_controls_passed": True}),
+            ("reconciliation", {"state_transitions": []}),
+            ("remediation", {"records": []}),
+        ]
+        for suite in suites_doc["suites"]:
+            samples.append(
+                (
+                    f"starter_{suite['name']}",
+                    copy.deepcopy(suite["artifact"]["starter"]),
+                )
+            )
+
+        for label, sample in samples:
+            with self.subTest(sample=label):
+                self.assertEqual(
+                    common._detect_domain_artifact(sample),
+                    sarif_mod._detect_domain_artifact(sample),
+                )
 
 
 class AuditToSarifSyncTests(unittest.TestCase):

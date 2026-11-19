@@ -11,11 +11,15 @@ from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import Any
 
+from . import vetting
 from .common import (
+    _SKILL_SUITE_PREFIXES,
     ROOT,
     FredCliError,
+    _infer_suite_name,
     _is_ignored_skill_entry,
     _is_skill_script_rel,
+    _suite_skills_by_suite,
     _validate_allowed_skill_file,
     atomic_json,
     choose_skills,
@@ -87,6 +91,13 @@ def _scan_skill_files(
             executable_paths.add(rel)
     if not files:
         raise ValueError(f"No files found in skill package: {package_dir}")
+    vet_res = vetting.vet_skill(package_dir, trust_builtin_allowlists=True, root=root)
+    if not vet_res["passed"]:
+        first = vet_res["findings"][0]
+        raise ValueError(
+            f"Security vetting failed for skill '{package_dir.name}' "
+            f"({first['file']}:{first['line']} [{first['rule']}]): {first['message']}"
+        )
     return files, executable_paths
 
 
@@ -98,22 +109,13 @@ def _collect_skill_files(
 
 
 def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[str]:
-    suites_path = root / "catalog" / "suites.json"
-    if suites_path.is_file():
-        try:
-            suites_doc = read_json(suites_path)
-            suites = suites_doc.get("suites", [])
-            skills: list[str] = []
-            matched = False
-            for suite in suites:
-                if suite_name is None or suite.get("name") == suite_name:
-                    matched = True
-                    for phase in suite.get("phases", []):
-                        skills.extend(phase.get("skills", []))
-            if matched or "suites" in suites_doc:
-                return sorted(dict.fromkeys(skills))
-        except (OSError, ValueError, KeyError):
-            pass
+    by_suite = _suite_skills_by_suite(root)
+    if by_suite is not None:
+        if suite_name is None:
+            skills = [s for members in by_suite.values() for s in members]
+        else:
+            skills = list(by_suite.get(suite_name, ()))
+        return sorted(dict.fromkeys(skills))
 
     packs_path = root / "catalog" / "packs.json"
     if packs_path.is_file():
@@ -142,10 +144,9 @@ def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[
                 if d.is_dir() and not d.is_symlink() and (d / "SKILL.md").is_file()
             ]
         )
-        if suite_name == "repository-audits":
-            dirs = [d for d in dirs if d.startswith("repo-audit-")]
-        elif suite_name == "repository-workflows":
-            dirs = [d for d in dirs if not d.startswith("repo-audit-")]
+        if suite_name is not None:
+            known_suites = tuple(s for _, s in _SKILL_SUITE_PREFIXES)
+            dirs = [d for d in dirs if _infer_suite_name(d, known_suites) == suite_name]
         if dirs:
             return dirs
 
