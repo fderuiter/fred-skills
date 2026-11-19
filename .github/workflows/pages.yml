@@ -98,6 +98,7 @@ jobs:
           set -eu
           python scripts/build_catalog.py --check
           python scripts/build_experience.py --check --stage-site dist/site
+          python scripts/build_site.py --output dist/site
           python scripts/check_doc_links.py
           test -f dist/site/.nojekyll
           test -s dist/site/index.html

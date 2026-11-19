@@ -1744,6 +1744,125 @@ Bearer sk-proj-1234567890abcdef1234567890
                 if task == "expand-automated-tests":
                     self.assertIn("--allow-fixes", instructions_blob)
 
+    def test_domain_schema_patterns_topic_stripping_and_recovery_edge_cases(self):
+        # 1. SCHEMA_PATTERNS matches required-property, enum, unexpected-property, duplicate-ID, and path errors
+        schema_error_lines = [
+            "'custom_field' is a required property",
+            "'proposed' is not one of ['draft', 'accepted', 'superseded', 'deprecated']",
+            "'return_value' is not one of ['state', 'exception', 'output', 'boundary']",
+            "'2.0' was expected; '1.0' was expected",
+            "Additional properties are not allowed ('run_id', 'extra' were unexpected)",
+            "Duplicate IDs in decisions: ADR-001",
+            "Duplicate IDs in findings: REV-1",
+            "Duplicate IDs in test_cases: TC-1",
+            "Finding file path must be repository-relative (REV-1): Unsafe relative path: '../secret.py'",
+            "Finding file path must be repository-relative (REV-2): Expected a nonempty repository-relative POSIX path",
+        ]
+        for err_line in schema_error_lines:
+            with self.subTest(error_line=err_line):
+                failure = triage.detect_failures(
+                    f"Validating deliverable\n{err_line}\n"
+                )
+                self.assertEqual("schema_validation_error", failure["failure_type"])
+
+        # 2. Suite-prefix stripping for topic across all 5 suites
+        expected_topics = {
+            "repo-audit-concurrency": "concurrency",
+            "repo-verify-finding": "verify-finding",
+            "arch-decision-record": "decision-record",
+            "arch-boundary-specification": "boundary-specification",
+            "review-diff-analysis": "diff-analysis",
+            "review-actionable-feedback": "actionable-feedback",
+            "test-gap-analysis": "gap-analysis",
+            "test-suite-verification": "suite-verification",
+        }
+        for skill_name, expected_topic in expected_topics.items():
+            with self.subTest(skill=skill_name):
+                corr = triage.correlate_audit_domain(
+                    f"Executing {skill_name}\nTimeoutError: timed out\n"
+                )
+                self.assertEqual(skill_name, corr["specialist_skill"])
+                self.assertEqual(expected_topic, corr["topic"])
+
+        # 3. Keyword fallback is scoped to audit runs even when audit_data is None or malformed
+        for domain_transcript, expected_topic in [
+            (
+                "Inspecting system architecture boundaries and writing architecture.json\n",
+                "architecture",
+            ),
+            (
+                "Checking diff invariants and compatibility in review.json\n",
+                "code-review",
+            ),
+            (
+                "Checking test-oracles and nondeterminism in testing.json\n",
+                "automated-testing",
+            ),
+        ]:
+            corr_domain = triage.correlate_audit_domain(domain_transcript)
+            self.assertIsNone(corr_domain["specialist_skill"])
+            self.assertEqual(expected_topic, corr_domain["topic"])
+
+        # 4. Token-boundary ID matching prevents ADR-1/REV-1/TC-1 from false-matching ADR-10/REV-10/TC-10
+        corr_prefix = triage.correlate_audit_domain(
+            "Updated ADR-10 and TC-10 after reviewing REV-10\n",
+            audit_data={
+                "schema_version": "1.0",
+                "title": "Arch",
+                "status": "draft",
+                "decisions": [
+                    {"id": "ADR-1", "title": "First", "decision": "Keep"},
+                    {"id": "ADR-10", "title": "Tenth", "decision": "Split"},
+                ],
+            },
+        )
+        self.assertEqual(["decisions:ADR-10"], corr_prefix["ledger_references"])
+
+        # 5. Recovery keeps audit.json commands unchanged when workspace_dir is omitted or contains audit.json
+        schema_failure = {
+            "failure_type": "schema_validation_error",
+            "line_number": 2,
+            "matched_line": "'verdict' is a required property",
+        }
+        no_ws_rec = triage.formulate_recovery_instructions(
+            schema_failure,
+            run_data=None,
+            workspace_dir=None,
+            specialist_skill="review-diff-analysis",
+        )
+        no_ws_blob = "\n".join(no_ws_rec["instructions"])
+        self.assertIn("validate_audit.py <audit-run-dir>/audit.json", no_ws_blob)
+        self.assertNotIn("validate-run", no_ws_blob)
+
+        audit_ws = self.temp_path / "ws_has_audit_json"
+        audit_ws.mkdir()
+        (audit_ws / "audit.json").write_text('{"findings": []}\n', encoding="utf-8")
+        audit_ws_rec = triage.formulate_recovery_instructions(
+            schema_failure,
+            run_data=None,
+            workspace_dir=audit_ws,
+            specialist_skill="arch-decision-record",
+        )
+        audit_ws_blob = "\n".join(audit_ws_rec["instructions"])
+        self.assertIn(f"validate_audit.py {audit_ws}/audit.json", audit_ws_blob)
+        self.assertNotIn("architecture.json", audit_ws_blob)
+
+        # 6. Workspace-file-only resolution (no run.json) resolves active domain deliverable
+        for fname in ("architecture.json", "review.json", "testing.json"):
+            file_only_ws = self.temp_path / f"ws_file_only_{fname}"
+            file_only_ws.mkdir()
+            (file_only_ws / fname).write_text("{}\n", encoding="utf-8")
+            rec = triage.formulate_recovery_instructions(
+                schema_failure,
+                run_data=None,
+                workspace_dir=file_only_ws,
+                specialist_skill=None,
+            )
+            blob = "\n".join(rec["instructions"])
+            self.assertIn(f"python scripts/fred.py validate-run {file_only_ws}", blob)
+            self.assertIn(fname, blob)
+            self.assertNotIn("validate_audit.py", blob)
+
 
 if __name__ == "__main__":
     unittest.main()

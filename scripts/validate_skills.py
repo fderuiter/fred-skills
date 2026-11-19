@@ -9,8 +9,9 @@ import re
 import shutil
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import jsonschema
@@ -65,6 +66,8 @@ BOUNDARY_SECTION_PATTERN = re.compile(
     r"^##+\s+.*\b(guardrail\w*|prohibit\w*|constraint\w*|non-goal\w*|out of scope|deliver\w*|produce)\b",
     re.IGNORECASE | re.MULTILINE,
 )
+PROMPT_HEADING_PATTERN = re.compile(r"^\s*#+", re.MULTILINE)
+REPEATED_WORD_PATTERN = re.compile(r"\b([A-Za-z0-9]+)\s+\1\b", re.IGNORECASE)
 GENERIC_ROUTING_PROMPT_PATTERN = re.compile(
     r"\b(spelling\s+mistake|fix\s+a\s+typo|\btypo\b|proofread\b|grammar\s+check|"
     r"project\s+description\s+typo|readme\s+spelling)\b",
@@ -83,6 +86,40 @@ EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
     r"\bexpected\s+findings\b",
     re.IGNORECASE,
 )
+
+
+def _validate_ui_icon(package: Path, field: str, raw_value: object) -> list[str]:
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return [f"Missing or invalid UI {field}"]
+    if (
+        "\\" in raw_value
+        or raw_value.startswith("/")
+        or Path(raw_value).is_absolute()
+        or PureWindowsPath(raw_value).is_absolute()
+    ):
+        return [f"UI {field} must be a relative package-local SVG path: {raw_value}"]
+    candidate = package / raw_value
+    resolved_package = package.resolve()
+    try:
+        resolved_candidate = candidate.resolve()
+    except OSError as exc:
+        return [f"UI {field} could not be resolved ({raw_value}): {exc}"]
+    if not resolved_candidate.is_relative_to(resolved_package):
+        return [f"UI {field} escapes standalone package: {raw_value}"]
+    if candidate.is_symlink():
+        return [f"UI {field} must not be a symlink: {raw_value}"]
+    if candidate.suffix.lower() != ".svg":
+        return [f"UI {field} must point to an .svg file: {raw_value}"]
+    if not candidate.is_file():
+        return [f"Missing UI {field} file: {raw_value}"]
+    try:
+        svg_root = ET.fromstring(candidate.read_text(encoding="utf-8"))
+    except (OSError, ET.ParseError) as exc:
+        return [f"Invalid SVG in UI {field} ({raw_value}): {exc}"]
+    tag = svg_root.tag.rsplit("}", 1)[-1]
+    if tag != "svg":
+        return [f"Invalid SVG root element in UI {field} ({raw_value}): {tag}"]
+    return []
 
 
 def _infer_suite_and_siblings(package: Path, skill_name: str) -> tuple[str, set[str]]:
@@ -435,6 +472,14 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                     f"{prompt_rel}: prompt template exceeds line budget "
                     f"({len(lines)} > {MAX_PROMPT_LINES} lines)"
                 )
+            if PROMPT_HEADING_PATTERN.search(prompt_content):
+                errors.append(
+                    f"{prompt_rel}: prompt template must not contain Markdown headings"
+                )
+            if "```" in prompt_content:
+                errors.append(
+                    f"{prompt_rel}: prompt template must not contain triple-backtick code fences"
+                )
             placeholders = PLACEHOLDER_PATTERN.findall(prompt_content)
             unauthorized = sorted(
                 {p for p in placeholders if p not in ALLOWED_PROMPT_PLACEHOLDERS}
@@ -555,18 +600,61 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
     ui_path = package / "agents/openai.yaml"
     if ui_path.exists():
         try:
-            ui = yaml.safe_load(ui_path.read_text(encoding="utf-8"))["interface"]
-            if (
-                not isinstance(ui.get("display_name"), str)
-                or not ui["display_name"].strip()
-            ):
-                errors.append("Missing display name")
-            short = ui.get("short_description")
-            if not isinstance(short, str) or not 25 <= len(short) <= 64:
-                errors.append("UI short_description must contain 25–64 characters")
-            prompt = ui.get("default_prompt")
-            if not isinstance(prompt, str) or f"${name}" not in prompt:
-                errors.append("UI default_prompt must name the skill")
+            ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
+            if not isinstance(ui_doc, dict):
+                errors.append("Invalid optional UI metadata: expected mapping")
+            else:
+                ui = ui_doc.get("interface")
+                if not isinstance(ui, dict):
+                    errors.append("Invalid optional UI metadata: missing interface")
+                else:
+                    if (
+                        not isinstance(ui.get("display_name"), str)
+                        or not ui["display_name"].strip()
+                    ):
+                        errors.append("Missing display name")
+                    short = ui.get("short_description")
+                    if not isinstance(short, str) or not 25 <= len(short) <= 64:
+                        errors.append(
+                            "UI short_description must contain 25–64 characters"
+                        )
+                    elif REPEATED_WORD_PATTERN.search(short):
+                        errors.append(
+                            "UI short_description contains repeated adjacent words"
+                        )
+                    prompt = ui.get("default_prompt")
+                    if not isinstance(prompt, str) or f"${name}" not in prompt:
+                        errors.append("UI default_prompt must name the skill")
+                    errors.extend(
+                        _validate_ui_icon(package, "icon_small", ui.get("icon_small"))
+                    )
+                    errors.extend(
+                        _validate_ui_icon(package, "icon_large", ui.get("icon_large"))
+                    )
+                policy = ui_doc.get("policy")
+                if not isinstance(policy, dict):
+                    errors.append(
+                        "Missing UI policy: policy.allow_implicit_invocation must be a boolean"
+                    )
+                else:
+                    allow_implicit = policy.get("allow_implicit_invocation")
+                    if not isinstance(allow_implicit, bool):
+                        errors.append(
+                            "UI policy.allow_implicit_invocation must be a boolean"
+                        )
+                    if "products" in policy:
+                        products = policy.get("products")
+                        if (
+                            not isinstance(products, list)
+                            or not products
+                            or not all(
+                                isinstance(item, str) and bool(item.strip())
+                                for item in products
+                            )
+                        ):
+                            errors.append(
+                                "UI policy.products must be a nonempty list of strings"
+                            )
         except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError) as exc:
             errors.append(f"Invalid optional UI metadata: {exc}")
     return errors
@@ -834,6 +922,7 @@ def validate_with_telemetry(
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     problems: list[str] = []
     descriptions: dict[str, str] = {}
+    short_descriptions: dict[str, str] = {}
     scenario_schema = None
     schema_path = root / "schemas/evaluation-scenarios.schema.json"
     if not schema_path.is_file():
@@ -979,14 +1068,40 @@ def validate_with_telemetry(
         except (OSError, ValueError, TypeError, yaml.YAMLError):
             pass  # The package-level validator already reports this failure.
 
+        ui_path = package / "agents/openai.yaml"
+        if ui_path.is_file() and not ui_path.is_symlink():
+            try:
+                ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
+                if isinstance(ui_doc, dict) and isinstance(
+                    ui_doc.get("interface"), dict
+                ):
+                    short_desc = ui_doc["interface"].get("short_description")
+                    if isinstance(short_desc, str) and short_desc.strip():
+                        normalized_short = short_desc.strip()
+                        if normalized_short in short_descriptions:
+                            problems.append(
+                                f"Duplicate UI short_description: {package.name} and {short_descriptions[normalized_short]}"
+                            )
+                        else:
+                            short_descriptions[normalized_short] = package.name
+            except (OSError, ValueError, TypeError, yaml.YAMLError):
+                pass  # The package-level validator already reports this failure.
+
     if record_attempts and ledger_dirty:
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
 
     try:
         if (root / "catalog/suites.json").is_file():
             for name in suite_members(root):
-                if not (root / "skills" / name / "SKILL.md").is_file():
+                skill_dir = root / "skills" / name
+                if not (skill_dir / "SKILL.md").is_file():
                     problems.append(f"Suite references absent skill: {name}")
+                elif (skill_dir / "agents/openai.yaml").is_symlink() or not (
+                    skill_dir / "agents/openai.yaml"
+                ).is_file():
+                    problems.append(
+                        f"{name}: Suite skill missing required UI metadata: agents/openai.yaml"
+                    )
     except (OSError, ValueError, KeyError) as exc:
         problems.append(f"Invalid suite manifest: {exc}")
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections.abc import Sequence
@@ -50,8 +51,10 @@ def _default_description(name: str, title: str) -> str:
 
 
 def _default_short_description(title: str, name: str) -> str:
-    """Construct a UI short_description strictly within 25..64 characters."""
-    candidate = f"Run {title.lower()} checks with evidence guardrails"
+    """Construct a UI short_description strictly within 25..64 characters without adjacent repeats."""
+    lower_title = title.lower()
+    verb = "Execute" if lower_title.startswith("run") else "Run"
+    candidate = f"{verb} {lower_title} checks with evidence guardrails"
     if len(candidate) > 64:
         candidate = f"Execute {name[:36]} workflow with guardrails"
     if len(candidate) > 64:
@@ -281,6 +284,38 @@ def _render_output_schema(name: str, title: str) -> str:
     return json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
 
 
+SUITE_ICON_PALETTE: dict[str, tuple[str, str]] = {
+    "repository-audits": ("#1E3A8A", "#93C5FD"),
+    "repository-workflows": ("#065F46", "#6EE7B7"),
+    "software-architecture": ("#4C1D95", "#C4B5FD"),
+    "code-review": ("#9A3412", "#FDBA74"),
+    "automated-testing": ("#881337", "#FDA4AF"),
+}
+
+
+def _render_icon_svg(name: str, suite_name: str) -> str:
+    """Render a deterministic 24x24 SVG icon using the suite background palette."""
+    bg_hex, accent_hex = SUITE_ICON_PALETTE.get(
+        suite_name, SUITE_ICON_PALETTE["repository-audits"]
+    )
+    digest = hashlib.sha256(name.encode("utf-8")).digest()
+    x1 = 6 + (digest[0] % 5)
+    y1 = 7 + (digest[1] % 5)
+    x2 = 18 - (digest[2] % 5)
+    y2 = 17 - (digest[3] % 5)
+    cx = 9 + (digest[4] % 7)
+    cy = 9 + (digest[5] % 7)
+    return (
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" '
+        'xmlns="http://www.w3.org/2000/svg">\n'
+        f'  <rect x="2" y="2" width="20" height="20" rx="5" fill="{bg_hex}"/>\n'
+        '  <rect x="5.5" y="5.5" width="13" height="13" rx="2" stroke="#FFFFFF" stroke-width="1.5"/>\n'
+        f'  <path d="M{x1} {y1}L{cx} {cy}L{x2} {y2}" stroke="{accent_hex}" '
+        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>\n'
+        "</svg>\n"
+    )
+
+
 def _render_openai_yaml(name: str, title: str, short_description: str) -> str:
     default_prompt = (
         f"Use ${name} on this repository and report evidence-backed results."
@@ -290,6 +325,15 @@ def _render_openai_yaml(name: str, title: str, short_description: str) -> str:
         f"  display_name: {_yaml_double_quoted(title)}\n"
         f"  short_description: {_yaml_double_quoted(short_description)}\n"
         f"  default_prompt: {_yaml_double_quoted(default_prompt)}\n"
+        '  icon_small: "assets/icon.svg"\n'
+        '  icon_large: "assets/icon.svg"\n'
+        "policy:\n"
+        "  products:\n"
+        "    - chatgpt\n"
+        "    - codex\n"
+        "    - api\n"
+        "    - atlas\n"
+        "  allow_implicit_invocation: true\n"
     )
 
 
@@ -635,6 +679,10 @@ def scaffold_skill(
             description=effective_description,
             schema_filename=schema_filename,
             extra_schema_links=extra_schema_links,
+        ),
+        "assets/icon.svg": _render_icon_svg(
+            name=name,
+            suite_name=effective_suite,
         ),
         "assets/prompt.md": _render_prompt_markdown(
             name=name,

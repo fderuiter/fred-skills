@@ -195,6 +195,7 @@ class ScaffolderTests(unittest.TestCase):
         pkg_dir = self.root / "skills/custom-boundary-check"
         self.assertTrue((pkg_dir / "SKILL.md").is_file())
         self.assertTrue((pkg_dir / "assets/prompt.md").is_file())
+        self.assertTrue((pkg_dir / "assets/icon.svg").is_file())
         self.assertTrue(
             (pkg_dir / "assets/custom-boundary-check.schema.json").is_file()
         )
@@ -489,6 +490,7 @@ class WorkflowAndContributingGuardrailTests(unittest.TestCase):
 
         checkout_step = steps[0]
         self.assertTrue(checkout_step["uses"].startswith("actions/checkout@"))
+        self.assertEqual("${{ inputs.ref }}", checkout_step["with"]["ref"])
         self.assertEqual(0, checkout_step["with"]["fetch-depth"])
 
         pkg_step = next(

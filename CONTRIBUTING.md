@@ -106,8 +106,9 @@ The ledger validator also needs jsonschema; instruction-only use does not need P
    Link package-local references directly without symlinks or paths escaping the skill directory.
    Preserve the distinction between independent requirements and observed code.
 3. Enforce all seven package validator guardrails (`scripts/validate_skills.py`):
-   - **Prompt budgets**: `assets/prompt.md` is required and must stay within `1200` characters
-     (`MAX_PROMPT_CHARS = 1200`) and `20` lines (`MAX_PROMPT_LINES = 20`).
+   - **Prompt budgets**: `assets/prompt.md` is required, must stay within `1200` characters
+     (`MAX_PROMPT_CHARS = 1200`) and `20` lines (`MAX_PROMPT_LINES = 20`), and must not contain
+     Markdown headings or triple-backtick code fences.
    - **Allowed placeholders**: Any `<...>` token in `assets/prompt.md` must match the approved
      allowlist: `<audit workspace/reports>`, `<critical workflows>`,
      `<existing audit workspace, if any>`, `<existing audit workspace>`,
@@ -123,9 +124,10 @@ The ledger validator also needs jsonschema; instruction-only use does not need P
    - **Output schemas**: Define at least one closed Draft 2020-12 JSON output schema in
      `assets/*.schema.json` (excluding `evaluation-scenarios*`) with root `properties` and
      `additionalProperties: false` on structured objects.
-   - **UI limits**: When `agents/openai.yaml` is present, `interface.display_name` must be
-     nonempty, `interface.short_description` must contain `25–64` characters, and
-     `interface.default_prompt` must reference `$<skill-name>`.
+   - **UI limits**: `agents/openai.yaml` must provide nonempty `interface.display_name`, unique
+     `interface.short_description` of `25–64` characters without repeated adjacent words,
+     `interface.default_prompt` referencing `$<skill-name>`, package-local SVG `icon_small` /
+     `icon_large` (`assets/icon.svg`), and boolean `policy.allow_implicit_invocation`.
    - **Scenario suffixes**: `references/evaluation-scenarios.json` must conform to
      `schemas/evaluation-scenarios.schema.json` with three scenarios using `-failure`, `-safe`,
      and `-routing` identifier suffixes (including `sibling_skill` on `-routing` scenarios for

@@ -1,4 +1,14 @@
 interface:
-  display_name: "Invariant Verification"
-  short_description: "Verify invariants and regression hazards in diffs"
-  default_prompt: "Use $review-invariant-violations on this pull request diff and invariant rules."
+  display_name: Invariant Verification
+  short_description: Verify invariants and regression hazards in diffs
+  default_prompt: Use $review-invariant-violations on this pull request diff and invariant
+    rules.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
