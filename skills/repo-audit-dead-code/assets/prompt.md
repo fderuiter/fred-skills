@@ -1,12 +1,7 @@
-Use repo-audit-dead-code to conduct a comprehensive dead code and obsolete compatibility paths audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-dead-code to audit unreachable code, orphaned wiring, and vestigial paths in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while checking issue <issue-number>.
+Inventory CLI/HTTP entrypoints, plugin registries, exports, retired feature flags, compatibility shims, generated artifacts, and reflection/string-dispatched hooks.
+Trace reachability from real build, runtime, framework, test, and published package roots before classifying any symbol as dead.
+Distinguish provably unreachable code and no-op branches from dynamically loaded extension points with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

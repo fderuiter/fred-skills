@@ -1,12 +1,7 @@
-Use repo-audit-trust-boundaries to conduct a comprehensive trust and authorization boundaries audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-trust-boundaries to audit trust boundaries, authorization gates, and sink safety in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while checking issue <issue-number>.
+Inventory HTTP/RPC/CLI/webhook/file inputs, browser-to-server transitions, tenant and role claims, object lookups, SSRF/command/SQL/template sinks, and secret stores.
+Trace untrusted data from entry point through parsing, policy enforcement, tenant-scoped resource lookup, and privileged sink execution.
+Identify missing object- or operation-level authorization, confused-deputy paths, and unvalidated sink injection with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

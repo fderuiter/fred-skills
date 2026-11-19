@@ -1,12 +1,7 @@
-Use repo-audit-data-integrity to conduct a comprehensive data transformation integrity audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-data-integrity to audit end-to-end data transformation integrity in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while reviewing issue <issue-number>.
+Inventory input parsers, DTO-to-domain mappers, ORM/SQL persistence bindings, wire serializers, CSV/JSON exports, unit/currency math, and timezone projections.
+Build field-level transformation chains tracking precision, rounding, signedness, encoding, identifier provenance, and absent-versus-null-versus-empty semantics.
+Prove silent truncation, floating-point drift, timezone shifts, or dropped unknown fields with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

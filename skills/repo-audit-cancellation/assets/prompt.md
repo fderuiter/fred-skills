@@ -1,12 +1,7 @@
-Use repo-audit-cancellation to conduct a comprehensive cancellation propagation audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-cancellation to audit cancellation propagation and abort safety in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while referencing issue <issue-number>.
+Inventory cancellation roots, abort signals/tokens, spawned child tasks, blocking I/O calls, background queues, teardown hooks, and result publication gates.
+Build the cancellation tree to verify who requests, propagates, observes, and joins each operation, checking synchronous abort callbacks for reentrancy hazards.
+Identify orphaned background work, half-committed mutations after abort, and swallowed cancellation exceptions with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

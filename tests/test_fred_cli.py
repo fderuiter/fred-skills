@@ -2486,6 +2486,90 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("Hint:", proc.stderr)
             self.assertIn("installed", proc.stderr)
 
+    def test_plan_and_init_accept_tactical_scope_flags_and_persist_dependencies(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp) / "app"
+            (repo_dir / "src/orders").mkdir(parents=True)
+            (repo_dir / "src/orders/handler.py").write_text(
+                "def place_order(cart_id: str) -> bool:\n    return bool(cart_id)\n",
+                encoding="utf-8",
+            )
+            (repo_dir / "pyproject.toml").write_text(
+                '[project]\nname = "orders"\ndependencies = ["sqlalchemy==2.0.35"]\n',
+                encoding="utf-8",
+            )
+            ws = Path(tmp) / "run-ws"
+
+            plan_proc = self.run_cli(
+                "plan",
+                str(repo_dir),
+                "--task",
+                "plan-findings",
+                "--budget",
+                "brief",
+                "--directory",
+                "src/orders",
+                "--symbol",
+                "place_order",
+                "--allowed-paths",
+                "src/orders",
+                "--do-not-modify-paths",
+                "pyproject.toml",
+                "--issue-number",
+                "77",
+                "--json",
+            )
+            self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
+            plan_payload = json.loads(plan_proc.stdout)
+            self.assertEqual("src/orders", plan_payload["plan"]["directory"])
+            self.assertEqual("place_order", plan_payload["plan"]["symbol"])
+            self.assertEqual(["src/orders"], plan_payload["plan"]["allowed_paths"])
+            self.assertEqual(
+                ["pyproject.toml"], plan_payload["plan"]["do_not_modify_paths"]
+            )
+            self.assertEqual(77, plan_payload["plan"]["issue_number"])
+            self.assertEqual(
+                "2.0.35",
+                plan_payload["preflight"]["dependencies"]["packages"]["sqlalchemy"],
+            )
+
+            init_proc = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "plan-findings",
+                "--budget",
+                "brief",
+                "--output",
+                str(ws),
+                "--directory",
+                "src/orders",
+                "--symbol",
+                "place_order",
+                "--allowed-paths",
+                "src/orders",
+                "--do-not-modify-paths",
+                "pyproject.toml",
+                "--issue-number",
+                "77",
+                "--json",
+            )
+            self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+            val_proc = self.run_cli("validate-run", str(ws))
+            self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+            saved_run = json.loads((ws / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                "2.0.35", saved_run["dependencies"]["packages"]["sqlalchemy"]
+            )
+            prompt_md = (ws / "prompt.md").read_text(encoding="utf-8")
+            self.assertIn("`sqlalchemy` (2.0.35)", prompt_md)
+            self.assertIn("`place_order`", prompt_md)
+            self.assertIn("./src/orders/handler.py", prompt_md)
+            self.assertIn("gh issue view 77", prompt_md)
+
 
 if __name__ == "__main__":
     unittest.main()
