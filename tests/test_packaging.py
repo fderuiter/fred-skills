@@ -661,6 +661,10 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(validate_wf_path.is_file())
         with validate_wf_path.open("r", encoding="utf-8") as f:
             validate_wf = yaml.safe_load(f)
+        validate_triggers = validate_wf.get("on") or validate_wf.get(True) or {}
+        self.assertIn("push", validate_triggers)
+        self.assertIn("pull_request", validate_triggers)
+        self.assertIn("workflow_call", validate_triggers)
         concurrency = validate_wf.get("concurrency", {})
         self.assertIsInstance(concurrency, dict)
         group_expr = concurrency.get("group", "")
@@ -855,6 +859,19 @@ class PackageTests(unittest.TestCase):
                 "cancel-in-progress": False,
             },
         )
+        dispatch_release_ctx = {
+            "workflow": "Release",
+            "event_name": "workflow_dispatch",
+            "ref": "refs/heads/feature/dry-run",
+            "sha": "e8d6832900000000000000000000000000000004",
+            "run_id": "9004",
+        }
+        caller_group = eval_gha_template(
+            release_wf["concurrency"]["group"], dispatch_release_ctx
+        )
+        called_validate_group = eval_gha_template(group_tpl, dispatch_release_ctx)
+        self.assertNotEqual(caller_group, called_validate_group)
+        self.assertIn(dispatch_release_ctx["sha"], called_validate_group)
 
     def test_makefile_target_definitions(self):
         makefile_path = ROOT / "Makefile"
@@ -1162,6 +1179,378 @@ class PackageTests(unittest.TestCase):
                 and "<repository>" in error
                 for error in errors
             )
+        )
+
+    def _write_ui_metadata(
+        self,
+        skill_dir: Path | None = None,
+        *,
+        skill_name: str = "sample-audit",
+        display_name: str = "Sample Audit",
+        short_description: str = "Investigate synthetic behavioral contracts",
+        icon_small: object = "assets/icon.svg",
+        icon_large: object = "assets/icon.svg",
+        policy: object = "default",
+        svg_content: str | None = (
+            '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" '
+            'xmlns="http://www.w3.org/2000/svg"><rect x="2" y="2" width="20" '
+            'height="20" rx="5" fill="#1E3A8A"/></svg>\n'
+        ),
+    ) -> Path:
+        target_skill = skill_dir or self.skill
+        if svg_content is not None:
+            icon_file = target_skill / "assets/icon.svg"
+            icon_file.parent.mkdir(parents=True, exist_ok=True)
+            icon_file.write_text(svg_content, encoding="utf-8")
+        interface_data: dict[str, object] = {
+            "display_name": display_name,
+            "short_description": short_description,
+            "default_prompt": f"Use ${skill_name} on this repository.",
+        }
+        if icon_small is not Ellipsis:
+            interface_data["icon_small"] = icon_small
+        if icon_large is not Ellipsis:
+            interface_data["icon_large"] = icon_large
+        doc: dict[str, object] = {"interface": interface_data}
+        if policy == "default":
+            doc["policy"] = {
+                "products": ["chatgpt", "codex", "api", "atlas"],
+                "allow_implicit_invocation": True,
+            }
+        elif policy is not Ellipsis:
+            doc["policy"] = policy
+        ui_file = target_skill / "agents/openai.yaml"
+        ui_file.parent.mkdir(parents=True, exist_ok=True)
+        ui_file.write_text(
+            yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        return ui_file
+
+    def test_prompt_template_with_markdown_heading_or_code_fence_is_rejected(self):
+        self.prompt.write_text(
+            "# Diagnostic Prompt\n\nUse sample-audit on <repository>. Do not modify code.\n",
+            encoding="utf-8",
+        )
+        heading_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Markdown headings" in error for error in heading_errors),
+            f"Expected Markdown heading error, got: {heading_errors}",
+        )
+
+        self.prompt.write_text(
+            "```markdown\nUse sample-audit on <repository>. Do not modify code.\n```\n",
+            encoding="utf-8",
+        )
+        fence_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("triple-backtick code fences" in error for error in fence_errors),
+            f"Expected code fence error, got: {fence_errors}",
+        )
+
+    def test_ui_metadata_missing_or_invalid_icons_are_rejected(self):
+        self._write_ui_metadata()
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Missing icon fields
+        self._write_ui_metadata(icon_small=Ellipsis, icon_large=Ellipsis)
+        missing_field_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("icon_small" in error for error in missing_field_errors),
+            missing_field_errors,
+        )
+        self.assertTrue(
+            any("icon_large" in error for error in missing_field_errors),
+            missing_field_errors,
+        )
+
+        # Missing SVG file on disk
+        self._write_ui_metadata(svg_content=None)
+        (self.skill / "assets/icon.svg").unlink()
+        missing_file_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Missing UI icon_small file" in error for error in missing_file_errors),
+            missing_file_errors,
+        )
+
+        # Non-SVG extension
+        (self.skill / "assets/icon.png").write_bytes(b"PNG")
+        self._write_ui_metadata(
+            icon_small="assets/icon.png",
+            icon_large="assets/icon.png",
+            svg_content=None,
+        )
+        non_svg_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(".svg" in error for error in non_svg_errors),
+            non_svg_errors,
+        )
+
+        # Package-escaping relative icon path
+        outside_svg = self.root / "outside.svg"
+        outside_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"/>\n',
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            icon_small="../../outside.svg",
+            icon_large="../../outside.svg",
+        )
+        escape_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("escapes standalone package" in error for error in escape_errors),
+            escape_errors,
+        )
+
+        # Absolute or backslash icon paths
+        for bad_icon in ("/tmp/outside.svg", r"assets\icon.svg", "C:/outside.svg"):
+            self._write_ui_metadata(icon_small=bad_icon)
+            bad_path_errors = validate_skill(self.skill)
+            self.assertTrue(
+                any("icon_small" in error for error in bad_path_errors),
+                f"Expected icon_small rejection for {bad_icon}: {bad_path_errors}",
+            )
+
+        # Malformed SVG XML content
+        self._write_ui_metadata(svg_content="not valid xml <svg")
+        malformed_svg_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Invalid SVG" in error for error in malformed_svg_errors),
+            malformed_svg_errors,
+        )
+
+    def test_ui_metadata_missing_or_non_boolean_policy_is_rejected(self):
+        # Missing policy section entirely
+        self._write_ui_metadata(policy=Ellipsis)
+        no_policy_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "policy.allow_implicit_invocation must be a boolean" in error
+                for error in no_policy_errors
+            ),
+            no_policy_errors,
+        )
+
+        # Missing allow_implicit_invocation key
+        self._write_ui_metadata(policy={"products": ["codex"]})
+        missing_key_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "policy.allow_implicit_invocation must be a boolean" in error
+                for error in missing_key_errors
+            ),
+            missing_key_errors,
+        )
+
+        # Strings, integers, and null values must all fail isinstance(..., bool)
+        for bad_val in ("true", "false", 1, 0, None):
+            self._write_ui_metadata(policy={"allow_implicit_invocation": bad_val})
+            bad_val_errors = validate_skill(self.skill)
+            self.assertTrue(
+                any(
+                    "policy.allow_implicit_invocation must be a boolean" in error
+                    for error in bad_val_errors
+                ),
+                f"Expected rejection for {bad_val!r}, got: {bad_val_errors}",
+            )
+
+        # Explicit booleans True and False both succeed
+        for valid_bool in (True, False):
+            self._write_ui_metadata(
+                policy={
+                    "products": ["chatgpt", "codex", "api", "atlas"],
+                    "allow_implicit_invocation": valid_bool,
+                }
+            )
+            self.assertEqual([], validate_skill(self.skill))
+
+    def test_ui_metadata_repeated_adjacent_words_in_short_description_is_rejected(self):
+        for bad_short in (
+            "Investigate synthetic behavioral contracts contracts",
+            "Audit audit synthetic behavioral contracts",
+        ):
+            self._write_ui_metadata(short_description=bad_short)
+            errors = validate_skill(self.skill)
+            self.assertTrue(
+                any("repeated adjacent words" in error for error in errors),
+                f"Expected repeated-word rejection for {bad_short!r}, got: {errors}",
+            )
+
+    def test_suite_requires_openai_yaml_and_unique_short_descriptions(self):
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self.manifest()
+
+        # Standalone check allows omitting agents/openai.yaml outside suite validation
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Suite validation requires agents/openai.yaml on suite members
+        suite_errors, _ = validate_with_telemetry(self.root)
+        self.assertTrue(
+            any(
+                "sample-audit: Suite skill missing required UI metadata: agents/openai.yaml"
+                in err
+                for err in suite_errors
+            ),
+            suite_errors,
+        )
+
+        # Add valid UI metadata to sample-audit and create a second skill with duplicate short_description
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify bounded engineering workflow outcomes",
+        )
+        second_skill = self.root / "skills/second-audit"
+        shutil.copytree(self.skill, second_skill)
+        (second_skill / "SKILL.md").write_text(
+            '---\nname: second-audit\ndescription: "Audit secondary contracts when explicitly requested."\n---\n\n'
+            "# Second\n\nInspect the secondary contract.\n\n## Deliver\n\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json).\n"
+            "Do not modify application code without explicit user authorization.\n",
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            second_skill,
+            skill_name="second-audit",
+            short_description="Verify bounded engineering workflow outcomes",
+        )
+
+        dup_errors, _ = validate_with_telemetry(self.root)
+        self.assertTrue(
+            any("Duplicate UI short_description" in err for err in dup_errors),
+            dup_errors,
+        )
+
+        self._write_ui_metadata(
+            second_skill,
+            skill_name="second-audit",
+            short_description="Verify distinct secondary workflow outcomes",
+        )
+        clean_errors, _ = validate_with_telemetry(self.root)
+        self.assertEqual([], clean_errors)
+
+    def test_all_51_suite_skills_metadata_icons_and_policies_parity(self):
+        import hashlib
+        import re
+        import xml.etree.ElementTree as ET
+
+        suites_doc = json.loads(
+            (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
+        )
+        suite_to_skills: dict[str, list[str]] = {}
+        all_suite_skills: list[str] = []
+        for suite in suites_doc["suites"]:
+            skills_in_suite = [
+                skill for phase in suite["phases"] for skill in phase["skills"]
+            ]
+            suite_to_skills[suite["name"]] = skills_in_suite
+            all_suite_skills.extend(skills_in_suite)
+
+        self.assertEqual(51, len(all_suite_skills))
+        self.assertEqual(
+            {
+                "repository-audits",
+                "repository-workflows",
+                "software-architecture",
+                "code-review",
+                "automated-testing",
+            },
+            set(suite_to_skills),
+        )
+
+        explicit_only = {"repo-apply-fix", "test-case-generation"}
+        expected_products = ["chatgpt", "codex", "api", "atlas"]
+        repeated_word_re = re.compile(r"\b([A-Za-z0-9]+)\s+\1\b", re.IGNORECASE)
+        heading_re = re.compile(r"^\s*#+", re.MULTILINE)
+
+        short_descriptions: dict[str, str] = {}
+        svg_hashes: set[str] = set()
+        suite_bg_colors: dict[str, set[str]] = {}
+
+        for suite_name, skills_in_suite in suite_to_skills.items():
+            suite_bg_colors[suite_name] = set()
+            for skill_name in skills_in_suite:
+                pkg = ROOT / "skills" / skill_name
+                ui_path = pkg / "agents/openai.yaml"
+                icon_path = pkg / "assets/icon.svg"
+                prompt_path = pkg / "assets/prompt.md"
+
+                self.assertTrue(ui_path.is_file(), f"{skill_name} missing openai.yaml")
+                self.assertTrue(icon_path.is_file(), f"{skill_name} missing icon.svg")
+                self.assertTrue(
+                    prompt_path.is_file(), f"{skill_name} missing prompt.md"
+                )
+
+                svg_bytes = icon_path.read_bytes()
+                svg_hashes.add(hashlib.sha256(svg_bytes).hexdigest())
+                svg_root = ET.fromstring(svg_bytes.decode("utf-8"))
+                self.assertEqual("24", svg_root.attrib.get("width"), skill_name)
+                self.assertEqual("24", svg_root.attrib.get("height"), skill_name)
+                self.assertEqual(
+                    "0 0 24 24", svg_root.attrib.get("viewBox"), skill_name
+                )
+                first_child = next(iter(svg_root))
+                self.assertIsNotNone(first_child.attrib.get("fill"), skill_name)
+                suite_bg_colors[suite_name].add(first_child.attrib["fill"])
+
+                ui_doc = yaml.safe_load(ui_path.read_text(encoding="utf-8"))
+                interface = ui_doc["interface"]
+                self.assertEqual("assets/icon.svg", interface.get("icon_small"))
+                self.assertEqual("assets/icon.svg", interface.get("icon_large"))
+
+                short = interface.get("short_description")
+                self.assertIsInstance(short, str)
+                self.assertGreaterEqual(len(short), 25, skill_name)
+                self.assertLessEqual(len(short), 64, skill_name)
+                self.assertIsNone(
+                    repeated_word_re.search(short),
+                    f"{skill_name} has repeated adjacent words in {short!r}",
+                )
+                self.assertNotIn(
+                    short,
+                    short_descriptions,
+                    f"Duplicate short_description {short!r} in {skill_name} and {short_descriptions.get(short)}",
+                )
+                short_descriptions[short] = skill_name
+
+                policy = ui_doc.get("policy")
+                self.assertIsInstance(policy, dict, skill_name)
+                allow_implicit = policy.get("allow_implicit_invocation")
+                self.assertIsInstance(allow_implicit, bool, skill_name)
+                if skill_name in explicit_only:
+                    self.assertIs(allow_implicit, False, skill_name)
+                else:
+                    self.assertIs(allow_implicit, True, skill_name)
+                    self.assertEqual(
+                        expected_products, policy.get("products"), skill_name
+                    )
+
+                prompt_text = prompt_path.read_text(encoding="utf-8")
+                self.assertNotIn("```", prompt_text, skill_name)
+                self.assertIsNone(heading_re.search(prompt_text), skill_name)
+
+        # Every skill has a distinct SVG and each suite uses one distinct palette color
+        self.assertEqual(51, len(svg_hashes))
+        for suite_name, colors in suite_bg_colors.items():
+            self.assertEqual(
+                1,
+                len(colors),
+                f"{suite_name} must use a single suite palette: {colors}",
+            )
+        distinct_suite_colors = {next(iter(c)) for c in suite_bg_colors.values()}
+        self.assertEqual(5, len(distinct_suite_colors))
+
+        diagnostics_prompt = (
+            ROOT / "skills/repo-audit-diagnostics/assets/prompt.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Do not modify canonical ledger files; enforce diagnostic boundary guardrails.",
+            diagnostics_prompt,
         )
 
     def test_all_repository_prompt_templates_comply(self):

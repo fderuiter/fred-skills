@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .common import digest, version
+from .common import FredCliError, digest, version
 
 IGNORED = {
     ".git",
@@ -27,7 +27,11 @@ IGNORED = {
 def git(repo: Path, *args: str, required: bool = False) -> str | None:
     if not shutil.which("git"):
         if required:
-            raise ValueError("Git is required for a revision/diff-based plan")
+            raise FredCliError(
+                "Git is required for a revision/diff-based plan",
+                code="missing_git",
+                hint="Install Git or run in a non-diff mode such as --mode investigate.",
+            )
         return None
     result = subprocess.run(
         ["git", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
@@ -37,8 +41,10 @@ def git(repo: Path, *args: str, required: bool = False) -> str | None:
     )
     if result.returncode:
         if required:
-            raise ValueError(
-                "Git could not resolve the requested repository or revision"
+            raise FredCliError(
+                "Git could not resolve the requested repository or revision",
+                code="invalid_git_revision",
+                hint="Verify the repository is a Git checkout and pass a valid commit, branch, or tag to --base.",
             )
         return None
     return result.stdout.decode("utf-8", errors="surrogateescape").rstrip("\n")
@@ -52,7 +58,11 @@ def snapshot(
 ) -> dict:
     repo = repo.resolve()
     if not repo.is_dir():
-        raise ValueError(f"Repository directory does not exist: {repo}")
+        raise FredCliError(
+            f"Repository directory does not exist: {repo}",
+            code="missing_repository",
+            hint="Pass an existing target repository directory path.",
+        )
     exclude = list(exclude or [])
     listed = git(repo, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
     if listed is not None:

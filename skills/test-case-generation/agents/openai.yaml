@@ -1,4 +1,13 @@
 interface:
-  display_name: "Test Case Generation"
-  short_description: "Generate automated regression and unit test cases"
-  default_prompt: "Use $test-case-generation on this component and its test specification."
+  display_name: Test Case Generation
+  short_description: Generate automated regression and unit test cases
+  default_prompt: Use $test-case-generation on this component and its test specification.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: false

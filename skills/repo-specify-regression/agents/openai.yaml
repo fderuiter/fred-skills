@@ -1,4 +1,13 @@
 interface:
-  display_name: "Regression Specification"
-  short_description: "Verify bounded engineering workflow outcomes"
-  default_prompt: "Use $repo-specify-regression on this source and its evidence artifacts."
+  display_name: Regression Specification
+  short_description: Specify independent regression tests for verified defects
+  default_prompt: Use $repo-specify-regression on this source and its evidence artifacts.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -1,4 +1,13 @@
 interface:
-  display_name: "Finding Verification"
-  short_description: "Verify bounded engineering workflow outcomes"
-  default_prompt: "Use $repo-verify-finding on this source and its evidence artifacts."
+  display_name: Finding Verification
+  short_description: Reproduce, verify, or refute reported repository findings
+  default_prompt: Use $repo-verify-finding on this source and its evidence artifacts.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

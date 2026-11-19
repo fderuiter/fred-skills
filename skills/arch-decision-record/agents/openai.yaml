@@ -1,4 +1,13 @@
 interface:
-  display_name: "Architectural Decisions"
-  short_description: "Record architecture trade-offs and decision artifacts"
-  default_prompt: "Use $arch-decision-record on this source and its architectural context."
+  display_name: Architectural Decisions
+  short_description: Record architecture trade-offs and decision artifacts
+  default_prompt: Use $arch-decision-record on this source and its architectural context.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
