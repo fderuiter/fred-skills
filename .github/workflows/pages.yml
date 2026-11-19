@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   workflow_run:
-    workflows: [Validate skill packages]
+    workflows: [Release]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -39,12 +39,15 @@ jobs:
       - name: Checkout verified commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: refs/heads/main
+          fetch-depth: 0
           persist-credentials: false
       - name: Verify Pages deployment gate and target commit
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REF_VALUE: ${{ github.ref }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
           TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
@@ -80,9 +83,44 @@ jobs:
             exit 1
           fi
 
+          if [ -n "${GH_TOKEN:-}" ]; then
+            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+            SERVER_URL="${SERVER_URL%/}"
+            AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="http.${SERVER_URL}/.extraheader"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
+          fi
+
+          FETCH_ERR_FILE="$(mktemp)"
+          trap 'rm -f "$FETCH_ERR_FILE"' EXIT
+          FETCH_OK="true"
+          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+            git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          else
+            git fetch --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          fi
+          if [ "$FETCH_OK" != "true" ]; then
+            echo "Error: Failed to fetch refs/remotes/origin/main: $(cat "$FETCH_ERR_FILE")" >&2
+            exit 1
+          fi
+
+          ORIGIN_MAIN_SHA="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"
+          if [ -z "$ORIGIN_MAIN_SHA" ] || ! printf '%s' "$ORIGIN_MAIN_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Error: Verified refs/remotes/origin/main SHA is missing or invalid ('${ORIGIN_MAIN_SHA:-none}')" >&2
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
+            echo "Error: Trigger commit '$TARGET_SHA' is not an ancestor of refs/remotes/origin/main ('$ORIGIN_MAIN_SHA')" >&2
+            exit 1
+          fi
+
+          git checkout --detach refs/remotes/origin/main >/dev/null 2>&1
+
           HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
-          if [ "$HEAD_SHA" != "$TARGET_SHA" ]; then
-            echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified target commit '$TARGET_SHA'" >&2
+          if [ "$HEAD_SHA" != "$ORIGIN_MAIN_SHA" ]; then
+            echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified refs/remotes/origin/main '$ORIGIN_MAIN_SHA'" >&2
             exit 1
           fi
       - name: Set up Python 3.12

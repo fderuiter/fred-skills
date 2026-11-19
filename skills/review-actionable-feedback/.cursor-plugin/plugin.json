@@ -1,7 +1,7 @@
 {
   "name": "review-actionable-feedback",
   "description": "Turn PR review notes into ranked comments. Use when drafting PR feedback. Do not use for patches.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

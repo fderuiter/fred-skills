@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-accessibility-state",
   "description": "Audit ARIA state, focus, and keyboard parity. Use when checking UI a11y. Do not use for CSS style.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

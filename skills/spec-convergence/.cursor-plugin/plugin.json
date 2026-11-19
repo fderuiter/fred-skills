@@ -1,7 +1,7 @@
 {
   "name": "spec-convergence",
   "description": "Verify plans and diffs match SPEC.md scope. Use when checking spec drift. Do not use for PR style.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

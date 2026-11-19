@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-side-effects",
   "description": "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

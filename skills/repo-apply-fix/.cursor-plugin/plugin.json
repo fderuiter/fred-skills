@@ -1,7 +1,7 @@
 {
   "name": "repo-apply-fix",
   "description": "Implement an authorized, minimal source fix. Use when applying approved code. Do not use for audits.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

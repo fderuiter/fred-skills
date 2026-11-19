@@ -3418,22 +3418,92 @@ def _validate_specific_doc_invariants(
     return handler(rel_path, text, exp)
 
 
+def _git_tag_exists(root: Path, tag: str) -> bool:
+    if not (root / ".git").exists():
+        return False
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
 def _discover_release_note_docs(root: Path) -> list[str]:
-    docs_dir = root / "docs"
-    if not docs_dir.is_dir():
-        return []
-    discovered = {
-        p.relative_to(root).as_posix()
-        for p in sorted(docs_dir.glob("release-notes-*.md"))
-        if p.is_file()
-    }
     version_path = root / "VERSION"
-    if version_path.is_file():
-        ver = version_path.read_text(encoding="utf-8").strip()
-        candidate = f"docs/release-notes-{ver}.md"
-        if ver and (root / candidate).is_file():
-            discovered.add(candidate)
-    return sorted(discovered)
+    if not version_path.is_file():
+        return []
+    ver = version_path.read_text(encoding="utf-8").strip()
+    if not ver or _git_tag_exists(root, f"v{ver}"):
+        return []
+    candidate = f"docs/release-notes-{ver}.md"
+    return [candidate] if (root / candidate).is_file() else []
+
+
+def _discover_tagged_release_note_versions(root: Path) -> list[str]:
+    if not (root / ".git").exists():
+        return []
+    proc = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/v*"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    tagged: set[str] = set()
+    if proc.returncode == 0:
+        for line in proc.stdout.splitlines():
+            raw = line.strip()
+            if raw.startswith("v") and len(raw) > 1:
+                tagged.add(raw[1:])
+    docs_dir = root / "docs"
+    if docs_dir.is_dir():
+        for note_path in sorted(docs_dir.glob("release-notes-*.md")):
+            ver = note_path.name.removeprefix("release-notes-").removesuffix(".md")
+            if ver and _git_tag_exists(root, f"v{ver}"):
+                tagged.add(ver)
+    return sorted(tagged)
+
+
+def _check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
+    rel_path = f"docs/release-notes-{tag_ver}.md"
+    doc_path = root / rel_path
+    blob_proc = subprocess.run(
+        ["git", "cat-file", "blob", f"refs/tags/v{tag_ver}:{rel_path}"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if blob_proc.returncode != 0:
+        if doc_path.exists() or doc_path.is_symlink():
+            msg = (
+                f"{rel_path}: tagged release notes immutability violation; "
+                f"file did not exist at refs/tags/v{tag_ver}"
+            )
+            return [msg]
+        return []
+    if doc_path.is_symlink() or not doc_path.is_file():
+        msg = (
+            f"{rel_path}: tagged release notes immutability violation; "
+            f"file missing or symlink after refs/tags/v{tag_ver}"
+        )
+        return [msg]
+    if doc_path.read_bytes() != blob_proc.stdout:
+        msg = (
+            f"{rel_path}: tagged release notes immutability violation; "
+            f"content must remain byte-identical to refs/tags/v{tag_ver}:{rel_path}"
+        )
+        return [msg]
+    return []
+
+
+def _validate_tagged_release_notes_immutability(root: Path) -> list[str]:
+    errors: list[str] = []
+    for tag_ver in _discover_tagged_release_note_versions(root):
+        errors.extend(_check_single_tagged_release_note(root, tag_ver))
+    return errors
 
 
 def _validate_single_doc_file(
@@ -3464,7 +3534,7 @@ def _validate_documentation_invariants(root: Path) -> list[str]:
     if load_errors:
         return load_errors
     count_rules = _build_prose_count_rules(exp)
-    errors: list[str] = []
+    errors = _validate_tagged_release_notes_immutability(root)
     for rel_path in _discover_release_note_docs(root):
         errors.extend(
             _validate_single_doc_file(

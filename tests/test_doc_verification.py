@@ -530,9 +530,10 @@ class DocSnippetVerificationTests(unittest.TestCase):
 
     def test_tar_flags_and_host_path_validation(self):
         """tar validator accepts -xf/-tf/-xzf/-ztf and valid/custom paths while rejecting .agent/skills/."""
+        ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         valid_cmds = [
-            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/",
-            "tar -tf fred-skills-0.2.0-starter.tar",
+            f"tar -xf fred-skills-{ver}-starter.tar -C /path/to/project/.agents/skills/",
+            f"tar -tf fred-skills-{ver}-starter.tar",
             "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/",
             "tar -ztf repo-audit-concurrency.tar.gz",
             "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.claude/skills/",
@@ -545,13 +546,13 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertTrue(ok, f"Expected tar command to pass: {cmd} -> {msg}")
 
         invalid_cmds = [
-            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agent/skills/",
+            f"tar -xf fred-skills-{ver}-starter.tar -C /path/to/project/.agent/skills/",
             "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agent/skills/",
             "tar -xzf repo-audit-concurrency.tar.gz -C .agent/skills/",
             "tar -xzf repo-audit-concurrency.tar.gz -C ~/.agent/skills/",
             "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/skills/",
             "tar -cf archive.tar skills/",
-            "tar -xf fred-skills-0.2.0-starter.tar -C",
+            f"tar -xf fred-skills-{ver}-starter.tar -C",
         ]
         for cmd in invalid_cmds:
             ok, _ = execute_snippet_command(cmd, root=ROOT)
@@ -1006,13 +1007,14 @@ class DocSnippetVerificationTests(unittest.TestCase):
             any("audit_to_sarif.py" in cmd for cmd in executed_targets),
             "Expected docs/toolkit.md snippets to execute on default run",
         )
-        # docs/usage.md has tar -xf fred-skills-0.2.0-starter.tar / complete.tar
+        # docs/usage.md has tar -xf fred-skills-<VERSION>-starter.tar / complete.tar
+        ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         self.assertTrue(
-            any("fred-skills-0.2.0-starter.tar" in cmd for cmd in executed_targets),
+            any(f"fred-skills-{ver}-starter.tar" in cmd for cmd in executed_targets),
             "Expected docs/usage.md starter.tar snippet to execute on default run",
         )
         self.assertTrue(
-            any("fred-skills-0.2.0-complete.tar" in cmd for cmd in executed_targets),
+            any(f"fred-skills-{ver}-complete.tar" in cmd for cmd in executed_targets),
             "Expected docs/usage.md complete.tar snippet to execute on default run",
         )
 
@@ -1020,10 +1022,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self,
     ) -> None:
         """_validate_tar accepts -xf/-tf on .tar and -xzf/-ztf on .tar.gz, rejecting mismatches and unknown flags."""
+        ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         valid_cmds = [
-            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/",
-            "tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agents/skills/",
-            "tar -tf fred-skills-0.2.0-starter.tar",
+            f"tar -xf fred-skills-{ver}-starter.tar -C /path/to/project/.agents/skills/",
+            f"tar -xf fred-skills-{ver}-complete.tar -C /path/to/project/.agents/skills/",
+            f"tar -tf fred-skills-{ver}-starter.tar",
             "tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/",
             "tar -ztf repo-audit-concurrency.tar.gz",
         ]
@@ -1032,12 +1035,12 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertTrue(ok, f"Expected valid tar command to pass: {cmd} -> {msg}")
 
         invalid_cmds = [
-            "tar -xzf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/",
-            "tar -ztf fred-skills-0.2.0-complete.tar",
+            f"tar -xzf fred-skills-{ver}-starter.tar -C /path/to/project/.agents/skills/",
+            f"tar -ztf fred-skills-{ver}-complete.tar",
             "tar -xf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/",
             "tar -tf fred-skills-suite.tar.gz",
             "tar -xzf repo-audit-concurrency.tar.gz --invalid-flag",
-            "tar -xf fred-skills-0.2.0-starter.tar --unknown-option",
+            f"tar -xf fred-skills-{ver}-starter.tar --unknown-option",
             "tar -czf out.tar.gz skills/",
         ]
         for cmd in invalid_cmds:
@@ -1237,6 +1240,8 @@ class DocSnippetVerificationTests(unittest.TestCase):
             ok, _ = execute_snippet_command(bad_cmd, root=ROOT)
             self.assertFalse(ok, f"Expected release drift probe to fail: {bad_cmd}")
 
+        active_ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        active_notes = f"docs/release-notes-{active_ver}.md"
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_root = Path(tmp_dir)
             (tmp_root / "scripts").symlink_to(
@@ -1255,39 +1260,38 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 "catalog/packs.json",
                 "docs/usage.md",
                 "docs/release-notes-0.2.0.md",
+                active_notes,
             ):
                 dst = tmp_root / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes((ROOT / rel).read_bytes())
 
             # 1. Bump VERSION without updating README.md or docs/usage.md
-            (tmp_root / "VERSION").write_text("0.3.0\n", encoding="utf-8")
+            (tmp_root / "VERSION").write_text("9.9.9\n", encoding="utf-8")
             ver_errors = verify_all_snippets(
                 root=tmp_root, files=["README.md", "docs/usage.md"]
             )
             self.assertTrue(
-                any("README.md:L117:" in err and "v0.3.0" in err for err in ver_errors),
+                any("README.md:L117:" in err and "v9.9.9" in err for err in ver_errors),
                 f"Expected README.md:L117 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L147:" in err and "v0.3.0" in err
+                    "docs/usage.md:L147:" in err and "v9.9.9" in err
                     for err in ver_errors
                 ),
                 f"Expected docs/usage.md:L147 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L175:" in err and "0.3.0" in err
+                    "docs/usage.md:L175:" in err and "9.9.9" in err
                     for err in ver_errors
                 ),
                 f"Expected docs/usage.md:L175 tar version drift failure, got: {ver_errors}",
             )
 
             # Restore VERSION and mutate catalog/packs.json skill count without updating docs
-            (tmp_root / "VERSION").write_text(
-                (ROOT / "VERSION").read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            (tmp_root / "VERSION").write_text(f"{active_ver}\n", encoding="utf-8")
             import json
 
             packs_doc = json.loads(
@@ -1299,7 +1303,12 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
             count_errors = verify_all_snippets(
                 root=tmp_root,
-                files=["README.md", "docs/usage.md", "docs/release-notes-0.2.0.md"],
+                files=[
+                    "README.md",
+                    "docs/usage.md",
+                    "docs/release-notes-0.2.0.md",
+                    active_notes,
+                ],
             )
             self.assertTrue(
                 any("README.md:L4:" in err and "56" in err for err in count_errors),
@@ -1313,10 +1322,13 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
             self.assertTrue(
                 any(
-                    "docs/release-notes-0.2.0.md:L6:" in err and "56" in err
-                    for err in count_errors
+                    f"{active_notes}:L6:" in err and "56" in err for err in count_errors
                 ),
-                f"Expected release-notes L6 count drift failure, got: {count_errors}",
+                f"Expected active release-notes L6 count drift failure, got: {count_errors}",
+            )
+            self.assertFalse(
+                any("docs/release-notes-0.2.0.md" in err for err in count_errors),
+                f"Historical release-notes-0.2.0.md must be exempt from HEAD count checks: {count_errors}",
             )
 
     def test_shell_prefixes_control_keywords_env_and_assignments_unwrapped(

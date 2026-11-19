@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-nondeterminism",
   "description": "Audit clock, random, and order flakiness. Use when tracing non-determinism. Do not use for runners.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

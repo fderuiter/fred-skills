@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-trust-boundaries",
   "description": "Audit untrusted inputs, authz, and isolation. Use when tracing privilege bypasses. Do not use for blueprints.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

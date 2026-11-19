@@ -1,7 +1,7 @@
 {
   "name": "repo-reconcile-findings",
   "description": "Reconcile ledger statuses across run history. Use when syncing issue state. Do not use for audits.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-api-consistency",
   "description": "Audit endpoint verbs, paging, and shapes. Use when checking API uniformity. Do not use for wire.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

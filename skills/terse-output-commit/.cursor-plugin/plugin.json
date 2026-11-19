@@ -1,7 +1,7 @@
 {
   "name": "terse-output-commit",
   "description": "Format terse code replies and 50-char commits. Use when cutting token output. Do not use for docs.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

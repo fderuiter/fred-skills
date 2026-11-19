@@ -19,6 +19,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import bump_version
 import check_workflow_pins
 import verify_workflow_actions
 from fredlib import releases
@@ -28,6 +29,7 @@ VALIDATE_WORKFLOW = ROOT / ".github/workflows/validate.yml"
 ACTION_PINS_LOCKFILE = ROOT / ".github/action-pins.json"
 RELEASING_DOC = ROOT / "docs/releasing.md"
 CHECKOUT_SHA = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+SETUP_PYTHON_SHA = "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
 ATTEST_SHA = "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8"
 
 _PASSTHROUGH_ENV_KEYS = (
@@ -313,13 +315,44 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIs(dispatch_inputs["publish"]["default"], False)
 
         jobs = self.workflow_data["jobs"]
+        self.assertIn("prepare", jobs)
         self.assertIn("preflight", jobs)
         self.assertIn("validate", jobs)
         self.assertIn("build", jobs)
         self.assertIn("release", jobs)
 
+        prepare = jobs["prepare"]
+        self.assertEqual(prepare.get("permissions"), {"contents": "write"})
+        self.assertEqual(
+            prepare.get("concurrency"),
+            {
+                "group": "skills-release-prepare-main",
+                "cancel-in-progress": False,
+            },
+        )
+        self.assertIn("github.event_name == 'push'", str(prepare.get("if", "")))
+        self.assertIn("github.ref == 'refs/heads/main'", str(prepare.get("if", "")))
+        self.assertIn(
+            "github.actor != 'github-actions[bot]'", str(prepare.get("if", ""))
+        )
+        self.assertEqual(
+            set(prepare.get("outputs", {}).keys()),
+            {"bumped", "release_tag", "target_sha"},
+        )
+        prepare_checkout = prepare["steps"][0]
+        self.assertEqual(prepare_checkout.get("uses"), CHECKOUT_SHA)
+        self.assertEqual(prepare_checkout["with"].get("ref"), "refs/heads/main")
+        self.assertEqual(prepare_checkout["with"].get("fetch-depth"), 0)
+        self.assertIs(prepare_checkout["with"].get("persist-credentials"), False)
+        prepare_py = prepare["steps"][1]
+        self.assertEqual(prepare_py.get("uses"), SETUP_PYTHON_SHA)
+        self.assertEqual(prepare_py["with"].get("python-version"), "3.12")
+
         preflight = jobs["preflight"]
         self.assertNotIn("concurrency", preflight)
+        self.assertEqual(preflight.get("needs"), "prepare")
+        self.assertIn("needs.prepare.result == 'success'", str(preflight.get("if", "")))
+        self.assertIn("needs.prepare.result == 'skipped'", str(preflight.get("if", "")))
         self.assertEqual(preflight.get("permissions"), {"contents": "read"})
         self.assertEqual(
             set(preflight.get("outputs", {}).keys()),
@@ -327,42 +360,56 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         preflight_checkout = preflight["steps"][0]
         self.assertEqual(preflight_checkout.get("uses"), CHECKOUT_SHA)
+        self.assertEqual(
+            preflight_checkout.get("with", {}).get("ref"),
+            "${{ needs.prepare.outputs.target_sha || github.sha }}",
+        )
         self.assertIs(
             preflight_checkout.get("with", {}).get("persist-credentials"), False
         )
 
+        expected_handoff_ref = "${{ needs.prepare.outputs.target_sha || needs.preflight.outputs.target_sha }}"
+
         validate_job = jobs["validate"]
         self.assertNotIn("concurrency", validate_job)
-        self.assertEqual(validate_job.get("needs"), "preflight")
-        self.assertEqual(
-            validate_job.get("if"), "needs.preflight.outputs.should_build == 'true'"
+        self.assertEqual(validate_job.get("needs"), ["prepare", "preflight"])
+        self.assertIn(
+            "needs.preflight.outputs.should_build == 'true'",
+            str(validate_job.get("if", "")),
+        )
+        self.assertIn(
+            "needs.preflight.result == 'success'", str(validate_job.get("if", ""))
         )
         self.assertEqual(validate_job.get("permissions"), {"contents": "read"})
         self.assertEqual(validate_job.get("uses"), "./.github/workflows/validate.yml")
         self.assertEqual(
             validate_job.get("with"),
-            {"ref": "${{ needs.preflight.outputs.target_sha }}"},
+            {"ref": expected_handoff_ref},
         )
 
         build = jobs["build"]
         self.assertNotIn("concurrency", build)
-        self.assertEqual(build.get("needs"), ["preflight", "validate"])
-        self.assertEqual(
-            build.get("if"), "needs.preflight.outputs.should_build == 'true'"
+        self.assertEqual(build.get("needs"), ["prepare", "preflight", "validate"])
+        self.assertIn(
+            "needs.preflight.outputs.should_build == 'true'", str(build.get("if", ""))
         )
+        self.assertIn("needs.validate.result == 'success'", str(build.get("if", "")))
         self.assertEqual(build.get("permissions"), {"contents": "read"})
         build_checkout = build["steps"][0]
         self.assertEqual(build_checkout.get("uses"), CHECKOUT_SHA)
-        self.assertEqual(
-            build_checkout["with"]["ref"], "${{ needs.preflight.outputs.target_sha }}"
-        )
+        self.assertEqual(build_checkout["with"]["ref"], expected_handoff_ref)
         self.assertIs(build_checkout["with"]["persist-credentials"], False)
 
         release = jobs["release"]
-        self.assertEqual(release.get("needs"), ["preflight", "validate", "build"])
         self.assertEqual(
-            release.get("if"), "needs.preflight.outputs.should_publish == 'true'"
+            release.get("needs"), ["prepare", "preflight", "validate", "build"]
         )
+        self.assertIn(
+            "needs.preflight.outputs.should_publish == 'true'",
+            str(release.get("if", "")),
+        )
+        self.assertIn("needs.validate.result == 'success'", str(release.get("if", "")))
+        self.assertIn("needs.build.result == 'success'", str(release.get("if", "")))
         self.assertEqual(
             release.get("concurrency"),
             {
@@ -376,9 +423,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         release_checkout = release["steps"][0]
         self.assertEqual(release_checkout.get("uses"), CHECKOUT_SHA)
-        self.assertEqual(
-            release_checkout["with"]["ref"], "${{ needs.preflight.outputs.target_sha }}"
-        )
+        self.assertEqual(release_checkout["with"]["ref"], expected_handoff_ref)
         self.assertEqual(release_checkout["with"].get("fetch-depth"), 0)
         self.assertIs(release_checkout["with"]["persist-credentials"], False)
 
@@ -627,6 +672,35 @@ class ReleaseWorkflowTests(unittest.TestCase):
         merged_env = _isolated_env(cwd, {"GITHUB_OUTPUT": str(output_file), **env_vars})
         proc = self._run_shell_script(
             gate_step["run"],
+            cwd=cwd,
+            env=merged_env,
+        )
+        return proc, _parse_github_output(output_file)
+
+    def _run_prepare_step(
+        self, cwd: Path, env_vars: dict[str, str]
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        prepare_steps = self.workflow_data["jobs"]["prepare"]["steps"]
+        bump_step = next(
+            s
+            for s in prepare_steps
+            if s.get("name") == "Advance SemVer and push release commit"
+        )
+        output_file = cwd / ".test-prepare-output.txt"
+        output_file.unlink(missing_ok=True)
+        summary_file = cwd / ".test-prepare-summary.md"
+        summary_file.unlink(missing_ok=True)
+        merged_env = _isolated_env(
+            cwd,
+            {
+                "PYTHON_BIN": sys.executable,
+                "GITHUB_OUTPUT": str(output_file),
+                "GITHUB_STEP_SUMMARY": str(summary_file),
+                **env_vars,
+            },
+        )
+        proc = self._run_shell_script(
+            bump_step["run"],
             cwd=cwd,
             env=merged_env,
         )
@@ -1738,6 +1812,355 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("inputs.tag", doc_text)
         self.assertIn("release-artifacts", doc_text)
         self.assertIn("[LICENSE](../LICENSE)", doc_text)
+        self.assertIn("scripts/bump_version.py", doc_text)
+        self.assertIn("prepare", doc_text)
+
+    def _create_bump_fixture_repo(self, base_dir: Path) -> tuple[Path, Path]:
+        """Build a self-contained 2-skill git repository + bare origin for SemVer bump tests."""
+        origin = base_dir / "origin.git"
+        origin.mkdir(parents=True, exist_ok=True)
+        _git(origin, "init", "--bare")
+
+        repo = base_dir / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _git(repo, "init")
+        _git(repo, "remote", "add", "origin", origin.as_posix())
+
+        (repo / "scripts").mkdir(parents=True, exist_ok=True)
+        _write_lf(
+            repo / "scripts/bump_version.py",
+            (ROOT / "scripts/bump_version.py").read_text(encoding="utf-8"),
+        )
+        (repo / "scripts/fredlib").mkdir(parents=True, exist_ok=True)
+        _write_lf(repo / "scripts/fredlib/__init__.py", '"""Toolkit library."""\n')
+        (repo / "shared/repo-audit").mkdir(parents=True, exist_ok=True)
+        _write_lf(repo / "shared/repo-audit/manifest.json", '{"version": "1.0"}\n')
+        _write_lf(repo / "LICENSE", "MIT License\n")
+        _write_lf(repo / "VERSION", "0.2.0\n")
+
+        for sname, sdesc in (
+            ("skill-alpha", "Alpha audit skill."),
+            ("skill-beta", "Beta workflow skill."),
+        ):
+            sdir = repo / "skills" / sname
+            (sdir / ".cursor-plugin").mkdir(parents=True, exist_ok=True)
+            _write_lf(
+                sdir / "SKILL.md",
+                f"---\nname: {sname}\ndescription: {sdesc}\n---\n\n# {sname}\n",
+            )
+
+        suites_payload = {
+            "schema_version": "1.0",
+            "suites": [
+                {
+                    "name": "repository-audits",
+                    "phases": [{"id": 0, "title": "Core", "skills": ["skill-alpha"]}],
+                },
+                {
+                    "name": "repository-workflows",
+                    "phases": [{"id": 0, "title": "Fix", "skills": ["skill-beta"]}],
+                },
+            ],
+        }
+        skills_payload = {
+            "schema_version": "1.0",
+            "skills": [
+                {"name": "skill-alpha", "description": "Alpha audit skill."},
+                {"name": "skill-beta", "description": "Beta workflow skill."},
+            ],
+        }
+        packs_payload = {
+            "schema_version": "1.0",
+            "packs": {
+                "starter": {
+                    "description": "Starter pack.",
+                    "skills": ["skill-alpha"],
+                },
+                "complete": {
+                    "description": "Complete pack.",
+                    "skills": ["skill-alpha", "skill-beta"],
+                },
+            },
+        }
+        hosts_payload = {
+            "schema_version": "1.0",
+            "hosts": {"codex": {}, "claude": {}},
+        }
+        cases_payload = {"cases": [{"id": "c1"}, {"id": "c2"}, {"id": "c3"}]}
+
+        (repo / "catalog").mkdir(parents=True, exist_ok=True)
+        (repo / "evals").mkdir(parents=True, exist_ok=True)
+        (repo / "docs").mkdir(parents=True, exist_ok=True)
+        (repo / "tests").mkdir(parents=True, exist_ok=True)
+        _write_lf(
+            repo / "catalog/suites.json", json.dumps(suites_payload, indent=2) + "\n"
+        )
+        _write_lf(
+            repo / "catalog/skills.json", json.dumps(skills_payload, indent=2) + "\n"
+        )
+        _write_lf(
+            repo / "catalog/packs.json", json.dumps(packs_payload, indent=2) + "\n"
+        )
+        _write_lf(
+            repo / "catalog/hosts.json", json.dumps(hosts_payload, indent=2) + "\n"
+        )
+        _write_lf(repo / "evals/cases.json", json.dumps(cases_payload, indent=2) + "\n")
+
+        _write_lf(
+            repo / "README.md",
+            "# Test\n"
+            "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-starter.tar\n"
+            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/\n",
+        )
+        _write_lf(
+            repo / "docs/usage.md",
+            "# Usage\n"
+            "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-complete.tar\n"
+            "tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agents/skills/\n",
+        )
+        _write_lf(
+            repo / "docs/release-notes-0.2.0.md",
+            "# 0.2.0 — Initial snapshot\n\nTotal: 2 skills.\n",
+        )
+        for rel, content in bump_version.render_versioned_manifests(
+            repo, "0.2.0"
+        ).items():
+            target = repo / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _write_lf(target, content)
+
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "Release 0.2.0")
+        _git(repo, "tag", "-a", "v0.2.0", "-m", "Release v0.2.0")
+        _git(repo, "push", "-u", "origin", "HEAD:refs/heads/main")
+        _git(repo, "push", "origin", "refs/tags/v0.2.0")
+        return origin, repo
+
+    def test_bump_version_minor_patch_skip_untagged_and_manifest_sync(self) -> None:
+        """bump_version.py enforces minor/patch rules, skips non-distributable commits, syncs manifests, and restores tagged notes."""
+        # Stdlib-only execution under python -S on the live repository
+        stdlib_proc = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                str(ROOT / "scripts/bump_version.py"),
+                "--dry-run",
+                "--json",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, stdlib_proc.returncode, stdlib_proc.stderr)
+        parsed_live = json.loads(stdlib_proc.stdout)
+        self.assertIn("bumped", parsed_live)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, repo = self._create_bump_fixture_repo(Path(tmp_dir))
+
+            # 1. Commit modifying only tests/ and developer docs skips version bump
+            _write_lf(repo / "tests/test_extra.py", "x = 1\n")
+            _write_lf(repo / "docs/releasing.md", "# Releasing\n")
+            _git(repo, "add", "tests/test_extra.py", "docs/releasing.md")
+            _git(repo, "commit", "-m", "docs and tests only")
+
+            skip_res = bump_version.bump_repository_version(repo)
+            self.assertFalse(skip_res.bumped)
+            self.assertEqual("0.2.0", skip_res.new_version)
+            self.assertEqual("none", skip_res.bump_kind)
+
+            # 2. Distributable edit without catalog membership change -> patch bump (0.2.0 -> 0.2.1)
+            # Also corrupt docs/release-notes-0.2.0.md to verify automatic restoration from refs/tags/v0.2.0
+            _write_lf(repo / "scripts/fredlib/__init__.py", '"""Updated toolkit."""\n')
+            _write_lf(
+                repo / "docs/release-notes-0.2.0.md",
+                "# 0.2.0 — Rewritten by accident\n\nTotal: 99 skills.\n",
+            )
+            _git(
+                repo,
+                "add",
+                "scripts/fredlib/__init__.py",
+                "docs/release-notes-0.2.0.md",
+            )
+            _git(repo, "commit", "-m", "fix fredlib helper")
+
+            patch_res = bump_version.bump_repository_version(repo)
+            self.assertTrue(patch_res.bumped)
+            self.assertEqual("patch", patch_res.bump_kind)
+            self.assertEqual("0.2.1", patch_res.new_version)
+            self.assertEqual(
+                "0.2.1", (repo / "VERSION").read_text(encoding="utf-8").strip()
+            )
+            self.assertEqual(
+                "# 0.2.0 — Initial snapshot\n\nTotal: 2 skills.\n",
+                (repo / "docs/release-notes-0.2.0.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "Total: 2 skills.",
+                (repo / "docs/release-notes-0.2.1.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "v0.2.1/fred-skills-0.2.1-starter.tar",
+                (repo / "README.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "fred-skills-0.2.1-complete.tar",
+                (repo / "docs/usage.md").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                "0.2.1",
+                json.loads(
+                    (repo / "gemini-extension.json").read_text(encoding="utf-8")
+                )["version"],
+            )
+
+            # 3. Calling bump_version again before v0.2.1 is tagged is a clean no-op
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-m", "chore(release): bump version to v0.2.1")
+            untagged_res = bump_version.bump_repository_version(repo)
+            self.assertFalse(untagged_res.bumped)
+            self.assertEqual("0.2.1", untagged_res.new_version)
+
+            # 4. Tag v0.2.1, then add a new skill and sync catalog/skills.json + docs/catalog.md -> minor bump (0.2.1 -> 0.3.0)
+            import build_catalog
+
+            _git(repo, "tag", "v0.2.1")
+            sdir = repo / "skills/skill-gamma"
+            (sdir / ".cursor-plugin").mkdir(parents=True, exist_ok=True)
+            _write_lf(
+                sdir / "SKILL.md",
+                "---\nname: skill-gamma\ndescription: Gamma skill.\n---\n\n# skill-gamma\n",
+            )
+            suites_doc = json.loads(
+                (repo / "catalog/suites.json").read_text(encoding="utf-8")
+            )
+            suites_doc["suites"][0]["phases"][0]["skills"].append("skill-gamma")
+            _write_lf(
+                repo / "catalog/suites.json", json.dumps(suites_doc, indent=2) + "\n"
+            )
+            packs_doc = json.loads(
+                (repo / "catalog/packs.json").read_text(encoding="utf-8")
+            )
+            packs_doc["packs"]["complete"]["skills"].append("skill-gamma")
+            _write_lf(
+                repo / "catalog/packs.json", json.dumps(packs_doc, indent=2) + "\n"
+            )
+            build_catalog.build(root=repo)
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-m", "feat: add skill-gamma")
+
+            minor_res = bump_version.bump_repository_version(repo)
+            self.assertTrue(minor_res.bumped)
+            self.assertEqual("minor", minor_res.bump_kind)
+            self.assertEqual("0.3.0", minor_res.new_version)
+            self.assertIn(
+                "Total: 3 skills.",
+                (repo / "docs/release-notes-0.3.0.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "Total: 2 skills.",
+                (repo / "docs/release-notes-0.2.1.md").read_text(encoding="utf-8"),
+            )
+            self.assertEqual([], build_catalog.build(root=repo, check=True))
+
+    def test_prepare_job_shell_step_pushes_bump_commit_and_hands_off_target_sha(
+        self,
+    ) -> None:
+        """jobs.prepare pushes a SemVer bump commit to origin/main, enforces actor guard, and hands target_sha to preflight."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            origin, repo = self._create_bump_fixture_repo(base)
+            gh_env, _ = _install_fake_gh(
+                base,
+                {"releases": [{"tag": "v0.2.0", "draft": False}]},
+            )
+
+            # 1. Tests-only commit on main -> bumped=false, no extra commit pushed
+            _write_lf(repo / "tests/test_noop.py", "a = 1\n")
+            _git(repo, "add", "tests/test_noop.py")
+            _git(repo, "commit", "-m", "test: add noop test")
+            noop_sha = _git(repo, "rev-parse", "HEAD")
+            _git(repo, "push", "origin", "HEAD:refs/heads/main")
+
+            prep_noop, out_noop = self._run_prepare_step(
+                repo,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_REF_VALUE": "refs/heads/main",
+                    "GITHUB_ACTOR_NAME": "contributor",
+                    "WORKFLOW_SHA": noop_sha,
+                },
+            )
+            self.assertEqual(0, prep_noop.returncode, prep_noop.stderr)
+            self.assertEqual("false", out_noop.get("bumped"))
+            self.assertEqual(noop_sha, out_noop.get("target_sha"))
+
+            # 2. Catalog membership change on main -> minor bump 0.2.0 -> 0.3.0 pushed to origin/main
+            packs_doc = json.loads(
+                (repo / "catalog/packs.json").read_text(encoding="utf-8")
+            )
+            packs_doc["packs"]["starter"]["skills"].append("skill-beta")
+            _write_lf(
+                repo / "catalog/packs.json", json.dumps(packs_doc, indent=2) + "\n"
+            )
+            _git(repo, "add", "catalog/packs.json")
+            _git(repo, "commit", "-m", "feat(packs): expand starter pack")
+            merge_sha = _git(repo, "rev-parse", "HEAD")
+            _git(repo, "push", "origin", "HEAD:refs/heads/main")
+
+            prep_bump, out_bump = self._run_prepare_step(
+                repo,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_REF_VALUE": "refs/heads/main",
+                    "GITHUB_ACTOR_NAME": "contributor",
+                    "WORKFLOW_SHA": merge_sha,
+                },
+            )
+            self.assertEqual(0, prep_bump.returncode, prep_bump.stderr)
+            self.assertEqual("true", out_bump.get("bumped"))
+            self.assertEqual("v0.3.0", out_bump.get("release_tag"))
+            pushed_sha = out_bump.get("target_sha", "")
+            self.assertNotEqual(merge_sha, pushed_sha)
+            self.assertEqual(_git(origin, "rev-parse", "refs/heads/main"), pushed_sha)
+            self.assertEqual(
+                "github-actions[bot]",
+                _git(repo, "log", "-1", "--format=%an", pushed_sha),
+            )
+
+            # 3. Hand pushed target_sha directly to preflight in the same workflow run -> schedules v0.3.0 build & publish
+            pf_proc, pf_out = self._run_preflight_script(
+                repo,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "push",
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                    "WORKFLOW_SHA": pushed_sha,
+                    "INPUT_PUBLISH": "",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertEqual(0, pf_proc.returncode, pf_proc.stderr)
+            self.assertEqual("true", pf_out.get("should_build"))
+            self.assertEqual("true", pf_out.get("should_publish"))
+            self.assertEqual("v0.3.0", pf_out.get("release_tag"))
+            self.assertEqual(pushed_sha, pf_out.get("target_sha"))
+
+            # 4. Commit-actor guard prevents recursive bumps when triggered by github-actions[bot] commit
+            prep_guard, out_guard = self._run_prepare_step(
+                repo,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_REF_VALUE": "refs/heads/main",
+                    "GITHUB_ACTOR_NAME": "contributor",
+                    "WORKFLOW_SHA": pushed_sha,
+                },
+            )
+            self.assertEqual(0, prep_guard.returncode, prep_guard.stderr)
+            self.assertEqual("false", out_guard.get("bumped"))
+            self.assertEqual(pushed_sha, out_guard.get("target_sha"))
 
     def test_workflow_script_runners_stay_under_windows_cmdline_limit(self) -> None:
         """Workflow test helpers must execute shell steps via script files rather than sh -c exceeding Windows 8191-char limit."""

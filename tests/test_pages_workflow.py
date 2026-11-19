@@ -131,7 +131,7 @@ class PagesWorkflowTests(unittest.TestCase):
         triggers = self._triggers()
         self.assertEqual(set(triggers.keys()), {"workflow_run", "workflow_dispatch"})
         wf_run = triggers["workflow_run"]
-        self.assertEqual(wf_run.get("workflows"), ["Validate skill packages"])
+        self.assertEqual(wf_run.get("workflows"), ["Release"])
         self.assertEqual(wf_run.get("types"), ["completed"])
         self.assertEqual(wf_run.get("branches"), ["main"])
 
@@ -160,8 +160,9 @@ class PagesWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout_step.get("uses"), CHECKOUT_SHA)
         self.assertEqual(
             checkout_step.get("with", {}).get("ref"),
-            "${{ github.event.workflow_run.head_sha || github.sha }}",
+            "refs/heads/main",
         )
+        self.assertEqual(checkout_step.get("with", {}).get("fetch-depth"), 0)
         self.assertIs(checkout_step.get("with", {}).get("persist-credentials"), False)
 
         setup_py_step = next(
@@ -328,13 +329,19 @@ class PagesWorkflowTests(unittest.TestCase):
         script = str(gate_step["run"])
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            origin = Path(tmp_dir) / "origin.git"
+            origin.mkdir()
+            _git(origin, "init", "--bare")
+
             repo = Path(tmp_dir) / "repo"
             repo.mkdir()
             _git(repo, "init")
+            _git(repo, "remote", "add", "origin", origin.as_posix())
             (repo / "README.md").write_text("# Synthetic\n", encoding="utf-8")
             _git(repo, "add", "README.md")
             _git(repo, "commit", "-m", "Initial commit")
             head_sha = _git(repo, "rev-parse", "HEAD")
+            _git(repo, "push", "-u", "origin", "HEAD:refs/heads/main")
 
             def run_gate(env_vars: dict[str, str]) -> subprocess.CompletedProcess[str]:
                 with tempfile.TemporaryDirectory(
@@ -362,18 +369,44 @@ class PagesWorkflowTests(unittest.TestCase):
                 }
             )
             self.assertEqual(ok_wf.returncode, 0, msg=ok_wf.stderr)
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), head_sha)
+
+            # Advance origin/main with a post-merge SemVer bump commit while workflow_run.head_sha
+            # still points at the pre-bump commit: Pages must check out verified refs/remotes/origin/main.
+            pusher = Path(tmp_dir) / "pusher"
+            _git(Path(tmp_dir), "clone", origin.as_posix(), pusher.as_posix())
+            (pusher / "VERSION").write_text("0.3.0\n", encoding="utf-8")
+            _git(pusher, "add", "VERSION")
+            _git(pusher, "commit", "-m", "chore(release): bump version to v0.3.0")
+            bump_sha = _git(pusher, "rev-parse", "HEAD")
+            _git(pusher, "push", "origin", "HEAD:refs/heads/main")
+            _git(repo, "checkout", "--detach", head_sha)
+
+            ok_post_bump = run_gate(
+                {
+                    "EVENT_NAME": "workflow_run",
+                    "GITHUB_REF_VALUE": "refs/heads/main",
+                    "TARGET_SHA": head_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                }
+            )
+            self.assertEqual(ok_post_bump.returncode, 0, msg=ok_post_bump.stderr)
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), bump_sha)
 
             ok_dispatch = run_gate(
                 {
                     "EVENT_NAME": "workflow_dispatch",
                     "GITHUB_REF_VALUE": "refs/heads/main",
-                    "TARGET_SHA": head_sha,
+                    "TARGET_SHA": bump_sha,
                     "WORKFLOW_CONCLUSION": "",
                     "WORKFLOW_EVENT": "",
                     "WORKFLOW_HEAD_BRANCH": "",
                 }
             )
             self.assertEqual(ok_dispatch.returncode, 0, msg=ok_dispatch.stderr)
+            self.assertEqual(_git(repo, "rev-parse", "HEAD"), bump_sha)
 
             rejected_envs = [
                 {

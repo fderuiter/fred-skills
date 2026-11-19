@@ -1,7 +1,7 @@
 {
   "name": "spec-authoring",
   "description": "Compile settled decisions into SPEC.md files. Use when authoring specs. Do not use for ADR history.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

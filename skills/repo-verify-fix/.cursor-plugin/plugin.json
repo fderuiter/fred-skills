@@ -1,7 +1,7 @@
 {
   "name": "repo-verify-fix",
   "description": "Verify a proposed patch fixes its bug safely. Use when checking patch safety. Do not use for triage.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

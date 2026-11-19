@@ -72,7 +72,11 @@ class BuildSiteTests(unittest.TestCase):
         self.assertIn('href="docs/catalog.html"', index_html)
 
         source_guides = sorted((ROOT / "docs").glob("*.md"))
-        self.assertEqual(14, len(source_guides))
+        non_release_guides = [
+            g for g in source_guides if not g.name.startswith("release-notes-")
+        ]
+        self.assertEqual(13, len(non_release_guides))
+        self.assertGreaterEqual(len(source_guides), 15)
         for guide_md in source_guides:
             guide_html_path = self.site_dir / "docs" / f"{guide_md.stem}.html"
             self.assertTrue(guide_html_path.is_file(), guide_md.name)

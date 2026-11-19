@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-cache-coherence",
   "description": "Audit stale caches, keys, and invalidation. Use when checking cache drift. Do not use for schemas.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

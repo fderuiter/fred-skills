@@ -144,12 +144,12 @@ Fetch release pack artifacts directly from GitHub Releases or via `curl`:
 
 ```sh
 # Download a versioned pack archive and checksum manifest
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-starter.tar
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/manifest.json
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-starter.tar
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/SHA256SUMS
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/manifest.json
 
 # Or download the complete 57-package pack
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-complete.tar
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-complete.tar
 ```
 
 ### Verify checksums and manifest
@@ -172,9 +172,9 @@ Unpack verified archives into your agent host skills destination:
 mkdir -p /path/to/project/.agents/skills/
 
 # Deploy starter pack
-tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/
+tar -xf fred-skills-0.3.0-starter.tar -C /path/to/project/.agents/skills/
 
 # Deploy complete pack (creates all 57 skill directories)
-tar -xf fred-skills-0.2.0-complete.tar -C /path/to/project/.agents/skills/
+tar -xf fred-skills-0.3.0-complete.tar -C /path/to/project/.agents/skills/
 ```
 

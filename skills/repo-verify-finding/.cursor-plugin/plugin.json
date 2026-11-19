@@ -1,7 +1,7 @@
 {
   "name": "repo-verify-finding",
   "description": "Reproduce, narrow, or refute one finding. Use when validating a bug claim. Do not use for audits.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

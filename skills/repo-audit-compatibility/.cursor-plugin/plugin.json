@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-compatibility",
   "description": "Audit breaking schema changes and rollouts. Use when checking migrations. Do not use for wire skew.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

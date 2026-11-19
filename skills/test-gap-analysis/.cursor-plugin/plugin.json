@@ -1,7 +1,7 @@
 {
   "name": "test-gap-analysis",
   "description": "Identify uncovered branches and edge cases. Use when planning unit tests. Do not use for audits.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

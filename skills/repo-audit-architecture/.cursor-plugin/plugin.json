@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-architecture",
   "description": "Audit dependency cycles and layer leaks. Use when checking package coupling. Do not use for ADRs.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

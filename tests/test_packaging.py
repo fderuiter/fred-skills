@@ -1336,12 +1336,46 @@ class PackageTests(unittest.TestCase):
             "https://code.claude.com/docs/en/skills", gemini_ext["description"]
         )
 
-        for doc_name in [
+        tagged_v020_proc = subprocess.run(
+            ["git", "cat-file", "blob", "refs/tags/v0.2.0:docs/release-notes-0.2.0.md"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(
+            tagged_v020_proc.stdout,
+            (ROOT / "docs/release-notes-0.2.0.md").read_bytes(),
+        )
+        self.assertIn(
+            "Total: 42 skills.",
+            (ROOT / "docs/release-notes-0.2.0.md").read_text(encoding="utf-8"),
+        )
+
+        active_tag_exists = (
+            subprocess.run(
+                [
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"refs/tags/v{active_version}^{{commit}}",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        head_count_docs = [
             "docs/architecture.md",
             "docs/validation.md",
             "docs/implementation-status.md",
-            "docs/release-notes-0.2.0.md",
-        ]:
+        ]
+        if not active_tag_exists:
+            head_count_docs.append(f"docs/release-notes-{active_version}.md")
+
+        for doc_name in head_count_docs:
             doc_content = (ROOT / doc_name).read_text(encoding="utf-8")
             self.assertNotIn("41 packages", doc_content)
             self.assertNotIn("41 skills", doc_content)
@@ -1375,15 +1409,29 @@ class PackageTests(unittest.TestCase):
             "gemini-extension.json",
         )
 
-        rel_notes_text = (ROOT / f"docs/release-notes-{active_version}.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(f"{expected_suites} suites", rel_notes_text)
-        self.assertIn(f"{expected_packs} purpose packs", rel_notes_text)
-        self.assertIn(
-            f"{expected_hosts} explicit host installation\nlocations", rel_notes_text
-        )
-        self.assertIn(f"Total: {expected_skills} skills.", rel_notes_text)
+        rel_notes_path = ROOT / f"docs/release-notes-{active_version}.md"
+        if not active_tag_exists:
+            rel_notes_text = rel_notes_path.read_text(encoding="utf-8")
+            self.assertIn(f"{expected_suites} suites", rel_notes_text)
+            self.assertIn(f"{expected_packs} purpose packs", rel_notes_text)
+            self.assertIn(
+                f"{expected_hosts} explicit host installation\nlocations",
+                rel_notes_text,
+            )
+            self.assertIn(f"Total: {expected_skills} skills.", rel_notes_text)
+        else:
+            tagged_active_proc = subprocess.run(
+                [
+                    "git",
+                    "cat-file",
+                    "blob",
+                    f"refs/tags/v{active_version}:docs/release-notes-{active_version}.md",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(tagged_active_proc.stdout, rel_notes_path.read_bytes())
 
         for shared_dir in shared_dirs:
             self.assertIn(shared_dir, arch_text)
@@ -1621,6 +1669,169 @@ class PackageTests(unittest.TestCase):
         )
         self.assertEqual(1, stale_proc.returncode)
         self.assertIn("stale skill count 51", stale_proc.stdout)
+
+    def test_tagged_release_notes_immutability_enforced_by_validate_and_run_checks(
+        self,
+    ) -> None:
+        git_fixture = self.root / "tagged-notes-immutability"
+        git_fixture.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ROOT / "scripts", git_fixture / "scripts")
+        try:
+            for dname in (
+                "skills",
+                "schemas",
+                "shared",
+                "evals",
+                ".github",
+                ".claude-plugin",
+                ".cursor-plugin",
+            ):
+                (git_fixture / dname).symlink_to(ROOT / dname, target_is_directory=True)
+        except OSError:
+            for dname in (
+                "skills",
+                "schemas",
+                "shared",
+                "evals",
+                ".github",
+                ".claude-plugin",
+                ".cursor-plugin",
+            ):
+                shutil.copytree(ROOT / dname, git_fixture / dname)
+
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        for rel in (
+            "VERSION",
+            "gemini-extension.json",
+            "catalog/skills.json",
+            "catalog/suites.json",
+            "catalog/hosts.json",
+            "catalog/packs.json",
+            "catalog/experience.json",
+            "catalog/recipes.json",
+            "catalog/profiles.json",
+            "docs/catalog.md",
+            "docs/experience.md",
+            "docs/explorer.html",
+            "CLAUDE.md",
+            "GEMINI.md",
+            "README.md",
+            "docs/architecture.md",
+            "CONTRIBUTING.md",
+            "AGENTS.md",
+            "docs/validation.md",
+            "docs/implementation-status.md",
+            "docs/research.md",
+            "docs/release-notes-0.2.0.md",
+            f"docs/release-notes-{active_version}.md",
+        ):
+            dst = git_fixture / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((ROOT / rel).read_bytes())
+
+        def run_git(*args: str) -> None:
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "core.autocrlf=false",
+                    *args,
+                ],
+                cwd=git_fixture,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        run_git("init")
+        # Tag v0.1.0 without release-notes-0.1.0.md to test retroactive addition guard
+        (git_fixture / "VERSION").write_text("0.1.0\n", encoding="utf-8", newline="\n")
+        v020_bytes = (git_fixture / "docs/release-notes-0.2.0.md").read_bytes()
+        (git_fixture / "docs/release-notes-0.2.0.md").unlink()
+        run_git("add", "VERSION")
+        run_git("commit", "-m", "Initial 0.1.0")
+        run_git("tag", "v0.1.0")
+
+        # Tag v0.2.0 with historical 42-skill release-notes-0.2.0.md
+        (git_fixture / "VERSION").write_text("0.2.0\n", encoding="utf-8", newline="\n")
+        (git_fixture / "docs/release-notes-0.2.0.md").write_bytes(v020_bytes)
+        run_git("add", "VERSION", "docs/release-notes-0.2.0.md")
+        run_git("commit", "-m", "Release 0.2.0")
+        run_git("tag", "v0.2.0")
+
+        # Advance working tree to active_version (untagged)
+        (git_fixture / "VERSION").write_bytes((ROOT / "VERSION").read_bytes())
+        run_git("add", "-f", "VERSION", f"docs/release-notes-{active_version}.md")
+        run_git("commit", "-m", f"Advance to {active_version}")
+
+        # Clean baseline passes with 42 skills in 0.2.0 notes and 57 skills in active notes
+        self.assertEqual([], _validate_documentation_invariants(git_fixture))
+
+        # Editing docs/release-notes-0.2.0.md after refs/tags/v0.2.0 exists fails immutability
+        (git_fixture / "docs/release-notes-0.2.0.md").write_bytes(
+            v020_bytes.replace(b"Total: 42 skills.", b"Total: 57 skills.")
+        )
+        edited_errs = _validate_documentation_invariants(git_fixture)
+        self.assertTrue(
+            any(
+                "docs/release-notes-0.2.0.md" in err and "immutability" in err
+                for err in edited_errs
+            ),
+            f"Expected immutability error on edited v0.2.0 notes, got: {edited_errs}",
+        )
+
+        # Verify scripts/run_checks.py --phase packages fails with immutability error
+        checks_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(git_fixture / "scripts/run_checks.py"),
+                "--phase",
+                "packages",
+            ],
+            cwd=git_fixture,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(1, checks_proc.returncode)
+        self.assertIn(
+            "tagged release notes immutability violation",
+            checks_proc.stdout + checks_proc.stderr,
+        )
+
+        # Deleting docs/release-notes-0.2.0.md after refs/tags/v0.2.0 exists also fails
+        (git_fixture / "docs/release-notes-0.2.0.md").unlink()
+        missing_errs = _validate_documentation_invariants(git_fixture)
+        self.assertTrue(
+            any(
+                "docs/release-notes-0.2.0.md" in err and "immutability" in err
+                for err in missing_errs
+            ),
+            f"Expected immutability error on deleted v0.2.0 notes, got: {missing_errs}",
+        )
+        (git_fixture / "docs/release-notes-0.2.0.md").write_bytes(v020_bytes)
+
+        # Retroactively adding docs/release-notes-0.1.0.md when v0.1.0 had none fails
+        (git_fixture / "docs/release-notes-0.1.0.md").write_text(
+            "# 0.1.0 — Retroactive notes\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        retro_errs = _validate_documentation_invariants(git_fixture)
+        self.assertTrue(
+            any(
+                "docs/release-notes-0.1.0.md" in err and "immutability" in err
+                for err in retro_errs
+            ),
+            f"Expected immutability error on retroactive v0.1.0 notes, got: {retro_errs}",
+        )
+        (git_fixture / "docs/release-notes-0.1.0.md").unlink()
+        self.assertEqual([], _validate_documentation_invariants(git_fixture))
 
     def test_prompt_template_present_and_within_budget_is_valid(self):
         self.assertEqual([], validate_skill(self.skill))
