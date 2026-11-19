@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
+
+pty: ModuleType | None
+try:
+    import pty as _pty
+
+    pty = _pty
+except ImportError:
+    pty = None
 
 sys.dont_write_bytecode = True
 
@@ -355,6 +365,162 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertNotIn("myplaintextpassword", bundle_content)
         self.assertIn("[REDACTED_AUTH_TOKEN]", bundle_content)
         self.assertIn("[REDACTED_API_KEY]", bundle_content)
+
+    def _run_fred_pty(self, *args: str) -> subprocess.CompletedProcess[str]:
+        if pty is None:
+            self.skipTest("pty module is not available on this platform")
+        fred_cli = ROOT / "scripts/fred.py"
+        master, slave = pty.openpty()
+        proc = subprocess.run(
+            [sys.executable, str(fred_cli), *args],
+            stdin=subprocess.DEVNULL,
+            stdout=slave,
+            stderr=slave,
+            check=False,
+        )
+        os.close(slave)
+        output = b""
+        while True:
+            try:
+                chunk = os.read(master, 4096)
+                if not chunk:
+                    break
+                output += chunk
+            except OSError:
+                break
+        os.close(master)
+        return subprocess.CompletedProcess(
+            args=[sys.executable, str(fred_cli), *args],
+            returncode=proc.returncode,
+            stdout=output.decode("utf-8", errors="replace"),
+            stderr="",
+        )
+
+    def test_fred_cli_triage_help_suppresses_legacy_aliases_while_preserving_runtime(
+        self,
+    ):
+        fred_cli = ROOT / "scripts/fred.py"
+        help_proc = subprocess.run(
+            [sys.executable, str(fred_cli), "triage", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(help_proc.returncode, 0, help_proc.stderr)
+        self.assertIn("--workspace", help_proc.stdout)
+        self.assertIn("--output", help_proc.stdout)
+        self.assertNotIn("--transcript", help_proc.stdout)
+        self.assertNotIn("--workspace-dir", help_proc.stdout)
+        self.assertNotIn("--output-dir", help_proc.stdout)
+
+        # Legacy aliases remain active at runtime
+        ws_dir = self.temp_path / "legacy_ws"
+        ws_dir.mkdir()
+        (ws_dir / "run.json").write_text(
+            json.dumps({"run_id": "run-legacy-alias"}), encoding="utf-8"
+        )
+        transcript_file = self.temp_path / "legacy_transcript.txt"
+        transcript_file.write_text(
+            "Command 'ripgrep' timed out after 30.0 seconds\n", encoding="utf-8"
+        )
+        out_dir = self.temp_path / "legacy_out"
+        runtime_proc = subprocess.run(
+            [
+                sys.executable,
+                str(fred_cli),
+                "triage",
+                "--transcript",
+                str(transcript_file),
+                "--workspace-dir",
+                str(ws_dir),
+                "--output-dir",
+                str(out_dir),
+                "--check-schema",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(runtime_proc.returncode, 0, runtime_proc.stderr)
+        self.assertTrue((out_dir / "diagnostic_bundle.json").is_file())
+        self.assertTrue((out_dir / "diagnostic_report.md").is_file())
+        bundle = json.loads(runtime_proc.stdout)
+        self.assertEqual(bundle["session_id"], "run-legacy-alias")
+
+    def test_fred_cli_triage_tty_suppresses_transcript_dump_and_respects_json_flag(
+        self,
+    ):
+        import argparse
+
+        import fred
+
+        transcript_file = self.temp_path / "tty_triage_session.txt"
+        transcript_marker = "UNIQUE_TRANSCRIPT_LINE_MARKER_DO_NOT_DUMP_TO_TTY"
+        transcript_file.write_text(
+            f"Starting repo-audit-concurrency\n{transcript_marker}\nCommand 'ripgrep' timed out after 30.0 seconds\n",
+            encoding="utf-8",
+        )
+        export_dir = self.temp_path / "tty_triage_out"
+        bundle = triage.generate_diagnostic_bundle(transcript_file)
+
+        rendered_with_out = fred.render_tty_output(
+            "triage",
+            bundle,
+            argparse.Namespace(command="triage", output=export_dir, output_dir=None),
+        )
+        self.assertIn(
+            f"Exported diagnostic bundle: {export_dir / 'diagnostic_bundle.json'}",
+            rendered_with_out,
+        )
+        self.assertIn(
+            f"Exported diagnostic report: {export_dir / 'diagnostic_report.md'}",
+            rendered_with_out,
+        )
+        self.assertIn("tool_timeout", rendered_with_out)
+        self.assertNotIn(transcript_marker, rendered_with_out)
+
+        rendered_no_out = fred.render_tty_output(
+            "triage",
+            bundle,
+            argparse.Namespace(command="triage", output=None, output_dir=None),
+        )
+        self.assertIn("Failure classification: tool_timeout", rendered_no_out)
+        self.assertIn("Recovery steps:", rendered_no_out)
+        self.assertNotIn(transcript_marker, rendered_no_out)
+
+        # 1. TTY with --output: prints exported paths and failure type, no transcript dump
+        tty_with_out = self._run_fred_pty(
+            "triage", str(transcript_file), "--output", str(export_dir)
+        )
+        self.assertEqual(tty_with_out.returncode, 0, tty_with_out.stdout)
+        self.assertIn(
+            f"Exported diagnostic bundle: {export_dir / 'diagnostic_bundle.json'}",
+            tty_with_out.stdout,
+        )
+        self.assertIn(
+            f"Exported diagnostic report: {export_dir / 'diagnostic_report.md'}",
+            tty_with_out.stdout,
+        )
+        self.assertIn("tool_timeout", tty_with_out.stdout)
+        self.assertNotIn("scrubbed_transcript", tty_with_out.stdout)
+        self.assertNotIn(transcript_marker, tty_with_out.stdout)
+
+        # 2. TTY without --output: prints failure classification and recovery steps, no scrubbed_transcript
+        tty_no_out = self._run_fred_pty("triage", str(transcript_file))
+        self.assertEqual(tty_no_out.returncode, 0, tty_no_out.stdout)
+        self.assertIn("Failure classification: tool_timeout", tty_no_out.stdout)
+        self.assertIn("Recovery steps:", tty_no_out.stdout)
+        self.assertNotIn("scrubbed_transcript", tty_no_out.stdout)
+        self.assertNotIn(transcript_marker, tty_no_out.stdout)
+
+        # 3. TTY with --json: emits full raw JSON bundle
+        tty_json = self._run_fred_pty("triage", str(transcript_file), "--json")
+        self.assertEqual(tty_json.returncode, 0, tty_json.stdout)
+        parsed = json.loads(tty_json.stdout)
+        self.assertEqual(
+            parsed["failure_classification"]["failure_type"], "tool_timeout"
+        )
+        self.assertIn(transcript_marker, parsed["scrubbed_transcript"])
 
     def test_recover_audit_recipe_in_tasks_and_planning(self):
         fred_cli = ROOT / "scripts/fred.py"

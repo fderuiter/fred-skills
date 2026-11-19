@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 import sys
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -75,20 +78,166 @@ def _parse_adapter_argv(value: str) -> list[str]:
     return parsed
 
 
+_IDENTIFIER_HEADERS = frozenset({"Skill", "Host", "Pack", "Task"})
+
+
+def _fit_column_widths(
+    headers: list[str], natural: list[int], term_width: int
+) -> list[int]:
+    sep_width = 2 * max(0, len(headers) - 1)
+    if sum(natural) + sep_width <= term_width:
+        return list(natural)
+    clamped_term = max(term_width, 40)
+    widths = list(natural)
+    flex = [i for i, h in enumerate(headers) if h not in _IDENTIFIER_HEADERS]
+    if not flex:
+        return widths
+    fixed_total = sum(widths[i] for i in range(len(headers)) if i not in flex)
+    budget = clamped_term - sep_width - fixed_total
+    floors = [min(natural[i], max(len(headers[i]), 6)) for i in flex]
+    if budget <= sum(floors):
+        min_floors = [max(4, min(natural[i], 6)) for i in flex]
+        if budget <= sum(min_floors):
+            for idx, col in enumerate(flex):
+                widths[col] = min_floors[idx]
+            return widths
+        floors = min_floors
+    remaining = set(flex)
+    floor_map = dict(zip(flex, floors, strict=True))
+    avail = budget
+    while remaining:
+        share = avail // len(remaining)
+        small = [i for i in remaining if natural[i] <= share]
+        if small:
+            for col in small:
+                widths[col] = natural[col]
+                avail -= widths[col]
+                remaining.remove(col)
+            continue
+        clamped = [i for i in remaining if share <= floor_map[i]]
+        if clamped:
+            for col in clamped:
+                widths[col] = floor_map[col]
+                avail -= widths[col]
+                remaining.remove(col)
+            continue
+        sorted_rem = sorted(remaining)
+        extra = avail - share * len(sorted_rem)
+        for idx, col in enumerate(sorted_rem):
+            widths[col] = share + (1 if idx < extra else 0)
+        break
+    return widths
+
+
+_PATH_SEG_RE = re.compile(r"[/\\]*[^/\\]+[/\\]*")
+
+
+def _tokenize_path_units(para: str, safe_width: int) -> list[str]:
+    raw = _PATH_SEG_RE.findall(para)
+    if not raw:
+        return [para]
+    units: list[str] = []
+    idx = 0
+    while idx < len(raw):
+        seg = raw[idx]
+        if seg.startswith(".") and idx + 1 < len(raw):
+            combined = seg + raw[idx + 1]
+            trimmed = combined.rstrip("/\\")
+            if len(combined) <= safe_width:
+                units.append(combined)
+                idx += 2
+                continue
+            if len(trimmed) <= safe_width:
+                trailing = combined[len(trimmed) :]
+                units.append(trimmed)
+                if trailing and idx + 2 < len(raw):
+                    raw[idx + 2] = trailing + raw[idx + 2]
+                elif trailing:
+                    units.append(trailing)
+                idx += 2
+                continue
+        units.append(seg)
+        idx += 1
+    return units
+
+
+def _wrap_path_paragraph(para: str, safe_width: int) -> list[str]:
+    lines: list[str] = []
+    cur = ""
+    for unit in _tokenize_path_units(para, safe_width):
+        if cur and len(cur) + len(unit) <= safe_width:
+            cur += unit
+            continue
+        if cur:
+            lines.append(cur)
+            cur = ""
+        if len(unit) <= safe_width:
+            cur = unit
+        else:
+            chunks = textwrap.wrap(unit, width=safe_width) or [""]
+            lines.extend(chunks[:-1])
+            cur = chunks[-1]
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+def _wrap_table_cell(text: str, width: int, keep_intact: bool) -> list[str]:
+    if keep_intact:
+        return [text]
+    safe_width = max(1, width)
+    paragraphs = text.splitlines() or [""]
+    wrapped: list[str] = []
+    for para in paragraphs:
+        if len(para) <= safe_width:
+            wrapped.append(para)
+        elif ("/" in para or "\\" in para) and " " not in para:
+            wrapped.extend(_wrap_path_paragraph(para, safe_width))
+        else:
+            wrapped.extend(textwrap.wrap(para, width=safe_width) or [""])
+    return wrapped or [""]
+
+
+def _render_table_row(
+    cells: list[str], widths: list[int], keep_mask: list[bool]
+) -> list[str]:
+    wrapped_cols = [
+        _wrap_table_cell(cells[i], widths[i], keep_mask[i]) for i in range(len(widths))
+    ]
+    height = max(len(col) for col in wrapped_cols)
+    lines: list[str] = []
+    for line_idx in range(height):
+        parts = [
+            (
+                wrapped_cols[i][line_idx] if line_idx < len(wrapped_cols[i]) else ""
+            ).ljust(widths[i])
+            for i in range(len(widths))
+        ]
+        lines.append("  ".join(parts).rstrip())
+    return lines
+
+
 def format_table(headers: list[str], rows: list[list[str]]) -> str:
-    if not rows:
+    if not headers or not rows:
         return "No entries found."
-    widths = [len(h) for h in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            widths[i] = max(widths[i], len(str(cell)))
-    header_line = "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
-    separator_line = "  ".join("-" * widths[i] for i in range(len(headers)))
-    data_lines = [
-        "  ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row))
+    norm_rows = [
+        [str(row[i]) if i < len(row) else "" for i in range(len(headers))]
         for row in rows
     ]
-    return "\n".join([header_line, separator_line, *data_lines])
+    widths = [
+        max(len(h), *(len(row[i]) for row in norm_rows)) for i, h in enumerate(headers)
+    ]
+    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    if is_tty:
+        term_cols = shutil.get_terminal_size((80, 24)).columns
+        widths = _fit_column_widths(headers, widths, term_cols)
+    keep_mask = [(not is_tty) or (h in _IDENTIFIER_HEADERS) for h in headers]
+    header_lines = _render_table_row(headers, widths, keep_mask)
+    separator_line = "  ".join("-" * widths[i] for i in range(len(headers)))
+    data_lines: list[str] = []
+    for row in norm_rows:
+        data_lines.extend(_render_table_row(row, widths, keep_mask))
+    return "\n".join([*header_lines, separator_line, *data_lines])
 
 
 def _installed_rows_for_host(host_label: str, entry: dict[str, Any]) -> list[list[str]]:
@@ -195,6 +344,242 @@ def render_discovery_table(command: str, data: Any) -> str:
     if command == "installed":
         return _render_installed_table(data)
     return ""
+
+
+def _render_planning_tty(command: str, data: dict[str, Any]) -> str:
+    if command == "preflight":
+        repo = data.get("repository", {})
+        snap = data.get("snapshot", {})
+        file_count = snap.get("file_count", len(snap.get("files", {})))
+        dirty_suffix = " (dirty)" if repo.get("dirty") else ""
+        langs = ", ".join(data.get("languages", [])) or "none detected"
+        return "\n".join(
+            [
+                f"Repository: {repo.get('path', '')}",
+                f"Revision: {repo.get('revision', 'unversioned')}{dirty_suffix}",
+                f"Files indexed: {file_count} (complete: {snap.get('complete', True)})",
+                f"Languages: {langs}",
+            ]
+        )
+    if command == "plan":
+        plan_info = data.get("plan", {})
+        repo = data.get("preflight", {}).get("repository", {})
+        skills = plan_info.get("skills", [])
+        deferred = plan_info.get("deferred_skills", [])
+        outputs = plan_info.get("expected_outputs", [])
+        lines = [
+            f"Plan: {plan_info.get('task', '')} (mode: {plan_info.get('mode', '')}, budget: {plan_info.get('budget', '')})",
+            f"Repository: {repo.get('path', '')} ({repo.get('revision', 'unversioned')})",
+            f"Selected skills ({len(skills)}): {', '.join(skills) or 'none'}",
+            f"Deferred skills ({len(deferred)}): {', '.join(deferred) or 'none'}",
+            f"Expected outputs: {', '.join(outputs) or 'none'}",
+        ]
+        if plan_info.get("base_revision"):
+            changed = plan_info.get("changed_files", [])
+            lines.append(
+                f"Changed files ({len(changed)} vs {plan_info['base_revision'][:12]}): {', '.join(changed[:10]) or 'none'}"
+            )
+        return "\n".join(lines)
+    run = data.get("run", {})
+    plan_info = run.get("plan", {})
+    output = data.get("output", "")
+    skills = plan_info.get("skills", [])
+    prompt_path = str(Path(output) / "prompt.md") if output else "prompt.md"
+    return "\n".join(
+        [
+            f"Initialized run: {run.get('run_id', '')} ({plan_info.get('task', '')}, mode: {plan_info.get('mode', '')}, budget: {plan_info.get('budget', '')})",
+            f"Workspace: {output}",
+            f"Prompt: {prompt_path}",
+            f"Selected skills ({len(skills)}): {', '.join(skills) or 'none'}",
+        ]
+    )
+
+
+def _render_run_management_tty(command: str, data: dict[str, Any]) -> str:
+    if command == "validate-run":
+        status = "valid" if data.get("valid") else "invalid"
+        return f"Run validation: {status} (semantic claims verified: {str(bool(data.get('semantic_claims_verified'))).lower()})"
+    if command == "resume":
+        changed = data.get("changed_files", [])
+        stale = data.get("stale_finding_ids", [])
+        old_snap = str(data.get("old_snapshot", ""))[:12]
+        new_snap = str(data.get("new_snapshot", ""))[:12]
+        return "\n".join(
+            [
+                f"Resume check: {len(changed)} changed files, {len(stale)} stale findings",
+                f"Snapshot: {old_snap} -> {new_snap}",
+                f"Next action: {data.get('next_action', '')}",
+            ]
+        )
+    if command == "memory":
+        return f"Exported memory: {data.get('output', '')} ({data.get('contracts', 0)} contracts)"
+    if command == "checkpoint":
+        checkpoints = data.get("checkpoints", [])
+        latest_note = checkpoints[-1].get("note", "") if checkpoints else ""
+        return "\n".join(
+            [
+                f"Recorded checkpoint: {data.get('run_id', '')} -> {data.get('state', '')}",
+                f"Note: {latest_note}",
+            ]
+        )
+    if command == "report":
+        return f"Rendered report: {data.get('output', '')}"
+    if command == "issues":
+        drafts = data.get("drafts", [])
+        lines = [
+            f"Generated issue drafts: {len(drafts)} (remote writes: {data.get('remote_writes', 0)})"
+        ]
+        lines.extend(f"  {path}" for path in drafts)
+        return "\n".join(lines)
+    if command == "compare":
+        return (
+            "Comparison summary: "
+            f"{len(data.get('introduced', []))} introduced, "
+            f"{len(data.get('persisting', []))} persisting, "
+            f"{len(data.get('status_changed', []))} status changed, "
+            f"{len(data.get('not_observed', []))} not observed, "
+            f"{len(data.get('ambiguous', []))} ambiguous"
+        )
+    if command == "reconcile":
+        return "\n".join(
+            [
+                f"Reconciled finding {data.get('finding_id', '')}: {data.get('state', '')}",
+                f"Note: {data.get('note', '')}",
+            ]
+        )
+    if command == "import-sarif":
+        return f"Imported SARIF observations: {data.get('observations', 0)} -> {data.get('output', '')}"
+    return (
+        f"Exported SARIF results: {data.get('results', 0)} -> {data.get('output', '')}"
+    )
+
+
+def _render_installation_tty(command: str, data: dict[str, Any]) -> str:
+    skills = data.get("skills", [])
+    prefix = "Dry run: " if data.get("dry_run") else ""
+    if command in {"install", "update"}:
+        verb = (
+            ("install" if command == "install" else "update")
+            if prefix
+            else ("Installed" if command == "install" else "Updated")
+        )
+        hosts_list = data.get("hosts")
+        if isinstance(hosts_list, list) and hosts_list:
+            host_names = ", ".join(str(h.get("host", "")) for h in hosts_list)
+            lines = [
+                f"{prefix}{verb} {len(skills)} skills across {len(hosts_list)} hosts ({host_names}, {data.get('scope', '')}):"
+            ]
+            lines.extend(
+                f"  {h.get('host', '')} -> {h.get('target', '')}" for h in hosts_list
+            )
+            return "\n".join(lines)
+        return f"{prefix}{verb} {len(skills)} skills for {data.get('host', '')} ({data.get('scope', '')}) -> {data.get('target', '')}"
+    if command == "remove":
+        verb = "remove" if prefix else "Removed"
+        return f"{prefix}{verb} {len(skills)} skills: {', '.join(skills) or 'none'}"
+    if command == "rollback":
+        return f"Rolled back {len(skills)} skills: {', '.join(skills) or 'none'}"
+    lines = [
+        f"Install recovery ({data.get('recovery', '')}): {len(skills)} skills ({', '.join(skills) or 'none'})"
+    ]
+    if data.get("preserved_interrupted_content"):
+        lines.append(f"Preserved content: {data['preserved_interrupted_content']}")
+    return "\n".join(lines)
+
+
+def _render_release_tty(command: str, data: dict[str, Any]) -> str:
+    if command == "evaluate":
+        runs_list = data.get("runs", [])
+        summary = data.get("summary", {})
+        lines = [f"Evaluation complete: {len(runs_list)} runs"]
+        for label, key in [
+            ("Without skill", "without_skill"),
+            ("With skill", "with_skill"),
+        ]:
+            info = summary.get(key, {})
+            rate = info.get("exact_match_rate")
+            rate_str = f"{rate:.0%}" if isinstance(rate, int | float) else "n/a"
+            lines.append(
+                f"{label}: {info.get('runs', 0)} runs, exact match {rate_str}, {info.get('failures', 0)} failures"
+            )
+        return "\n".join(lines)
+    if command == "release":
+        archives = data.get("archives", [])
+        skills = data.get("skills", [])
+        return f"Built release v{data.get('version', '')} (pack: {data.get('pack', '')}): {len(archives)} archives ({len(skills)} skills)"
+    return "\n".join(
+        [
+            f"Verified release v{data.get('version', '')}: {data.get('verified_archives', 0)} archives verified",
+            str(data.get("authenticity", "")),
+        ]
+    ).rstrip()
+
+
+def _render_triage_tty(
+    data: dict[str, Any], args: argparse.Namespace | None = None
+) -> str:
+    fc = data.get("failure_classification", {})
+    failure_type = fc.get("failure_type", "unknown")
+    output_dir = (
+        (getattr(args, "output", None) or getattr(args, "output_dir", None))
+        if args is not None
+        else None
+    )
+    if output_dir:
+        out_path = Path(output_dir)
+        return "\n".join(
+            [
+                f"Exported diagnostic bundle: {out_path / 'diagnostic_bundle.json'}",
+                f"Exported diagnostic report: {out_path / 'diagnostic_report.md'}",
+                f"Failure classification: {failure_type}",
+            ]
+        )
+    line_num = fc.get("line_number")
+    line_suffix = f" (line {line_num})" if line_num is not None else ""
+    lines = [
+        f"Session: {data.get('session_id', 'unknown')}",
+        f"Failure classification: {failure_type}{line_suffix}",
+    ]
+    if fc.get("summary"):
+        lines.append(f"Summary: {fc['summary']}")
+    specialist = data.get("correlated_domain", {}).get("specialist_skill")
+    if specialist:
+        lines.append(f"Correlated domain: {specialist}")
+    steps = data.get("recovery", {}).get("instructions", [])
+    if steps:
+        lines.append("Recovery steps:")
+        lines.extend(f"  {step}" for step in steps)
+    return "\n".join(lines)
+
+
+def render_tty_output(
+    command: str, data: Any, args: argparse.Namespace | None = None
+) -> str:
+    if command in {"tasks", "packs", "hosts", "search", "installed"}:
+        return render_discovery_table(command, data)
+    payload = data if isinstance(data, dict) else {}
+    if command in {"preflight", "plan", "init"}:
+        return _render_planning_tty(command, payload)
+    if command == "triage":
+        return _render_triage_tty(payload, args)
+    if command in {
+        "validate-run",
+        "resume",
+        "memory",
+        "checkpoint",
+        "report",
+        "issues",
+        "compare",
+        "reconcile",
+        "import-sarif",
+        "export-sarif",
+    }:
+        return _render_run_management_tty(command, payload)
+    if command in {"install", "update", "remove", "rollback", "recover-install"}:
+        return _render_installation_tty(command, payload)
+    if command in {"evaluate", "release", "verify-release"}:
+        return _render_release_tty(command, payload)
+    return json.dumps(data, indent=2, ensure_ascii=False)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -555,7 +940,7 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         dest="transcript_opt",
         default=None,
-        help="Session transcript file (.json, .jsonl, .txt, .md)",
+        help=argparse.SUPPRESS,
     )
     sub_tri.add_argument(
         "--workspace",
@@ -567,7 +952,7 @@ def parser() -> argparse.ArgumentParser:
         "--workspace-dir",
         type=Path,
         default=None,
-        help="Optional audit run workspace directory with run.json/audit.json",
+        help=argparse.SUPPRESS,
     )
     sub_tri.add_argument(
         "--output",
@@ -579,7 +964,7 @@ def parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory to write scrubbed diagnostic_bundle.json and report",
+        help=argparse.SUPPRESS,
     )
     sub_tri.add_argument(
         "--session-id", default=None, help="Explicit session or run ID"
@@ -1094,12 +1479,8 @@ def main() -> int:
     except (ValueError, OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
         print(f"fred-skills: {exc}", file=sys.stderr)
         return 1
-    if (
-        args.command in {"tasks", "packs", "hosts", "search", "installed"}
-        and sys.stdout.isatty()
-        and not getattr(args, "as_json", False)
-    ):
-        print(render_discovery_table(args.command, result))
+    if sys.stdout.isatty() and not getattr(args, "as_json", False):
+        print(render_tty_output(args.command, result, args))
     else:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     if (
