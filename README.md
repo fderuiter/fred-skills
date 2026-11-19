@@ -7,37 +7,48 @@ remediation reconciliation, and nine software architecture, code review, and aut
 testing skills. All packages currently have experimental maturity.
 
 Start with a task in the [task guide](docs/experience.md), browse the
-[searchable offline explorer](docs/explorer.html) after downloading the repository,
-or choose a package from the [catalog](docs/catalog.md).
+[hosted explorer](https://fderuiter.github.io/fred-skills) (or local
+[offline explorer](docs/explorer.html)), or choose a package from the [catalog](docs/catalog.md).
 
 | I want to… | Start here |
 | --- | --- |
 | Review a pull request | `review-pr` with an explicit base revision |
 | Investigate a bug | `investigate-bug` and a bounded critical workflow |
 | Understand hidden contracts | `understand-repo` or `repo-audit-program` |
+| Design or document system architecture | `design-architecture` |
+| Run a differential code review | `review-code-changes` with an explicit base revision |
+| Expand automated test coverage | `expand-automated-tests` (add `--allow-fixes` to write test files) |
 | Turn findings into a practical plan | `plan-findings` |
 | Correct and independently verify a defect | `apply-fix`, then `verify-fix` |
 | Prepare a release | `release-ready` |
 
 ## Installation
 
-Register the marketplace catalog, then install a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills) or any individual skill:
+Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills), or any individual skill:
 
 ### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
+/plugin install fred-skills@fred-skills
+# Or install a curated pack:
+/plugin install starter@fred-skills
 /plugin install complete@fred-skills
 ```
 
 ### Codex
 
-```sh
-codex plugin marketplace add fderuiter/fred-skills
-codex plugin add starter@fred-skills
+Install skills into `.agents/skills/` using OpenAI Codex's built-in `$skill-installer` or the local CLI:
+
+```text
+$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
 ```
 
-Replace `complete` or `starter` with any pack in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Manual directory copying and local installer workflows (`scripts/fred.py install`) remain supported for environments without marketplace access.
+```sh
+python scripts/fred.py install --destination /path/to/project --host codex --pack starter
+```
+
+Replace `fred-skills`, `complete`, or `starter` with any pack in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Running `python scripts/fred.py install` without flags installs the `starter` pack across detected workspace hosts (or bootstraps `.agents/skills/` when no host markers exist).
 
 ## Try the local walkthrough
 

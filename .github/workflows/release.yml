@@ -47,6 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
           EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_SHA: ${{ github.sha }}
           INPUT_PUBLISH: ${{ inputs.publish }}
@@ -70,11 +71,32 @@ jobs:
                 exit 1
                 ;;
             esac
-            if ! printf '%s' "$CANDIDATE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z._-]+)?(\+[0-9A-Za-z._-]+)?$' || ! git check-ref-format "refs/tags/$CANDIDATE_TAG"; then
+            if ! printf '%s' "$CANDIDATE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || ! git check-ref-format "refs/tags/$CANDIDATE_TAG"; then
               echo "Error: Invalid release tag syntax '$CANDIDATE_TAG' (expected v<VERSION>)" >&2
               exit 1
             fi
           }
+
+          write_summary() {
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "### Release Preflight"
+                echo "- **Event**: \`${EVENT:-unknown}\` (\`${REF_TYPE:-unknown}:${REF_NAME:-unknown}\`)"
+                echo "- **Decision**: $1"
+                echo "- **Release tag**: \`${2:-none}\`"
+                echo "- **Target SHA**: \`$3\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+
+          if [ -n "${GH_TOKEN:-}" ]; then
+            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+            SERVER_URL="${SERVER_URL%/}"
+            AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="http.${SERVER_URL}/.extraheader"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
+          fi
 
           EVENT="${EVENT_NAME:-}"
           PUBLISH_INPUT="${INPUT_PUBLISH:-}"
@@ -146,6 +168,7 @@ jobs:
                 echo "target_sha=$TARGET_SHA"
               } >> "$GITHUB_OUTPUT"
             fi
+            write_summary "Build read-only workflow artifacts only (publish=false)" "$DISPATCH_TAG" "$TARGET_SHA"
             exit 0
           fi
 
@@ -226,6 +249,7 @@ jobs:
           trap 'rm -f "$VIEW_ERR_FILE"' EXIT
           SHOULD_BUILD="false"
           SHOULD_PUBLISH="false"
+          DECISION_TEXT=""
           if VIEW_OUT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
             NORMALIZED_VIEW="$(printf '%s' "$VIEW_OUT" | tr -d '[:space:]')"
             case "$NORMALIZED_VIEW" in
@@ -233,11 +257,13 @@ jobs:
                 echo "Draft release $TAG found; scheduling build and publication."
                 SHOULD_BUILD="true"
                 SHOULD_PUBLISH="true"
+                DECISION_TEXT="Draft release exists; schedule build and promotion"
                 ;;
               false|*'{"isDraft":false}'*)
                 echo "Release $TAG is already published; skipping duplicate build and publication."
                 SHOULD_BUILD="false"
                 SHOULD_PUBLISH="false"
+                DECISION_TEXT="Release already published; skip duplicate build and publication"
                 ;;
               *)
                 echo "Error: Unexpected gh release view output for '$TAG': $VIEW_OUT" >&2
@@ -249,6 +275,7 @@ jobs:
               echo "Release $TAG is unpublished; scheduling build and publication."
               SHOULD_BUILD="true"
               SHOULD_PUBLISH="true"
+              DECISION_TEXT="Release unpublished; schedule build and publication"
             else
               cat "$VIEW_ERR_FILE" >&2
               exit 1
@@ -263,6 +290,7 @@ jobs:
               echo "target_sha=$TARGET_SHA"
             } >> "$GITHUB_OUTPUT"
           fi
+          write_summary "$DECISION_TEXT" "$TAG" "$TARGET_SHA"
 
   build:
     needs: preflight
@@ -305,6 +333,9 @@ jobs:
     if: needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: skills-release-publish-${{ needs.preflight.outputs.release_tag || github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
@@ -364,7 +395,7 @@ jobs:
               exit 1
               ;;
           esac
-          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z._-]+)?(\+[0-9A-Za-z._-]+)?$' || ! git check-ref-format "refs/tags/$TAG"; then
+          if ! printf '%s' "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || ! git check-ref-format "refs/tags/$TAG"; then
             echo "Error: Invalid release tag syntax '$TAG' (expected v<VERSION>)" >&2
             exit 1
           fi
@@ -391,21 +422,143 @@ jobs:
       - name: Verify downloaded artifact checksums
         run: |
           set -eu
+          if [ ! -d dist/release ]; then
+            echo "Error: Downloaded release directory dist/release is missing" >&2
+            exit 1
+          fi
           if [ ! -s dist/release/SHA256SUMS ] || [ ! -s dist/release/checksums.sha256 ]; then
             echo "Error: Downloaded release checksum manifests are missing or empty" >&2
             exit 1
           fi
-          cd dist/release
-          sha256sum -c SHA256SUMS
-          sha256sum -c checksums.sha256
+          if ! cmp -s dist/release/SHA256SUMS dist/release/checksums.sha256; then
+            echo "Error: Downloaded SHA256SUMS and checksums.sha256 do not match" >&2
+            exit 1
+          fi
+
+          MANIFEST_LIST="$(mktemp)"
+          ACTUAL_LIST="$(mktemp)"
+          trap 'rm -f "$MANIFEST_LIST" "$ACTUAL_LIST"' EXIT
+
+          awk '{
+            if (NF < 2 || $1 !~ /^[0-9a-f]{64}$/) {
+              exit 2
+            }
+            sub(/^[0-9a-f]{64}  /, "", $0)
+            if ($0 == "" || $0 ~ /\// || $0 ~ /^\./) {
+              exit 2
+            }
+            print $0
+          }' dist/release/SHA256SUMS | LC_ALL=C sort -u > "$MANIFEST_LIST" || {
+            echo "Error: Malformed entry in dist/release/SHA256SUMS" >&2
+            exit 1
+          }
+
+          if [ ! -s "$MANIFEST_LIST" ]; then
+            echo "Error: No archive entries listed in dist/release/SHA256SUMS" >&2
+            exit 1
+          fi
+
+          for ENTRY in dist/release/* dist/release/.[!.]* dist/release/..?*; do
+            [ -e "$ENTRY" ] || [ -L "$ENTRY" ] || continue
+            if [ -L "$ENTRY" ] || [ ! -f "$ENTRY" ]; then
+              echo "Error: Non-regular file or symlink in dist/release: $ENTRY" >&2
+              exit 1
+            fi
+            BASENAME="${ENTRY#dist/release/}"
+            case "$BASENAME" in
+              .*)
+                echo "Error: Unexpected hidden file in dist/release: $BASENAME" >&2
+                exit 1
+                ;;
+              manifest.json|SHA256SUMS|checksums.sha256)
+                ;;
+              *)
+                printf '%s\n' "$BASENAME" >> "$ACTUAL_LIST"
+                ;;
+            esac
+          done
+
+          LC_ALL=C sort -u "$ACTUAL_LIST" -o "$ACTUAL_LIST"
+          if ! cmp -s "$MANIFEST_LIST" "$ACTUAL_LIST"; then
+            echo "Error: Downloaded files in dist/release do not match SHA256SUMS entries" >&2
+            exit 1
+          fi
+
+          if [ -f VERSION ] && [ ! -s dist/release/manifest.json ]; then
+            echo "Error: Downloaded dist/release/manifest.json is missing or empty" >&2
+            exit 1
+          fi
+
+          if [ -s dist/release/manifest.json ]; then
+            PY_BIN="${PYTHON_BIN:-}"
+            if [ -z "$PY_BIN" ]; then
+              if command -v python3 >/dev/null 2>&1; then
+                PY_BIN="python3"
+              elif command -v python >/dev/null 2>&1; then
+                PY_BIN="python"
+              else
+                echo "Error: python3 is required to verify dist/release/manifest.json" >&2
+                exit 1
+              fi
+            fi
+            "$PY_BIN" -S - <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          dist = Path("dist/release").resolve()
+          manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+          if manifest.get("schema_version") != "1.0":
+              raise SystemExit("Error: Unsupported manifest schema_version")
+          if manifest.get("licensing") != "See repository LICENSE":
+              raise SystemExit("Error: Release manifest licensing does not report repository LICENSE")
+          version_file = Path("VERSION")
+          if version_file.is_file():
+              expected_version = version_file.read_text(encoding="utf-8").strip()
+              if manifest.get("version") != expected_version:
+                  raise SystemExit(
+                      f"Error: Manifest version '{manifest.get('version')}' does not match VERSION '{expected_version}'"
+                  )
+          archives = manifest.get("archives")
+          if not isinstance(archives, list) or not archives:
+              raise SystemExit("Error: Manifest archives list is missing or empty")
+          expected_lines = []
+          for entry in archives:
+              name = entry.get("file", "")
+              digest = entry.get("sha256", "")
+              size = entry.get("bytes")
+              if not name or "/" in name or name.startswith("."):
+                  raise SystemExit(f"Error: Invalid archive filename in manifest: {name!r}")
+              target = dist / name
+              if target.is_symlink() or not target.resolve().is_relative_to(dist) or not target.is_file():
+                  raise SystemExit(f"Error: Missing or unsafe archive file: {name}")
+              raw = target.read_bytes()
+              if isinstance(size, int) and len(raw) != size:
+                  raise SystemExit(f"Error: Byte length mismatch for {name}")
+              if hashlib.sha256(raw).hexdigest() != digest:
+                  raise SystemExit(f"Error: Manifest SHA-256 mismatch for {name}")
+              expected_lines.append(f"{digest}  {name}\n")
+          if "".join(expected_lines) != (dist / "SHA256SUMS").read_text(encoding="utf-8"):
+              raise SystemExit("Error: manifest.json archives do not match SHA256SUMS")
+          sys.exit(0)
+          PY
+          fi
+
+          (
+            cd dist/release
+            sha256sum -c SHA256SUMS
+            sha256sum -c checksums.sha256
+          )
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: 'dist/release/*'
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
           INPUT_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
@@ -413,6 +566,17 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -eu
+
+          write_summary() {
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "### GitHub Release Publication"
+                echo "- **Outcome**: $1"
+                echo "- **Release tag**: \`$TAG\`"
+                echo "- **Target SHA**: \`$TARGET_SHA\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
 
           if [ ! -s VERSION ] || [ -z "$(tr -d '[:space:]' < VERSION)" ]; then
             echo "Error: VERSION file is missing or empty in repository root" >&2
@@ -456,9 +620,11 @@ jobs:
           fi
 
           if [ -n "${GH_TOKEN:-}" ]; then
+            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+            SERVER_URL="${SERVER_URL%/}"
             AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
             export GIT_CONFIG_COUNT=1
-            export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+            export GIT_CONFIG_KEY_0="http.${SERVER_URL}/.extraheader"
             export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
           fi
 
@@ -483,6 +649,14 @@ jobs:
             exit "$LS_EXIT"
           fi
 
+          TAG_NO_BUILD="${TAG%%+*}"
+          IS_PRERELEASE="false"
+          case "$TAG_NO_BUILD" in
+            *-*)
+              IS_PRERELEASE="true"
+              ;;
+          esac
+
           NOTES_FILE="docs/release-notes-${VERSION}.md"
           VIEW_ERR_FILE="$(mktemp)"
           trap 'rm -f "$VIEW_ERR_FILE"' EXIT
@@ -491,21 +665,23 @@ jobs:
             case "$NORMALIZED_VIEW" in
               true|*'{"isDraft":true}'*)
                 gh release upload "$TAG" dist/release/* --clobber
-                if [ -f "$NOTES_FILE" ]; then
-                  gh release edit "$TAG" \
-                    --draft=false \
-                    --title "$TAG" \
-                    --target "$TARGET_SHA" \
-                    --notes-file "$NOTES_FILE"
-                else
-                  gh release edit "$TAG" \
-                    --draft=false \
-                    --title "$TAG" \
-                    --target "$TARGET_SHA"
+                set -- gh release edit "$TAG" \
+                  --draft=false \
+                  --verify-tag \
+                  --title "$TAG" \
+                  --target "$TARGET_SHA"
+                if [ "$IS_PRERELEASE" = "true" ]; then
+                  set -- "$@" --prerelease
                 fi
+                if [ -f "$NOTES_FILE" ]; then
+                  set -- "$@" --notes-file "$NOTES_FILE"
+                fi
+                "$@"
+                write_summary "Promoted draft GitHub Release"
                 ;;
               false|*'{"isDraft":false}'*)
                 echo "Release $TAG is already published; skipping duplicate publication."
+                write_summary "Skipped duplicate publication (already published)"
                 ;;
               *)
                 echo "Error: Unexpected gh release view output for '$TAG': $VIEW_OUT" >&2
@@ -514,19 +690,20 @@ jobs:
             esac
           else
             if grep -Eqi 'release not found|not found|404' "$VIEW_ERR_FILE"; then
-              if [ -f "$NOTES_FILE" ]; then
-                gh release create "$TAG" dist/release/* \
-                  --title "$TAG" \
-                  --verify-tag \
-                  --target "$TARGET_SHA" \
-                  --notes-file "$NOTES_FILE"
-              else
-                gh release create "$TAG" dist/release/* \
-                  --title "$TAG" \
-                  --verify-tag \
-                  --target "$TARGET_SHA" \
-                  --generate-notes
+              set -- gh release create "$TAG" dist/release/* \
+                --title "$TAG" \
+                --verify-tag \
+                --target "$TARGET_SHA"
+              if [ "$IS_PRERELEASE" = "true" ]; then
+                set -- "$@" --prerelease
               fi
+              if [ -f "$NOTES_FILE" ]; then
+                set -- "$@" --notes-file "$NOTES_FILE"
+              else
+                set -- "$@" --generate-notes
+              fi
+              "$@"
+              write_summary "Published new GitHub Release"
             else
               cat "$VIEW_ERR_FILE" >&2
               exit 1

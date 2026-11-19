@@ -1,0 +1,136 @@
+name: Deploy GitHub Pages
+
+on:
+  workflow_run:
+    workflows: [Validate skill packages]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skills-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  build:
+    if: >-
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Checkout verified commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify Pages deployment gate and target commit
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_VALUE: ${{ github.ref }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -eu
+
+          if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
+            if [ "${WORKFLOW_CONCLUSION:-}" != "success" ]; then
+              echo "Error: Refusing Pages build for non-successful workflow_run conclusion '${WORKFLOW_CONCLUSION:-none}'" >&2
+              exit 1
+            fi
+            if [ "${WORKFLOW_EVENT:-}" != "push" ]; then
+              echo "Error: Refusing Pages build for workflow_run event '${WORKFLOW_EVENT:-none}' (expected push)" >&2
+              exit 1
+            fi
+            if [ "${WORKFLOW_HEAD_BRANCH:-}" != "main" ]; then
+              echo "Error: Refusing Pages build for workflow_run branch '${WORKFLOW_HEAD_BRANCH:-none}' (expected main)" >&2
+              exit 1
+            fi
+          elif [ "${EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            if [ "${GITHUB_REF_VALUE:-}" != "refs/heads/main" ]; then
+              echo "Error: Refusing Pages workflow_dispatch on ref '${GITHUB_REF_VALUE:-none}' (expected refs/heads/main)" >&2
+              exit 1
+            fi
+          else
+            echo "Error: Unsupported trigger event '${EVENT_NAME:-none}'" >&2
+            exit 1
+          fi
+
+          if [ -z "${TARGET_SHA:-}" ] || ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Error: Verified 40-character TARGET_SHA is missing or invalid ('${TARGET_SHA:-none}')" >&2
+            exit 1
+          fi
+
+          HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+          if [ "$HEAD_SHA" != "$TARGET_SHA" ]; then
+            echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified target commit '$TARGET_SHA'" >&2
+            exit 1
+          fi
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Verify catalog freshness and stage site
+        run: |
+          set -eu
+          python scripts/build_catalog.py --check
+          python scripts/build_experience.py --check --stage-site dist/site
+          python scripts/check_doc_links.py
+          test -f dist/site/.nojekyll
+          test -s dist/site/index.html
+          test -s dist/site/docs/explorer.html
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist/site/
+          include-hidden-files: true
+
+  deploy:
+    needs: build
+    if: >-
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -19,14 +19,16 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import check_workflow_pins
 import verify_workflow_actions
 from fredlib import releases
 
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
 VALIDATE_WORKFLOW = ROOT / ".github/workflows/validate.yml"
+ACTION_PINS_LOCKFILE = ROOT / ".github/action-pins.json"
 RELEASING_DOC = ROOT / "docs/releasing.md"
 CHECKOUT_SHA = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
-ATTEST_SHA = "actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2"
+ATTEST_SHA = "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8"
 
 _PASSTHROUGH_ENV_KEYS = (
     "PATH",
@@ -78,6 +80,7 @@ _FAKE_GH_PY = textwrap.dedent(
     if subcmd == "create":
         tag = args[2]
         draft = "--draft" in args or "-d" in args
+        prerelease = "--prerelease" in args or "-p" in args
         verify_tag = "--verify-tag" in args
         generate_notes = "--generate-notes" in args
         notes_file = None
@@ -88,7 +91,14 @@ _FAKE_GH_PY = textwrap.dedent(
         i = 3
         while i < len(args):
             tok = args[i]
-            if tok in ("--draft", "-d", "--verify-tag", "--generate-notes"):
+            if tok in (
+                "--draft",
+                "-d",
+                "--prerelease",
+                "-p",
+                "--verify-tag",
+                "--generate-notes",
+            ):
                 i += 1
             elif tok in ("--target", "--title", "-t", "--notes-file", "-F"):
                 val = args[i + 1]
@@ -111,6 +121,7 @@ _FAKE_GH_PY = textwrap.dedent(
             {
                 "tag": tag,
                 "draft": draft,
+                "prerelease": prerelease,
                 "verify_tag": verify_tag,
                 "generate_notes": generate_notes,
                 "notes_file": notes_file,
@@ -158,6 +169,12 @@ _FAKE_GH_PY = textwrap.dedent(
                 i += 1
             elif tok == "--draft=true" or tok == "--draft":
                 rel["draft"] = True
+                i += 1
+            elif tok == "--verify-tag":
+                rel["verify_tag"] = True
+                i += 1
+            elif tok in ("--prerelease", "-p", "--prerelease=true"):
+                rel["prerelease"] = True
                 i += 1
             elif tok in ("--target", "--title", "-t", "--notes-file", "-F"):
                 val = args[i + 1]
@@ -331,6 +348,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
             release.get("if"), "needs.preflight.outputs.should_publish == 'true'"
         )
         self.assertEqual(
+            release.get("concurrency"),
+            {
+                "group": "skills-release-publish-${{ needs.preflight.outputs.release_tag || github.ref }}",
+                "cancel-in-progress": False,
+            },
+        )
+        self.assertEqual(
             release.get("permissions"),
             {"contents": "write", "id-token": "write", "attestations": "write"},
         )
@@ -379,8 +403,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(checksum_idx, attest_idx)
         self.assertLess(attest_idx, publish_idx)
 
-    def test_attest_provenance_step_pins_valid_v2_2_3_sha_and_permissions(self) -> None:
-        """The release job must pin actions/attest-build-provenance to v2.2.3 SHA and retain SLSA permissions."""
+    def test_attest_provenance_step_pins_valid_v4_2_2_sha_and_permissions(self) -> None:
+        """The release job must pin actions/attest-build-provenance to v4.2.2 SHA and retain SLSA permissions."""
         release_job = self.workflow_data["jobs"]["release"]
         self.assertEqual(
             release_job.get("permissions"),
@@ -396,6 +420,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             if s.get("name") == "Attest build provenance"
         )
         self.assertEqual(attest_step.get("uses"), ATTEST_SHA)
+        self.assertIn(
+            f"{ATTEST_SHA} # v4.2.2",
+            self.workflow_text,
+        )
         self.assertEqual(
             attest_step.get("with", {}).get("subject-path"),
             "dist/release/*",
@@ -483,7 +511,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         return subprocess.run(
             ["sh", "-c", checksum_step["run"]],
             cwd=str(cwd),
-            env=_isolated_env(cwd, {}),
+            env=_isolated_env(cwd, {"PYTHON_BIN": sys.executable}),
             capture_output=True,
             text=True,
             check=False,
@@ -527,7 +555,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         _git(seed, "add", ".")
         _git(seed, "commit", "-m", "Initial release commit")
         tag_sha = _git(seed, "rev-parse", "HEAD")
-        _git(seed, "remote", "add", "origin", origin.as_posix())
+        _git(seed, "remote", "add", "origin", origin.as_uri())
         _git(seed, "push", "origin", "HEAD:refs/heads/main")
 
         if remote_tag is not None:
@@ -543,7 +571,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "clone",
             "--depth=1",
             "--no-tags",
-            origin.as_posix(),
+            origin.as_uri(),
             str(workspace),
         )
         return origin, workspace, tag_sha
@@ -632,7 +660,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("target_sha", diverged.stderr)
 
     def test_downloaded_artifact_checksum_verification_step(self) -> None:
-        """Downloaded artifact checksum step passes on matching digests and fails on tampering."""
+        """Downloaded artifact checksum step enforces matching manifests, rejects unlisted files, and catches tampering."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
             dist = tmp / "dist" / "release"
@@ -646,9 +674,60 @@ class ReleaseWorkflowTests(unittest.TestCase):
             ok = self._run_checksum_step(tmp)
             self.assertEqual(ok.returncode, 0, msg=ok.stderr)
 
+            # Unlisted file injected into dist/release must fail before attestation.
+            unlisted = dist / "unlisted.tar.gz"
+            unlisted.write_bytes(b"injected")
+            extra_res = self._run_checksum_step(tmp)
+            self.assertNotEqual(extra_res.returncode, 0)
+            self.assertIn("do not match SHA256SUMS", extra_res.stderr)
+            unlisted.unlink()
+
+            # Divergent SHA256SUMS vs checksums.sha256 must fail.
+            _write_lf(dist / "checksums.sha256", f"{'0' * 64}  pack.tar\n")
+            mismatch_res = self._run_checksum_step(tmp)
+            self.assertNotEqual(mismatch_res.returncode, 0)
+            _write_lf(dist / "checksums.sha256", f"{digest}  pack.tar\n")
+
+            # Tampered archive payload must fail sha256sum -c.
             (dist / "pack.tar").write_bytes(b"tampered")
             bad = self._run_checksum_step(tmp)
             self.assertNotEqual(bad.returncode, 0)
+
+            # Restore valid payload and verify full VERSION + manifest.json check under stdlib-only Python (-S).
+            (dist / "pack.tar").write_bytes(payload)
+            _write_lf(tmp / "VERSION", "0.2.0\n")
+            missing_manifest = self._run_checksum_step(tmp)
+            self.assertNotEqual(missing_manifest.returncode, 0)
+            self.assertIn("manifest.json is missing", missing_manifest.stderr)
+
+            valid_manifest = {
+                "schema_version": "1.0",
+                "version": "0.2.0",
+                "pack": "starter",
+                "licensing": "See repository LICENSE",
+                "archives": [
+                    {
+                        "file": "pack.tar",
+                        "sha256": digest,
+                        "bytes": len(payload),
+                    }
+                ],
+            }
+            _write_lf(dist / "manifest.json", json.dumps(valid_manifest) + "\n")
+            ok_manifest = self._run_checksum_step(tmp)
+            self.assertEqual(ok_manifest.returncode, 0, msg=ok_manifest.stderr)
+
+            bad_version_manifest = {**valid_manifest, "version": "0.9.9"}
+            _write_lf(dist / "manifest.json", json.dumps(bad_version_manifest) + "\n")
+            bad_ver = self._run_checksum_step(tmp)
+            self.assertNotEqual(bad_ver.returncode, 0)
+            self.assertIn("does not match VERSION", bad_ver.stderr)
+
+            bad_license_manifest = {**valid_manifest, "licensing": "Unknown"}
+            _write_lf(dist / "manifest.json", json.dumps(bad_license_manifest) + "\n")
+            bad_lic = self._run_checksum_step(tmp)
+            self.assertNotEqual(bad_lic.returncode, 0)
+            self.assertIn("licensing", bad_lic.stderr)
 
     def test_preflight_manual_dispatch_publish_false_builds_artifacts_only(
         self,
@@ -888,6 +967,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             marker = workspace / "injected.txt"
             bad_tags = [
                 "0.2.0",
+                "v01.2.0",
+                "v0.2.0.1",
                 "--upload-pack=evil",
                 f"v0.2.0; touch {marker}",
                 "v0.2.0\ninjected",
@@ -1005,8 +1086,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     "clone",
                     "--depth=1",
                     "--no-tags",
-                    origin.as_posix(),
+                    origin.as_uri(),
                     str(fresh_checkout),
+                )
+                self.assertEqual(
+                    _git(fresh_checkout, "rev-parse", "--is-shallow-repository"),
+                    "true",
                 )
 
                 proc_dispatch, out_dispatch = self._run_preflight_script(
@@ -1070,12 +1155,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             _write_lf(dist_dir / "pack.tar.gz", "archive-v1")
 
             gh_env, state_path = _install_fake_gh(base / "curated")
+            summary_file = base / "curated-summary.md"
             res = self._run_publish_script(
                 workspace,
                 {
                     **gh_env,
                     "GH_REPO": "fderuiter/fred-skills",
                     "GH_TOKEN": "synthetic-token",
+                    "GITHUB_STEP_SUMMARY": str(summary_file),
                     "RELEASE_TAG": "v0.2.0",
                     "TARGET_SHA": head_sha,
                     "INPUT_TAG": "",
@@ -1086,37 +1173,42 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(res.returncode, 0, msg=res.stderr)
 
             remote_tags = _git(
-                workspace, "ls-remote", "--refs", origin.as_posix(), "refs/tags/v0.2.0"
+                workspace, "ls-remote", "--refs", origin.as_uri(), "refs/tags/v0.2.0"
             )
             self.assertIn("refs/tags/v0.2.0", remote_tags)
+            self.assertIn(
+                "Published new GitHub Release",
+                summary_file.read_text(encoding="utf-8"),
+            )
 
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(len(state["releases"]), 1)
             created = state["releases"][0]
             self.assertEqual(created["tag"], "v0.2.0")
             self.assertFalse(created["draft"])
+            self.assertFalse(created["prerelease"])
             self.assertTrue(created["verify_tag"])
             self.assertFalse(created["generate_notes"])
             self.assertEqual(created["notes_file"], "docs/release-notes-0.2.0.md")
             self.assertEqual(created["target"], head_sha)
 
-            # Without docs/release-notes-<VERSION>.md, falls back to --generate-notes.
+            # Without docs/release-notes-<VERSION>.md, falls back to --generate-notes; pre-release sets --prerelease.
             origin_gen, workspace_gen, gen_sha = self._setup_origin_and_clone(
                 base / "generated",
-                version_text="0.3.0\n",
+                version_text="0.3.0-rc.1\n",
                 license_text="MIT License\n",
                 remote_tag=None,
             )
             dist_gen = workspace_gen / "dist" / "release"
             dist_gen.mkdir(parents=True)
-            _write_lf(dist_gen / "pack.tar.gz", "archive-v0.3.0")
+            _write_lf(dist_gen / "pack.tar.gz", "archive-v0.3.0-rc.1")
             gh_env_gen, state_gen_path = _install_fake_gh(base / "generated")
             res_gen = self._run_publish_script(
                 workspace_gen,
                 {
                     **gh_env_gen,
                     "GH_REPO": "fderuiter/fred-skills",
-                    "RELEASE_TAG": "v0.3.0",
+                    "RELEASE_TAG": "v0.3.0-rc.1",
                     "TARGET_SHA": gen_sha,
                     "INPUT_TAG": "",
                     "REF_TYPE": "branch",
@@ -1125,19 +1217,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(res_gen.returncode, 0, msg=res_gen.stderr)
             self.assertIn(
-                "refs/tags/v0.3.0",
+                "refs/tags/v0.3.0-rc.1",
                 _git(
                     workspace_gen,
                     "ls-remote",
                     "--refs",
-                    origin_gen.as_posix(),
-                    "refs/tags/v0.3.0",
+                    origin_gen.as_uri(),
+                    "refs/tags/v0.3.0-rc.1",
                 ),
             )
             state_gen = json.loads(state_gen_path.read_text(encoding="utf-8"))
             self.assertTrue(state_gen["releases"][0]["generate_notes"])
             self.assertIsNone(state_gen["releases"][0]["notes_file"])
             self.assertFalse(state_gen["releases"][0]["draft"])
+            self.assertTrue(state_gen["releases"][0]["prerelease"])
 
     def test_publish_promotes_draft_skips_published_and_handles_errors(self) -> None:
         """Publish GitHub Release promotes existing drafts with --clobber + edit --draft=false, skips published, and fails on API errors."""
@@ -1177,13 +1270,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "REF_TYPE": "tag",
             }
 
-            # 1. Existing draft is updated via --clobber and promoted via gh release edit --draft=false.
+            # 1. Existing draft is updated via --clobber and promoted via gh release edit --draft=false --verify-tag.
             res_draft = self._run_publish_script(workspace, base_env)
             self.assertEqual(res_draft.returncode, 0, msg=res_draft.stderr)
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(len(state["releases"]), 1)
             rel = state["releases"][0]
             self.assertFalse(rel["draft"])
+            self.assertTrue(rel.get("verify_tag"))
             self.assertTrue(rel.get("last_upload_clobber"))
             self.assertEqual(rel["assets"]["pack.tar.gz"], "archive-v2")
             self.assertEqual(rel["notes_file"], "docs/release-notes-0.2.0.md")
@@ -1290,7 +1384,7 @@ class WorkflowActionPinVerificationTests(unittest.TestCase):
         online_steps = [
             s
             for s in steps
-            if "verify_workflow_actions.py --online" in s.get("run", "")
+            if "check_workflow_pins.py --verify-remote" in s.get("run", "")
         ]
         self.assertEqual(1, len(online_steps))
         condition = online_steps[0].get("if", "")
@@ -1525,6 +1619,317 @@ jobs:
                 )
             self.assertEqual(1, len(errors))
             self.assertIn("timed out", errors[0])
+
+    def test_action_pins_lockfile_records_all_repository_actions_and_passes_offline(
+        self,
+    ) -> None:
+        """The committed .github/action-pins.json lockfile must record all nine repository actions and pass check_workflow_pins.py."""
+        self.assertTrue(ACTION_PINS_LOCKFILE.is_file())
+        locked, lock_errors = check_workflow_pins.load_lockfile(
+            ACTION_PINS_LOCKFILE, root=ROOT
+        )
+        self.assertEqual([], lock_errors)
+        self.assertEqual(
+            {
+                "actions/attest-build-provenance": (
+                    "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                    "v4.2.2",
+                ),
+                "actions/cache": (
+                    "0057852bfaa89a56745cba8c7296529d2fc39830",
+                    "v4",
+                ),
+                "actions/checkout": (
+                    "d23441a48e516b6c34aea4fa41551a30e30af803",
+                    "v6",
+                ),
+                "actions/configure-pages": (
+                    "45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+                    "v6.0.0",
+                ),
+                "actions/deploy-pages": (
+                    "368f82528645a54fb793d4d04e342629a3f51346",
+                    "v5.0.1",
+                ),
+                "actions/download-artifact": (
+                    "cc203385981b70ca67e1cc392babf9cc229d5806",
+                    "v4",
+                ),
+                "actions/setup-python": (
+                    "ece7cb06caefa5fff74198d8649806c4678c61a1",
+                    "v6",
+                ),
+                "actions/upload-artifact": (
+                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
+                    "v4",
+                ),
+                "actions/upload-pages-artifact": (
+                    "fc324d3547104276b827a68afc52ff2a11cc49c9",
+                    "v5.0.0",
+                ),
+            },
+            {repo: (pin.sha, pin.version) for repo, pin in locked.items()},
+        )
+
+        self.assertEqual([], check_workflow_pins.check_pins(root=ROOT))
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check_workflow_pins.py")],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("PASS", proc.stdout)
+
+    def test_lockfile_parity_rejects_missing_malformed_drift_and_unused_entries(
+        self,
+    ) -> None:
+        """Offline lockfile check rejects missing/malformed lockfiles, SHA/version drift, unrecorded actions, and stale entries."""
+        valid_workflow = """\
+name: CI
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "ci.yml").write_text(valid_workflow, encoding="utf-8")
+            lock_path = tmp_root / ".github/action-pins.json"
+
+            # 1. Missing lockfile fails by default.
+            missing_errors = check_workflow_pins.check_pins(root=tmp_root)
+            self.assertTrue(
+                any("does not exist" in err for err in missing_errors),
+                missing_errors,
+            )
+
+            # 2. Malformed JSON lockfile fails cleanly.
+            lock_path.write_text("{not-valid-json", encoding="utf-8")
+            malformed_errors = check_workflow_pins.check_pins(root=tmp_root)
+            self.assertTrue(
+                any("Invalid JSON" in err for err in malformed_errors),
+                malformed_errors,
+            )
+
+            # 3. SHA mismatch, version mismatch, missing action, and unused lockfile entry are all reported.
+            drifted_lockfile = {
+                "schema_version": 1,
+                "actions": {
+                    "actions/checkout": {
+                        "sha": "0" * 40,
+                        "version": "v5",
+                    },
+                    "actions/stale-unused": {
+                        "sha": "1" * 40,
+                        "version": "v1",
+                    },
+                },
+            }
+            lock_path.write_text(json.dumps(drifted_lockfile), encoding="utf-8")
+            drift_errors = check_workflow_pins.check_pins(root=tmp_root)
+            self.assertEqual(4, len(drift_errors), drift_errors)
+            self.assertTrue(
+                any("SHA" in err and "does not match" in err for err in drift_errors)
+            )
+            self.assertTrue(
+                any(
+                    "version comment '# v6' does not match" in err
+                    for err in drift_errors
+                )
+            )
+            self.assertTrue(
+                any(
+                    "Action 'actions/attest-build-provenance' is missing from .github/action-pins.json"
+                    in err
+                    for err in drift_errors
+                )
+            )
+            self.assertTrue(
+                any(
+                    "Unused lockfile entry 'actions/stale-unused'" in err
+                    for err in drift_errors
+                )
+            )
+
+            # 4. Matching lockfile passes with zero errors.
+            matching_lockfile = {
+                "schema_version": 1,
+                "actions": {
+                    "actions/attest-build-provenance": {
+                        "sha": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                        "version": "v4.2.2",
+                    },
+                    "actions/checkout": {
+                        "sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+                        "version": "v6",
+                    },
+                },
+            }
+            lock_path.write_text(json.dumps(matching_lockfile), encoding="utf-8")
+            self.assertEqual([], check_workflow_pins.check_pins(root=tmp_root))
+
+    def test_check_pins_skips_local_and_docker_steps_and_rejects_malformed_pins(
+        self,
+    ) -> None:
+        """check_workflow_pins skips './' and 'docker://' steps while rejecting unpinned tags, short SHAs, and missing comments."""
+        workflow_yaml = """\
+name: MixedSteps
+on: [push]
+jobs:
+  local_reusable:
+    uses: ./.github/workflows/reusable.yml
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./scripts/local-step
+      - uses: docker://alpine:3.20
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+"""
+        invalid_workflow_yaml = """\
+name: InvalidPins
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6 # v6
+      - uses: actions/setup-python@ece7cb06 # v6
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+"""
+        lockfile = {
+            "schema_version": 1,
+            "actions": {
+                "actions/checkout": {
+                    "sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+                    "version": "v6",
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "mixed.yml").write_text(workflow_yaml, encoding="utf-8")
+            (tmp_root / ".github/action-pins.json").write_text(
+                json.dumps(lockfile), encoding="utf-8"
+            )
+            self.assertEqual([], check_workflow_pins.check_pins(root=tmp_root))
+
+            bad_wf = tmp_root / "invalid.yml"
+            bad_wf.write_text(invalid_workflow_yaml, encoding="utf-8")
+            bad_errors = check_workflow_pins.check_pins(
+                root=tmp_root, workflow_files=[bad_wf]
+            )
+            self.assertEqual(3, len(bad_errors), bad_errors)
+            self.assertTrue(any("got 'v6'" in err for err in bad_errors))
+            self.assertTrue(any("got 'ece7cb06'" in err for err in bad_errors))
+            self.assertTrue(
+                any("missing a trailing version comment" in err for err in bad_errors)
+            )
+
+    def test_verify_remote_dereferences_annotated_v4_tag_and_retries_transient_errors(
+        self,
+    ) -> None:
+        """--verify-remote dereferences refs/tags/v4^{} and retries transient git ls-remote errors."""
+        workflow_yaml = """\
+name: ReleaseAttest
+on: [push]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+"""
+        lockfile = {
+            "schema_version": 1,
+            "actions": {
+                "actions/attest-build-provenance": {
+                    "sha": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                    "version": "v4",
+                }
+            },
+        }
+        ls_remote_stdout = (
+            "8beda2b7ed98355c0e97c0a63bec38ae472e66c4\trefs/tags/v4\n"
+            "4d101475d8b20a2381f78447822ac1eab6504dd8\trefs/tags/v4^{}\n"
+            "4d101475d8b20a2381f78447822ac1eab6504dd8\trefs/tags/v4.2.2\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "release.yml").write_text(workflow_yaml, encoding="utf-8")
+            (tmp_root / ".github/action-pins.json").write_text(
+                json.dumps(lockfile), encoding="utf-8"
+            )
+
+            slept: list[float] = []
+            attempts: list[subprocess.CompletedProcess[str] | BaseException] = [
+                subprocess.CompletedProcess(
+                    args=["git", "ls-remote"],
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: unable to access: The requested URL returned error: 502",
+                ),
+                subprocess.TimeoutExpired(cmd=["git", "ls-remote"], timeout=10.0),
+                subprocess.CompletedProcess(
+                    args=["git", "ls-remote"],
+                    returncode=0,
+                    stdout=ls_remote_stdout,
+                    stderr="",
+                ),
+            ]
+            call_idx = 0
+
+            def fake_run(
+                *_args: Any, **_kwargs: Any
+            ) -> subprocess.CompletedProcess[str]:
+                nonlocal call_idx
+                item = attempts[call_idx]
+                call_idx += 1
+                if isinstance(item, BaseException):
+                    raise item
+                return item
+
+            errors = check_workflow_pins.check_pins(
+                root=tmp_root,
+                verify_remote=True,
+                timeout=10.0,
+                retries=2,
+                retry_backoff=0.5,
+                run_fn=fake_run,
+                sleep_fn=slept.append,
+            )
+            self.assertEqual([], errors)
+            self.assertEqual(3, call_idx)
+            self.assertEqual([0.5, 1.0], slept)
+
+            # Exhausting retries surfaces the final remote error cleanly.
+            always_fail_slept: list[float] = []
+            fail_errors = check_workflow_pins.check_pins(
+                root=tmp_root,
+                verify_remote=True,
+                timeout=10.0,
+                retries=1,
+                retry_backoff=0.25,
+                run_fn=lambda *_a, **_k: subprocess.CompletedProcess(
+                    args=["git", "ls-remote"],
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: unable to access: Connection reset by peer",
+                ),
+                sleep_fn=always_fail_slept.append,
+            )
+            self.assertEqual(1, len(fail_errors), fail_errors)
+            self.assertIn("Connection reset by peer", fail_errors[0])
+            self.assertEqual([0.25], always_fail_slept)
 
 
 if __name__ == "__main__":

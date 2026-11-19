@@ -16,8 +16,10 @@ def _pack_plugins(root: Path, known_skills: set[str]) -> list[dict[str, object]]
     packs = json.loads(packs_path.read_text(encoding="utf-8")).get("packs", {})
     bundles: list[dict[str, object]] = []
     for pack_name, pack_data in packs.items():
-        if pack_name in known_skills:
-            raise ValueError(f"Pack name collides with skill name: {pack_name}")
+        if pack_name == "fred-skills" or pack_name in known_skills:
+            raise ValueError(
+                f"Pack name collides with reserved or skill name: {pack_name}"
+            )
         pack_skills = pack_data.get("skills", [])
         missing = set(pack_skills) - known_skills
         if not pack_skills or missing:
@@ -86,19 +88,28 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         desc = entry["description"].replace("|", "\\|").replace("\n", " ")
         phase = entry["phase_title"] or "Independent"
         markdown += f"| {phase} | [{entry['name']}](../{entry['path']}) | {desc} |\n"
-    plugins = _pack_plugins(root, set(membership)) + [
-        {
-            "name": entry["name"],
-            "description": entry["description"],
-            "source": f"./skills/{entry['name']}",
-        }
-        for entry in sorted(entries, key=lambda item: item["name"])
-        if entry["name"] in membership
-    ]
     description = (
         "Portable engineering workflows for investigating repositories, planning"
         " useful fixes, and verifying that those fixes work."
     )
+    suite_plugin: dict[str, object] = {
+        "name": "fred-skills",
+        "description": description,
+        "source": "./",
+        "strict": False,
+        "skills": [f"./skills/{name}" for name in sorted(membership)],
+    }
+    standalone_plugins: list[dict[str, object]] = [
+        {
+            "name": entry["name"],
+            "description": entry["description"],
+            "source": f"./skills/{entry['name']}",
+            "skills": ["."],
+        }
+        for entry in sorted(entries, key=lambda item: item["name"])
+        if entry["name"] in membership
+    ]
+    plugins = [suite_plugin, *_pack_plugins(root, set(membership)), *standalone_plugins]
     version_path = root / "VERSION"
     extension_version = (
         version_path.read_text(encoding="utf-8").strip() or "0.0.0"

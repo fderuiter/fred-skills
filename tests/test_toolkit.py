@@ -768,6 +768,87 @@ class RunTests(unittest.TestCase):
                     runs.compare(valid_payload, valid_payload)
                 self.assertIn("audit.json", str(cmp_ctx.exception))
 
+    def test_declarative_suite_contracts_workflows_allow_fixes_and_domain_revalidate(
+        self,
+    ):
+        # 1. Comprehensive mode on repository-workflows expands suite phases in order
+        expected_workflow_skills = [
+            "repo-verify-finding",
+            "repo-specify-regression",
+            "repo-plan-fix",
+            "repo-apply-fix",
+            "repo-verify-fix",
+            "repo-reconcile-findings",
+        ]
+        for task in ("verify-fix", "apply-fix"):
+            planned, _ = runs.plan(self.repo, task=task, mode="comprehensive")
+            self.assertEqual(expected_workflow_skills, planned["skills"])
+            self.assertEqual([], planned["deferred_skills"])
+
+        # 2. expand-automated-tests prompt documents --allow-fixes for both read-only and write runs
+        ws_ro = self.root / "ws-tests-readonly"
+        run_ro = runs.initialize(
+            self.repo, ws_ro, "expand-automated-tests", allow_fixes=False
+        )
+        self.assertFalse(run_ro["authority"]["application_changes"])
+        prompt_ro = (ws_ro / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "skills/test-case-generation/assets/testing.schema.json", prompt_ro
+        )
+        self.assertIn("--allow-fixes", prompt_ro)
+        self.assertIn("without modifying repository files", prompt_ro)
+
+        ws_rw = self.root / "ws-tests-allow-fixes"
+        run_rw = runs.initialize(
+            self.repo, ws_rw, "expand-automated-tests", allow_fixes=True
+        )
+        self.assertTrue(run_rw["authority"]["application_changes"])
+        prompt_rw = (ws_rw / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("--allow-fixes", prompt_rw)
+        self.assertIn("authorized", prompt_rw)
+        self.assertNotIn("without modifying repository files", prompt_rw)
+
+        # 3. Domain revalidate enforces schema contracts and tracks stale review findings
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "fixture"],
+        ]:
+            subprocess.run(["git", "-C", str(self.repo), *argv], check=True)
+        base = repository.git(self.repo, "rev-parse", "HEAD", required=True)
+        ws_rev = self.root / "ws-review-revalidate"
+        runs.initialize(self.repo, ws_rev, "review-code-changes", base=base)
+        review_doc = {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Unchecked input path",
+            "findings": [
+                {
+                    "id": "REV-1",
+                    "title": "Missing bounds check",
+                    "severity": "high",
+                    "file": "source.py",
+                    "line": 1,
+                    "description": "Unchecked value",
+                }
+            ],
+        }
+        atomic_json(ws_rev / "review.json", review_doc)
+        (self.repo / "source.py").write_text("value = 99\n")
+        reval = runs.revalidate(ws_rev)
+        self.assertEqual(["source.py"], reval["changed_files"])
+        self.assertEqual(["REV-1"], reval["stale_finding_ids"])
+        self.assertEqual(["REV-1"], reval["needs_impact_review"])
+        self.assertEqual(review_doc, read_json(ws_rev / "review.json"))
+
+        # Schema violation in domain artifact causes revalidate to raise ValueError
+        atomic_json(ws_rev / "review.json", {"schema_version": "1.0"})
+        with self.assertRaises(ValueError) as ctx:
+            runs.revalidate(ws_rev)
+        self.assertIn("Invalid review.json", str(ctx.exception))
+
 
 class ReportTests(unittest.TestCase):
     def test_untrusted_source_is_escaped_and_no_network_is_required(self):

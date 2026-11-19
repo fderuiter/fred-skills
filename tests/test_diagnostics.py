@@ -1493,6 +1493,257 @@ Bearer sk-proj-1234567890abcdef1234567890
             self.assertIn("**Credentials Redacted:**", report_md)
             self.assertIn("**Total Redactions:**", report_md)
 
+    def test_known_specialists_cover_all_51_catalog_skills_without_false_audit_matches(
+        self,
+    ):
+        catalog_skills = json.loads(
+            (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
+        )["skills"]
+        expected_names = {item["name"] for item in catalog_skills}
+        self.assertEqual(51, len(expected_names))
+        self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
+
+        # Every single catalog skill correlates cleanly before any keyword fallback
+        for item in catalog_skills:
+            skill_name = item["name"]
+            with self.subTest(skill=skill_name):
+                transcript = (
+                    f"[2026-11-18T12:00:00Z] Activating skill {skill_name} on repository architecture and test suite\n"
+                    f"[2026-11-18T12:00:05Z] Command 'pytest' timed out after 30.0 seconds\n"
+                )
+                corr = triage.correlate_audit_domain(transcript)
+                self.assertEqual(skill_name, corr["specialist_skill"])
+
+        # arch-decision-record transcripts (structured JSONL and plain text) never false-match repo-audit-architecture
+        adr_records = [
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "Design system architecture using arch-decision-record and write architecture.json.",
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": "Inspecting architecture boundaries and recording ADR-001 in architecture.json against architecture.schema.json.",
+                },
+            },
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "prompt is too long: 210000 tokens > 200000 maximum",
+                },
+            },
+        ]
+        adr_jsonl = "\n".join(json.dumps(r) for r in adr_records) + "\n"
+        corr_jsonl = triage.correlate_audit_domain(adr_jsonl)
+        self.assertEqual("arch-decision-record", corr_jsonl["specialist_skill"])
+        self.assertNotEqual("repo-audit-architecture", corr_jsonl["specialist_skill"])
+        self.assertIn("ADR-001", corr_jsonl["ledger_references"])
+        corr_jsonl_with_doc = triage.correlate_audit_domain(
+            adr_jsonl,
+            audit_data={
+                "schema_version": "1.0",
+                "title": "Core Architecture",
+                "status": "proposed",
+                "boundaries": [],
+                "decisions": [
+                    {
+                        "id": "ADR-001",
+                        "title": "Boundary split",
+                        "context": "Isolation",
+                        "decision": "Split",
+                        "consequences": ["Safe"],
+                    }
+                ],
+            },
+        )
+        self.assertIn("decisions:ADR-001", corr_jsonl_with_doc["ledger_references"])
+
+        # Even without an explicit skill name, a software-architecture workspace does not false-match repo-audit-architecture
+        corr_no_skill = triage.correlate_audit_domain(
+            "Drafting architecture.json against architecture.schema.json for ADR-002\n",
+            audit_data={
+                "schema_version": "1.0",
+                "title": "Core Architecture",
+                "status": "proposed",
+                "boundaries": [],
+                "decisions": [],
+            },
+        )
+        self.assertIsNone(corr_no_skill["specialist_skill"])
+        self.assertEqual("architecture", corr_no_skill["topic"])
+
+    def test_fred_cli_triage_domain_suites_correlate_ids_and_emit_suite_recovery(self):
+        import shutil
+
+        from fredlib import repository, runs
+
+        if not shutil.which("git"):
+            self.skipTest("Git unavailable")
+        repo_dir = self.temp_path / "domain_triage_repo"
+        repo_dir.mkdir()
+        (repo_dir / "service.py").write_text("def handle(x):\n    return x\n")
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "initial"],
+        ]:
+            subprocess.run(["git", "-C", str(repo_dir), *argv], check=True)
+        base_rev = repository.git(repo_dir, "rev-parse", "HEAD", required=True)
+
+        cases = [
+            (
+                "design-architecture",
+                None,
+                "arch-decision-record",
+                "architecture.json",
+                "skills/arch-decision-record/assets/architecture.schema.json",
+                {
+                    "schema_version": "1.0",
+                    "title": "Order Service Architecture",
+                    "status": "proposed",
+                    "boundaries": [
+                        {
+                            "name": "PaymentGateway",
+                            "type": "trust",
+                            "description": "External settlement boundary",
+                            "invariants": ["Idempotent charge keys"],
+                        }
+                    ],
+                    "decisions": [
+                        {
+                            "id": "ADR-001",
+                            "title": "Outbox event relay",
+                            "context": "Avoid dual writes",
+                            "decision": "Transactional outbox table",
+                            "consequences": ["At-least-once delivery"],
+                        }
+                    ],
+                },
+                "Update ADR-001 across PaymentGateway in architecture.json\nAdditional properties are not allowed ('run_id' was unexpected)\n",
+                ["decisions:ADR-001", "boundaries:PaymentGateway"],
+            ),
+            (
+                "review-code-changes",
+                base_rev,
+                "review-diff-analysis",
+                "review.json",
+                "skills/review-diff-analysis/assets/review.schema.json",
+                {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Diff introduces unchecked cast",
+                    "findings": [
+                        {
+                            "id": "REV-1",
+                            "title": "Unchecked cast in handler",
+                            "severity": "high",
+                            "file": "service.py",
+                            "line": 1,
+                            "description": "Raises TypeError on None",
+                        }
+                    ],
+                },
+                "Recording REV-1 in review.json\n'verdict' is a required property\n",
+                ["findings:REV-1"],
+            ),
+            (
+                "expand-automated-tests",
+                None,
+                "test-case-generation",
+                "testing.json",
+                "skills/test-case-generation/assets/testing.schema.json",
+                {
+                    "schema_version": "1.0",
+                    "component": "service.handle",
+                    "framework": "pytest",
+                    "test_cases": [
+                        {
+                            "id": "TC-1",
+                            "name": "test_handle_none",
+                            "description": "Verifies None input behavior",
+                            "oracle_type": "return_value",
+                            "verified": False,
+                        }
+                    ],
+                },
+                "Generating TC-1 in testing.json\n'oracle_type' is a required property\n",
+                ["test_cases:TC-1"],
+            ),
+        ]
+
+        fred_cli = ROOT / "scripts/fred.py"
+        for (
+            task,
+            base_arg,
+            skill_name,
+            filename,
+            schema_path,
+            payload,
+            error_lines,
+            expected_refs,
+        ) in cases:
+            with self.subTest(task=task):
+                ws = self.temp_path / f"ws_{task}"
+                runs.initialize(repo_dir, ws, task=task, base=base_arg)
+                artifact_file = ws / filename
+                artifact_file.write_text(
+                    json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+                )
+                before_bytes = artifact_file.read_bytes()
+
+                transcript = ws / "session-transcript.jsonl"
+                transcript.write_text(
+                    f"Starting skill {skill_name}\n{error_lines}",
+                    encoding="utf-8",
+                )
+                out_dir = self.temp_path / f"diag_{task}"
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        str(fred_cli),
+                        "triage",
+                        "--workspace",
+                        str(ws),
+                        "--output",
+                        str(out_dir),
+                        "--check-schema",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertEqual(before_bytes, artifact_file.read_bytes())
+
+                bundle = json.loads(
+                    (out_dir / "diagnostic_bundle.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    "schema_validation_error",
+                    bundle["failure_classification"]["failure_type"],
+                )
+                self.assertEqual(
+                    skill_name, bundle["correlated_domain"]["specialist_skill"]
+                )
+                for ref in expected_refs:
+                    self.assertIn(ref, bundle["correlated_domain"]["ledger_references"])
+
+                instructions_blob = "\n".join(bundle["recovery"]["instructions"])
+                self.assertIn("validate-run", instructions_blob)
+                self.assertIn(filename, instructions_blob)
+                self.assertIn(schema_path, instructions_blob)
+                self.assertNotIn("validate_audit.py", instructions_blob)
+                self.assertNotIn("audit.json", instructions_blob)
+                if task == "expand-automated-tests":
+                    self.assertIn("--allow-fixes", instructions_blob)
+
 
 if __name__ == "__main__":
     unittest.main()

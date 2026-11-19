@@ -127,6 +127,63 @@ class ExperienceTests(unittest.TestCase):
             self.assertIn(expected["deliverable"], experience_md)
             self.assertIn(expected["deliverable"], explorer_html)
 
+    def test_suite_artifact_contracts_and_readme_quickstart(self):
+        import jsonschema
+
+        suites = {
+            item["name"]: item
+            for item in read_json(ROOT / "catalog/suites.json")["suites"]
+        }
+        expected_artifacts = {
+            "repository-audits": (
+                "audit.json",
+                "shared/repo-audit/resources/assets/audit.schema.json",
+            ),
+            "repository-workflows": (
+                "audit.json",
+                "shared/repo-audit/resources/assets/audit.schema.json",
+            ),
+            "software-architecture": (
+                "architecture.json",
+                "skills/arch-decision-record/assets/architecture.schema.json",
+            ),
+            "code-review": (
+                "review.json",
+                "skills/review-diff-analysis/assets/review.schema.json",
+            ),
+            "automated-testing": (
+                "testing.json",
+                "skills/test-case-generation/assets/testing.schema.json",
+            ),
+        }
+        self.assertEqual(set(expected_artifacts), set(suites))
+        for suite_name, (filename, schema_rel) in expected_artifacts.items():
+            with self.subTest(suite=suite_name):
+                artifact = suites[suite_name].get("artifact")
+                self.assertIsInstance(artifact, dict)
+                self.assertEqual(filename, artifact["filename"])
+                self.assertEqual(schema_rel, artifact["schema"])
+                schema_path = ROOT / schema_rel
+                self.assertTrue(schema_path.is_file())
+                starter = artifact["starter"]
+                self.assertIsInstance(starter, dict)
+                self.assertTrue(starter)
+                if filename != "audit.json":
+                    schema = read_json(schema_path)
+                    errors = list(
+                        jsonschema.Draft202012Validator(schema).iter_errors(starter)
+                    )
+                    self.assertEqual([], errors, [e.message for e in errors])
+
+        readme_lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+        quickstart_header = "\n".join(readme_lines[:28])
+        for recipe_name in (
+            "design-architecture",
+            "review-code-changes",
+            "expand-automated-tests",
+        ):
+            self.assertIn(f"`{recipe_name}`", quickstart_header)
+
 
 if __name__ == "__main__":
     unittest.main()
