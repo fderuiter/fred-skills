@@ -14,6 +14,7 @@ import time
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -2250,6 +2251,695 @@ def _validate_suite_manifest(root: Path) -> list[str]:
     return problems
 
 
+_PROSE_NUMBER_WORDS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+}
+_HOST_DISPLAY_LABELS: dict[str, str] = {
+    "codex": "Codex",
+    "claude-code": "Claude Code",
+    "antigravity": "Antigravity",
+    "gemini-cli": "Gemini CLI",
+    "cursor": "Cursor",
+    "copilot": "GitHub Copilot",
+    "opencode": "OpenCode",
+    "windsurf": "Windsurf",
+    "kiro": "Kiro",
+}
+_BUILD_CATALOG_DOC_TOKENS: tuple[str, ...] = (
+    "catalog/skills.json",
+    "docs/catalog.md",
+    ".claude-plugin/marketplace.json",
+    ".cursor-plugin/marketplace.json",
+    ".cursor-plugin/plugin.json",
+    "gemini-extension.json",
+)
+_ACTION_PINS_DOC_TOKEN = ".github/action-pins.json"
+_AUDIT_CORE_SKILLS: frozenset[str] = frozenset(
+    {"repo-audit-program", "repo-audit-diagnostics", "repo-audit-synthesis"}
+)
+_CORE_INVARIANT_DOCS: tuple[str, ...] = (
+    "README.md",
+    "docs/architecture.md",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
+    "docs/validation.md",
+    "docs/implementation-status.md",
+    "docs/research.md",
+)
+_IMPL_STATUS_BANNED_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"world's\s+best\s+skill\s+repository", re.IGNORECASE),
+        "prompt-guardrail disclaimer",
+    ),
+    (
+        re.compile(r"\bPrioritize\s+future\s+work\b", re.IGNORECASE),
+        "obsolete backlog note",
+    ),
+    (
+        re.compile(
+            r"before\s+expanding\s+hosts,\s+scanners,\s+or\s+skill\s+counts",
+            re.IGNORECASE,
+        ),
+        "obsolete backlog note",
+    ),
+)
+_RESEARCH_BANNED_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"exhaustive\s+market\s+census", re.IGNORECASE),
+        "prompt-guardrail disclaimer",
+    ),
+    (
+        re.compile(r"proof\s+that\s+no\s+comparable\s+suite\s+exists", re.IGNORECASE),
+        "prompt-guardrail disclaimer",
+    ),
+    (
+        re.compile(r"measured\s+superiority", re.IGNORECASE),
+        "prompt-guardrail disclaimer",
+    ),
+    (
+        re.compile(r"market\s+uniqueness", re.IGNORECASE),
+        "prompt-guardrail disclaimer",
+    ),
+    (
+        re.compile(r"into\s+a\s+read-only\s+audit", re.IGNORECASE),
+        "obsolete read-only scope claim",
+    ),
+)
+_RELEASE_HOST_COUNT_RE = re.compile(
+    r"\b([A-Za-z0-9]+)\s+explicit\s+host\s+installation\s+locations\b",
+    re.IGNORECASE,
+)
+_RELEASE_SUITE_COUNT_RE = re.compile(r"\b([A-Za-z0-9]+)\s+suites\b", re.IGNORECASE)
+_RELEASE_PACK_COUNT_RE = re.compile(
+    r"\b([A-Za-z0-9]+)\s+(?:purpose\s+)?packs\b", re.IGNORECASE
+)
+_RELEASE_TOTAL_SKILLS_RE = re.compile(
+    r"\bTotal:\s*([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE
+)
+_HOST_LAYOUTS_RE = re.compile(r"\b([A-Za-z0-9]+)\s+host\s+layouts\b", re.IGNORECASE)
+_README_AUDIT_DOMAINS_RE = re.compile(
+    r"\b([A-Za-z0-9]+)\s+audit\s+domains\b", re.IGNORECASE
+)
+_README_WORKFLOWS_RE = re.compile(
+    r"\b([A-Za-z0-9]+)\s+workflows\s+from\s+finding\s+verification\b",
+    re.IGNORECASE,
+)
+_README_ENGINEERING_RE = re.compile(
+    r"\b([A-Za-z0-9]+)\s+(?:software\s+)?architecture,\s+code\s+review,\s+automated\s+testing,\s+and\s+spec-driven\s+development\s+skills\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _DocExpectations:
+    suites_count: int | None
+    total_skills: int | None
+    audit_skills: int | None
+    audit_domains: int | None
+    workflow_skills: int | None
+    engineering_skills: int | None
+    deliverables: tuple[str, ...]
+    hosts_count: int | None
+    host_ids: tuple[str, ...]
+    packs_count: int | None
+    starter_skills: int | None
+    shared_dirs: tuple[str, ...]
+
+
+def _parse_prose_int(raw: str) -> int | None:
+    token = raw.strip().lower()
+    if token.isdigit():
+        return int(token)
+    return _PROSE_NUMBER_WORDS.get(token)
+
+
+def _load_optional_json_dict(
+    path: Path, rel_label: str
+) -> tuple[dict[str, Any] | None, list[str]]:
+    if not path.is_file():
+        return None, []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, [f"{rel_label}: {exc}"]
+    if not isinstance(data, dict):
+        return None, [f"{rel_label}: expected JSON object"]
+    return data, []
+
+
+def _suite_skill_names(suite: Mapping[str, Any]) -> list[str]:
+    phases = suite.get("phases")
+    if not isinstance(phases, list):
+        return []
+    return [
+        skill
+        for phase in phases
+        if isinstance(phase, dict)
+        for skill in phase.get("skills", [])
+        if isinstance(skill, str)
+    ]
+
+
+def _suite_deliverable_filename(suite: Mapping[str, Any]) -> str | None:
+    artifact = suite.get("artifact")
+    if not isinstance(artifact, dict):
+        return None
+    filename = artifact.get("filename")
+    return filename if isinstance(filename, str) else None
+
+
+def _extract_suite_expectations(
+    suites_doc: Mapping[str, Any] | None,
+) -> tuple[
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    tuple[str, ...],
+]:
+    if suites_doc is None:
+        return None, None, None, None, None, None, ()
+    raw_suites = suites_doc.get("suites")
+    if not isinstance(raw_suites, list):
+        return None, None, None, None, None, None, ()
+    suites = [s for s in raw_suites if isinstance(s, dict)]
+    by_name = {str(s.get("name", "")): _suite_skill_names(s) for s in suites}
+    total = sum(len(members) for members in by_name.values())
+    audit_members = by_name.get("repository-audits", [])
+    audit_domains = sum(1 for s in audit_members if s not in _AUDIT_CORE_SKILLS)
+    workflows = len(by_name.get("repository-workflows", []))
+    engineering = total - len(audit_members) - workflows
+    deliverables = sorted(
+        {
+            fname
+            for s in suites
+            for fname in (_suite_deliverable_filename(s),)
+            if fname is not None
+        }
+    )
+    return (
+        len(suites),
+        total,
+        len(audit_members),
+        audit_domains,
+        workflows,
+        engineering,
+        tuple(deliverables),
+    )
+
+
+def _extract_host_expectations(
+    hosts_doc: Mapping[str, Any] | None,
+) -> tuple[int | None, tuple[str, ...]]:
+    if hosts_doc is None:
+        return None, ()
+    hosts = hosts_doc.get("hosts")
+    if not isinstance(hosts, dict):
+        return None, ()
+    names = tuple(str(k) for k in hosts)
+    return len(names), names
+
+
+def _extract_pack_expectations(
+    packs_doc: Mapping[str, Any] | None,
+) -> tuple[int | None, int | None]:
+    if packs_doc is None:
+        return None, None
+    packs = packs_doc.get("packs")
+    if not isinstance(packs, dict):
+        return None, None
+    starter = packs.get("starter")
+    starter_skills = starter.get("skills") if isinstance(starter, dict) else None
+    starter_count = len(starter_skills) if isinstance(starter_skills, list) else None
+    return len(packs), starter_count
+
+
+def _discover_shared_suite_dirs(root: Path) -> tuple[str, ...]:
+    shared_root = root / "shared"
+    if not shared_root.is_dir():
+        return ()
+    return tuple(
+        f"shared/{manifest.parent.name}/"
+        for manifest in sorted(shared_root.glob("*/manifest.json"))
+    )
+
+
+def _load_doc_expectations(root: Path) -> tuple[_DocExpectations, list[str]]:
+    suites_doc, s_errs = _load_optional_json_dict(
+        root / "catalog/suites.json", "catalog/suites.json"
+    )
+    hosts_doc, h_errs = _load_optional_json_dict(
+        root / "catalog/hosts.json", "catalog/hosts.json"
+    )
+    packs_doc, p_errs = _load_optional_json_dict(
+        root / "catalog/packs.json", "catalog/packs.json"
+    )
+    (
+        suites_count,
+        total_skills,
+        audit_skills,
+        audit_domains,
+        workflow_skills,
+        engineering_skills,
+        deliverables,
+    ) = _extract_suite_expectations(suites_doc)
+    hosts_count, host_ids = _extract_host_expectations(hosts_doc)
+    packs_count, starter_skills = _extract_pack_expectations(packs_doc)
+    expectations = _DocExpectations(
+        suites_count=suites_count,
+        total_skills=total_skills,
+        audit_skills=audit_skills,
+        audit_domains=audit_domains,
+        workflow_skills=workflow_skills,
+        engineering_skills=engineering_skills,
+        deliverables=deliverables,
+        hosts_count=hosts_count,
+        host_ids=host_ids,
+        packs_count=packs_count,
+        starter_skills=starter_skills,
+        shared_dirs=_discover_shared_suite_dirs(root),
+    )
+    return expectations, [*s_errs, *h_errs, *p_errs]
+
+
+def _build_prose_count_rules(
+    exp: _DocExpectations,
+) -> tuple[tuple[re.Pattern[str], str, int | None], ...]:
+    scenarios_total = exp.total_skills * 3 if exp.total_skills is not None else None
+    deliverables_total = len(exp.deliverables) if exp.deliverables else None
+    return (
+        (
+            re.compile(r"\*\*([A-Za-z0-9]+)\s+standalone\s+skills\*\*", re.IGNORECASE),
+            "skill",
+            exp.total_skills,
+        ),
+        (
+            re.compile(
+                r"`complete`\s+for\s+all\s+([A-Za-z0-9]+)\s+(?:skills|packages)",
+                re.IGNORECASE,
+            ),
+            "skill",
+            exp.total_skills,
+        ),
+        (
+            re.compile(r"\beach\s+of\s+the\s+([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE),
+            "skill",
+            exp.total_skills,
+        ),
+        (
+            re.compile(
+                r"\bcreates\s+all\s+([A-Za-z0-9]+)\s+skill\s+directories\b",
+                re.IGNORECASE,
+            ),
+            "skill",
+            exp.total_skills,
+        ),
+        (_RELEASE_TOTAL_SKILLS_RE, "skill", exp.total_skills),
+        (
+            re.compile(
+                r"\b([A-Za-z0-9]+)\s+total\s+(?:packages|skills)\b", re.IGNORECASE
+            ),
+            "skill",
+            exp.total_skills,
+        ),
+        (
+            re.compile(r"\bacross\s+the\s+([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE),
+            "skill",
+            exp.total_skills,
+        ),
+        (
+            re.compile(
+                r"\bhosts?(?:\s+adapters)?,\s+and\s+([A-Za-z0-9]+)\s+skills\b",
+                re.IGNORECASE,
+            ),
+            "skill",
+            exp.total_skills,
+        ),
+        (
+            re.compile(
+                r"`starter`\s+for\s+([A-Za-z0-9]+)\s+core\s+audit\s+skills",
+                re.IGNORECASE,
+            ),
+            "starter pack",
+            exp.starter_skills,
+        ),
+        (
+            re.compile(r"\b([A-Za-z0-9]+)\s+(?:`shared/`\s+)?suites\b", re.IGNORECASE),
+            "suite",
+            exp.suites_count,
+        ),
+        (_RELEASE_PACK_COUNT_RE, "pack", exp.packs_count),
+        (
+            re.compile(
+                r"\b([A-Za-z0-9]+)\s+(?:explicit\s+)?(?:cataloged\s+)?(?:agent\s+)?hosts?(?:\s+(?:layouts|adapters|installation\s+locations))?\b",
+                re.IGNORECASE,
+            ),
+            "host",
+            exp.hosts_count,
+        ),
+        (
+            re.compile(
+                r"\b([A-Za-z0-9]+)\s+structured\s+JSON\s+deliverables\b",
+                re.IGNORECASE,
+            ),
+            "JSON deliverable",
+            deliverables_total,
+        ),
+        (
+            re.compile(r"\b([A-Za-z0-9]+)-package\s+audit\s+family\b", re.IGNORECASE),
+            "audit suite",
+            exp.audit_skills,
+        ),
+        (
+            re.compile(r"\ball\s+([A-Za-z0-9]+)\s+specialists\b", re.IGNORECASE),
+            "audit specialist",
+            exp.audit_domains,
+        ),
+        (
+            re.compile(
+                r"\b([A-Za-z0-9]+)-package\s+workflow\s+family\b", re.IGNORECASE
+            ),
+            "workflow suite",
+            exp.workflow_skills,
+        ),
+        (
+            re.compile(r"\b([A-Za-z0-9]+)\s+correction\s+workflows\b", re.IGNORECASE),
+            "workflow suite",
+            exp.workflow_skills,
+        ),
+        (
+            re.compile(
+                r"\|\s*Verification\s+lifecycle\s*\|\s*([A-Za-z0-9]+)\s+skills\b",
+                re.IGNORECASE,
+            ),
+            "workflow suite",
+            exp.workflow_skills,
+        ),
+        (
+            re.compile(
+                r"\b([A-Za-z0-9]+)\s+engineering\s+suite\s+packages\b", re.IGNORECASE
+            ),
+            "engineering suite",
+            exp.engineering_skills,
+        ),
+        (
+            re.compile(
+                r"\b(?:These|all)\s+([A-Za-z0-9]+)\s+(?:scenario\s+)?specifications\b",
+                re.IGNORECASE,
+            ),
+            "scenario specification",
+            scenarios_total,
+        ),
+    )
+
+
+def _check_single_count_rule(
+    rel_path: str,
+    text: str,
+    pattern: re.Pattern[str],
+    label: str,
+    expected: int | None,
+) -> list[str]:
+    if expected is None:
+        return []
+    errors: list[str] = []
+    for match in pattern.finditer(text):
+        found = _parse_prose_int(match.group(1))
+        if found is not None and found != expected:
+            snippet = " ".join(match.group(0).split())
+            errors.append(
+                f"{rel_path}: stale {label} count {found} in '{snippet}' (expected {expected})"
+            )
+    return errors
+
+
+def _check_prose_counts(
+    rel_path: str,
+    text: str,
+    rules: Sequence[tuple[re.Pattern[str], str, int | None]],
+) -> list[str]:
+    errors: list[str] = []
+    for pattern, label, expected in rules:
+        errors.extend(
+            _check_single_count_rule(rel_path, text, pattern, label, expected)
+        )
+    return errors
+
+
+def _require_doc_tokens(
+    rel_path: str, text: str, tokens: Sequence[str], category: str
+) -> list[str]:
+    return [
+        f"{rel_path}: missing required {category} '{tok}'"
+        for tok in tokens
+        if tok not in text
+    ]
+
+
+def _forbid_doc_patterns(
+    rel_path: str, text: str, rules: Sequence[tuple[re.Pattern[str], str]]
+) -> list[str]:
+    return [
+        f"{rel_path}: disallowed {desc} ('{' '.join(m.group(0).split())}')"
+        for pat, desc in rules
+        for m in (pat.search(text),)
+        if m is not None
+    ]
+
+
+def _extract_matched_prose_int(pattern: re.Pattern[str], text: str) -> int | None:
+    match = pattern.search(text)
+    if match is None:
+        return None
+    return _parse_prose_int(match.group(1))
+
+
+def _check_readme_itemized_sum(
+    rel_path: str, intro_text: str, exp: _DocExpectations
+) -> list[str]:
+    if exp.total_skills is None:
+        return []
+    domains = _extract_matched_prose_int(_README_AUDIT_DOMAINS_RE, intro_text)
+    workflows = _extract_matched_prose_int(_README_WORKFLOWS_RE, intro_text)
+    engineering = _extract_matched_prose_int(_README_ENGINEERING_RE, intro_text)
+    errors = _require_doc_tokens(
+        rel_path,
+        intro_text,
+        ("a coordinator", "repo-audit-diagnostics", "findings synthesis"),
+        "itemized skill entry",
+    )
+    if domains is None or workflows is None or engineering is None:
+        errors.append(f"{rel_path}: missing itemized skill breakdown in introduction")
+        return errors
+    itemized_sum = domains + 3 + workflows + engineering
+    if itemized_sum != exp.total_skills:
+        errors.append(
+            f"{rel_path}: itemized skill sum {itemized_sum} does not match catalog total {exp.total_skills}"
+        )
+    return errors
+
+
+def _check_readme_host_names(
+    rel_path: str, text: str, host_ids: Sequence[str]
+) -> list[str]:
+    missing: list[str] = []
+    for host_id in host_ids:
+        label = _HOST_DISPLAY_LABELS.get(host_id, host_id)
+        if label.lower() not in text.lower():
+            missing.append(f"{rel_path}: missing cataloged host '{label}' ({host_id})")
+    return missing
+
+
+def _validate_release_notes_doc(
+    rel_path: str, text: str, exp: _DocExpectations
+) -> list[str]:
+    if exp.total_skills is None or exp.hosts_count is None or exp.packs_count is None:
+        return []
+    required_patterns = (
+        (_RELEASE_HOST_COUNT_RE, "host installation location count"),
+        (_RELEASE_SUITE_COUNT_RE, "suite count"),
+        (_RELEASE_PACK_COUNT_RE, "pack count"),
+        (_RELEASE_TOTAL_SKILLS_RE, "total skill count"),
+    )
+    return [
+        f"{rel_path}: missing required {label}"
+        for pat, label in required_patterns
+        if _extract_matched_prose_int(pat, text) is None
+    ]
+
+
+def _validate_readme_doc(rel_path: str, text: str, exp: _DocExpectations) -> list[str]:
+    intro = "\n".join(text.splitlines()[:10])
+    return [
+        *_check_readme_itemized_sum(rel_path, intro, exp),
+        *_check_readme_host_names(rel_path, text, exp.host_ids),
+    ]
+
+
+def _validate_architecture_doc(
+    rel_path: str, text: str, exp: _DocExpectations
+) -> list[str]:
+    return [
+        *_require_doc_tokens(rel_path, text, exp.shared_dirs, "shared suite"),
+        *_require_doc_tokens(rel_path, text, exp.deliverables, "JSON deliverable"),
+        *_require_doc_tokens(
+            rel_path, text, _BUILD_CATALOG_DOC_TOKENS, "build_catalog.py output"
+        ),
+        *_require_doc_tokens(
+            rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
+        ),
+    ]
+
+
+def _validate_contributing_doc(
+    rel_path: str, text: str, exp: _DocExpectations
+) -> list[str]:
+    return [
+        *_require_doc_tokens(rel_path, text, exp.shared_dirs, "shared suite"),
+        *_require_doc_tokens(
+            rel_path, text, _BUILD_CATALOG_DOC_TOKENS, "build_catalog.py output"
+        ),
+        *_require_doc_tokens(
+            rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
+        ),
+    ]
+
+
+def _validate_agents_doc(rel_path: str, text: str, _exp: _DocExpectations) -> list[str]:
+    return [
+        *_require_doc_tokens(
+            rel_path, text, _BUILD_CATALOG_DOC_TOKENS, "build_catalog.py output"
+        ),
+        *_require_doc_tokens(
+            rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
+        ),
+        *_require_doc_tokens(rel_path, text, ("--phase format",), "check phase"),
+    ]
+
+
+def _require_host_layouts(rel_path: str, text: str, exp: _DocExpectations) -> list[str]:
+    if exp.hosts_count is None:
+        return []
+    if _extract_matched_prose_int(_HOST_LAYOUTS_RE, text) is None:
+        return [f"{rel_path}: missing required host layout count"]
+    return []
+
+
+def _validate_impl_status_doc(
+    rel_path: str, text: str, exp: _DocExpectations
+) -> list[str]:
+    return [
+        *_forbid_doc_patterns(rel_path, text, _IMPL_STATUS_BANNED_RULES),
+        *_require_host_layouts(rel_path, text, exp),
+    ]
+
+
+def _validate_research_doc(
+    rel_path: str, text: str, _exp: _DocExpectations
+) -> list[str]:
+    return _forbid_doc_patterns(rel_path, text, _RESEARCH_BANNED_RULES)
+
+
+_SPECIFIC_DOC_VALIDATORS = {
+    "README.md": _validate_readme_doc,
+    "docs/architecture.md": _validate_architecture_doc,
+    "CONTRIBUTING.md": _validate_contributing_doc,
+    "AGENTS.md": _validate_agents_doc,
+    "docs/validation.md": _require_host_layouts,
+    "docs/implementation-status.md": _validate_impl_status_doc,
+    "docs/research.md": _validate_research_doc,
+}
+
+
+def _validate_specific_doc_invariants(
+    rel_path: str, text: str, exp: _DocExpectations
+) -> list[str]:
+    handler = _SPECIFIC_DOC_VALIDATORS.get(rel_path)
+    if handler is None:
+        return []
+    return handler(rel_path, text, exp)
+
+
+def _discover_release_note_docs(root: Path) -> list[str]:
+    docs_dir = root / "docs"
+    if not docs_dir.is_dir():
+        return []
+    discovered = {
+        p.relative_to(root).as_posix()
+        for p in sorted(docs_dir.glob("release-notes-*.md"))
+        if p.is_file()
+    }
+    version_path = root / "VERSION"
+    if version_path.is_file():
+        ver = version_path.read_text(encoding="utf-8").strip()
+        candidate = f"docs/release-notes-{ver}.md"
+        if ver and (root / candidate).is_file():
+            discovered.add(candidate)
+    return sorted(discovered)
+
+
+def _validate_single_doc_file(
+    root: Path,
+    rel_path: str,
+    exp: _DocExpectations,
+    count_rules: Sequence[tuple[re.Pattern[str], str, int | None]],
+    *,
+    is_release_notes: bool = False,
+) -> list[str]:
+    doc_path = root / rel_path
+    if not doc_path.is_file():
+        return []
+    try:
+        text = doc_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"{rel_path}: {exc}"]
+    errors = _check_prose_counts(rel_path, text, count_rules)
+    if is_release_notes:
+        errors.extend(_validate_release_notes_doc(rel_path, text, exp))
+    else:
+        errors.extend(_validate_specific_doc_invariants(rel_path, text, exp))
+    return errors
+
+
+def _validate_documentation_invariants(root: Path) -> list[str]:
+    exp, load_errors = _load_doc_expectations(root)
+    if load_errors:
+        return load_errors
+    count_rules = _build_prose_count_rules(exp)
+    errors: list[str] = []
+    for rel_path in _discover_release_note_docs(root):
+        errors.extend(
+            _validate_single_doc_file(
+                root, rel_path, exp, count_rules, is_release_notes=True
+            )
+        )
+    for rel_path in _CORE_INVARIANT_DOCS:
+        errors.extend(_validate_single_doc_file(root, rel_path, exp, count_rules))
+    return errors
+
+
 def _rate_pair(numerator: int, denominator: int) -> tuple[float, float]:
     raw = (numerator / denominator) if denominator > 0 else 0.0
     return round(raw, 4), round(raw * 100.0, 2)
@@ -2428,6 +3118,7 @@ def validate_with_telemetry(
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
 
     problems.extend(_validate_suite_manifest(root))
+    problems.extend(_validate_documentation_invariants(root))
     method_dup_errors, method_dup_rate, method_dup_pct = (
         _evaluate_method_boilerplate_duplication(method_lines_by_pkg)
     )

@@ -1,10 +1,10 @@
 # fred-skills
 
 Portable engineering workflows for investigating repositories, planning useful fixes,
-and verifying that those fixes work. **55 standalone skills**: 34 audit domains,
-a coordinator, diagnostics, findings synthesis, six workflows from finding verification
-to remediation reconciliation, and twelve software architecture, code review, automated
-testing, and spec-driven development skills. All packages currently have experimental maturity.
+and verifying that those fixes work. **55 standalone skills** across 6 suites: 34 audit
+domains, a coordinator, diagnostics (`repo-audit-diagnostics`), findings synthesis, six
+workflows from finding verification to remediation reconciliation, and twelve architecture,
+code review, automated testing, and spec-driven development skills (experimental maturity).
 
 Start with a task in the [task guide](docs/experience.md), browse the
 [hosted documentation and explorer](https://fderuiter.github.io/fred-skills) on the web (or open the local
@@ -58,7 +58,7 @@ $skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skil
 python scripts/fred.py install --destination /path/to/project --host codex --pack starter
 ```
 
-Replace `fred-skills`, `complete`, or `starter` with any pack in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Running `python scripts/fred.py install` without flags installs the `starter` pack across detected workspace hosts (or bootstraps `.agents/skills/` when no host markers exist).
+Replace `fred-skills`, `complete`, or `starter` with any of the 12 packs in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Running `python scripts/fred.py install` without flags installs the `starter` pack across detected workspace hosts (or bootstraps `.agents/skills/` when no host markers exist).
 
 ## Try the local walkthrough
 

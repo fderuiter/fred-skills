@@ -1,8 +1,8 @@
 # Existing approaches and adoption decisions
 
-Research date: 2026-11-13. This is a representative capability comparison, not a benchmark,
-exhaustive market census, or proof that no comparable suite exists. Inspect licenses and
-versions before adopting third-party code. No external package is installed by this suite.
+Research date: 2026-11-13. This capability comparison informs how the 6 suites, 12 packs,
+9 host adapters, and 55 skills set external tool boundaries. Inspect licenses and versions
+before adopting third-party code. No external package is installed by this toolkit.
 
 | Existing approach | Useful coverage | Boundary and suite decision |
 | --- | --- | --- |
@@ -18,11 +18,12 @@ versions before adopting third-party code. No external package is installed by t
 | Playwright with accessibility checks | Stateful browser checks and automated accessibility scans | Add keyboard/focus/manual checks; scans alone do not verify all accessibility behavior. |
 | Knip | Unused files, exports, dependencies in JS/TS | Validate entry points and dynamic consumers before proposing deletion. |
 | OpenTelemetry | Correlated telemetry signals | Helps observe failures; instrumentation alone does not prove correctness or audit-log completeness. |
-| Superpowers | Composable development skills | Useful workflow/evaluation ideas; avoid importing mandatory orchestration or approval assumptions into a read-only audit. |
+| Superpowers | Composable development skills | Useful workflow/evaluation ideas; avoid importing mandatory orchestration or implicit approval assumptions into standalone skill packages. |
 | skills.sh | Skill discovery and distribution | Installation popularity is a discovery signal, not assurance of correctness or security. |
 
-The suite's design goal is evidence reuse across behavioral discovery, specialized review,
-and issue planning. No claim of measured superiority or market uniqueness is made.
+The toolkit's design goal is structured evidence reuse across repository audits, verified
+correction workflows, software architecture, code review, automated testing, and
+spec-driven development.
 
 # Source register
 

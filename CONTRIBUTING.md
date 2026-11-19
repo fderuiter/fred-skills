@@ -6,14 +6,21 @@
 includes `SKILL.md` and only the scripts, references, templates, and optional host
 metadata needed for its task. Root documentation and authoring tests stay outside it.
 
-`shared/repo-audit/resources/` owns the common protocol, audit schema, report template,
-and handoff template. Its manifest names every generated destination. The copies inside
-each audit skill are committed to make a single exported skill self-contained, without
-symlinks, a network dependency, or paths escaping its directory. CI rejects drift.
+Canonical suite protocols, schemas, templates, and synced validator targets live across
+all 6 `shared/` suites (`shared/repo-audit/`, `shared/repo-workflows/`,
+`shared/software-architecture/`, `shared/code-review/`, `shared/automated-testing/`, and
+`shared/spec-driven-development/`). Each suite's `manifest.json` names every generated
+destination across the 55 skills. The copies inside each skill are committed to make a
+single exported skill self-contained, without symlinks, a network dependency, or paths
+escaping its directory. CI rejects drift.
 
-`catalog/suites.json` owns family membership and pass ordering. `catalog/skills.json`
-and `docs/catalog.md` are deterministic generated discovery indexes. New families can
-be added without changing the audit suite's public names.
+`catalog/suites.json` owns family membership and pass ordering across 6 suites, paired
+with 12 packs in `catalog/packs.json` and 9 host adapters in `catalog/hosts.json`.
+`scripts/build_catalog.py` emits deterministic generated discovery and plugin manifests:
+`catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`,
+`.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json` (plus per-skill
+`skills/*/.cursor-plugin/plugin.json`), and `gemini-extension.json`. New families can be
+added without changing the audit suite's public names.
 
 ## Local checks
 
@@ -92,7 +99,7 @@ python scripts/validate_skills.py --base-ref main --telemetry validation-telemet
 
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
-All commands above run without network access once the development dependencies are installed; CI additionally runs `python scripts/check_workflow_pins.py --verify-remote` to confirm upstream commit and tag resolution via `git ls-remote`.
+All commands above run without network access once the development dependencies are installed (`check_workflow_pins.py` and `verify_workflow_actions.py` verify workflow action SHAs and version comments against `.github/action-pins.json`); CI additionally runs `python scripts/check_workflow_pins.py --verify-remote` to confirm upstream commit and tag resolution via `git ls-remote`.
 The ledger validator also needs jsonschema; instruction-only use does not need Python.
 
 ## Change a skill
@@ -156,10 +163,12 @@ Do not infer permission to copy an upstream implementation from its public avail
 
 ## Toolkit and experience changes
 
-`shared/repo-workflows/` owns common correction handoffs/protocol. Its manifest limits
-copies to the new workflow family. `catalog/{recipes,packs,profiles,hosts,experience}.json`
-are authoring inputs; the skill catalog, docs/catalog.md, docs/experience.md, and explorer
-are generated. Keep these boundaries explicit rather than adding another editable index.
+Each `shared/<suite>/` directory owns its suite protocol, schema, and templates, and its
+`manifest.json` limits copies to that suite's members. `catalog/{suites,recipes,packs,profiles,hosts,experience}.json`
+are authoring inputs; `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`,
+`.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json`, `skills/*/.cursor-plugin/plugin.json`,
+`gemini-extension.json`, `docs/experience.md`, and `docs/explorer.html` are generated. Keep
+these boundaries explicit rather than adding another editable index.
 
 Root CLI tooling lives in `scripts/fredlib/`; installable skills do not import it.
 Preserve audit schema 1.0 compatibility, source identity, explicit authority, empty findings,
