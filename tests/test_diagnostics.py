@@ -373,28 +373,28 @@ Bearer sk-proj-1234567890abcdef1234567890
             self.skipTest("pty module is not available on this platform")
         fred_cli = ROOT / "scripts/fred.py"
         master, slave = pty.openpty()
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, str(fred_cli), *args],
             stdin=subprocess.DEVNULL,
             stdout=slave,
             stderr=slave,
-            check=False,
         )
         os.close(slave)
-        output = b""
+        chunks: list[bytes] = []
         while True:
             try:
                 chunk = os.read(master, 4096)
                 if not chunk:
                     break
-                output += chunk
+                chunks.append(chunk)
             except OSError:
                 break
         os.close(master)
+        returncode = proc.wait()
         return subprocess.CompletedProcess(
             args=[sys.executable, str(fred_cli), *args],
-            returncode=proc.returncode,
-            stdout=output.decode("utf-8", errors="replace"),
+            returncode=returncode,
+            stdout=b"".join(chunks).decode("utf-8", errors="replace"),
             stderr="",
         )
 

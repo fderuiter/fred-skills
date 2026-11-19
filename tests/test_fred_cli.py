@@ -58,30 +58,30 @@ class FredCLITests(unittest.TestCase):
             if fcntl is not None and termios is not None:
                 winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, str(FRED_PY), *args],
             stdin=subprocess.DEVNULL,
             stdout=slave,
             stderr=slave,
-            check=False,
             cwd=cwd,
             env=run_env,
         )
         os.close(slave)
-        output = b""
+        chunks: list[bytes] = []
         while True:
             try:
                 chunk = os.read(master, 4096)
                 if not chunk:
                     break
-                output += chunk
+                chunks.append(chunk)
             except OSError:
                 break
         os.close(master)
+        returncode = proc.wait()
         return subprocess.CompletedProcess(
             args=[sys.executable, str(FRED_PY), *args],
-            returncode=proc.returncode,
-            stdout=output.decode("utf-8", errors="replace"),
+            returncode=returncode,
+            stdout=b"".join(chunks).decode("utf-8", errors="replace"),
             stderr="",
         )
 
