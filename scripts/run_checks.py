@@ -91,6 +91,8 @@ def build_phase_commands(
     python_executable: str = sys.executable,
     ruff_cmd: Sequence[str] | None = None,
     telemetry_path: str | None = None,
+    base_ref: str | None = None,
+    step_summary: str | None = None,
 ) -> list[list[str]]:
     """Build the ordered command list for a single check phase."""
     resolved_ruff = (
@@ -108,8 +110,15 @@ def build_phase_commands(
         return [[python_executable, "-m", "mypy"]]
     if phase == "packages":
         validate_cmd = [python_executable, str(scripts_dir / "validate_skills.py")]
+        if base_ref is not None:
+            validate_cmd.extend(["--base-ref", base_ref])
         if telemetry_path:
             validate_cmd.extend(["--telemetry", telemetry_path])
+        if step_summary is not None:
+            if step_summary:
+                validate_cmd.extend(["--step-summary", step_summary])
+            else:
+                validate_cmd.append("--step-summary")
         return [
             [
                 python_executable,
@@ -165,6 +174,8 @@ def run_checks(
     python_executable: str = sys.executable,
     ruff_override: str | None = None,
     telemetry_path: str | None = None,
+    base_ref: str | None = None,
+    step_summary: str | None = None,
     dry_run: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> int:
@@ -184,6 +195,8 @@ def run_checks(
             python_executable=python_executable,
             ruff_cmd=ruff_cmd,
             telemetry_path=telemetry_path,
+            base_ref=base_ref,
+            step_summary=step_summary,
         )
         for cmd in commands:
             display = _format_command_display(cmd, root)
@@ -235,6 +248,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write validation telemetry JSON from validate_skills.py to PATH.",
     )
     parser.add_argument(
+        "--base-ref",
+        default=None,
+        metavar="REF",
+        help="Git base ref or SHA forwarded to validate_skills.py for diff telemetry.",
+    )
+    parser.add_argument(
+        "--step-summary",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Append Markdown telemetry summary to PATH or $GITHUB_STEP_SUMMARY.",
+    )
+    parser.add_argument(
         "--ruff",
         default=None,
         metavar="BIN",
@@ -277,6 +304,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         root=args.root,
         ruff_override=args.ruff,
         telemetry_path=args.telemetry,
+        base_ref=args.base_ref,
+        step_summary=args.step_summary,
         dry_run=args.dry_run,
     )
 

@@ -83,6 +83,11 @@ python -m unittest discover -s tests -v
 python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
 python scripts/build_experience.py
+
+# Scaffold a new skill package and export diff-scoped validation telemetry
+python scripts/scaffold_skill.py <skill-name> --dry-run
+python scripts/scaffold_skill.py <skill-name> --catalog --suite repository-workflows --dry-run
+python scripts/validate_skills.py --base-ref main --telemetry validation-telemetry.json
 ```
 
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
@@ -92,15 +97,44 @@ The ledger validator also needs jsonschema; instruction-only use does not need P
 
 ## Change a skill
 
-1. Establish a real task, its expected output, and when the skill should activate.
-2. Put a brief, specific trigger in `description`; put procedure in the Markdown body.
-3. Keep root instructions below 500 lines. Link references directly and say when to read
-   them. Preserve the distinction between independent requirements and observed code.
-4. Include a failure scenario, a safe control, and an unrelated activation scenario.
-   Keep expected answers out of fresh-context execution prompts.
-5. Run packaging checks and relevant deterministic tests. For behavioral changes, run
-   representative agent tasks and record actual results, misses, and limits in the PR.
-6. Regenerate shared copies and indexes. Review the generated diff for unrelated changes.
+1. Scaffold a compliant starter package with `python scripts/scaffold_skill.py <skill-name>`
+   (add `--catalog --suite <suite>` to update `catalog/suites.json`, `catalog/experience.json`,
+   and generated discovery indexes), then establish a real task, its expected output, and
+   when the skill should activate.
+2. Put a brief, specific trigger in `description` (`1–1024` characters, unique across skills)
+   with `name` matching the directory; put procedure in the `SKILL.md` body under `500` lines.
+   Link package-local references directly without symlinks or paths escaping the skill directory.
+   Preserve the distinction between independent requirements and observed code.
+3. Enforce all seven package validator guardrails (`scripts/validate_skills.py`):
+   - **Prompt budgets**: `assets/prompt.md` is required and must stay within `1200` characters
+     (`MAX_PROMPT_CHARS = 1200`) and `20` lines (`MAX_PROMPT_LINES = 20`).
+   - **Allowed placeholders**: Any `<...>` token in `assets/prompt.md` must match the approved
+     allowlist: `<audit workspace/reports>`, `<critical workflows>`,
+     `<existing audit workspace, if any>`, `<existing audit workspace>`,
+     `<finding/run artifacts>`, `<path-to-diagnostic-bundle-output>`,
+     `<path-to-run-workspace-directory>`, `<path-to-session-transcript>`,
+     `<repository/revision>`, `<repository>`, `<revision>`.
+   - **Negative constraints**: `assets/prompt.md` must include explicit negative constraints or
+     boundary guardrails (such as `do not`, `never`, `must not`, `only when`, `keep ... unchanged`,
+     `boundaries`, `guardrails`, or `invariants`).
+   - **Boundary headings**: `SKILL.md` must contain at least one `##` or deeper boundary/workflow
+     section matching validator patterns (`## Workflow`, `## Boundary`, `## Guardrails`,
+     `## Deliver`, `## Inventory`, `## Investigate`, `## Challenge`, `## Triage`,
+     `## Establish`, `## Coordinate`, or `## Validate`).
+   - **Output schemas**: Define at least one Draft 2020-12 JSON output schema in
+     `assets/*.schema.json` (excluding `evaluation-scenarios*`).
+   - **UI limits**: When `agents/openai.yaml` is present, `interface.display_name` must be
+     nonempty, `interface.short_description` must contain `25–64` characters, and
+     `interface.default_prompt` must reference `$<skill-name>`.
+   - **Scenario suffixes**: `references/evaluation-scenarios.json` must conform to
+     `schemas/evaluation-scenarios.schema.json` with three scenarios using `-failure`, `-safe`,
+     and `-routing` identifier suffixes (a failure case, a safe control, and an unrelated
+     activation scenario). Keep expected answers out of fresh-context execution prompts.
+4. Run packaging checks and relevant deterministic tests. Initial outcomes for newly authored
+   skills are recorded in `.fred-skills/validation-attempts.json` so local revision loops preserve
+   first-pass telemetry. For behavioral changes, run representative agent tasks and record actual
+   results, misses, and limits in the PR.
+5. Regenerate shared copies and indexes. Review the generated diff for unrelated changes.
 
 When changing the shared protocol/schema, review every consumer and update the version
 and migration guidance together if the artifact contract changes. A schema passing does
