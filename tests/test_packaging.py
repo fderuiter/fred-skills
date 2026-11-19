@@ -712,7 +712,7 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("ruff-format", skip_ids)
 
         run_cmds = [s.get("run", "") for s in validate_steps]
-        for phase in ["lint", "typecheck", "packages", "tests"]:
+        for phase in ["lint", "typecheck", "packages", "docs", "tests"]:
             self.assertTrue(
                 any(
                     f"scripts/run_checks.py --phase {phase}" in cmd for cmd in run_cmds
@@ -938,14 +938,14 @@ class PackageTests(unittest.TestCase):
             ALL_PHASES,
         )
         self.assertEqual(
-            ("lint", "format", "typecheck", "packages", "tests"),
+            ("lint", "format", "typecheck", "packages", "docs", "tests"),
             DEFAULT_PHASES,
         )
         self.assertEqual(
-            ["lint", "format", "typecheck", "packages", "tests"],
+            ["lint", "format", "typecheck", "packages", "docs", "tests"],
             resolve_phases(),
         )
-        self.assertNotIn("docs", resolve_phases())
+        self.assertIn("docs", resolve_phases())
         self.assertEqual(["docs"], resolve_phases(["docs"]))
         self.assertEqual(
             ["lint", "typecheck", "tests"],
@@ -1000,8 +1000,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("[dry-run:format]", dry.stdout)
         self.assertIn("[dry-run:typecheck]", dry.stdout)
         self.assertIn("[dry-run:packages]", dry.stdout)
+        self.assertIn("[dry-run:docs]", dry.stdout)
         self.assertIn("[dry-run:tests]", dry.stdout)
-        self.assertNotIn("[dry-run:docs]", dry.stdout)
 
         invoked: list[tuple[list[str], dict[str, str]]] = []
 

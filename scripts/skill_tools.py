@@ -7,6 +7,7 @@ import math
 import re
 from collections import deque
 from collections.abc import Mapping
+from html import unescape
 from pathlib import Path
 from typing import TypeVar
 from urllib.parse import unquote, urlsplit
@@ -17,10 +18,13 @@ __all__ = [
     "ROOT",
     "build_outputs",
     "estimate_tokens",
+    "extract_document_anchors",
+    "extract_link_fragment",
     "extract_relative_links",
     "find_deep_reference_chains",
     "read_frontmatter",
     "resolve_relative_link_target",
+    "slugify_markdown_heading",
     "suite_members",
 ]
 
@@ -32,6 +36,13 @@ MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
 # Matches reference-style link definitions [label]: target
 MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
+_ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+_HTML_ID_ATTR_RE = re.compile(r"""\bid=["\x27]([^"\x27]+)["\x27]""")
+_HTML_NAME_ANCHOR_RE = re.compile(
+    r"""<a\b[^>]*\bname=["\x27]([^"\x27]+)["\x27]""", re.IGNORECASE
+)
 
 
 def estimate_tokens(text: str) -> int:
@@ -42,22 +53,103 @@ def estimate_tokens(text: str) -> int:
     return max(math.ceil(len(stripped) / 4), len(stripped.split()))
 
 
-def extract_relative_links(content: str) -> list[str]:
-    """Extract all link targets from markdown content."""
+def extract_relative_links(
+    content: str,
+    include_fragments: bool = False,
+) -> list[str]:
+    """Extract all relative link targets (and optional #fragment links) from content."""
     raw_targets = (
         MD_LINK_RE.findall(content)
         + HTML_LINK_RE.findall(content)
         + MD_REF_LINK_RE.findall(content)
     )
-    relative_paths = []
+    relative_paths: list[str] = []
     for target in raw_targets:
         target = target.strip().strip("<>\"'")
         parsed = urlsplit(target)
-        # Skip external links and in-page anchor links
-        if parsed.scheme or parsed.netloc or not parsed.path:
+        if parsed.scheme or parsed.netloc:
+            continue
+        if not parsed.path:
+            if include_fragments and parsed.fragment:
+                relative_paths.append(target)
             continue
         relative_paths.append(target)
     return relative_paths
+
+
+def extract_link_fragment(target: str) -> str | None:
+    """Extract an unquoted #fragment identifier from a relative or in-page link target."""
+    target = target.strip().strip("<>\"'")
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc or not parsed.fragment:
+        return None
+    return unquote(parsed.fragment)
+
+
+def slugify_markdown_heading(heading_text: str) -> str:
+    """Convert Markdown heading text into an anchor slug matching GitHub and build_site."""
+    cleaned = re.sub(r"!?\[([^\]]*)\]\([^)]+\)", r"\1", heading_text)
+    cleaned = cleaned.lower()
+    cleaned = re.sub(r"[`]", "", cleaned)
+    cleaned = re.sub(r"[^a-z0-9 _-]", "", cleaned)
+    return cleaned.strip().replace(" ", "-")
+
+
+def _extract_html_anchors(content: str) -> set[str]:
+    """Extract id and <a name=...> anchor targets from HTML text outside script/style."""
+    cleaned = _HTML_SCRIPT_STYLE_RE.sub("", content)
+    raw_anchors = _HTML_ID_ATTR_RE.findall(cleaned) + _HTML_NAME_ANCHOR_RE.findall(
+        cleaned
+    )
+    anchors: set[str] = set()
+    for item in raw_anchors:
+        decoded = unescape(item).strip()
+        if decoded:
+            anchors.add(decoded)
+            anchors.add(unquote(decoded))
+    return anchors
+
+
+def extract_document_anchors(content: str, suffix: str = ".md") -> set[str]:
+    """Extract all valid #fragment anchor identifiers from a Markdown or HTML document."""
+    if suffix.lower() in {".html", ".htm"}:
+        return _extract_html_anchors(content)
+
+    anchors: set[str] = set()
+    seen_slugs: dict[str, int] = {}
+    fence_char = ""
+    fence_len = 0
+
+    for line in content.splitlines():
+        fence_match = _FENCE_MARKER_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not fence_char:
+                fence_char = marker[0]
+                fence_len = len(marker)
+                continue
+            if marker[0] == fence_char and len(marker) >= fence_len:
+                fence_char = ""
+                fence_len = 0
+                continue
+        if fence_char:
+            continue
+
+        heading_match = _ATX_HEADING_RE.match(line)
+        if heading_match:
+            base = slugify_markdown_heading(heading_match.group(2)) or "section"
+            count = seen_slugs.get(base, 0)
+            seen_slugs[base] = count + 1
+            anchors.add(base if count == 0 else f"{base}-{count}")
+
+        for raw_attr in _HTML_ID_ATTR_RE.findall(line) + _HTML_NAME_ANCHOR_RE.findall(
+            line
+        ):
+            decoded = unescape(raw_attr).strip()
+            if decoded:
+                anchors.add(decoded)
+
+    return anchors
 
 
 def resolve_relative_link_target(target: str, base_dir: Path) -> Path | None:

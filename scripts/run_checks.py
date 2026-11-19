@@ -30,6 +30,7 @@ DEFAULT_PHASES: tuple[str, ...] = (
     "format",
     "typecheck",
     "packages",
+    "docs",
     "tests",
 )
 
@@ -67,11 +68,7 @@ def resolve_ruff_command(
 
 
 def resolve_phases(requested: Sequence[str] | None = None) -> list[str]:
-    """Resolve requested phases in canonical execution order.
-
-    Full runs (when no explicit phases are supplied) omit standalone doc scripts
-    because tests/test_doc_verification.py already executes link and snippet checks.
-    """
+    """Resolve requested phases in canonical execution order."""
     if not requested:
         return list(DEFAULT_PHASES)
 
@@ -221,8 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run cross-platform repository validation checks. "
-            "Defaults to lint, format, typecheck, packages, and tests (omitting "
-            "standalone doc scripts covered by tests/test_doc_verification.py)."
+            "Defaults to lint, format, typecheck, packages, docs, and tests."
         )
     )
     parser.add_argument(
