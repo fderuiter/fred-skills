@@ -634,7 +634,7 @@ def evaluate(
 ) -> dict
 ```
 
-Runs a user-supplied adapter executable over evaluation test cases across all five suites (`audit`, `architecture`, `review`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
+Runs a user-supplied adapter executable over evaluation test cases across all six suites (`audit`, `architecture`, `review`, `spec`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
 
 - **Parameters:**
   - `output` (`Path`): Output directory for evaluation logs and `benchmark.json`. Must be a new or empty directory.
