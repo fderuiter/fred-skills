@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "finding_id": "F-401",
+      "fingerprint": "fp-auth-bind",
+      "previous_state": "in-progress",
+      "has_verification_proof": true
+    }
+  ],
+  "unmapped": []
+}

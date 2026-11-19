@@ -21,3 +21,4 @@ Focus on actionable recommendations, clear severity grading, and practical remed
 Format review feedback following the [review template](assets/review-template.md).
 Ensure feedback payload conforms to [review schema](assets/review.schema.json).
 Produce structured, developer-ready review output with actionable next actions.
+Do not modify application code or publish review comments remotely without explicit user authorization.

@@ -3,10 +3,11 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import os
 import re
 import tarfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -44,15 +45,25 @@ _EXCLUDED_FILE_SUFFIXES = {".pyc", ".pyo", ".pyd"}
 _EXCLUDED_FILE_NAMES = {".DS_Store", ".gitignore", ".gitattributes"}
 
 
-def _collect_skill_files(
+def _is_executable_file(path: Path, data: bytes) -> bool:
+    return (os.name != "nt" and bool(path.stat().st_mode & 0o111)) or data.startswith(
+        b"#!"
+    )
+
+
+def _scan_skill_files(
     package_dir: Path, root: Path = ROOT
-) -> list[tuple[str, bytes]]:
+) -> tuple[list[tuple[str, bytes]], set[str]]:
     if not package_dir.is_dir() or package_dir.is_symlink():
         raise ValueError(f"Expected a real package directory: {package_dir}")
     if not package_dir.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"Package directory escapes repository root: {package_dir}")
     files: list[tuple[str, bytes]] = []
-    for path in sorted(package_dir.rglob("*")):
+    executable_paths: set[str] = set()
+    for path in sorted(
+        package_dir.rglob("*"),
+        key=lambda p: p.relative_to(package_dir).as_posix(),
+    ):
         if path.is_symlink():
             raise ValueError(f"Symlinks not supported in skill packages: {path}")
         if not path.resolve().is_relative_to(root.resolve()):
@@ -64,9 +75,19 @@ def _collect_skill_files(
         if path.suffix in _EXCLUDED_FILE_SUFFIXES or path.name in _EXCLUDED_FILE_NAMES:
             continue
         rel = path.relative_to(package_dir).as_posix()
-        files.append((rel, path.read_bytes()))
+        data = path.read_bytes()
+        files.append((rel, data))
+        if _is_executable_file(path, data):
+            executable_paths.add(rel)
     if not files:
         raise ValueError(f"No files found in skill package: {package_dir}")
+    return files, executable_paths
+
+
+def _collect_skill_files(
+    package_dir: Path, root: Path = ROOT
+) -> list[tuple[str, bytes]]:
+    files, _ = _scan_skill_files(package_dir, root=root)
     return files
 
 
@@ -125,21 +146,34 @@ def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[
     raise ValueError("Unable to determine suite skills from catalog")
 
 
-def _write_zip_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> None:
-    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+def _write_zip_archive(
+    archive_path: Path,
+    entries: list[tuple[str, bytes]],
+    executable_paths: Collection[str] | None = None,
+) -> None:
+    exec_set = set(executable_paths) if executable_paths else set()
+    with zipfile.ZipFile(
+        archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as archive:
         for name, data in sorted(entries, key=lambda x: x[0]):
+            mode = 0o100755 if name in exec_set else 0o100644
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
             info.create_system = 3
-            info.external_attr = 0o100644 << 16
+            info.external_attr = mode << 16
             info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, data)
+            archive.writestr(info, data, compresslevel=9)
 
 
-def _write_tar_entries(tar: tarfile.TarFile, entries: list[tuple[str, bytes]]) -> None:
+def _write_tar_entries(
+    tar: tarfile.TarFile,
+    entries: list[tuple[str, bytes]],
+    executable_paths: Collection[str] | None = None,
+) -> None:
+    exec_set = set(executable_paths) if executable_paths else set()
     for name, data in sorted(entries, key=lambda x: x[0]):
         info = tarfile.TarInfo(name)
         info.size = len(data)
-        info.mode = 0o644
+        info.mode = 0o755 if name in exec_set else 0o644
         info.mtime = 0
         info.uid = 0
         info.gid = 0
@@ -148,29 +182,48 @@ def _write_tar_entries(tar: tarfile.TarFile, entries: list[tuple[str, bytes]]) -
         tar.addfile(info, io.BytesIO(data))
 
 
-def _write_tar_archive(archive_path: Path, entries: list[tuple[str, bytes]]) -> None:
+def _write_tar_archive(
+    archive_path: Path,
+    entries: list[tuple[str, bytes]],
+    executable_paths: Collection[str] | None = None,
+) -> None:
     with tarfile.open(archive_path, "w", format=tarfile.PAX_FORMAT) as archive:
-        _write_tar_entries(archive, entries)
+        _write_tar_entries(archive, entries, executable_paths=executable_paths)
 
 
-def _create_tar_gz_bytes(entries: list[tuple[str, bytes]]) -> bytes:
+def _create_tar_gz_bytes(
+    entries: list[tuple[str, bytes]],
+    executable_paths: Collection[str] | None = None,
+) -> bytes:
     buf = io.BytesIO()
     with (
         gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz,
         tarfile.open(mode="w", fileobj=gz, format=tarfile.PAX_FORMAT) as tar,
     ):
-        _write_tar_entries(tar, entries)
+        _write_tar_entries(tar, entries, executable_paths=executable_paths)
     return buf.getvalue()
+
+
+def _scan_skills_entries(
+    skills: Iterable[str], root: Path = ROOT
+) -> tuple[list[tuple[str, bytes]], set[str]]:
+    entries: list[tuple[str, bytes]] = []
+    executable_paths: set[str] = set()
+    for s_name in sorted(skills):
+        pkg = root / "skills" / s_name
+        files, rel_execs = _scan_skill_files(pkg, root=root)
+        for rel, data in files:
+            arcname = f"{s_name}/{rel}"
+            entries.append((arcname, data))
+            if rel in rel_execs:
+                executable_paths.add(arcname)
+    return entries, executable_paths
 
 
 def _collect_skills_entries(
     skills: Iterable[str], root: Path = ROOT
 ) -> list[tuple[str, bytes]]:
-    entries: list[tuple[str, bytes]] = []
-    for s_name in sorted(skills):
-        pkg = root / "skills" / s_name
-        for rel, data in _collect_skill_files(pkg, root=root):
-            entries.append((f"{s_name}/{rel}", data))
+    entries, _ = _scan_skills_entries(skills, root=root)
     return entries
 
 
@@ -182,15 +235,19 @@ def _package_skills(output: Path, root: Path = ROOT) -> dict[str, list[str]]:
 
     archive_skills: dict[str, list[str]] = {}
     all_suite_entries: list[tuple[str, bytes]] = []
+    all_suite_executables: set[str] = set()
     for s_name in sorted(suite_skills):
-        s_entries = _collect_skills_entries([s_name], root=root)
+        s_entries, s_execs = _scan_skills_entries([s_name], root=root)
         all_suite_entries.extend(s_entries)
-        tar_gz_bytes = _create_tar_gz_bytes(s_entries)
+        all_suite_executables.update(s_execs)
+        tar_gz_bytes = _create_tar_gz_bytes(s_entries, executable_paths=s_execs)
         archive_name = f"{s_name}.tar.gz"
         (output / archive_name).write_bytes(tar_gz_bytes)
         archive_skills[archive_name] = [s_name]
 
-    suite_bytes = _create_tar_gz_bytes(all_suite_entries)
+    suite_bytes = _create_tar_gz_bytes(
+        all_suite_entries, executable_paths=all_suite_executables
+    )
     suite_name = "fred-skills-suite.tar.gz"
     (output / suite_name).write_bytes(suite_bytes)
     archive_skills[suite_name] = suite_skills
@@ -209,8 +266,7 @@ def build(
     output.mkdir(parents=True, exist_ok=True)
 
     if all_packs or pack == "all":
-        packs_doc = read_json(root / "catalog/packs.json").get("packs", {})
-        available_packs = list(packs_doc.keys())
+        available_packs = list(_load_documented_packs(root))
         if not available_packs:
             raise ValueError("No documented packs found in catalog/packs.json")
 
@@ -221,11 +277,11 @@ def build(
             p_skills = choose_skills(root, pack=p)
             packs_map[p] = p_skills
             p_stem = f"fred-skills-{version(root)}-{p}"
-            p_entries = _collect_skills_entries(p_skills, root=root)
+            p_entries, p_execs = _scan_skills_entries(p_skills, root=root)
             zip_name = f"{p_stem}.zip"
             tar_name = f"{p_stem}.tar"
-            _write_zip_archive(output / zip_name, p_entries)
-            _write_tar_archive(output / tar_name, p_entries)
+            _write_zip_archive(output / zip_name, p_entries, executable_paths=p_execs)
+            _write_tar_archive(output / tar_name, p_entries, executable_paths=p_execs)
             archive_skills[zip_name] = p_skills
             archive_skills[tar_name] = p_skills
 
@@ -258,8 +314,12 @@ def build(
         checksum_lines = "".join(
             f"{item['sha256']}  {item['file']}\n" for item in all_archives
         )
-        (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
-        (output / "checksums.sha256").write_text(checksum_lines, encoding="utf-8")
+        (output / "SHA256SUMS").write_text(
+            checksum_lines, encoding="utf-8", newline="\n"
+        )
+        (output / "checksums.sha256").write_text(
+            checksum_lines, encoding="utf-8", newline="\n"
+        )
         return manifest
 
     selected = choose_skills(root, pack, skills)
@@ -267,14 +327,15 @@ def build(
     if not re.fullmatch(r"[a-z0-9-]+", label):
         raise ValueError("Invalid pack name")
     stem = f"fred-skills-{version(root)}-{label}"
-    entries = _collect_skills_entries(selected, root=root)
-    _write_zip_archive(output / (stem + ".zip"), entries)
-    _write_tar_archive(output / (stem + ".tar"), entries)
+    entries, execs = _scan_skills_entries(selected, root=root)
+    _write_zip_archive(output / (stem + ".zip"), entries, executable_paths=execs)
+    _write_tar_archive(output / (stem + ".tar"), entries, executable_paths=execs)
     pack_archives: list[dict[str, Any]] = [
         {
             "file": path.name,
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "bytes": path.stat().st_size,
+            "skills": list(selected),
         }
         for path in sorted(output.iterdir())
         if path.is_file()
@@ -294,21 +355,88 @@ def build(
     checksum_lines = "".join(
         f"{item['sha256']}  {item['file']}\n" for item in pack_archives
     )
-    (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8")
-    (output / "checksums.sha256").write_text(checksum_lines, encoding="utf-8")
+    (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8", newline="\n")
+    (output / "checksums.sha256").write_text(
+        checksum_lines, encoding="utf-8", newline="\n"
+    )
     return manifest
+
+
+def _verify_checksum_file(
+    checksum_path: Path, manifest_dir: Path, expected_digests: dict[str, str]
+) -> None:
+    if checksum_path.is_symlink():
+        raise ValueError(f"Symlink checksum file not supported: {checksum_path.name}")
+    if not checksum_path.exists():
+        return
+    if not checksum_path.is_file() or not checksum_path.resolve().is_relative_to(
+        manifest_dir
+    ):
+        raise ValueError(f"Unsafe checksum file: {checksum_path.name}")
+    lines = checksum_path.read_text(encoding="utf-8").splitlines()
+    if not lines and expected_digests:
+        raise ValueError(f"Empty checksum file: {checksum_path.name}")
+    seen: dict[str, str] = {}
+    for line in lines:
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if not match:
+            raise ValueError(
+                f"Malformed checksum line in {checksum_path.name}: {line!r}"
+            )
+        digest, raw_name = match.groups()
+        norm_name = relative_path(raw_name).as_posix()
+        if norm_name != raw_name:
+            raise ValueError(
+                f"Non-normalized archive path in {checksum_path.name}: {raw_name!r}"
+            )
+        if norm_name in seen:
+            raise ValueError(
+                f"Duplicate archive entry in {checksum_path.name}: {norm_name}"
+            )
+        if norm_name not in expected_digests:
+            raise ValueError(
+                f"Unexpected archive entry in {checksum_path.name}: {norm_name}"
+            )
+        if digest != expected_digests[norm_name]:
+            raise ValueError(f"Checksum mismatch in {checksum_path.name}: {norm_name}")
+        seen[norm_name] = digest
+    if set(seen) != set(expected_digests):
+        raise ValueError(f"Missing archive entries in {checksum_path.name}")
 
 
 def verify(manifest: Path) -> dict:
     data = read_json(manifest)
+    manifest_dir = manifest.parent.resolve()
+    expected_digests: dict[str, str] = {}
     for entry in data["archives"]:
-        path = manifest.parent / relative_path(entry["file"])
-        if path.is_symlink() or not path.resolve().is_relative_to(
-            manifest.parent.resolve()
-        ):
+        rel = relative_path(entry["file"])
+        rel_posix = rel.as_posix()
+        if rel_posix in expected_digests:
+            raise ValueError(f"Duplicate archive entry in manifest: {entry['file']}")
+        path = manifest.parent / rel
+        if path.is_symlink() or not path.resolve().is_relative_to(manifest_dir):
             raise ValueError("Release archive escapes manifest directory")
-        if hashlib.sha256(path.read_bytes()).hexdigest() != entry["sha256"]:
+        if not path.is_file():
+            raise ValueError(f"Missing release archive: {entry['file']}")
+        expected_bytes = entry.get("bytes")
+        if (
+            isinstance(expected_bytes, bool)
+            or not isinstance(expected_bytes, int)
+            or expected_bytes < 0
+        ):
+            raise ValueError(f"Invalid byte count in manifest: {entry['file']}")
+        if path.stat().st_size != expected_bytes:
+            raise ValueError(f"Byte size mismatch: {entry['file']}")
+        raw = path.read_bytes()
+        if len(raw) != expected_bytes:
+            raise ValueError(f"Byte size mismatch: {entry['file']}")
+        if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
             raise ValueError(f"Checksum mismatch: {entry['file']}")
+        expected_digests[rel_posix] = entry["sha256"]
+    for checksum_name in ("SHA256SUMS", "checksums.sha256"):
+        _verify_checksum_file(
+            manifest.parent / checksum_name, manifest_dir, expected_digests
+        )
     return {
         "verified_archives": len(data["archives"]),
         "version": data["version"],

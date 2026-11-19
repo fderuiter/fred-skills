@@ -1,0 +1,4 @@
+{
+  "finding_id": "F-201",
+  "contract": "debit must reject withdrawals exceeding available quota"
+}
