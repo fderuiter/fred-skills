@@ -2,10 +2,19 @@
 
 This package provides programmatic library modules for run lifecycle management,
 skill installation, evaluation harnesses, report generation, release packaging,
-and repository inspection.
+repository inspection, and static security vetting.
 """
 
-from . import common, evaluations, installation, releases, reports, repository, runs
+from . import (
+    common,
+    evaluations,
+    installation,
+    releases,
+    reports,
+    repository,
+    runs,
+    vetting,
+)
 
 __all__ = [
     "common",
@@ -15,4 +24,5 @@ __all__ = [
     "reports",
     "repository",
     "runs",
+    "vetting",
 ]

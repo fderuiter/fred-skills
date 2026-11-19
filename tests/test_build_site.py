@@ -84,13 +84,13 @@ class BuildSiteTests(unittest.TestCase):
                 )
 
         skill_dirs = sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(51, len(skill_dirs))
+        self.assertEqual(52, len(skill_dirs))
         for skill_name in skill_dirs:
             skill_html_path = self.site_dir / "skills" / skill_name / "SKILL.html"
             self.assertTrue(skill_html_path.is_file(), skill_name)
 
     def test_compiled_skill_pages_strip_frontmatter_and_render_metadata(self) -> None:
-        """All 51 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
+        """All 52 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
         for skill_html_path in sorted((self.site_dir / "skills").glob("*/SKILL.html")):
             skill_name = skill_html_path.parent.name
             html_text = skill_html_path.read_text(encoding="utf-8")

@@ -265,6 +265,7 @@ _DEFAULT_SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "repo-audit-domain-models",
         "repo-audit-failure-modes",
         "repo-audit-trust-boundaries",
+        "repo-audit-agent-configs",
         "repo-audit-transactions",
         "repo-audit-idempotency",
         "repo-audit-error-semantics",

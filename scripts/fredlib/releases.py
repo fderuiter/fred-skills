@@ -11,6 +11,7 @@ from collections.abc import Collection, Iterable
 from pathlib import Path
 from typing import Any
 
+from . import vetting
 from .common import (
     _SKILL_SUITE_PREFIXES,
     ROOT,
@@ -87,6 +88,13 @@ def _scan_skill_files(
             executable_paths.add(rel)
     if not files:
         raise ValueError(f"No files found in skill package: {package_dir}")
+    vet_res = vetting.vet_skill(package_dir, trust_builtin_allowlists=True, root=root)
+    if not vet_res["passed"]:
+        first = vet_res["findings"][0]
+        raise ValueError(
+            f"Security vetting failed for skill '{package_dir.name}' "
+            f"({first['file']}:{first['line']} [{first['rule']}]): {first['message']}"
+        )
     return files, executable_paths
 
 
