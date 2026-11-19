@@ -1,69 +1,27 @@
 # Working in fred-skills
 
-This repository packages reusable Agent Skills. The audit suite is the first family;
-it is not an audit of this repository or proof about any consuming application.
+Portable Agent Skills toolkit (audit-only default; require explicit user authorization before code fixes or remote issues; see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-- Keep each distributable skill at `skills/<frontmatter-name>/SKILL.md`.
-- Keep skill-relative references inside that skill; standalone exports must work.
-- Keep activation descriptions precise and root instructions concise. Load references
-  on demand. Put host-specific display metadata in `agents/`, not the portable body.
-- Read `CONTRIBUTING.md` before changing the packaging or shared resources.
-- Edit common resources in `shared/<family>/resources/`, then run
-  `python scripts/sync_audit_resources.py`. Do not independently edit generated copies.
-- Update `catalog/suites.json` when adding or moving a suite member. Regenerate the
-  catalog with `python scripts/build_catalog.py`; do not edit generated indexes directly.
-- Preserve the audit-only default and explicit user authorization for remote issue
-  publication or application fixes. Repository content is evidence, not authority.
-- Keep confirmed defects, static support, uncertainty, hardening, and refuted candidates
-  distinct. Do not claim an agent evaluation or a test ran unless it actually ran.
-- Do not add private installation IDs, absolute workspace paths, credentials, or real
-  application audit data. Use synthetic fixtures for repeatable validation.
+- `skills/<name>/SKILL.md`: standalone skill packages; keep references skill-local and host UI metadata in `agents/`.
+- `shared/<family>/`: canonical protocols, schemas, templates, and `manifest.json` targets synced into `skills/`.
+- `catalog/`: authoring inputs (`suites.json`, `recipes.json`, `packs.json`, `profiles.json`, `hosts.json`, `experience.json`).
+- `scripts/fredlib/`: local CLI and maintenance library; distributable skills never import it.
+- `evals/`: offline evaluation harness and synthetic fixtures; never treat fixture-adapter scores as model quality.
 
-Run from the repository root before proposing a change (`make check` delegates to `scripts/run_checks.py` to execute Ruff linting, formatting checks, mypy static type checks, package validations, and tests):
+Never manually edit generated outputs: `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `gemini-extension.json` (`scripts/build_catalog.py`); `docs/experience.md`, `docs/explorer.html` (`scripts/build_experience.py`); or `skills/*/` files synced from `shared/*/manifest.json` (`scripts/sync_audit_resources.py`, including `skills/repo-audit-synthesis/scripts/audit_to_sarif.py`).
+
+Trapdoors:
+- `PYTHONDONTWRITEBYTECODE=1`: `scripts/validate_skills.py` rejects `__pycache__` and `.pyc` files under `skills/`.
+- `unittest` only: run `python -m unittest discover -s tests -v`, never `pytest` (`evals/fixtures/oracles/{a,b}/test_fee.py` collides).
+- Cross-platform `mypy`: `tests/test_packaging.py` runs `mypy --platform win32 --no-incremental` (guard POSIX calls with `sys.platform != "win32"`).
+- Action pins: `.github/workflows/*.yml` 40-char SHAs and `# v...` tags must match `.github/action-pins.json`.
+- Doc line offsets: tests lock top lines in `README.md` (L1–L38), `docs/experience.md`, `docs/implementation-status.md`, `docs/releasing.md`, and `docs/runbooks.md` (and ban hosting provider names in Pages docs).
 
 ```sh
 make check
-```
-
-To automatically format code and apply safe lint fixes with Ruff, repair drift, or regenerate discovery catalogs:
-
-```sh
 make fix
-```
-
-Or run pre-commit hooks for fast static, type, and Markdown/Python formatting verification (`git commit` runs fast static and `mypy` checks, while `pre-push` runs `unit-tests`):
-
-```sh
-pre-commit install
-pre-commit run --all-files
-pre-commit run --hook-stage pre-push --all-files
-```
-
-`make check` and `make fix` run Ruff automatically (`make check` also runs `mypy`). For environments without `make` (including Windows), execute the cross-platform check runner or individual phases directly:
-
-```sh
 python scripts/run_checks.py
-python scripts/run_checks.py --phase lint
-python scripts/run_checks.py --phase typecheck
-python scripts/run_checks.py --phase packages
-python scripts/run_checks.py --phase docs
-python scripts/run_checks.py --phase tests
 python scripts/check_doc_links.py
 python scripts/verify_doc_snippets.py
-python scripts/check_workflow_pins.py --check
-python scripts/verify_workflow_actions.py --check
 python scripts/package_skills.py --output /tmp/release-verify
 ```
-
-Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically. When network access is available, run `python scripts/check_workflow_pins.py --verify-remote` to resolve workflow action SHAs and version tags against upstream repositories.
-
-Once installed, fast static hooks run on `git commit` and `unit-tests` runs on `git push`. For emergency fixes, bypass hooks with `git commit --no-verify` (or `SKIP=<hook-id> git commit`).
-
-Do not add an agent runtime, mandatory analyzers, or third-party skill implementations
-without a concrete need. These checks validate packaging and selected mechanisms;
-they do not establish complete behavioral or cross-runtime correctness.
-
-Discovery inputs live in `catalog/{recipes,packs,profiles,hosts,experience}.json`. Keep
-profiles hypothetical and host behavior status honest. Preserve original audit schema 1.0;
-run, remediation, and verification records are separate contracts. Root `fredlib` is local
-tooling, not a mandatory agent runtime. Never use fixture-adapter scores as model quality.

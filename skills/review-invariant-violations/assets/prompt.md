@@ -1,6 +1,5 @@
-Use review-invariant-violations to verify behavioral invariants for <repository> at <revision>.
-Check modified code for invariant violations, concurrency hazards, and state transitions.
-Verify error handling preserves transactional integrity and resource lifecycles.
-Highlight subtle timing, ordering, or reentrancy issues introduced by code changes.
-Do not modify application code without explicit user authorization or report unverified hypotheses as confirmed defects.
-Record invariant findings adhering to the review template and assets/review.schema.json.
+Use review-invariant-violations to check behavioral invariants in proposed changes for <repository> at <revision> across <directory> and <symbol>.
+Inspect modified logic around <critical workflows> and issue <issue-number> for state-transition violations, race windows, and unhandled null/boundary inputs.
+Verify that error paths preserve transactional rollback guarantees and balanced resource acquisition/disposal lifecycles.
+Write `review.json` adhering to the review template and `assets/review.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code unauthorized or report unverified hypotheses as confirmed defects.

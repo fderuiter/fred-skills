@@ -1,12 +1,7 @@
-Use repo-audit-canonicalization to conduct a comprehensive security-sensitive canonicalization audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-canonicalization to audit input normalization and canonicalization ordering in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while reviewing issue <issue-number>.
+Inventory URL and path parsers, hostname allowlists, Unicode case/NFKC normalizers, percent/HTML decoders, symlink/filesystem resolvers, and auth cache keys.
+Trace raw input step-by-step through decoding, normalization, validation, authorization policy checks, and final sink consumption.
+Flag time-of-check versus time-of-use representation drift, double decoding, path traversal, and homograph collisions with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

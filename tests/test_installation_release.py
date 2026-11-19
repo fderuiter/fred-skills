@@ -60,6 +60,7 @@ class InstallationTests(unittest.TestCase):
                 "copilot",
                 "opencode",
                 "windsurf",
+                "kiro",
             ],
         )
         initial_bytes = b"Synthetic package sample"
@@ -466,7 +467,7 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((one / "checksums.sha256").is_file())
 
         ver_result = releases.verify(manifest_path)
-        self.assertEqual(74, ver_result["verified_archives"])
+        self.assertEqual(75, ver_result["verified_archives"])
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
         # Check all 11 canonical catalog packs (tar and zip) and archive skills lists
@@ -474,7 +475,7 @@ class InstallationTests(unittest.TestCase):
         catalog_packs = list(packs_data.keys())
         self.assertEqual(11, len(catalog_packs))
         self.assertNotIn("architecture", catalog_packs)
-        self.assertEqual(36, len(packs_data["full-audit"]["skills"]))
+        self.assertEqual(37, len(packs_data["full-audit"]["skills"]))
         self.assertIn("repo-audit-diagnostics", packs_data["full-audit"]["skills"])
         self.assertEqual(tuple(catalog_packs), releases.DOCUMENTED_PACKS)
         self.assertEqual(catalog_packs, list(first["packs"].keys()))
@@ -501,7 +502,7 @@ class InstallationTests(unittest.TestCase):
         # Check consolidated suite and standalone skills
         self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
         self.assertEqual(
-            51, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
+            52, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
         )
         self.assertTrue((one / "repo-audit-concurrency.tar.gz").is_file())
         self.assertEqual(
@@ -606,6 +607,12 @@ class InstallationTests(unittest.TestCase):
                 ".windsurf/skills/sample/SKILL.md",
             ),
             (
+                "kiro_proj",
+                [".kiro"],
+                "kiro",
+                ".kiro/skills/sample/SKILL.md",
+            ),
+            (
                 "copilot_bare_github",
                 [".github/workflows"],
                 "copilot",
@@ -694,6 +701,7 @@ class InstallationTests(unittest.TestCase):
             (".copilot", "copilot"),
             (".config/opencode", "opencode"),
             (".config/devin", "windsurf"),
+            (".kiro", "kiro"),
         ]
         for idx, (marker, expected_host) in enumerate(user_cases):
             with self.subTest(marker=marker):

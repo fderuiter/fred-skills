@@ -54,7 +54,7 @@ class SuiteValidatorsTests(unittest.TestCase):
             check=False,
         )
 
-    def test_all_51_skill_worked_example_json_blocks_pass_suite_semantic_validators(
+    def test_all_52_skill_worked_example_json_blocks_pass_suite_semantic_validators(
         self,
     ) -> None:
         suites = json.loads((ROOT / "catalog/suites.json").read_text(encoding="utf-8"))[

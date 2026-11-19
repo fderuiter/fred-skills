@@ -1,7 +1,7 @@
 # fred-skills
 
 Portable engineering workflows for investigating repositories, planning useful fixes,
-and verifying that those fixes work. **51 standalone skills**: 33 audit domains,
+and verifying that those fixes work. **52 standalone skills**: 34 audit domains,
 a coordinator, diagnostics, findings synthesis, six workflows from finding verification
 to remediation reconciliation, and nine software architecture, code review, and automated
 testing skills. All packages currently have experimental maturity.
@@ -24,7 +24,7 @@ Start with a task in the [task guide](docs/experience.md), browse the
 
 ## Installation
 
-Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills), or any individual skill:
+Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 52 skills or `starter` for 6 core audit skills), or any individual skill:
 
 ### Claude Code
 
@@ -34,6 +34,16 @@ Register the marketplace catalog, then install the `fred-skills` suite plugin, a
 # Or install a curated pack:
 /plugin install starter@fred-skills
 /plugin install complete@fred-skills
+```
+
+### Skills CLI
+
+Install skills across supported agent hosts with the open [`skills`](https://skills.sh/docs) CLI:
+
+```sh
+npx skills add fderuiter/fred-skills
+# Or install a single specialist:
+npx skills add fderuiter/fred-skills --skill repo-audit-concurrency
 ```
 
 ### Codex
@@ -84,14 +94,15 @@ source identity; **it does not execute an audit**. Budgets show deferred topics 
 than implying complete coverage. Use `--allow-fixes` only within a user-authorized
 correction task. Remote issue publication is a separate explicit choice.
 
-The managed installer supports explicit Codex, Claude Code, Antigravity, and Gemini CLI
-locations, with dry runs, local-change protection, receipts, backups, and rollback.
+The managed installer supports all nine cataloged agent hosts (Codex, Claude Code,
+Antigravity, Gemini CLI, Cursor, GitHub Copilot, OpenCode, Windsurf, and Kiro),
+with dry runs, local-change protection, receipts, backups, and rollback.
 Copy-path checks do not establish behavior on those hosts. Manual directory copying
 remains supported; Python is unnecessary for instruction-only use.
 
 ## Release archives and supply chain verification
 
-Official releases provide standalone tarball archives for each of the 51 skills
+Official releases provide standalone tarball archives for each of the 52 skills
 (e.g., `repo-audit-concurrency.tar.gz`), as well as a consolidated suite archive
 (`fred-skills-suite.tar.gz`). Every published archive is accompanied by a SHA-256
 checksum manifest (`checksums.sha256`) and cryptographically signed SLSA provenance
@@ -133,7 +144,7 @@ mkdir -p /path/to/project/.agents/skills/
 # Extract single specialist (creates repo-audit-concurrency/ directory)
 tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/
 
-# Extract complete suite (creates all 51 skill directories)
+# Extract complete suite (creates all 52 skill directories)
 tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agents/skills/
 ```
 

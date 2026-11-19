@@ -390,6 +390,7 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
+        self.assertEqual("AGENTS.md", gemini_default["contextFileName"])
         root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
         self.assertEqual(root_version, marketplace_default["version"])
@@ -609,6 +610,7 @@ class PackageTests(unittest.TestCase):
         gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual(gemini_data["name"], "fred-skills")
         self.assertTrue(gemini_data["description"])
+        self.assertEqual(gemini_data["contextFileName"], "AGENTS.md")
         self.assertEqual(
             gemini_data["version"],
             (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
@@ -734,7 +736,7 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("ruff-format", skip_ids)
 
         run_cmds = [s.get("run", "") for s in validate_steps]
-        for phase in ["lint", "typecheck", "packages", "tests"]:
+        for phase in ["lint", "typecheck", "packages", "docs", "tests"]:
             self.assertTrue(
                 any(
                     f"scripts/run_checks.py --phase {phase}" in cmd for cmd in run_cmds
@@ -960,14 +962,14 @@ class PackageTests(unittest.TestCase):
             ALL_PHASES,
         )
         self.assertEqual(
-            ("lint", "format", "typecheck", "packages", "tests"),
+            ("lint", "format", "typecheck", "packages", "docs", "tests"),
             DEFAULT_PHASES,
         )
         self.assertEqual(
-            ["lint", "format", "typecheck", "packages", "tests"],
+            ["lint", "format", "typecheck", "packages", "docs", "tests"],
             resolve_phases(),
         )
-        self.assertNotIn("docs", resolve_phases())
+        self.assertIn("docs", resolve_phases())
         self.assertEqual(["docs"], resolve_phases(["docs"]))
         self.assertEqual(
             ["lint", "typecheck", "tests"],
@@ -1022,8 +1024,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("[dry-run:format]", dry.stdout)
         self.assertIn("[dry-run:typecheck]", dry.stdout)
         self.assertIn("[dry-run:packages]", dry.stdout)
+        self.assertIn("[dry-run:docs]", dry.stdout)
         self.assertIn("[dry-run:tests]", dry.stdout)
-        self.assertNotIn("[dry-run:docs]", dry.stdout)
 
         invoked: list[tuple[list[str], dict[str, str]]] = []
 
@@ -1065,19 +1067,19 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(51, len(suite_skills))
+        self.assertEqual(52, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", arch_text)
+        self.assertIn("52 total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", val_text)
+        self.assertIn("52 total packages", val_text)
         self.assertIn(
-            "Each of the 51 skills in the suite includes three scenario specifications",
+            "Each of the 52 skills in the suite includes three scenario specifications",
             val_text,
         )
         self.assertIn(
-            "These 153 specifications are not 153 executed evaluations",
+            "These 156 specifications are not 156 executed evaluations",
             val_text,
         )
         self.assertNotIn("42 skills in the suite", val_text)
@@ -1086,14 +1088,14 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", impl_text)
+        self.assertIn("52 total packages", impl_text)
 
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 51-package pack", usage_text)
+        self.assertIn("complete 52-package pack", usage_text)
         self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
-            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`)",
+            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 52 packages or `starter`)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
@@ -1105,7 +1107,7 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 52 skills or `starter` for 6 core audit skills)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
@@ -1133,12 +1135,12 @@ class PackageTests(unittest.TestCase):
 
         exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
         self.assertIn(
-            "| `full-audit` | All 33 specialist audits plus coordinator, diagnostics, and synthesis. | 36 |",
+            "| `full-audit` | All 34 specialist audits plus coordinator, diagnostics, and synthesis. | 37 |",
             exp_text,
         )
         self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 51 |",
+            "| `complete` | Every audit and engineering workflow. | 52 |",
             exp_text,
         )
 
@@ -1475,7 +1477,7 @@ class PackageTests(unittest.TestCase):
             suite_to_skills[suite["name"]] = skills_in_suite
             all_suite_skills.extend(skills_in_suite)
 
-        self.assertEqual(51, len(all_suite_skills))
+        self.assertEqual(52, len(all_suite_skills))
         self.assertEqual(
             {
                 "repository-audits",
@@ -1559,7 +1561,7 @@ class PackageTests(unittest.TestCase):
                 self.assertIsNone(heading_re.search(prompt_text), skill_name)
 
         # Every skill has a distinct SVG and each suite uses one distinct palette color
-        self.assertEqual(51, len(svg_hashes))
+        self.assertEqual(52, len(svg_hashes))
         for suite_name, colors in suite_bg_colors.items():
             self.assertEqual(
                 1,
@@ -1902,8 +1904,8 @@ class PackageTests(unittest.TestCase):
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)
         self.assertEqual([], errors)
-        self.assertEqual(51, telemetry["total_packages"])
-        self.assertEqual(51, telemetry["passed_packages"])
+        self.assertEqual(52, telemetry["total_packages"])
+        self.assertEqual(52, telemetry["passed_packages"])
         self.assertEqual(0, telemetry["failed_packages"])
         self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
         self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
@@ -1928,7 +1930,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
         self.assertTrue(telemetry_file.is_file())
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
-        self.assertEqual(51, exported["total_packages"])
+        self.assertEqual(52, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
 
     def test_all_skills_have_output_format_schemas(self):
@@ -1936,7 +1938,7 @@ class PackageTests(unittest.TestCase):
         packages = sorted(
             p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
         )
-        self.assertEqual(len(packages), 51)
+        self.assertEqual(len(packages), 52)
         for package in packages:
             schemas = sorted(package.glob("assets/*.schema.json"))
             self.assertGreater(
@@ -2073,6 +2075,253 @@ class PackageTests(unittest.TestCase):
         (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
         snap = repository.snapshot(repo_dir)
         self.assertEqual(list(snap["files"].keys()), ["app.py"])
+
+    def test_validate_skills_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        import ast
+
+        def calculate_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+            return complexity
+
+        def max_nesting_depth(stmts: list[ast.stmt], depth: int = 0) -> int:
+            deepest = depth
+            for stmt in stmts:
+                if isinstance(
+                    stmt,
+                    (
+                        ast.If,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.While,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.Try,
+                        ast.TryStar,
+                    ),
+                ):
+                    orelse = getattr(stmt, "orelse", [])
+                    branches: list[tuple[list[ast.stmt], int]] = [
+                        (stmt.body, depth + 1),
+                        (getattr(stmt, "finalbody", []), depth + 1),
+                    ]
+                    for handler in getattr(stmt, "handlers", []):
+                        branches.append((handler.body, depth + 1))
+                    if orelse:
+                        is_elif = len(orelse) == 1 and isinstance(orelse[0], ast.If)
+                        branches.append((orelse, depth if is_elif else depth + 1))
+                    for branch_body, next_depth in branches:
+                        if branch_body:
+                            deepest = max(
+                                deepest, max_nesting_depth(branch_body, next_depth)
+                            )
+            return deepest
+
+        validator_py = ROOT / "scripts/validate_skills.py"
+        tree = ast.parse(validator_py.read_text(encoding="utf-8"))
+        functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        for item in tree.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions[item.name] = item
+                for sub in ast.walk(item):
+                    if sub is not item and isinstance(
+                        sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        functions[f"{item.name}.{sub.name}"] = sub
+            elif isinstance(item, ast.ClassDef):
+                for method in item.body:
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        functions[f"{item.name}.{method.name}"] = method
+
+        self.assertGreater(len(functions), 0)
+        for name, func_node in functions.items():
+            score = calculate_complexity(func_node)
+            self.assertLessEqual(
+                score,
+                10,
+                f"Function {name} exceeds cyclomatic complexity limit of 10 (score: {score})",
+            )
+            nesting = max_nesting_depth(func_node.body)
+            self.assertLessEqual(
+                nesting,
+                3,
+                f"Function {name} exceeds control-flow nesting limit of 3 (depth: {nesting})",
+            )
+
+    def test_frontmatter_failure_short_circuits_and_symlink_ui_is_guarded(self) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify bounded engineering workflow outcomes",
+        )
+
+        broken_skill = self.root / "skills/broken-frontmatter"
+        shutil.copytree(self.skill, broken_skill)
+        (broken_skill / "SKILL.md").write_text(
+            "# Missing YAML frontmatter\n", encoding="utf-8"
+        )
+        (broken_skill / "assets/prompt.md").unlink()
+
+        single_errors = validate_skill(broken_skill)
+        self.assertEqual(1, len(single_errors))
+        self.assertIn("missing YAML frontmatter", single_errors[0])
+
+        try:
+            symlink_skill = self.root / "skills/symlink-ui-audit"
+            shutil.copytree(self.skill, symlink_skill)
+            (symlink_skill / "SKILL.md").write_text(
+                '---\nname: symlink-ui-audit\ndescription: "Audit symlinked UI guard behavior."\n---\n\n'
+                "# Symlink UI\n\nRead [examples](references/examples.md).\n\n## Deliver\n\n"
+                "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
+                encoding="utf-8",
+            )
+            symlink_ui = symlink_skill / "agents/openai.yaml"
+            symlink_ui.unlink()
+            symlink_ui.symlink_to(self.skill / "agents/openai.yaml")
+        except OSError:
+            symlink_skill = None
+
+        all_errors, telemetry = validate_with_telemetry(
+            self.root, record_attempts=False
+        )
+        pkg_by_name = {pkg["name"]: pkg for pkg in telemetry["packages"]}
+        broken_tel = pkg_by_name["broken-frontmatter"]
+        self.assertIs(broken_tel["valid"], False)
+        self.assertIs(broken_tel["has_output_schema"], False)
+        self.assertIs(broken_tel["has_prompt_constraints"], False)
+        self.assertIs(broken_tel["has_boundary_sections"], False)
+        self.assertIs(broken_tel["deterministic_constraint_coverage"], False)
+        self.assertEqual(["assets/audit.schema.json"], broken_tel["output_schemas"])
+        self.assertEqual(single_errors, broken_tel["errors"])
+
+        if symlink_skill is not None:
+            self.assertTrue(
+                any(
+                    "symlink-ui-audit: Symlink breaks standalone packaging: agents/openai.yaml"
+                    in err
+                    for err in all_errors
+                ),
+                all_errors,
+            )
+            self.assertFalse(
+                any("Duplicate UI short_description" in err for err in all_errors),
+                f"Symlinked openai.yaml must not trigger duplicate short_description: {all_errors}",
+            )
+
+    def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
+        errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
+        self.assertEqual([], errors)
+        self.assertEqual(52, telemetry["total_packages"])
+
+        bodies_by_skill: dict[str, str] = {}
+        for prompt_path in sorted((ROOT / "skills").glob("*/assets/prompt.md")):
+            lines = prompt_path.read_text(encoding="utf-8").splitlines()
+            self.assertGreater(
+                len(lines), 1, f"{prompt_path} must have a multi-line body"
+            )
+            normalized = " ".join(" ".join(lines[1:]).split())
+            self.assertTrue(normalized, f"{prompt_path} body after line 1 is empty")
+            bodies_by_skill[prompt_path.parent.parent.name] = normalized
+
+        self.assertEqual(52, len(bodies_by_skill))
+        self.assertEqual(
+            len(bodies_by_skill),
+            len(set(bodies_by_skill.values())),
+            "Every skills/*/assets/prompt.md must have a unique body after line 1",
+        )
+
+    def test_tactical_placeholders_allowed_and_duplicate_or_unknown_prompts_rejected(
+        self,
+    ) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify tactical prompt placeholder guardrails",
+        )
+        tactical_body = (
+            "Scope inspection to <directory> and <symbol> with issue <issue-number>.\n"
+            "Write `audit.json` conforming to `assets/audit.schema.json`.\n"
+            "Honor <allowed-paths> and <do-not-modify-paths>; do not modify code unauthorized.\n"
+        )
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Unknown placeholders must be rejected.
+        self.prompt.write_text(
+            "Use sample-audit on <repository> with <bogus-placeholder>.\n"
+            + tactical_body,
+            encoding="utf-8",
+        )
+        unknown_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "unauthorized placeholder '<bogus-placeholder>'" in err
+                for err in unknown_errors
+            ),
+            unknown_errors,
+        )
+
+        # Restore valid prompt on first skill and clone an identical body after line 1 onto a second skill.
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        twin = self.root / "skills/twin-audit"
+        shutil.copytree(self.skill, twin)
+        (twin / "SKILL.md").write_text(
+            '---\nname: twin-audit\ndescription: "Audit distinct topic with cloned prompt body."\n---\n\n'
+            "# Twin\n\nRead [examples](references/examples.md).\n\n## Deliver\n\n"
+            "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            twin,
+            skill_name="twin-audit",
+            short_description="Verify distinct twin UI short description",
+        )
+        (twin / "assets/prompt.md").write_text(
+            "Use twin-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        dup_errors, _ = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertTrue(
+            any(
+                "Duplicate prompt template body: twin-audit and sample-audit" in err
+                for err in dup_errors
+            ),
+            dup_errors,
+        )
 
     def test_worked_examples_count_link_and_json_schema_validation(self) -> None:
         # 1. Missing worked examples file is rejected
@@ -2245,7 +2494,7 @@ class PackageTests(unittest.TestCase):
             missing_script_errors,
         )
 
-    def test_all_51_skills_worked_examples_protocols_and_validators_parity(
+    def test_all_52_skills_worked_examples_protocols_and_validators_parity(
         self,
     ) -> None:
         import re
@@ -2253,6 +2502,7 @@ class PackageTests(unittest.TestCase):
 
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)
+        self.assertEqual(52, telemetry["total_packages"])
         self.assertEqual(100.0, telemetry["skill_worked_example_coverage_percentage"])
         self.assertEqual(100.0, telemetry["validator_script_coverage_percentage"])
         self.assertEqual(0.0, telemetry["method_boilerplate_duplication_percentage"])
@@ -2289,6 +2539,7 @@ class PackageTests(unittest.TestCase):
         for synced_sample in (
             "skills/repo-audit-concurrency/scripts/validate_audit.py",
             r"skills\repo-audit-concurrency\scripts\validate_audit.py",
+            "skills/repo-audit-agent-configs/scripts/validate_audit.py",
             "skills/repo-plan-fix/scripts/validate_workflow.py",
             r"skills\repo-plan-fix\scripts\validate_workflow.py",
             "skills/arch-decision-record/scripts/validate_architecture.py",

@@ -21,6 +21,7 @@
         "./skills/arch-decision-record",
         "./skills/repo-apply-fix",
         "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-agent-configs",
         "./skills/repo-audit-api-consistency",
         "./skills/repo-audit-architecture",
         "./skills/repo-audit-behavioral-contracts",
@@ -189,11 +190,12 @@
     },
     {
       "name": "full-audit",
-      "description": "All 33 specialist audits plus coordinator, diagnostics, and synthesis.",
+      "description": "All 34 specialist audits plus coordinator, diagnostics, and synthesis.",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-agent-configs",
         "./skills/repo-audit-api-consistency",
         "./skills/repo-audit-architecture",
         "./skills/repo-audit-behavioral-contracts",
@@ -241,6 +243,7 @@
         "./skills/arch-component-decomposition",
         "./skills/arch-decision-record",
         "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-agent-configs",
         "./skills/repo-audit-api-consistency",
         "./skills/repo-audit-architecture",
         "./skills/repo-audit-behavioral-contracts",
@@ -326,6 +329,14 @@
       "name": "repo-audit-accessibility-state",
       "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
       "source": "./skills/repo-audit-accessibility-state",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "repo-audit-agent-configs",
+      "description": "Audit repository agent configurations, skill bundles, instruction files, and MCP server definitions with code evidence and counterexamples. Use when inspecting .claude/skills, .agents/skills, .cursor/skills, AGENTS.md, .cursorrules, or .mcp.json for prompt injection, unvetted scripts, or unsafe agent tool permissions.",
+      "source": "./skills/repo-audit-agent-configs",
       "skills": [
         "."
       ]

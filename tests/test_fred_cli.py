@@ -295,6 +295,7 @@ class FredCLITests(unittest.TestCase):
             "copilot",
             "opencode",
             "windsurf",
+            "kiro",
         ]:
             self.assertIn(host, stdout)
 
@@ -311,6 +312,7 @@ class FredCLITests(unittest.TestCase):
             "copilot",
             "opencode",
             "windsurf",
+            "kiro",
         ]:
             self.assertIn(host, proc.stderr)
 
@@ -355,7 +357,7 @@ class FredCLITests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir)
-            for host in ["cursor", "copilot", "opencode", "windsurf"]:
+            for host in ["cursor", "copilot", "opencode", "windsurf", "kiro"]:
                 for scope in ["project", "user"]:
                     dest = base / f"{host}-{scope}"
                     proc = self.run_cli(
@@ -427,6 +429,7 @@ class FredCLITests(unittest.TestCase):
             "copilot",
             "opencode",
             "windsurf",
+            "kiro",
         ]:
             self.assertIn(host, stdout)
         self.assertIn(".agents/skills", stdout)
@@ -435,6 +438,7 @@ class FredCLITests(unittest.TestCase):
         self.assertIn(".github/skills", stdout)
         self.assertIn(".opencode/skills", stdout)
         self.assertIn(".windsurf/skills", stdout)
+        self.assertIn(".kiro/skills", stdout)
 
     def test_discovery_packs_and_tasks_table_in_terminal(self):
         packs_proc = self.run_cli("packs", isatty=True)
@@ -799,6 +803,13 @@ class FredCLITests(unittest.TestCase):
                 "recovery": {"instructions": ["1. Retry narrowly"]},
                 "scrubbed_transcript": "LARGE_TRANSCRIPT_BODY",
             },
+            "vet": {
+                "target": "/dest/skill",
+                "kind": "skill",
+                "passed": True,
+                "scanned_files": 2,
+                "findings": [],
+            },
             "installed": {
                 "target": "/dest/.agents/skills",
                 "skills": {"s1": {"source_version": "0.2.0", "status": "tracked"}},
@@ -851,7 +862,7 @@ class FredCLITests(unittest.TestCase):
             },
         }
         all_commands = [cmd for cmds in fred.LIFECYCLE_GROUPS.values() for cmd in cmds]
-        self.assertEqual(27, len(all_commands))
+        self.assertEqual(28, len(all_commands))
         for cmd in all_commands:
             with self.subTest(command=cmd):
                 rendered = fred.render_tty_output(
@@ -2209,12 +2220,12 @@ class FredDispatchRegistryTests(unittest.TestCase):
         depth = max_nesting_depth(dispatch_node)
         self.assertLessEqual(depth, 1, f"dispatch nesting depth {depth} exceeds 1")
 
-    def test_dispatch_registry_maps_all_twenty_seven_commands(self):
-        """COMMAND_REGISTRY must contain all 27 subcommands across all lifecycle groups."""
+    def test_dispatch_registry_maps_all_twenty_eight_commands(self):
+        """COMMAND_REGISTRY must contain all 28 subcommands across all lifecycle groups."""
         expected_commands = {
             cmd for cmds in self.fred.LIFECYCLE_GROUPS.values() for cmd in cmds
         }
-        self.assertEqual(27, len(expected_commands))
+        self.assertEqual(28, len(expected_commands))
         self.assertEqual(expected_commands, set(self.fred.COMMAND_REGISTRY.keys()))
         self.assertEqual(self.fred.COMMAND_REGISTRY, self.fred.DISPATCH_REGISTRY)
 
@@ -2481,6 +2492,90 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("operation.json", proc.stderr)
             self.assertIn("Hint:", proc.stderr)
             self.assertIn("installed", proc.stderr)
+
+    def test_plan_and_init_accept_tactical_scope_flags_and_persist_dependencies(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp) / "app"
+            (repo_dir / "src/orders").mkdir(parents=True)
+            (repo_dir / "src/orders/handler.py").write_text(
+                "def place_order(cart_id: str) -> bool:\n    return bool(cart_id)\n",
+                encoding="utf-8",
+            )
+            (repo_dir / "pyproject.toml").write_text(
+                '[project]\nname = "orders"\ndependencies = ["sqlalchemy==2.0.35"]\n',
+                encoding="utf-8",
+            )
+            ws = Path(tmp) / "run-ws"
+
+            plan_proc = self.run_cli(
+                "plan",
+                str(repo_dir),
+                "--task",
+                "plan-findings",
+                "--budget",
+                "brief",
+                "--directory",
+                "src/orders",
+                "--symbol",
+                "place_order",
+                "--allowed-paths",
+                "src/orders",
+                "--do-not-modify-paths",
+                "pyproject.toml",
+                "--issue-number",
+                "77",
+                "--json",
+            )
+            self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
+            plan_payload = json.loads(plan_proc.stdout)
+            self.assertEqual("src/orders", plan_payload["plan"]["directory"])
+            self.assertEqual("place_order", plan_payload["plan"]["symbol"])
+            self.assertEqual(["src/orders"], plan_payload["plan"]["allowed_paths"])
+            self.assertEqual(
+                ["pyproject.toml"], plan_payload["plan"]["do_not_modify_paths"]
+            )
+            self.assertEqual(77, plan_payload["plan"]["issue_number"])
+            self.assertEqual(
+                "2.0.35",
+                plan_payload["preflight"]["dependencies"]["packages"]["sqlalchemy"],
+            )
+
+            init_proc = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "plan-findings",
+                "--budget",
+                "brief",
+                "--output",
+                str(ws),
+                "--directory",
+                "src/orders",
+                "--symbol",
+                "place_order",
+                "--allowed-paths",
+                "src/orders",
+                "--do-not-modify-paths",
+                "pyproject.toml",
+                "--issue-number",
+                "77",
+                "--json",
+            )
+            self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+            val_proc = self.run_cli("validate-run", str(ws))
+            self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+            saved_run = json.loads((ws / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                "2.0.35", saved_run["dependencies"]["packages"]["sqlalchemy"]
+            )
+            prompt_md = (ws / "prompt.md").read_text(encoding="utf-8")
+            self.assertIn("`sqlalchemy` (2.0.35)", prompt_md)
+            self.assertIn("`place_order`", prompt_md)
+            self.assertIn("./src/orders/handler.py", prompt_md)
+            self.assertIn("gh issue view 77", prompt_md)
 
 
 if __name__ == "__main__":
