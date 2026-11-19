@@ -2046,6 +2046,160 @@ class PackageTests(unittest.TestCase):
         snap = repository.snapshot(repo_dir)
         self.assertEqual(list(snap["files"].keys()), ["app.py"])
 
+    def test_validate_skills_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        import ast
+
+        def calculate_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+            return complexity
+
+        def max_nesting_depth(stmts: list[ast.stmt], depth: int = 0) -> int:
+            deepest = depth
+            for stmt in stmts:
+                if isinstance(
+                    stmt,
+                    (
+                        ast.If,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.While,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.Try,
+                        ast.TryStar,
+                    ),
+                ):
+                    orelse = getattr(stmt, "orelse", [])
+                    branches: list[tuple[list[ast.stmt], int]] = [
+                        (stmt.body, depth + 1),
+                        (getattr(stmt, "finalbody", []), depth + 1),
+                    ]
+                    for handler in getattr(stmt, "handlers", []):
+                        branches.append((handler.body, depth + 1))
+                    if orelse:
+                        is_elif = len(orelse) == 1 and isinstance(orelse[0], ast.If)
+                        branches.append((orelse, depth if is_elif else depth + 1))
+                    for branch_body, next_depth in branches:
+                        if branch_body:
+                            deepest = max(
+                                deepest, max_nesting_depth(branch_body, next_depth)
+                            )
+            return deepest
+
+        validator_py = ROOT / "scripts/validate_skills.py"
+        tree = ast.parse(validator_py.read_text(encoding="utf-8"))
+        functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        for item in tree.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions[item.name] = item
+                for sub in ast.walk(item):
+                    if sub is not item and isinstance(
+                        sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        functions[f"{item.name}.{sub.name}"] = sub
+            elif isinstance(item, ast.ClassDef):
+                for method in item.body:
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        functions[f"{item.name}.{method.name}"] = method
+
+        self.assertGreater(len(functions), 0)
+        for name, func_node in functions.items():
+            score = calculate_complexity(func_node)
+            self.assertLessEqual(
+                score,
+                10,
+                f"Function {name} exceeds cyclomatic complexity limit of 10 (score: {score})",
+            )
+            nesting = max_nesting_depth(func_node.body)
+            self.assertLessEqual(
+                nesting,
+                3,
+                f"Function {name} exceeds control-flow nesting limit of 3 (depth: {nesting})",
+            )
+
+    def test_frontmatter_failure_short_circuits_and_symlink_ui_is_guarded(self) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify bounded engineering workflow outcomes",
+        )
+
+        broken_skill = self.root / "skills/broken-frontmatter"
+        shutil.copytree(self.skill, broken_skill)
+        (broken_skill / "SKILL.md").write_text(
+            "# Missing YAML frontmatter\n", encoding="utf-8"
+        )
+        (broken_skill / "assets/prompt.md").unlink()
+
+        single_errors = validate_skill(broken_skill)
+        self.assertEqual(1, len(single_errors))
+        self.assertIn("missing YAML frontmatter", single_errors[0])
+
+        try:
+            symlink_skill = self.root / "skills/symlink-ui-audit"
+            shutil.copytree(self.skill, symlink_skill)
+            (symlink_skill / "SKILL.md").write_text(
+                '---\nname: symlink-ui-audit\ndescription: "Audit symlinked UI guard behavior."\n---\n\n'
+                "# Symlink UI\n\n## Deliver\n\n"
+                "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
+                encoding="utf-8",
+            )
+            symlink_ui = symlink_skill / "agents/openai.yaml"
+            symlink_ui.unlink()
+            symlink_ui.symlink_to(self.skill / "agents/openai.yaml")
+        except OSError:
+            symlink_skill = None
+
+        all_errors, telemetry = validate_with_telemetry(
+            self.root, record_attempts=False
+        )
+        pkg_by_name = {pkg["name"]: pkg for pkg in telemetry["packages"]}
+        broken_tel = pkg_by_name["broken-frontmatter"]
+        self.assertIs(broken_tel["valid"], False)
+        self.assertIs(broken_tel["has_output_schema"], False)
+        self.assertIs(broken_tel["has_prompt_constraints"], False)
+        self.assertIs(broken_tel["has_boundary_sections"], False)
+        self.assertIs(broken_tel["deterministic_constraint_coverage"], False)
+        self.assertEqual(["assets/audit.schema.json"], broken_tel["output_schemas"])
+        self.assertEqual(single_errors, broken_tel["errors"])
+
+        if symlink_skill is not None:
+            self.assertTrue(
+                any(
+                    "symlink-ui-audit: Symlink breaks standalone packaging: agents/openai.yaml"
+                    in err
+                    for err in all_errors
+                ),
+                all_errors,
+            )
+            self.assertFalse(
+                any("Duplicate UI short_description" in err for err in all_errors),
+                f"Symlinked openai.yaml must not trigger duplicate short_description: {all_errors}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
