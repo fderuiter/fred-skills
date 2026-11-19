@@ -532,8 +532,8 @@ class PagesWorkflowTests(unittest.TestCase):
         intro_window = "\n".join(readme_lines[8:11])
         self.assertIn(HOSTED_URL, intro_window)
         self.assertIn("docs/explorer.html", intro_window)
-        self.assertEqual(readme_lines[25], "### Claude Code")
-        self.assertEqual(readme_lines[27], "```sh")
+        self.assertEqual(readme_lines[28], "### Claude Code")
+        self.assertEqual(readme_lines[30], "```sh")
 
         exp_lines = (
             (ROOT / "docs/experience.md").read_text(encoding="utf-8").splitlines()
