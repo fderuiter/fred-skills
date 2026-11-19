@@ -56,6 +56,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
         run: |
           set -eu
+          export MSYS2_ARG_CONV_EXCL="*"
 
           validate_tag_syntax() {
             CANDIDATE_TAG="$1"
@@ -145,13 +146,15 @@ jobs:
                 echo "Error: Remote tag 'refs/tags/$DISPATCH_TAG' does not exist on origin" >&2
                 exit 1
               fi
-              git fetch --force --depth=1 origin "refs/tags/$DISPATCH_TAG:refs/tags/$DISPATCH_TAG" >/dev/null 2>&1 || \
-                git fetch --force origin "refs/tags/$DISPATCH_TAG:refs/tags/$DISPATCH_TAG" >/dev/null 2>&1
-              TARGET_SHA="$(git rev-parse --verify "refs/tags/$DISPATCH_TAG^{commit}")"
+              git -c maintenance.auto=false -c gc.auto=0 fetch --force --depth=1 origin "refs/tags/$DISPATCH_TAG:refs/tags/$DISPATCH_TAG" >/dev/null 2>&1 || \
+                git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$DISPATCH_TAG:refs/tags/$DISPATCH_TAG" >/dev/null 2>&1
+              RAW_TARGET_SHA="$(git rev-parse --verify "refs/tags/$DISPATCH_TAG^{commit}")"
+              TARGET_SHA="$(printf '%s' "$RAW_TARGET_SHA" | tr -d '[:space:]')"
             else
               TARGET_SHA="${WORKFLOW_SHA:-${GITHUB_SHA:-}}"
               if [ -z "$TARGET_SHA" ]; then
-                TARGET_SHA="$(git rev-parse --verify HEAD)"
+                RAW_HEAD_SHA="$(git rev-parse --verify HEAD)"
+                TARGET_SHA="$(printf '%s' "$RAW_HEAD_SHA" | tr -d '[:space:]')"
               fi
             fi
 
@@ -190,9 +193,10 @@ jobs:
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
           if [ "$LS_EXIT" -eq 0 ]; then
-            git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
-              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
-            TARGET_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            git -c maintenance.auto=false -c gc.auto=0 fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
+              git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            RAW_TARGET_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            TARGET_SHA="$(printf '%s' "$RAW_TARGET_SHA" | tr -d '[:space:]')"
           elif [ "$LS_EXIT" -eq 2 ] && [ "$EVENT" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
             if [ ! -s VERSION ] || [ -z "$(tr -d '[:space:]' < VERSION)" ]; then
               echo "Error: VERSION file is missing or empty on main" >&2
@@ -205,7 +209,8 @@ jobs:
             fi
             TARGET_SHA="${WORKFLOW_SHA:-${GITHUB_SHA:-}}"
             if [ -z "$TARGET_SHA" ]; then
-              TARGET_SHA="$(git rev-parse --verify HEAD)"
+              RAW_HEAD_SHA="$(git rev-parse --verify HEAD)"
+              TARGET_SHA="$(printf '%s' "$RAW_HEAD_SHA" | tr -d '[:space:]')"
             fi
           elif [ "$LS_EXIT" -eq 2 ]; then
             echo "Error: Remote tag 'refs/tags/$TAG' does not exist on origin" >&2
@@ -224,10 +229,12 @@ jobs:
           VIEW_ERR_FILE="$(mktemp)"
           trap 'rm -f "$FETCH_ERR_FILE" "$VIEW_ERR_FILE"' EXIT
           FETCH_OK="true"
-          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-            git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          IS_SHALLOW="$(git rev-parse --is-shallow-repository 2>/dev/null || true)"
+          IS_SHALLOW="$(printf '%s' "$IS_SHALLOW" | tr -d '[:space:]')"
+          if [ "$IS_SHALLOW" = "true" ]; then
+            git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
           else
-            git fetch --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
           fi
           if [ "$FETCH_OK" != "true" ]; then
             echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
@@ -239,7 +246,9 @@ jobs:
             exit 1
           fi
 
-          if [ "$(git cat-file -t "$TARGET_SHA:LICENSE" 2>/dev/null || true)" != "blob" ]; then
+          LICENSE_OBJ_TYPE="$(git cat-file -t "$TARGET_SHA:LICENSE" 2>/dev/null || true)"
+          LICENSE_OBJ_TYPE="$(printf '%s' "$LICENSE_OBJ_TYPE" | tr -d '[:space:]')"
+          if [ "$LICENSE_OBJ_TYPE" != "blob" ]; then
             echo "Error: LICENSE file is missing at target commit $TARGET_SHA" >&2
             exit 1
           fi
@@ -248,7 +257,9 @@ jobs:
             exit 1
           fi
 
-          if [ "$(git cat-file -t "$TARGET_SHA:VERSION" 2>/dev/null || true)" != "blob" ]; then
+          VERSION_OBJ_TYPE="$(git cat-file -t "$TARGET_SHA:VERSION" 2>/dev/null || true)"
+          VERSION_OBJ_TYPE="$(printf '%s' "$VERSION_OBJ_TYPE" | tr -d '[:space:]')"
+          if [ "$VERSION_OBJ_TYPE" != "blob" ]; then
             echo "Error: VERSION file is missing at target commit $TARGET_SHA" >&2
             exit 1
           fi
@@ -385,6 +396,7 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -eu
+          export MSYS2_ARG_CONV_EXCL="*"
 
           if [ ! -s LICENSE ] || [ -z "$(tr -d '[:space:]' < LICENSE)" ]; then
             echo "Error: LICENSE file is missing or empty in repository root" >&2
@@ -443,6 +455,7 @@ jobs:
           fi
 
           HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+          HEAD_SHA="$(printf '%s' "$HEAD_SHA" | tr -d '[:space:]')"
           if [ "$HEAD_SHA" != "$TARGET_SHA" ]; then
             echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified target_sha '$TARGET_SHA'" >&2
             exit 1
@@ -460,10 +473,12 @@ jobs:
           FETCH_ERR_FILE="$(mktemp)"
           trap 'rm -f "$FETCH_ERR_FILE"' EXIT
           FETCH_OK="true"
-          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-            git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          IS_SHALLOW="$(git rev-parse --is-shallow-repository 2>/dev/null || true)"
+          IS_SHALLOW="$(printf '%s' "$IS_SHALLOW" | tr -d '[:space:]')"
+          if [ "$IS_SHALLOW" = "true" ]; then
+            git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
           else
-            git fetch --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
           fi
           if [ "$FETCH_OK" != "true" ]; then
             echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
@@ -478,8 +493,9 @@ jobs:
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
           if [ "$LS_EXIT" -eq 0 ]; then
-            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
-            REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            RAW_REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            REMOTE_TAG_SHA="$(printf '%s' "$RAW_REMOTE_TAG_SHA" | tr -d '[:space:]')"
             if [ "$REMOTE_TAG_SHA" != "$TARGET_SHA" ]; then
               echo "Error: Remote tag 'refs/tags/$TAG' points to '$REMOTE_TAG_SHA', expected '$TARGET_SHA'" >&2
               exit 1
@@ -646,6 +662,7 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -eu
+          export MSYS2_ARG_CONV_EXCL="*"
 
           write_summary() {
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -689,6 +706,7 @@ jobs:
           fi
 
           HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+          HEAD_SHA="$(printf '%s' "$HEAD_SHA" | tr -d '[:space:]')"
           if [ "$HEAD_SHA" != "$TARGET_SHA" ]; then
             echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified target_sha '$TARGET_SHA'" >&2
             exit 1
@@ -713,10 +731,12 @@ jobs:
           VIEW_ERR_FILE="$(mktemp)"
           trap 'rm -f "$FETCH_ERR_FILE" "$VIEW_ERR_FILE"' EXIT
           FETCH_OK="true"
-          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-            git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          IS_SHALLOW="$(git rev-parse --is-shallow-repository 2>/dev/null || true)"
+          IS_SHALLOW="$(printf '%s' "$IS_SHALLOW" | tr -d '[:space:]')"
+          if [ "$IS_SHALLOW" = "true" ]; then
+            git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
           else
-            git fetch --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
           fi
           if [ "$FETCH_OK" != "true" ]; then
             echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
@@ -731,9 +751,10 @@ jobs:
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
           if [ "$LS_EXIT" -eq 0 ]; then
-            git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
-              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
-            REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            git -c maintenance.auto=false -c gc.auto=0 fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
+              git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            RAW_REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            REMOTE_TAG_SHA="$(printf '%s' "$RAW_REMOTE_TAG_SHA" | tr -d '[:space:]')"
             if [ "$REMOTE_TAG_SHA" != "$TARGET_SHA" ]; then
               echo "Error: Remote tag 'refs/tags/$TAG' points to '$REMOTE_TAG_SHA', expected '$TARGET_SHA'" >&2
               exit 1

@@ -202,6 +202,10 @@ def _write_lf(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
+def _temp_dir() -> tempfile.TemporaryDirectory[str]:
+    return tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+
+
 def _isolated_env(tmp: Path, extra_env: dict[str, str]) -> dict[str, str]:
     env = {k: os.environ[k] for k in _PASSTHROUGH_ENV_KEYS if k in os.environ}
     home_dir = tmp / ".test-home"
@@ -209,6 +213,7 @@ def _isolated_env(tmp: Path, extra_env: dict[str, str]) -> dict[str, str]:
     env["HOME"] = str(home_dir)
     env["USERPROFILE"] = str(home_dir)
     env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["MSYS2_ARG_CONV_EXCL"] = "*"
     env.update(extra_env)
     return env
 
@@ -224,6 +229,12 @@ def _git(cwd: Path, *args: str) -> str:
             "-c",
             "core.autocrlf=false",
             "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
             "init.defaultBranch=main",
             *args,
         ],
@@ -233,6 +244,13 @@ def _git(cwd: Path, *args: str) -> str:
         check=True,
     )
     return proc.stdout.strip()
+
+
+def _configure_local_test_repo(repo: Path) -> None:
+    _git(repo, "config", "core.autocrlf", "false")
+    _git(repo, "config", "maintenance.auto", "false")
+    _git(repo, "config", "gc.auto", "0")
+    _git(repo, "config", "protocol.file.allow", "always")
 
 
 def _parse_github_output(output_file: Path) -> dict[str, str]:
@@ -705,6 +723,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             origin.as_uri(),
             str(workspace),
         )
+        _configure_local_test_repo(workspace)
         return origin, workspace, tag_sha
 
     def test_verification_fails_when_license_missing_or_empty(self) -> None:
@@ -750,7 +769,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_verification_enforces_head_matches_target_sha(self) -> None:
         """Defense-in-depth verification succeeds when HEAD == TARGET_SHA and fails on divergence."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             _, workspace, tag_sha = self._setup_origin_and_clone(Path(tmp_dir))
             ok = self._run_verification_script(
                 workspace,
@@ -864,7 +883,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         """Manual workflow_dispatch with publish=false sets should_build=true and should_publish=false without LICENSE or gh."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             _, workspace, head_sha = self._setup_origin_and_clone(
                 Path(tmp_dir),
                 license_text=None,
@@ -925,7 +944,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         """On main pushes, preflight schedules build/publish when missing or draft, skips when published, and fails on API error."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             _, workspace, head_sha = self._setup_origin_and_clone(
                 base,
@@ -1032,7 +1051,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         """Publish preflight rejects non-main dispatches, tag pushes, or historical tags absent from origin even if local tag exists."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             _, workspace, head_sha = self._setup_origin_and_clone(
                 base,
@@ -1091,7 +1110,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_preflight_publish_rejects_invalid_or_injected_tag_syntax(self) -> None:
         """Publish preflight validates tag syntax via env vars without shell injection."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             _, workspace, _ = self._setup_origin_and_clone(base)
             gh_env, _ = _install_fake_gh(base)
@@ -1124,7 +1143,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_preflight_publish_verifies_license_and_version_at_target_sha(self) -> None:
         """Publish preflight inspects LICENSE and VERSION blobs at target_sha rather than branch HEAD."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             gh_env, _ = _install_fake_gh(base)
 
@@ -1194,7 +1213,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     ) -> None:
         """Publish preflight peels annotated and lightweight tags to target_sha even after main advances."""
         for annotated in (True, False):
-            with self.subTest(annotated=annotated), tempfile.TemporaryDirectory() as td:
+            with self.subTest(annotated=annotated), _temp_dir() as td:
                 base = Path(td)
                 gh_env, _ = _install_fake_gh(base)
                 origin, _, tag_sha = self._setup_origin_and_clone(
@@ -1220,6 +1239,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     origin.as_uri(),
                     str(fresh_checkout),
                 )
+                _configure_local_test_repo(fresh_checkout)
                 self.assertEqual(
                     _git(fresh_checkout, "rev-parse", "--is-shallow-repository"),
                     "true",
@@ -1271,7 +1291,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_publish_pushes_missing_tag_on_main_and_selects_notes(self) -> None:
         """On main with missing tag, Publish GitHub Release pushes v<VERSION> and selects --notes-file or --generate-notes."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             origin, workspace, head_sha = self._setup_origin_and_clone(
                 base / "curated",
@@ -1365,7 +1385,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_publish_promotes_draft_skips_published_and_handles_errors(self) -> None:
         """Publish GitHub Release promotes existing drafts with --clobber + edit --draft=false, skips published, and fails on API errors."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             _, workspace, tag_sha = self._setup_origin_and_clone(
                 base,
@@ -1491,7 +1511,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         """Unmerged tags or workflow_dispatch runs outside origin/main fail in both preflight and Verify release prerequisites."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             gh_env, _ = _install_fake_gh(base)
             origin, _, main_sha = self._setup_origin_and_clone(
@@ -1522,6 +1542,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 origin.as_uri(),
                 str(unmerged_ws),
             )
+            _configure_local_test_repo(unmerged_ws)
 
             # 1. Tag push from unmerged commit fails preflight ancestry check.
             preflight_tag, _ = self._run_preflight_script(
@@ -1537,7 +1558,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 },
             )
             self.assertNotEqual(preflight_tag.returncode, 0)
-            self.assertIn("origin/main", preflight_tag.stderr)
+            self.assertIn("not an ancestor of origin/main", preflight_tag.stderr)
 
             # 2. workflow_dispatch publish=true on unmerged branch fails preflight ancestry check.
             preflight_dispatch, _ = self._run_preflight_script(
@@ -1553,7 +1574,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 },
             )
             self.assertNotEqual(preflight_dispatch.returncode, 0)
-            self.assertIn("origin/main", preflight_dispatch.stderr)
+            self.assertIn("not an ancestor of origin/main", preflight_dispatch.stderr)
 
             # 3. Verify release prerequisites rejects GITHUB_SHA outside origin/main after unshallow fetch.
             prereq_unmerged = self._run_verification_script(
@@ -1567,7 +1588,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 },
             )
             self.assertNotEqual(prereq_unmerged.returncode, 0)
-            self.assertIn("origin/main", prereq_unmerged.stderr)
+            self.assertIn("not an ancestor of origin/main", prereq_unmerged.stderr)
 
             # 4. Dry-run workflow_dispatch (publish=false) on unmerged branch still succeeds for artifact inspection.
             preflight_dry, dry_outputs = self._run_preflight_script(
@@ -1590,7 +1611,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         """Verify release prerequisites rejects missing/mismatched remote tags and accepts ancestor commits on origin/main."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             base = Path(tmp_dir)
             gh_env, _ = _install_fake_gh(base)
             origin, untagged_ws, head_sha = self._setup_origin_and_clone(
@@ -1674,6 +1695,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             shallow_tag_ws = base / "historical" / "shallow-tag-ws"
             shallow_tag_ws.mkdir(parents=True)
             _git(shallow_tag_ws, "init")
+            _configure_local_test_repo(shallow_tag_ws)
             _git(shallow_tag_ws, "remote", "add", "origin", hist_origin.as_uri())
             _git(
                 shallow_tag_ws,
