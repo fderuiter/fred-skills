@@ -5,7 +5,7 @@ description: "Use when starting a feature or change before writing code to pause
 
 # Pre-Code Specification Interview
 
-Read the [spec protocol](references/spec-protocol.md) before interviewing the user or proposing requirements.
+Read the [spec protocol](references/spec-protocol.md) and [worked examples](references/examples.md) before interviewing the user or proposing requirements.
 Pause all feature implementation until critical product, architectural, and boundary ambiguities are resolved.
 
 ## Workflow
@@ -24,5 +24,5 @@ Pause all feature implementation until critical product, architectural, and boun
 
 ## Deliver
 
-Structure notes for handoff to the [spec template](assets/spec-template.md) and validate `spec.json` against the [spec schema](assets/spec.schema.json).
+Structure notes for handoff to the [spec template](assets/spec-template.md), validate `spec.json` against the [spec schema](assets/spec.schema.json), and run the [spec validator](scripts/validate_spec.py).
 Keep `interview_decisions`, `new_file_scopes`, `out_of_scope`, and `verification_commands` explicit, closed-schema compliant, and free of undeclared properties.

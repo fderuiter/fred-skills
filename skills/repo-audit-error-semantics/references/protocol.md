@@ -31,17 +31,22 @@ Never test with production credentials, real patient data, or destructive remote
 If an existing user instruction authorizes issue creation or a fix, honor that scope;
 otherwise produce reviewable issue drafts and a handoff, without creating remote records.
 
-## 2. Build evidence and coverage
+## 2. Select workflow slices and build coverage
 
-Start with rg/rg --files or equivalent connector search. Inspect entry points and callers,
+Review one critical workflow end to end first, then expand systematically by resource,
+actor, or data ownership. For each specialist inventory class, record concrete instances,
+relevant source paths, existing enforcement, and coverage state; do not mark an entire
+inventory class reviewed from a single example.
+
+Start with `rg`/`rg --files` or equivalent connector search. Inspect entry points and callers,
 then trace cross-module behavior and existing defenses. Search matches generate candidates,
 not findings. Trace runtime reachability and configuration; inspect middleware, framework
 guarantees, type constraints, database policies, locks, cleanup, and tests that may refute it.
 
 Maintain a coverage ledger per subsystem/topic with: inspected files/symbols, searches,
 caller/callee boundaries traced, checks run, checks not run with reason, exclusions,
-open questions, and next continuation point. Use inspected, partial, not-reviewed, or
-not-applicable (with evidence) for status. A whole-tree search is not a whole-tree review.
+open questions, and next continuation point. Use `inspected`, `partial`, `not-reviewed`, or
+`not-applicable` (with evidence) for status. A whole-tree search is not a whole-tree review.
 For large repositories, finish bounded workflow slices and checkpoint; never replace
 deep tracing with a claim of exhaustive coverage. Exclude generated/vendor output from
 primary review unless the relevant contract crosses it; preserve that scope decision.
@@ -52,12 +57,24 @@ are verified. A dirty snapshot requires content identity or an excerpt; do not m
 uncommitted lines as belonging to a clean commit. On resume, compare snapshots and
 revalidate affected evidence and dependent findings before reuse.
 
-## 3. Reconstruct and challenge contracts
+## 3. Reconstruct contracts, probes, and safe controls
 
-Assign run-local unique contract IDs (C-001), evidence IDs (E-001), and finding IDs (F-001).
-Keep IDs stable on resume; different runs require explicit import/remapping. Record each
-contract's dimension, scope, independently supported intended guarantee, observed guarantee,
-enforcement point, and supporting evidence IDs. Unknown intended behavior stays unknown.
+Assign run-local unique contract IDs (`C-001`), evidence IDs (`E-001`), and finding IDs (`F-001`).
+Keep IDs stable on resume; different runs require explicit import/remapping. Complete a
+contract worksheet for each inventoried boundary: record the exact predicate or guarantee,
+independent requirement basis, scope/lifetime, establishing operation, invalidating
+operations, observers, enforcing authority, observed guarantee, and existing tests. If
+intended semantics are unknown, record the question and keep any candidate at
+`needs-validation` or `hardening` until an independently supported requirement exists.
+
+Apply the specialist's domain discovery probes in `SKILL.md` and `references/method.md` to
+each inventoried boundary, recording both passing safeguards and unresolved cases. Treat
+starter failure shapes strictly as discovery leads: find matching reachable code, name the
+actors and boundaries, and write exact numbered steps. Inspect the strongest prevention
+mechanism and close safe control (comparing actual mechanisms rather than surface syntax)
+before filing, and preserve that safe control when recommending a correction. If no real
+reachable path matches a starter example, report that the illustrative failure was not
+established; never turn a reference example into evidence.
 
 For every candidate, write: claimed guarantee, actual mechanism, preconditions, ordered
 input/event trace, observed or statically implied result, and practical impact. Then actively
@@ -68,30 +85,35 @@ incorrect behavior. Demonstrate a contract gap or a specific maintenance consequ
 
 Use one status per finding:
 
-- confirmed: reproduced on the exact audited code/snapshot; attach command and result.
-- supported: a reachable code trace establishes a violated supported contract, without an executed reproduction.
-- needs-validation: a plausible gap remains because a stated precondition or behavior is unverified.
-- hardening: a concrete defense improvement without an established violated contract.
-- refuted: a candidate is blocked by an existing safeguard or contradicted by evidence.
+- `confirmed`: reproduced on the exact audited code/snapshot; attach command and result.
+- `supported`: a reachable code trace establishes a violated supported contract, without an executed reproduction.
+- `needs-validation`: a plausible gap remains because a stated precondition or behavior is unverified.
+- `hardening`: a concrete defense improvement without an established violated contract.
+- `refuted`: a candidate is blocked by an existing safeguard or contradicted by evidence.
 
-Do not silently upgrade supported to confirmed. An isolated model can demonstrate a
-mechanism but cannot establish that a production implementation contains it. State what
-was executed versus inferred. A test not run is not a passing test. Preserve inconclusive
-evidence and blockers instead of fabricating a result or forcing a finding count.
+Do not silently upgrade `supported` to `confirmed`. Derive expected validation results from
+the contract, use a bounded deterministic local harness where practical, record actual
+commands/results, and retain limitations. An isolated model can demonstrate a mechanism
+but cannot establish that a production implementation contains it. An unavailable tool
+changes the validation plan, not the claimed certainty; state what was executed versus
+inferred and record the smallest missing piece of evidence that would resolve each open
+finding. A test not run is not a passing test.
 
 ## 4. Prioritize and recommend
 
 Record severity independently from confidence. Critical means reachable catastrophic impact
 with supporting scope and preconditions; high means serious data/security/availability or
 core-workflow harm; medium means bounded material failure; low means limited consequence;
-info means an observation/hardening lead. Explain impact, exposure, likelihood, and affected
-scope. Confidence low/medium/high describes evidential uncertainty, not business priority.
-Never copy the starter text's topic priority as the severity of an individual finding.
+info means an observation/hardening lead (and is mandatory for `refuted` records). Explain
+impact, exposure, likelihood, and affected scope. Confidence `low`/`medium`/`high` describes
+evidential uncertainty, not business priority. Never copy a topic's default priority as the
+severity of an individual finding.
 
-Recommend the smallest idiomatic remedy that enforces the contract at its authority.
-Consider compatibility, ownership, operational constraints, and migration. Give alternatives
-only where a real tradeoff exists. Avoid compulsory frameworks, dependency additions,
-event sourcing, state libraries, or broad rewrites without repository-specific benefit.
+Recommend the smallest idiomatic remedy that enforces the contract at its authority while
+preserving verified safe controls. Consider compatibility, ownership, operational constraints,
+and migration. Give alternatives only where a real tradeoff exists. Avoid compulsory
+frameworks, dependency additions, event sourcing, state libraries, or broad rewrites without
+repository-specific benefit.
 
 For each actionable finding, specify an independent expected outcome, smallest reproducer,
 relevant existing tests, missing regression scenario, measurable acceptance criteria, and
@@ -99,25 +121,24 @@ compatibility risks. Prefer deterministic interleavings, isolated fault injectio
 vectors, properties, and integration boundaries suited to the actual fault. Specify test
 commands only after checking the repository's tooling; otherwise label them proposals.
 
-## 5. Share artifacts and handoffs
+## 5. Validate artifacts and coordinate handoffs
 
-Keep the canonical machine-readable run in audit.json using assets/audit.schema.json.
-Add a topic report with inventory, contract table, coverage, prioritized findings, healthy
-counterexamples, limitations, and next steps. Reference evidence by IDs and summarize in
-human-readable prose. Reports must remain useful without the original conversation.
+Keep the canonical machine-readable run in `audit.json` conforming to `assets/audit.schema.json`,
+and validate it locally with `python3 <this-skill>/scripts/validate_audit.py <audit.json>`
+when Python 3 and `jsonschema` are available (reporting any blocked check if unavailable).
+Add a topic report using `assets/report-template.md` with inventory, contract table, coverage,
+prioritized findings, healthy counterexamples, limitations, and next steps. Reference
+evidence by IDs and summarize in human-readable prose so reports stand alone.
 
 When run alone, create the minimal complete run envelope. When given an existing run,
-append or revise only owned topic records and preserve unrelated records. The coordinator
-allocates non-overlapping ID ranges to concurrent workers if delegation was explicitly
-authorized; workers return artifacts to one merger and never edit a shared ledger together.
-Otherwise run sequentially. Do not require subagents or assume an agent-specific tool exists.
+append or revise only owned topic records and preserve unrelated records. If delegation was
+explicitly authorized, the coordinator allocates non-overlapping ID ranges and merges
+worker artifacts centrally; workers never edit a shared ledger concurrently.
 
-Cross-tag a finding with all relevant audit topics but nominate one primary root cause.
-Use the same finding ID for one established cause; link separate causes even if they share
-a symptom. Do not deduplicate solely by title or nearby line number. Keep issue dependency
-edges acyclic; related-to and duplicate-of are different relationships from blocked-by.
-
-Hand off snapshot, scope completed/remaining, contract/finding/evidence IDs, artifact paths,
-unverified assumptions, tools available, validation state, and the next concrete action.
-If using an unfamiliar runtime, read the supplied files directly and translate invocation
-syntax; do not reinterpret a skill instruction as an authorization grant.
+Keep each specialist's inventory complete, cross-tag findings with all relevant audit topics,
+and nominate one primary root cause. Hand off a different underlying root cause to the
+specialist named in `SKILL.md`, preserving the same evidence IDs and avoiding duplicate
+defect reports for one contract violation. Distinct independently fixable causes remain
+separate even when they share a symptom. Keep issue `depends_on` edges acyclic (`related-to`
+and `duplicate-of` differ from `blocked-by`), and include a complete continuation handoff
+using `assets/handoff-template.md`.

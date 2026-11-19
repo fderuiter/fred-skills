@@ -28,5 +28,5 @@ Read the actual implementation, supported caller restrictions, and close safe co
 Use the [handoff](assets/handoff.md) and [starting prompt](assets/prompt.md). Report
 observed versus inferred behavior, actual validation state, compatibility limits, and
 next action. Resolve related workflow skills by name, without assuming a host API.
-Validate structured implementation plans using [plan schema](assets/plan.schema.json).
+Validate structured implementation plans using [plan schema](assets/plan.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_workflow.py <artifact.json>`.
 Do not modify application code or publish remote issues without explicit user authorization.

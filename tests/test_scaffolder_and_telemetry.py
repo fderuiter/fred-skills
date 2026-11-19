@@ -586,6 +586,12 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
             "deterministic_constraint_coverage_percentage",
             "output_schema_coverage",
             "output_schema_coverage_percentage",
+            "skill_worked_example_coverage",
+            "skill_worked_example_coverage_percentage",
+            "validator_script_coverage",
+            "validator_script_coverage_percentage",
+            "method_boilerplate_duplication_rate",
+            "method_boilerplate_duplication_percentage",
             "execution_time_seconds",
             "packages",
         }
@@ -609,6 +615,12 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
         )
         self.assertEqual(0.75, telemetry["output_schema_coverage"])
         self.assertEqual(75.0, telemetry["output_schema_coverage_percentage"])
+        self.assertEqual(0.75, telemetry["skill_worked_example_coverage"])
+        self.assertEqual(75.0, telemetry["skill_worked_example_coverage_percentage"])
+        self.assertEqual(0.75, telemetry["validator_script_coverage"])
+        self.assertEqual(75.0, telemetry["validator_script_coverage_percentage"])
+        self.assertEqual(0.0, telemetry["method_boilerplate_duplication_rate"])
+        self.assertEqual(0.0, telemetry["method_boilerplate_duplication_percentage"])
 
         pkg_by_name = {pkg["name"]: pkg for pkg in telemetry["packages"]}
         for pkg_name, pkg_entry in pkg_by_name.items():
@@ -628,6 +640,9 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
                 "validation_attempts": 1,
                 "has_output_schema": True,
                 "output_schemas": ["assets/partial-invalid-skill.schema.json"],
+                "worked_example_blocks": 2,
+                "has_worked_examples": True,
+                "has_validator_script": True,
                 "has_prompt_constraints": False,
                 "has_boundary_sections": True,
                 "deterministic_constraint_coverage": False,
@@ -644,6 +659,9 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
                 "validation_attempts": 1,
                 "has_output_schema": False,
                 "output_schemas": [],
+                "worked_example_blocks": 0,
+                "has_worked_examples": False,
+                "has_validator_script": False,
                 "has_prompt_constraints": False,
                 "has_boundary_sections": False,
                 "deterministic_constraint_coverage": False,

@@ -19,6 +19,6 @@ Focus on actionable recommendations, clear severity grading, and practical remed
 ## Deliver
 
 Format review feedback following the [review template](assets/review-template.md).
-Ensure feedback payload conforms to [review schema](assets/review.schema.json).
+Ensure feedback payload conforms to [review schema](assets/review.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_review.py <artifact.json>`.
 Produce structured, developer-ready review output with actionable next actions.
 Do not modify application code or publish review comments remotely without explicit user authorization.
