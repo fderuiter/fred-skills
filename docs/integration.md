@@ -484,16 +484,82 @@ To inject a skill into a custom agent harness:
    ```json
    {
      "schema_version": "1.0",
+     "run_id": "harness-run-001",
+     "repository": {
+       "identity": "example-service",
+       "revision": "main",
+       "dirty": false,
+       "snapshot": "sha256:example"
+     },
+     "scope": ["src/queue.py"],
+     "coverage": [
+       {
+         "topic": "concurrency",
+         "scope": "src/queue.py",
+         "status": "inspected",
+         "evidence_ids": ["E-001"],
+         "notes": "Reviewed worker dispatch loop and task spawning bounds.",
+         "next_action": "Add bounded semaphore regression test."
+       }
+     ],
+     "contracts": [
+       {
+         "id": "C-001",
+         "dimension": "concurrency",
+         "scope": "src/queue.py",
+         "intended": "Worker bounds concurrent task execution",
+         "observed": "Worker spawns unbounded background tasks",
+         "enforcement": "none",
+         "evidence_ids": ["E-001"]
+       }
+     ],
+     "evidence": [
+       {
+         "id": "E-001",
+         "path": "src/queue.py",
+         "line_start": 42,
+         "line_end": 58,
+         "symbol": "QueueWorker.dispatch",
+         "context": "Worker spawns tasks without a concurrency semaphore."
+       }
+     ],
      "findings": [
        {
          "id": "F-001",
+         "topic": "concurrency",
+         "tags": ["backpressure", "worker"],
          "title": "Unbounded concurrency in queue worker",
-         "status": "candidate",
+         "status": "supported",
          "severity": "high",
-         "target": "src/queue.py",
-         "lines": [42, 58],
-         "evidence": "Worker spawns tasks without concurrency semaphore."
+         "confidence": "high",
+         "contract_ids": ["C-001"],
+         "evidence_ids": ["E-001"],
+         "preconditions": "Burst of incoming queue messages exceeds worker capacity",
+         "sequence": [
+           "Producer enqueues a large batch of jobs",
+           "QueueWorker.dispatch spawns a task per message without awaiting a semaphore"
+         ],
+         "expected": "In-flight worker tasks remain bounded by configured concurrency",
+         "actual": "Unbounded tasks exhaust memory and downstream connection pools",
+         "impact": "Worker process exhaustion under burst traffic",
+         "root_cause": "Missing concurrency semaphore around task creation",
+         "counterevidence": "No upstream rate limiter caps burst delivery to QueueWorker",
+         "remedy": "Guard task spawning with an explicit asyncio.Semaphore limit",
+         "acceptance": [
+           "Concurrent in-flight tasks never exceed the configured limit"
+         ],
+         "validation": {
+           "state": "not-run",
+           "commands": [],
+           "result": "Static inspection only; runtime load test not executed."
+         },
+         "related_findings": []
        }
-     ]
+     ],
+     "issues": [],
+     "limitations": [
+       "Static harness example; runtime load test not executed."
+     ],
+     "checks": []
    }
    ```

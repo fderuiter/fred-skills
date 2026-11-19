@@ -119,7 +119,7 @@ When `operation.json` indicates `phase: "committed"` or the operation ID is reco
    ```json
    {
      "recovery": "already-committed",
-     "skills": [...]
+     "skills": ["<skill-1>", "<skill-2>"]
    }
    ```
 
