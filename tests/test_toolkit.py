@@ -10,7 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 from fredlib import reports, repository, runs
-from fredlib.common import atomic_json, read_json, resolve_audit_path
+from fredlib.common import (
+    DOMAIN_DELIVERABLE_SCHEMAS,
+    SUITE_DELIVERABLES,
+    atomic_json,
+    read_json,
+    resolve_audit_path,
+)
 
 
 class RunTests(unittest.TestCase):
@@ -792,8 +798,9 @@ class RunTests(unittest.TestCase):
         )
         self.assertFalse(run_ro["authority"]["application_changes"])
         prompt_ro = (ws_ro / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn("assets/testing.schema.json", prompt_ro)
         self.assertIn(
-            "skills/test-case-generation/assets/testing.schema.json", prompt_ro
+            "shared/automated-testing/resources/assets/testing.schema.json", prompt_ro
         )
         self.assertIn("--allow-fixes", prompt_ro)
         self.assertIn("without modifying repository files", prompt_ro)
@@ -848,6 +855,228 @@ class RunTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             runs.revalidate(ws_rev)
         self.assertIn("Invalid review.json", str(ctx.exception))
+
+    @unittest.skipUnless(shutil.which("git"), "Git unavailable")
+    def test_profile_and_config_priorities_scoped_to_matching_suite_and_domain_assets(
+        self,
+    ):
+        import re
+
+        self.assertEqual(
+            {
+                "architecture.json": "shared/software-architecture/resources/assets/architecture.schema.json",
+                "review.json": "shared/code-review/resources/assets/review.schema.json",
+                "testing.json": "shared/automated-testing/resources/assets/testing.schema.json",
+            },
+            DOMAIN_DELIVERABLE_SCHEMAS,
+        )
+        for suite_name, expected in {
+            "software-architecture": (
+                "architecture.json",
+                "shared/software-architecture/resources/assets/architecture.schema.json",
+            ),
+            "code-review": (
+                "review.json",
+                "shared/code-review/resources/assets/review.schema.json",
+            ),
+            "automated-testing": (
+                "testing.json",
+                "shared/automated-testing/resources/assets/testing.schema.json",
+            ),
+        }.items():
+            self.assertEqual(expected, SUITE_DELIVERABLES[suite_name])
+
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "fixture"],
+        ]:
+            subprocess.run(["git", "-C", str(self.repo), *argv], check=True)
+        base = repository.git(self.repo, "rev-parse", "HEAD", required=True)
+        example_config = ROOT / "examples/project-config.yaml"
+
+        domain_cases = [
+            (
+                "design-architecture",
+                "software-architecture",
+                None,
+                [
+                    "arch-decision-record",
+                    "arch-boundary-specification",
+                    "arch-component-decomposition",
+                ],
+                "architecture.json",
+                ["architecture-template.md", "architecture.schema.json"],
+            ),
+            (
+                "review-code-changes",
+                "code-review",
+                base,
+                [
+                    "review-diff-analysis",
+                    "review-invariant-violations",
+                    "review-actionable-feedback",
+                ],
+                "review.json",
+                ["review-template.md", "review.schema.json"],
+            ),
+            (
+                "expand-automated-tests",
+                "automated-testing",
+                None,
+                [
+                    "test-gap-analysis",
+                    "test-case-generation",
+                    "test-suite-verification",
+                ],
+                "testing.json",
+                ["testing-template.md", "testing.schema.json"],
+            ),
+        ]
+
+        for (
+            task,
+            suite_name,
+            base_rev,
+            expected_skills,
+            deliverable,
+            asset_names,
+        ) in domain_cases:
+            for budget in ("brief", "balanced", "deep"):
+                for mode in ("investigate", "comprehensive"):
+                    with self.subTest(task=task, budget=budget, mode=mode):
+                        planned_prof, _ = runs.plan(
+                            self.repo,
+                            task=task,
+                            mode=mode,
+                            budget=budget,
+                            base=base_rev,
+                            profile="modular-backend",
+                        )
+                        self.assertEqual(expected_skills, planned_prof["skills"])
+                        self.assertEqual([], planned_prof["deferred_skills"])
+                        self.assertFalse(
+                            any(
+                                s.startswith("repo-audit-")
+                                for s in planned_prof["skills"]
+                                + planned_prof["deferred_skills"]
+                            )
+                        )
+
+                        planned_cfg, detected_cfg = runs.plan(
+                            self.repo,
+                            task=task,
+                            mode=mode,
+                            budget=budget,
+                            base=base_rev,
+                            config=example_config,
+                        )
+                        self.assertEqual("web-app", planned_cfg["profile"])
+                        self.assertEqual(expected_skills, planned_cfg["skills"])
+                        self.assertEqual([], planned_cfg["deferred_skills"])
+                        self.assertIn(
+                            "generated/**", detected_cfg["snapshot"]["exclude"]
+                        )
+                        self.assertTrue(planned_cfg["critical_workflows"])
+
+            ws = self.root / f"ws-assets-{task}"
+            runs.initialize(
+                self.repo,
+                ws,
+                task,
+                budget="brief",
+                base=base_rev,
+                config=example_config,
+            )
+            self.assertTrue((ws / deliverable).is_file())
+            self.assertFalse((ws / "audit.json").exists())
+            assets_dir = ws / "assets"
+            self.assertTrue(assets_dir.is_dir())
+            for asset_name in asset_names:
+                copied_asset = assets_dir / asset_name
+                canonical_asset = (
+                    ROOT / "shared" / suite_name / "resources/assets" / asset_name
+                )
+                self.assertTrue(copied_asset.is_file(), f"Missing {copied_asset}")
+                self.assertEqual(
+                    canonical_asset.read_bytes(), copied_asset.read_bytes()
+                )
+
+            prompt_text = (ws / "prompt.md").read_text(encoding="utf-8")
+            self.assertNotIn("repo-audit-", prompt_text)
+            self.assertNotIn("audit.json", prompt_text)
+            rel_asset_refs = set(re.findall(r"(?<![/\w.-])assets/[\w.-]+", prompt_text))
+            self.assertTrue(rel_asset_refs)
+            for rel_ref in rel_asset_refs:
+                self.assertTrue((ws / rel_ref).is_file(), f"Unresolved {rel_ref}")
+            self.assertEqual([], runs.validate_run(ws))
+
+        # Workflow-only recipes also ignore audit-only profile priorities
+        planned_wf, _ = runs.plan(
+            self.repo,
+            task="verify-fix",
+            budget="brief",
+            profile="web-app",
+        )
+        self.assertEqual(
+            [
+                "repo-verify-finding",
+                "repo-specify-regression",
+                "repo-verify-fix",
+            ],
+            planned_wf["skills"],
+        )
+        self.assertEqual(["repo-reconcile-findings"], planned_wf["deferred_skills"])
+
+        # Pure audit and mixed audit+workflow recipes retain profile priorities in order
+        bug_brief, _ = runs.plan(
+            self.repo,
+            task="investigate-bug",
+            budget="brief",
+            config=example_config,
+        )
+        self.assertEqual(
+            [
+                "repo-audit-trust-boundaries",
+                "repo-audit-cache-coherence",
+                "repo-audit-accessibility-state",
+            ],
+            bug_brief["skills"],
+        )
+        bug_bal, _ = runs.plan(
+            self.repo,
+            task="investigate-bug",
+            budget="balanced",
+            config=example_config,
+        )
+        self.assertEqual(
+            [
+                "repo-audit-trust-boundaries",
+                "repo-audit-cache-coherence",
+                "repo-audit-accessibility-state",
+                "repo-audit-behavioral-contracts",
+                "repo-audit-state-machines",
+                "repo-audit-concurrency",
+                "repo-audit-failure-modes",
+                "repo-verify-finding",
+            ],
+            bug_bal["skills"],
+        )
+        self.assertEqual([], bug_bal["deferred_skills"])
+
+        # In-repository domain workspace excludes copied assets from snapshots
+        in_repo_ws = self.repo / "arch-workspace"
+        in_repo_run = runs.initialize(
+            self.repo,
+            in_repo_ws,
+            "design-architecture",
+            config=example_config,
+        )
+        self.assertIn("arch-workspace/**", in_repo_run["snapshot"]["exclude"])
+        self.assertTrue((in_repo_ws / "assets/architecture.schema.json").is_file())
+        self.assertEqual([], runs.revalidate(in_repo_ws)["changed_files"])
 
 
 class ReportTests(unittest.TestCase):

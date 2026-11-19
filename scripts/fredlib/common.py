@@ -44,7 +44,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "software-architecture": {
         "filename": "architecture.json",
-        "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+        "schema": "shared/software-architecture/resources/assets/architecture.schema.json",
         "starter": {
             "schema_version": "1.0",
             "title": "Architecture specification",
@@ -55,7 +55,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "code-review": {
         "filename": "review.json",
-        "schema": "skills/review-diff-analysis/assets/review.schema.json",
+        "schema": "shared/code-review/resources/assets/review.schema.json",
         "starter": {
             "schema_version": "1.0",
             "verdict": "comment",
@@ -65,7 +65,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "automated-testing": {
         "filename": "testing.json",
-        "schema": "skills/test-case-generation/assets/testing.schema.json",
+        "schema": "shared/automated-testing/resources/assets/testing.schema.json",
         "starter": {
             "schema_version": "1.0",
             "component": "repository",
@@ -189,6 +189,31 @@ def _artifact_contract_for_run(run: dict, root: Path = ROOT) -> dict[str, Any]:
 
 def _deliverable_for_run(run: dict, root: Path = ROOT) -> str:
     return str(_artifact_contract_for_run(run, root=root)["filename"])
+
+
+def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path, Path]]:
+    shared_dir = root / "shared"
+    if not shared_dir.is_dir():
+        return []
+    assets: list[tuple[Path, Path]] = []
+    for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
+        try:
+            manifest = read_json(manifest_path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        if manifest.get("suite", "repository-audits") != suite_name:
+            continue
+        for raw_entry in manifest.get("files", []):
+            if not isinstance(raw_entry, str):
+                continue
+            rel = relative_path(raw_entry)
+            if rel.parts and rel.parts[0] == "assets":
+                source = manifest_path.parent / "resources" / rel
+                if source.is_file() and not source.is_symlink():
+                    assets.append((rel, source))
+    return assets
 
 
 def _detect_domain_kind(data: object) -> str | None:

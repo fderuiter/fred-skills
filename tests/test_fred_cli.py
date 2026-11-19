@@ -1760,6 +1760,137 @@ class FredCLITests(unittest.TestCase):
                     self.assertEqual(1, rec_proc.returncode)
                     self.assertIn("audit.json", rec_proc.stderr)
 
+    def test_cli_profile_and_config_scope_domain_plans_and_copy_suite_assets(self):
+        import shutil
+
+        if not shutil.which("git"):
+            self.skipTest("Git unavailable")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            repo = tmp_path / "profile_repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("def calc(x):\n    return x * 2\n")
+            for argv in [
+                ["init", "-q"],
+                ["config", "user.name", "Fixture"],
+                ["config", "user.email", "fixture@example.invalid"],
+                ["add", "."],
+                ["commit", "-qm", "initial"],
+            ]:
+                subprocess.run(["git", "-C", str(repo), *argv], check=True)
+            base_rev = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "app.py").write_text("def calc(x):\n    return x * 2 + 1\n")
+            config_file = ROOT / "examples/project-config.yaml"
+
+            cases = [
+                (
+                    "design-architecture",
+                    "software-architecture",
+                    [],
+                    "architecture.json",
+                    [
+                        "arch-decision-record",
+                        "arch-boundary-specification",
+                        "arch-component-decomposition",
+                    ],
+                    ["architecture-template.md", "architecture.schema.json"],
+                ),
+                (
+                    "review-code-changes",
+                    "code-review",
+                    ["--base", base_rev],
+                    "review.json",
+                    [
+                        "review-diff-analysis",
+                        "review-invariant-violations",
+                        "review-actionable-feedback",
+                    ],
+                    ["review-template.md", "review.schema.json"],
+                ),
+                (
+                    "expand-automated-tests",
+                    "automated-testing",
+                    [],
+                    "testing.json",
+                    [
+                        "test-gap-analysis",
+                        "test-case-generation",
+                        "test-suite-verification",
+                    ],
+                    ["testing-template.md", "testing.schema.json"],
+                ),
+            ]
+
+            for (
+                task,
+                suite_name,
+                extra_args,
+                deliverable,
+                expected_skills,
+                asset_files,
+            ) in cases:
+                for budget in ("brief", "balanced", "deep"):
+                    for flag_args in (
+                        ["--profile", "modular-backend"],
+                        ["--config", str(config_file)],
+                    ):
+                        with self.subTest(task=task, budget=budget, flags=flag_args[0]):
+                            plan_proc = self.run_cli(
+                                "plan",
+                                str(repo),
+                                "--task",
+                                task,
+                                "--budget",
+                                budget,
+                                *flag_args,
+                                *extra_args,
+                                "--json",
+                            )
+                            self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
+                            plan_json = json.loads(plan_proc.stdout)["plan"]
+                            self.assertEqual(expected_skills, plan_json["skills"])
+                            self.assertEqual([], plan_json["deferred_skills"])
+                            self.assertFalse(
+                                any(
+                                    s.startswith("repo-audit-")
+                                    for s in plan_json["skills"]
+                                    + plan_json["deferred_skills"]
+                                )
+                            )
+
+                ws = tmp_path / f"ws-cfg-{task}"
+                init_proc = self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    task,
+                    "--budget",
+                    "brief",
+                    "--config",
+                    str(config_file),
+                    "--output",
+                    str(ws),
+                    *extra_args,
+                    "--json",
+                )
+                self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+                self.assertTrue((ws / deliverable).is_file())
+                self.assertFalse((ws / "audit.json").exists())
+                for asset_name in asset_files:
+                    copied = ws / "assets" / asset_name
+                    canonical = (
+                        ROOT / "shared" / suite_name / "resources/assets" / asset_name
+                    )
+                    self.assertTrue(copied.is_file(), f"Missing {copied}")
+                    self.assertEqual(canonical.read_bytes(), copied.read_bytes())
+                prompt_text = (ws / "prompt.md").read_text(encoding="utf-8")
+                self.assertNotIn("repo-audit-", prompt_text)
+                self.assertNotIn("audit.json", prompt_text)
+                val_proc = self.run_cli("validate-run", str(ws))
+                self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
 
 class FredDispatchRegistryTests(unittest.TestCase):
     @classmethod
