@@ -1,6 +1,5 @@
-Use arch-boundary-specification to define and verify boundaries for <repository> at <revision>.
-Map trust boundaries where untrusted inputs enter privileged system components.
-Define encapsulation barriers, interface contracts, and module communication rules.
-Verify that invariant checks and authorization guards execute at each crossing.
-Do not modify application code or publish external records without explicit user authorization.
-Document boundary specifications adhering to the architecture template and assets/architecture.schema.json.
+Use arch-boundary-specification to define and verify module and trust boundaries for <repository> at <revision> across <directory> and <symbol>.
+Map entry boundaries where untrusted or cross-module inputs cross into privileged domain components, referencing issue <issue-number> when applicable.
+Specify narrow encapsulation barriers, typed interface contracts, error translation rules, and authorization/invariant guards at each crossing.
+Write `architecture.json` conforming to the architecture template and `assets/architecture.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish external records without explicit user authorization.

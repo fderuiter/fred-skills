@@ -1,12 +1,7 @@
-Use repo-audit-cache-coherence to conduct a comprehensive cache coherence audit of <repository> at <revision>.
-
-Prioritize <critical workflows> and inspect the whole relevant scope in bounded slices.
-Reuse <existing audit workspace, if any>. Establish intended contracts independently,
-trace callers and enforcement, construct adversarial sequences, and check counterevidence.
-Separate reproduced defects, statically supported findings, unresolved risks, hardening,
-and refuted candidates. Report file/symbol/line evidence tied to the audited snapshot.
-Record honest coverage, tests actually run, validation not run, severity and confidence,
-minimal remedies, independent acceptance criteria, and cross-topic handoffs. Keep IDs
-stable and preserve unrelated records. Return a standalone report plus audit.json conforming to assets/audit.schema.json.
-Draft any issue recommendations; do not modify application code or publish issues unless
-the current user request separately authorizes it.
+Use repo-audit-cache-coherence to audit cache coherence and invalidation semantics in <repository> at <revision> across <directory> and <symbol>.
+Prioritize <critical workflows> and reuse <existing audit workspace, if any> while checking context from issue <issue-number>.
+Inventory browser, server, CDN, and query caches, memoized selectors, cache key dimensions, TTLs, negative-lookup entries, refresh jobs, and backing versions.
+Check whether tenant, principal authorization, locale, feature flags, and schema version are encoded in keys so cross-tenant or stale reads cannot leak.
+Trace write/delete invalidation ordering, stampede amplification, and rollback races with file/symbol/line evidence.
+Return a standalone report plus `audit.json` conforming to `assets/audit.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code or publish issues unless explicitly authorized.

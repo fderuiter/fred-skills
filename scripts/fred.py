@@ -374,14 +374,17 @@ def _render_planning_tty(command: str, data: dict[str, Any]) -> str:
         file_count = snap.get("file_count", len(snap.get("files", {})))
         dirty_suffix = " (dirty)" if repo.get("dirty") else ""
         langs = ", ".join(data.get("languages", [])) or "none detected"
-        return "\n".join(
-            [
-                f"Repository: {repo.get('path', '')}",
-                f"Revision: {repo.get('revision', 'unversioned')}{dirty_suffix}",
-                f"Files indexed: {file_count} (complete: {snap.get('complete', True)})",
-                f"Languages: {langs}",
-            ]
-        )
+        deps = data.get("dependencies", {})
+        dep_pkgs = deps.get("packages", {}) if isinstance(deps, dict) else {}
+        dep_manifests = deps.get("manifests", []) if isinstance(deps, dict) else []
+        lines = [
+            f"Repository: {repo.get('path', '')}",
+            f"Revision: {repo.get('revision', 'unversioned')}{dirty_suffix}",
+            f"Files indexed: {file_count} (complete: {snap.get('complete', True)})",
+            f"Languages: {langs}",
+            f"Dependencies: {len(dep_pkgs)} packages across {len(dep_manifests)} manifests",
+        ]
+        return "\n".join(lines)
     if command == "plan":
         plan_info = data.get("plan", {})
         repo = data.get("preflight", {}).get("repository", {})
@@ -752,6 +755,38 @@ def parser() -> argparse.ArgumentParser:
             "--config",
             type=Path,
             help="Optional project YAML with profile, excludes, and critical workflows; never executable commands",
+        )
+        sub.add_argument(
+            "--directory",
+            default=None,
+            help="Optional target subdirectory within the repository to focus tactical scope",
+        )
+        sub.add_argument(
+            "--symbol",
+            default=None,
+            help="Optional symbol, function, or type name to trace blast radius and caller migration order",
+        )
+        sub.add_argument(
+            "--allowed-paths",
+            "--allowed-path",
+            dest="allowed_paths",
+            action="append",
+            default=[],
+            help="Relative path or glob allowed for edits when fixes are authorized (can be repeated)",
+        )
+        sub.add_argument(
+            "--do-not-modify-paths",
+            "--do-not-modify-path",
+            dest="do_not_modify_paths",
+            action="append",
+            default=[],
+            help="Relative path or glob that must never be modified (can be repeated)",
+        )
+        sub.add_argument(
+            "--issue-number",
+            type=int,
+            default=None,
+            help="Optional GitHub issue number for live read-only gh context queries",
         )
         sub.add_argument(
             "--full",
@@ -1315,6 +1350,11 @@ def _extract_run_options(a: argparse.Namespace) -> dict[str, Any]:
             "profile",
             "exclude",
             "config",
+            "directory",
+            "symbol",
+            "allowed_paths",
+            "do_not_modify_paths",
+            "issue_number",
         ]
     }
 
