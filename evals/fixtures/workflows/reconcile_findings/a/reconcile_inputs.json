@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "finding_id": "F-401",
+      "fingerprint": "fp-auth-bind",
+      "previous_state": "in-progress",
+      "has_verification_proof": true
+    },
+    {
+      "finding_id": "F-402",
+      "fingerprint": "fp-stale-cache",
+      "previous_state": "open",
+      "has_verification_proof": false
+    }
+  ],
+  "unmapped": [
+    {
+      "record_id": "LEGACY-9",
+      "reason": "unmatched-fingerprint"
+    }
+  ]
+}

@@ -10,7 +10,7 @@
         "Specify prioritized contract test_cases and fake-parity checks in testing.json without modifying repository files unless permitted.",
         "Validate testing.json against assets/testing.schema.json."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral testing task without revealing expected test specifications."
     },
     {
       "id": "test-contract-harnesses-safe",
@@ -24,11 +24,13 @@
     },
     {
       "id": "test-contract-harnesses-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Specify deterministic seeded round-trip and idempotency property invariants for this path canonicalizer module.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets test-property-invariants rather than test-contract-harnesses.",
+        "Defer or route to test-property-invariants instead of forcing an out-of-scope automated-testing pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to design test harnesses."
+      "evaluation_note": "Near-neighbor sibling routing check within automated-testing; verify routing to test-property-invariants instead of test-contract-harnesses.",
+      "sibling_skill": "test-property-invariants"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

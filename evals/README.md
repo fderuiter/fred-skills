@@ -1,17 +1,20 @@
 # Executable evaluation harness
 
-`cases.json` selects 24 raw cases across concurrency, authorization, transactions,
-test oracles, synthesis, data evolution, API compatibility, and flakiness isolation:
-two relevant/control inputs and an unrelated routing task per domain. The 180
-per-skill scenario specifications are separate authoring inputs, not 180 executable
-cases or completed model evaluations.
+`cases.json` selects 87 raw cases across 29 skills spanning all five suites
+(`repository-audits`, `software-architecture`, `code-review`, `automated-testing`, and
+`repository-workflows`): relevant failure, safe control, and routing tasks per skill.
+The 180 skill scenario specifications in `references/evaluation-scenarios.json` remain
+separate authoring inputs, not 180 completed model evaluations.
 
 The harness creates a fresh case directory for each configuration/repeat, copies only
-raw `source/` and (for `with_skill`) one standalone `skill/`, writes a user request,
-executes an explicit adapter argv without a shell, then grades outside that workdir.
-Expected keys are not placed in the prompt or copied source. This reduces accidental
-answer leakage; the process still has normal filesystem/network access. Use an external
-sandbox for untrusted adapters and never grant them access to private data unnecessarily.
+raw `source/` and (for `with_skill`) one standalone `skill/` (excluding `__pycache__`),
+writes a contract-specific user request, executes an explicit adapter argv without a
+shell, then grades outside that workdir. Expected keys, expected assertions, and
+`writable_paths` rules are never placed in `prompt.md` or the copied workspace. `./source`
+is read-only by default and permits modifications only inside declared `writable_paths`
+globs for source-mutating skills. This reduces accidental answer leakage; the process
+still has normal filesystem/network access. Use an external sandbox for untrusted
+adapters and never grant them access to private data unnecessarily.
 
 ## Adapter contract
 

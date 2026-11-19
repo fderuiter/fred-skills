@@ -24,11 +24,13 @@
     },
     {
       "id": "review-api-compatibility-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Review this pull request diff for tenant authorization bypasses, path traversal confinement, and unvalidated SQL sink parameters.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets review-security-boundaries rather than review-api-compatibility.",
+        "Defer or route to review-security-boundaries instead of forcing an out-of-scope code-review pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform a code review."
+      "evaluation_note": "Near-neighbor sibling routing check within code-review; verify routing to review-security-boundaries instead of review-api-compatibility.",
+      "sibling_skill": "review-security-boundaries"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

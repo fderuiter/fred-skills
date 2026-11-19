@@ -36,7 +36,11 @@ class PackageTests(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract; do not modify application code without permission.\n\n## Deliver\n\nDeliver the audit output.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json).\n"
+            "Do not modify application code without explicit user authorization.\n",
+            encoding="utf-8",
         )
         assets_dir = self.skill / "assets"
         assets_dir.mkdir(parents=True)
@@ -46,13 +50,19 @@ class PackageTests(unittest.TestCase):
                 {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
+                    "additionalProperties": False,
+                    "required": ["schema_version"],
+                    "properties": {
+                        "schema_version": {"type": "string", "const": "1.0"}
+                    },
                 }
             ),
             encoding="utf-8",
         )
         self.prompt = assets_dir / "prompt.md"
         self.prompt.write_text(
-            "Use sample-audit on <repository> at <revision>. Do not modify application code without authorization.\n",
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Do not modify application code without authorization.\n",
             encoding="utf-8",
         )
         self.scenarios_file = self.skill / "references/evaluation-scenarios.json"
@@ -66,18 +76,22 @@ class PackageTests(unittest.TestCase):
                             "id": "sample-audit-failure",
                             "prompt": "Audit synthetic contracts when explicitly requested.",
                             "expected_behavior": ["Report finding with evidence."],
+                            "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral audit task without revealing expected findings.",
                         },
                         {
                             "id": "sample-audit-safe",
                             "prompt": "Audit synthetic contracts when explicitly requested.",
                             "expected_behavior": ["Safeguards verified, no defect."],
+                            "evaluation_note": "Construct a raw safe control; keep expected audit outcomes out of the execution prompt.",
                         },
                         {
                             "id": "sample-audit-routing",
-                            "prompt": "Fix a spelling mistake in the project description.",
+                            "sibling_skill": "sample-sibling-audit",
+                            "prompt": "Audit asynchronous cancellation propagation and stale completion handlers across worker tasks.",
                             "expected_behavior": [
-                                "Do not activate this specialist solely because the task concerns a repository."
+                                "Route this request to sample-sibling-audit instead of activating sample-audit."
                             ],
+                            "evaluation_note": "Near-neighbor sibling routing check within repository-audits; verify routing to sample-sibling-audit.",
                         },
                     ],
                 }
@@ -117,6 +131,142 @@ class PackageTests(unittest.TestCase):
         errors = validate_skill(self.skill)
         self.assertTrue(
             any("references/evaluation-scenarios.json" in error for error in errors)
+        )
+
+    def test_generic_typo_routing_prompt_and_misplaced_audit_notes_are_rejected(self):
+        # 1. Generic spelling/typo prompt is rejected
+        data = json.loads(self.scenarios_file.read_text(encoding="utf-8"))
+        data["scenarios"][2]["prompt"] = (
+            "Fix a spelling mistake in the project description."
+        )
+        self.scenarios_file.write_text(json.dumps(data), encoding="utf-8")
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("generic typo or proofreading prompt" in error for error in errors),
+            f"Expected generic typo prompt error, got: {errors}",
+        )
+
+        # 2. Misplaced audit notes inside a software-architecture skill are rejected
+        arch_skill = self.root / "skills/arch-sample-spec"
+        shutil.copytree(self.skill, arch_skill)
+        (arch_skill / "SKILL.md").write_text(
+            '---\nname: arch-sample-spec\ndescription: "Specify sample architecture boundaries."\n---\n\n# Arch Sample\n\n## Deliver\n\nDeliver architecture spec.\n',
+            encoding="utf-8",
+        )
+        (arch_skill / "assets/prompt.md").write_text(
+            "Use arch-sample-spec on <repository> at <revision>. Do not invent ungrounded boundaries.\n",
+            encoding="utf-8",
+        )
+        (arch_skill / "references/evaluation-scenarios.json").write_text(
+            json.dumps(
+                {
+                    "topic": "arch-sample-spec",
+                    "scenarios": [
+                        {
+                            "id": "arch-sample-spec-failure",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Document trust boundary."],
+                            "evaluation_note": "Execute without revealing expected findings.",
+                        },
+                        {
+                            "id": "arch-sample-spec-safe",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Verify clean gateway."],
+                            "evaluation_note": "Construct a raw safe implementation.",
+                        },
+                        {
+                            "id": "arch-sample-spec-routing",
+                            "sibling_skill": "arch-decision-record",
+                            "prompt": "Author an architectural decision record comparing queue trade-offs.",
+                            "expected_behavior": [
+                                "Route to arch-decision-record instead."
+                            ],
+                            "evaluation_note": "This is an activation test, not an instruction to perform an audit.",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        arch_errors = validate_skill(arch_skill)
+        self.assertTrue(
+            any("misplaced" in err or "legacy audit" in err for err in arch_errors),
+            f"Expected misplaced audit note errors, got: {arch_errors}",
+        )
+
+        # 3. Out-of-suite sibling_skill is rejected when catalog/suites.json defines suite siblings
+        (self.root / "catalog").mkdir(exist_ok=True)
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "software-architecture",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Arch",
+                                    "skills": [
+                                        "arch-sample-spec",
+                                        "arch-decision-record",
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "code-review",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Review",
+                                    "skills": ["review-diff-analysis"],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (arch_skill / "references/evaluation-scenarios.json").write_text(
+            json.dumps(
+                {
+                    "topic": "arch-sample-spec",
+                    "scenarios": [
+                        {
+                            "id": "arch-sample-spec-failure",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Document trust boundary."],
+                            "evaluation_note": "Execute without revealing expected boundary outcomes.",
+                        },
+                        {
+                            "id": "arch-sample-spec-safe",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Verify clean gateway."],
+                            "evaluation_note": "Construct a raw safe boundary control.",
+                        },
+                        {
+                            "id": "arch-sample-spec-routing",
+                            "sibling_skill": "review-diff-analysis",
+                            "prompt": "Inspect pull request diff hunks and caller blast radius.",
+                            "expected_behavior": [
+                                "Route to review-diff-analysis instead."
+                            ],
+                            "evaluation_note": "Sibling routing check for review-diff-analysis.",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cross_suite_errors = validate_skill(arch_skill)
+        self.assertTrue(
+            any(
+                "not a member of suite 'software-architecture'" in err
+                for err in cross_suite_errors
+            ),
+            f"Expected cross-suite sibling error, got: {cross_suite_errors}",
         )
 
     def test_name_mismatch_is_rejected(self):
@@ -216,17 +366,31 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
+        root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual(root_version, marketplace_default["version"])
+        self.assertEqual(root_version, marketplace_default["metadata"]["version"])
+        self.assertTrue(marketplace_default["description"])
 
         (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
         problems_version = build(self.root, check=True)
         self.assertTrue(
             any("gemini-extension.json" in problem for problem in problems_version)
         )
+        self.assertTrue(
+            any(
+                ".claude-plugin/marketplace.json" in problem
+                for problem in problems_version
+            )
+        )
         self.assertEqual([], build(self.root))
         self.assertEqual(
             "1.2.3",
             json.loads(gemini_ext_path.read_text(encoding="utf-8"))["version"],
         )
+        updated_marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual("1.2.3", updated_marketplace["version"])
+        self.assertEqual("1.2.3", updated_marketplace["metadata"]["version"])
 
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
         cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
@@ -358,6 +522,7 @@ class PackageTests(unittest.TestCase):
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
         ]
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         for rel_manifest in [
             ".claude-plugin/marketplace.json",
             ".cursor-plugin/marketplace.json",
@@ -366,6 +531,10 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(manifest_path.is_file())
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(data["name"], "fred-skills")
+            self.assertEqual(data["version"], active_version)
+            self.assertTrue(data["description"])
+            self.assertEqual(data["description"], data["metadata"]["description"])
+            self.assertEqual(data["metadata"]["version"], active_version)
             self.assertEqual(data["owner"]["name"], "fderuiter")
             plugins = data["plugins"]
             self.assertEqual(len(plugins), 1 + len(packs) + len(suite_skills))
@@ -465,6 +634,10 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(hooks[hook_id].get("language"), "system")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
             self.assertTrue(hooks[hook_id].get("always_run", False))
+        self.assertEqual(
+            hooks["validate-skills"].get("entry"),
+            "python scripts/validate_skills.py --telemetry validation-telemetry.json",
+        )
         self.assertEqual(hooks["unit-tests"].get("stages"), ["pre-push"])
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
@@ -540,6 +713,22 @@ class PackageTests(unittest.TestCase):
                 ),
                 f"validate.yml must run dedicated '{phase}' phase step",
             )
+        self.assertTrue(
+            any(
+                "scripts/run_checks.py --phase packages --telemetry validation-telemetry.json"
+                in cmd
+                for cmd in run_cmds
+            ),
+            "validate.yml packages phase must export validation-telemetry.json",
+        )
+        self.assertFalse(
+            any(cmd.strip().startswith("ruff ") for cmd in run_cmds),
+            "validate.yml must not run duplicate standalone ruff commands",
+        )
+        self.assertFalse(
+            any(cmd.strip() == "make check" for cmd in run_cmds),
+            "validate.yml must not run duplicate make check command",
+        )
         self.assertEqual(
             1,
             sum(
@@ -593,6 +782,10 @@ class PackageTests(unittest.TestCase):
             **push_ctx_a,
             "sha": "c6b4610700000000000000000000000000000002",
         }
+        push_ctx_c = {
+            **push_ctx_a,
+            "sha": "e8d6832900000000000000000000000000000004",
+        }
         pr_ctx_1 = {
             "workflow": "Validate skill packages",
             "event_name": "pull_request",
@@ -603,24 +796,47 @@ class PackageTests(unittest.TestCase):
             **pr_ctx_1,
             "sha": "d7c5721800000000000000000000000000000003",
         }
+        branch_push_1 = {
+            "workflow": "Validate skill packages",
+            "event_name": "push",
+            "ref": "refs/heads/feature/branch",
+            "sha": "a111111100000000000000000000000000000001",
+        }
+        branch_push_2 = {
+            **branch_push_1,
+            "sha": "b222222200000000000000000000000000000002",
+        }
 
         group_push_a = eval_gha_template(group_tpl, push_ctx_a)
         group_push_b = eval_gha_template(group_tpl, push_ctx_b)
-        self.assertNotEqual(group_push_a, group_push_b)
+        group_push_c = eval_gha_template(group_tpl, push_ctx_c)
+        self.assertEqual(3, len({group_push_a, group_push_b, group_push_c}))
         self.assertIn(push_ctx_a["sha"], group_push_a)
         self.assertIn(push_ctx_b["sha"], group_push_b)
+        self.assertIn(push_ctx_c["sha"], group_push_c)
         self.assertEqual(group_push_a, eval_gha_template(group_tpl, push_ctx_a))
         self.assertIs(eval_gha_template(cancel_tpl, push_ctx_a), False)
         self.assertIs(eval_gha_template(cancel_tpl, push_ctx_b), False)
+        self.assertIs(eval_gha_template(cancel_tpl, push_ctx_c), False)
 
         group_pr_1 = eval_gha_template(group_tpl, pr_ctx_1)
         group_pr_2 = eval_gha_template(group_tpl, pr_ctx_2)
         self.assertEqual(
             group_pr_1, "skills-Validate skill packages-refs/pull/42/merge"
         )
+        self.assertNotIn(pr_ctx_1["sha"], group_pr_1)
         self.assertEqual(group_pr_1, group_pr_2)
         self.assertNotEqual(group_push_a, group_pr_1)
         self.assertIs(eval_gha_template(cancel_tpl, pr_ctx_1), True)
+
+        group_branch_1 = eval_gha_template(group_tpl, branch_push_1)
+        group_branch_2 = eval_gha_template(group_tpl, branch_push_2)
+        self.assertEqual(
+            group_branch_1, "skills-Validate skill packages-refs/heads/feature/branch"
+        )
+        self.assertNotIn(branch_push_1["sha"], group_branch_1)
+        self.assertEqual(group_branch_1, group_branch_2)
+        self.assertIs(eval_gha_template(cancel_tpl, branch_push_1), True)
 
         release_wf = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -628,7 +844,14 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(
             release_wf["concurrency"],
             {
-                "group": "skills-${{ github.workflow }}-${{ github.ref }}",
+                "group": "skills-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}",
+                "cancel-in-progress": False,
+            },
+        )
+        self.assertEqual(
+            release_wf["jobs"]["release"]["concurrency"],
+            {
+                "group": "skills-release-publish-${{ needs.preflight.outputs.release_tag || github.ref }}",
                 "cancel-in-progress": False,
             },
         )
@@ -826,9 +1049,10 @@ class PackageTests(unittest.TestCase):
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
         self.assertIn("60 total packages", impl_text)
 
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
         self.assertIn("complete 60-package pack", usage_text)
-        self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
+        self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
             "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 60 packages or `starter`)",
             usage_text,
@@ -870,9 +1094,10 @@ class PackageTests(unittest.TestCase):
 
         exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
         self.assertIn(
-            "| `full-audit` | All 33 specialist audits plus coordinator and synthesis. | 35 |",
+            "| `full-audit` | All 33 specialist audits plus coordinator, diagnostics, and synthesis. | 36 |",
             exp_text,
         )
+        self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
             "| `complete` | Every audit and engineering workflow. | 60 |",
             exp_text,
@@ -979,22 +1204,42 @@ class PackageTests(unittest.TestCase):
         )
 
     def test_prompt_lacking_negative_constraints_or_guardrails_is_rejected(self):
+        noun_only_prompt = (
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Enforce boundary guardrails, isolation barriers, invariants, and safe controls.\n"
+        )
+        for unconstrained_prompt in (
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json.\n",
+            noun_only_prompt,
+        ):
+            self.prompt.write_text(unconstrained_prompt, encoding="utf-8")
+            errors = validate_skill(self.skill)
+            self.assertTrue(
+                any(
+                    "prompt template lacks negative constraints or boundary guardrails"
+                    in error
+                    for error in errors
+                ),
+                f"Expected prompt constraint error for {unconstrained_prompt!r}, got: {errors}",
+            )
+
+    def test_prompt_missing_output_schema_mention_is_rejected(self):
         self.prompt.write_text(
-            "Use sample-audit on <repository> at <revision>.\n", encoding="utf-8"
+            "Use sample-audit on <repository> at <revision>. Inspect data schemas carefully. "
+            "Do not modify application code without authorization.\n",
+            encoding="utf-8",
         )
         errors = validate_skill(self.skill)
         self.assertTrue(
-            any(
-                "prompt template lacks negative constraints or boundary guardrails"
-                in error
-                for error in errors
-            ),
-            f"Expected prompt constraint error, got: {errors}",
+            any("output schema contract" in error for error in errors),
+            f"Expected missing output schema mention error, got: {errors}",
         )
 
     def test_skill_markdown_lacking_boundary_sections_is_rejected(self):
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract without standard headers; do not modify application code.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\nInspect [audit schema](assets/audit.schema.json); do not mutate files.\n",
+            encoding="utf-8",
         )
         errors = validate_skill(self.skill)
         self.assertTrue(
@@ -1002,16 +1247,59 @@ class PackageTests(unittest.TestCase):
             f"Expected missing boundary section error, got: {errors}",
         )
 
-    def test_skill_markdown_lacking_negative_constraints_is_rejected(self):
+    def test_skill_markdown_prohibition_and_delivery_or_guardrail_rules(self):
+        # Noun-only SKILL.md without explicit prohibitions is rejected
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\nDeliver the audit output.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Workflow\n\nMap trust boundaries and isolation barriers.\n\n"
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) invariant summaries.\n",
+            encoding="utf-8",
+        )
+        noun_only_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("explicit negative prohibitions" in e for e in noun_only_errors),
+            f"Expected explicit prohibition error, got: {noun_only_errors}",
+        )
+
+        # Prohibition only in ## Workflow without ## Guardrails or ## Deliver prohibition is rejected
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Workflow\n\nDo not trust unvalidated inputs.\n\n"
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
+            encoding="utf-8",
+        )
+        misplaced_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "dedicated guardrail heading" in e and "delivery section" in e
+                for e in misplaced_errors
+            ),
+            f"Expected guardrail/delivery placement error, got: {misplaced_errors}",
+        )
+
+        # Dedicated ## Guardrails section with explicit prohibition and linked schema is accepted
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Guardrails\n\n- Never modify application code without authorization.\n\n"
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_skill_markdown_missing_schema_link_is_rejected(self):
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            "# Sample\n\n## Deliver\n\nDeliver the audit output. Do not modify application code.\n",
+            encoding="utf-8",
         )
         errors = validate_skill(self.skill)
         self.assertTrue(
             any(
-                "skill markdown lacks negative constraints" in error for error in errors
+                "missing markdown link to output schema assets/audit.schema.json"
+                in error
+                for error in errors
             ),
-            f"Expected missing SKILL.md negative constraint error, got: {errors}",
+            f"Expected unlinked schema error, got: {errors}",
         )
 
     def test_enriched_architecture_and_testing_schemas_enforce_strict_contracts(self):
@@ -1107,6 +1395,186 @@ class PackageTests(unittest.TestCase):
             },
         }
         self.assertTrue(list(testing_validator.iter_errors(bad_testing)))
+
+    def test_empty_and_open_schemas_are_rejected_while_map_objects_are_allowed(self):
+        # 1. Empty {} schema
+        self.output_schema.write_text("{}", encoding="utf-8")
+        empty_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("empty or non-object JSON schema" in e for e in empty_errors),
+            f"Expected empty schema rejection, got: {empty_errors}",
+        )
+
+        # 2. Open root object schema without properties
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                }
+            ),
+            encoding="utf-8",
+        )
+        open_root_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "root schema must define non-empty 'properties'" in e
+                for e in open_root_errors
+            ),
+            f"Expected open root schema rejection, got: {open_root_errors}",
+        )
+
+        # 3. Nested structured object with properties omitting additionalProperties: false
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "nested": {
+                            "type": "object",
+                            "properties": {"field": {"type": "string"}},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        nested_open_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "$.properties.nested" in e and "'additionalProperties': false" in e
+                for e in nested_open_errors
+            ),
+            f"Expected nested open object rejection, got: {nested_open_errors}",
+        )
+
+        # 4. Intentional map object (additionalProperties schema) and untyped details object without properties
+        self.output_schema.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "by_category": {
+                            "type": "object",
+                            "additionalProperties": {"type": "integer", "minimum": 0},
+                        },
+                        "details": {"type": "object"},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_multi_hop_markdown_links_are_rejected(self):
+        refs_dir = self.skill / "references"
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        (refs_dir / "hop1.md").write_text(
+            "# Hop 1\n\nSee [hop 2](hop2.md) for nested details.\n",
+            encoding="utf-8",
+        )
+        (refs_dir / "hop2.md").write_text("# Hop 2\n", encoding="utf-8")
+        self.entry.write_text(
+            self.entry.read_text(encoding="utf-8")
+            + "\nRead [hop 1](references/hop1.md).\n",
+            encoding="utf-8",
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "1-hop depth limit" in e
+                and "SKILL.md -> references/hop1.md -> references/hop2.md" in e
+                for e in errors
+            ),
+            f"Expected multi-hop link error, got: {errors}",
+        )
+
+    def test_progressive_disclosure_token_budgets_are_enforced(self):
+        orig_entry = self.entry.read_text(encoding="utf-8")
+
+        # 1. Frontmatter startup metadata over 100 tokens
+        bloated_desc = " ".join(["contract"] * 105)
+        self.entry.write_text(
+            f'---\nname: sample-audit\ndescription: "{bloated_desc}"\n---\n\n'
+            "# Sample\n\n## Deliver\n\nDeliver [audit schema](assets/audit.schema.json). "
+            "Do not modify code.\n",
+            encoding="utf-8",
+        )
+        meta_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("frontmatter metadata exceeds token budget" in e for e in meta_errors),
+            f"Expected metadata token budget error, got: {meta_errors}",
+        )
+
+        # 2. SKILL.md 5,000-token body (< 500 lines)
+        five_k_body = "\n".join([" ".join(["word"] * 50) for _ in range(100)])
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            f"# Sample\n\n{five_k_body}\n\n## Deliver\n\n"
+            "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
+            encoding="utf-8",
+        )
+        body_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("skill body exceeds token budget" in e for e in body_errors),
+            f"Expected 5,000-token body rejection, got: {body_errors}",
+        )
+
+        # 3. Reference markdown 5,000-token file
+        self.entry.write_text(orig_entry, encoding="utf-8")
+        bloated_ref = self.skill / "references/bloated.md"
+        bloated_ref.write_text(" ".join(["detail"] * 5000), encoding="utf-8")
+        ref_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "references/bloated.md: reference markdown exceeds token budget" in e
+                for e in ref_errors
+            ),
+            f"Expected reference token budget error, got: {ref_errors}",
+        )
+
+    def test_telemetry_rejects_unconstrained_and_empty_schema_fixtures_with_zero_coverage(
+        self,
+    ):
+        self.manifest()
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+
+        # 1. Negative-constraint-free noun-only synthetic fixture -> 0% constraint coverage
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Map boundaries and guardrails.\n",
+            encoding="utf-8",
+        )
+        errors_no_neg, tel_no_neg = validate_with_telemetry(self.root)
+        self.assertTrue(errors_no_neg)
+        self.assertEqual(0, tel_no_neg["passed_packages"])
+        self.assertEqual(0.0, tel_no_neg["deterministic_constraint_coverage"])
+        self.assertEqual(
+            0.0, tel_no_neg["deterministic_constraint_coverage_percentage"]
+        )
+
+        # 2. Empty {} schema synthetic fixture -> 0% constraint and schema coverage
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Do not modify application code.\n",
+            encoding="utf-8",
+        )
+        self.output_schema.write_text("{}", encoding="utf-8")
+        errors_empty, tel_empty = validate_with_telemetry(self.root)
+        self.assertTrue(errors_empty)
+        self.assertEqual(0, tel_empty["passed_packages"])
+        self.assertEqual(0.0, tel_empty["output_schema_coverage"])
+        self.assertEqual(0.0, tel_empty["deterministic_constraint_coverage"])
+        self.assertEqual(0.0, tel_empty["deterministic_constraint_coverage_percentage"])
 
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)

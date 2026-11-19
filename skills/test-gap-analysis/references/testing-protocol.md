@@ -19,4 +19,4 @@ Standard protocol for automated test gap analysis, test case specification, cont
 
 1. **Gap & Contract Analysis**: Compare public/module contracts, error paths, and protocol schemas against actual assertion strength in existing suites.
 2. **Specification & Harness Design**: Author concrete test specifications, property invariants, and isolation controls in `testing.json`—writing repository test files only when explicit user permission is active.
-3. **Verification & Handoff**: Execute authorized test commands when available, validate `testing.json` against [../assets/testing.schema.json](../assets/testing.schema.json), summarize with [../assets/testing-template.md](../assets/testing-template.md), and hand off via [../assets/handoff-template.md](../assets/handoff-template.md).
+3. **Verification & Handoff**: Execute authorized test commands when available, validate `testing.json` against `assets/testing.schema.json`, summarize with `assets/testing-template.md`, and hand off via `assets/handoff-template.md`.

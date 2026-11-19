@@ -10,7 +10,7 @@
         "Specify expand-backfill-contract phases, storage boundary invariants, and rollback cutoffs in architecture.json.",
         "Keep repository migration files untouched unless explicit user permission is granted."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral architecture task without revealing expected boundaries or decisions."
     },
     {
       "id": "arch-data-evolution-safe",
@@ -24,11 +24,13 @@
     },
     {
       "id": "arch-data-evolution-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Specify external webhook wire DTO schemas, idempotency headers, and consumer version compatibility across service boundaries.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets arch-integration-contracts rather than arch-data-evolution.",
+        "Defer or route to arch-integration-contracts instead of forcing an out-of-scope software-architecture pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform an architecture specification."
+      "evaluation_note": "Near-neighbor sibling routing check within software-architecture; verify routing to arch-integration-contracts instead of arch-data-evolution.",
+      "sibling_skill": "arch-integration-contracts"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

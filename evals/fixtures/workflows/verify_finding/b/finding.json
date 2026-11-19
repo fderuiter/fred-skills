@@ -1,0 +1,4 @@
+{
+  "finding_id": "F-101",
+  "claim": "Concurrent append loses sequence monotonicity without lock."
+}

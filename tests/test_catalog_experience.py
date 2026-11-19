@@ -198,15 +198,15 @@ class ExperienceTests(unittest.TestCase):
             ),
             "software-architecture": (
                 "architecture.json",
-                "skills/arch-decision-record/assets/architecture.schema.json",
+                "shared/software-architecture/resources/assets/architecture.schema.json",
             ),
             "code-review": (
                 "review.json",
-                "skills/review-diff-analysis/assets/review.schema.json",
+                "shared/code-review/resources/assets/review.schema.json",
             ),
             "automated-testing": (
                 "testing.json",
-                "skills/test-case-generation/assets/testing.schema.json",
+                "shared/automated-testing/resources/assets/testing.schema.json",
             ),
         }
         self.assertEqual(set(expected_artifacts), set(suites))

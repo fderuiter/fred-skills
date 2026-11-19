@@ -120,73 +120,1141 @@
       "expected_keys": []
     },
     {
-      "id": "data-evolution-a",
-      "fixture": "fixtures/data_evolution/a",
-      "skill": "arch-data-evolution",
-      "prompt": "Evaluate zero-downtime rolling schema compatibility in this migration. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "id": "arch-decision-record-a",
+      "fixture": "fixtures/architecture/decision_record/a",
+      "skill": "arch-decision-record",
+      "contract": "architecture",
+      "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+      "prompt": "Record an architectural decision record evaluating the supplied event dispatch trade-offs and operational consequences. Emit accepted decision ADR-001 when an unresolved architectural trade-off is present, or keep a draft with empty decisions when already settled.",
       "expected_keys": [
-        "single-phase-schema-break"
-      ]
+        "ADR-001"
+      ],
+      "expected_assertions": {
+        "status": "accepted",
+        "decision_ids": [
+          "ADR-001"
+        ],
+        "min_consequences": 2
+      }
     },
     {
-      "id": "api-compatibility-a",
-      "fixture": "fixtures/api_compatibility/a",
-      "skill": "review-api-compatibility",
-      "prompt": "Review public v1 wire and caller compatibility in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "id": "arch-decision-record-b",
+      "fixture": "fixtures/architecture/decision_record/b",
+      "skill": "arch-decision-record",
+      "contract": "architecture",
+      "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+      "prompt": "Record an architectural decision record evaluating the supplied event dispatch trade-offs and operational consequences. Emit accepted decision ADR-001 when an unresolved architectural trade-off is present, or keep a draft with empty decisions when already settled.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "decision_ids": [],
+        "boundary_names": []
+      }
+    },
+    {
+      "id": "arch-decision-record-routing",
+      "fixture": "fixtures/architecture/decision_record/a",
+      "skill": "arch-decision-record",
+      "contract": "architecture",
+      "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+      "prompt": "Sibling routing request: map trust boundary validation guards where raw HTTP headers enter storage repositories rather than authoring an architectural decision record. Abstain with draft status and empty lists when the request belongs to boundary specification.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "decision_ids": [],
+        "boundary_names": []
+      }
+    },
+    {
+      "id": "arch-boundary-specification-a",
+      "fixture": "fixtures/architecture/boundary_spec/a",
+      "skill": "arch-boundary-specification",
+      "contract": "architecture",
+      "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
+      "prompt": "Specify trust and module boundaries and required entry invariants for this order repository source. Report boundary http-to-order-repository when raw transport inputs cross into storage unvalidated, or return empty boundaries when gateway invariants already isolate the repository.",
       "expected_keys": [
-        "breaking-wire-change"
-      ]
+        "http-to-order-repository"
+      ],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [
+          "http-to-order-repository"
+        ],
+        "boundary_types": {
+          "http-to-order-repository": "trust"
+        },
+        "min_invariants": 1
+      }
     },
     {
-      "id": "flakiness-isolation-a",
-      "fixture": "fixtures/flakiness_isolation/a",
-      "skill": "test-flakiness-isolation",
-      "prompt": "Isolate async timing and shared-state test flakiness in this test module. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "id": "arch-boundary-specification-b",
+      "fixture": "fixtures/architecture/boundary_spec/b",
+      "skill": "arch-boundary-specification",
+      "contract": "architecture",
+      "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
+      "prompt": "Specify trust and module boundaries and required entry invariants for this order repository source. Report boundary http-to-order-repository when raw transport inputs cross into storage unvalidated, or return empty boundaries when gateway invariants already isolate the repository.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-boundary-specification-routing",
+      "fixture": "fixtures/architecture/boundary_spec/a",
+      "skill": "arch-boundary-specification",
+      "contract": "architecture",
+      "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
+      "prompt": "Sibling routing request: decompose a monolithic reporting pipeline into cohesive extractor, calculator, and publisher components rather than specifying trust boundaries. Abstain with draft status and empty lists when the request belongs to component decomposition.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-component-decomposition-a",
+      "fixture": "fixtures/architecture/decomposition/a",
+      "skill": "arch-component-decomposition",
+      "contract": "architecture",
+      "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
+      "prompt": "Decompose tangled billing pipeline responsibilities into cohesive module boundaries and record decomposition decision ADR-DECOMP-1 with boundary billing-ingestion-module. Return empty boundaries and decisions when components are already cleanly separated.",
       "expected_keys": [
-        "sleep-poll-race"
-      ]
+        "billing-ingestion-module",
+        "ADR-DECOMP-1"
+      ],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [
+          "billing-ingestion-module"
+        ],
+        "boundary_types": {
+          "billing-ingestion-module": "module"
+        },
+        "decision_ids": [
+          "ADR-DECOMP-1"
+        ]
+      }
     },
     {
-      "id": "data-evolution-b",
-      "fixture": "fixtures/data_evolution/b",
+      "id": "arch-component-decomposition-b",
+      "fixture": "fixtures/architecture/decomposition/b",
+      "skill": "arch-component-decomposition",
+      "contract": "architecture",
+      "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
+      "prompt": "Decompose tangled billing pipeline responsibilities into cohesive module boundaries and record decomposition decision ADR-DECOMP-1 with boundary billing-ingestion-module. Return empty boundaries and decisions when components are already cleanly separated.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-component-decomposition-routing",
+      "fixture": "fixtures/architecture/decomposition/a",
+      "skill": "arch-component-decomposition",
+      "contract": "architecture",
+      "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
+      "prompt": "Sibling routing request: author a standalone ADR comparing message broker durability trade-offs rather than decomposing module capabilities. Abstain with draft status and empty lists when the request belongs to architectural decision records.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "review-diff-analysis-a",
+      "fixture": "fixtures/review/diff_analysis/a",
+      "skill": "review-diff-analysis",
+      "contract": "review",
+      "schema": "skills/review-diff-analysis/assets/review.schema.json",
+      "prompt": "Analyze the supplied diff and downstream caller impact surface. Report finding DIFF-001 with request_changes when a signature change breaks existing callers, or approve with empty findings when backward compatible.",
+      "expected_keys": [
+        "DIFF-001"
+      ],
+      "expected_assertions": {
+        "verdict": "request_changes",
+        "finding_ids": [
+          "DIFF-001"
+        ],
+        "severities": {
+          "DIFF-001": "high"
+        },
+        "files": [
+          "invoice_client.py"
+        ]
+      }
+    },
+    {
+      "id": "review-diff-analysis-b",
+      "fixture": "fixtures/review/diff_analysis/b",
+      "skill": "review-diff-analysis",
+      "contract": "review",
+      "schema": "skills/review-diff-analysis/assets/review.schema.json",
+      "prompt": "Analyze the supplied diff and downstream caller impact surface. Report finding DIFF-001 with request_changes when a signature change breaks existing callers, or approve with empty findings when backward compatible.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "approve",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-diff-analysis-routing",
+      "fixture": "fixtures/review/diff_analysis/a",
+      "skill": "review-diff-analysis",
+      "contract": "review",
+      "schema": "skills/review-diff-analysis/assets/review.schema.json",
+      "prompt": "Sibling routing request: synthesize pre-existing reviewer comments into deduplicated developer remediation guidance rather than performing diff impact analysis. Abstain with comment verdict and empty findings.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "comment",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-invariant-violations-a",
+      "fixture": "fixtures/review/invariants/a",
+      "skill": "review-invariant-violations",
+      "contract": "review",
+      "schema": "skills/review-invariant-violations/assets/review.schema.json",
+      "prompt": "Review state transitions in escrow_state.py against behavioral invariants. Report finding INV-001 with request_changes when disputed escrows can release funds unguarded, or approve when the invariant precondition is enforced.",
+      "expected_keys": [
+        "INV-001"
+      ],
+      "expected_assertions": {
+        "verdict": "request_changes",
+        "finding_ids": [
+          "INV-001"
+        ],
+        "severities": {
+          "INV-001": "critical"
+        },
+        "files": [
+          "escrow_state.py"
+        ]
+      }
+    },
+    {
+      "id": "review-invariant-violations-b",
+      "fixture": "fixtures/review/invariants/b",
+      "skill": "review-invariant-violations",
+      "contract": "review",
+      "schema": "skills/review-invariant-violations/assets/review.schema.json",
+      "prompt": "Review state transitions in escrow_state.py against behavioral invariants. Report finding INV-001 with request_changes when disputed escrows can release funds unguarded, or approve when the invariant precondition is enforced.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "approve",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-invariant-violations-routing",
+      "fixture": "fixtures/review/invariants/a",
+      "skill": "review-invariant-violations",
+      "contract": "review",
+      "schema": "skills/review-invariant-violations/assets/review.schema.json",
+      "prompt": "Sibling routing request: map exported API signature hunks and downstream caller blast radius from a pull request diff rather than checking state invariants. Abstain with comment verdict and empty findings.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "comment",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-actionable-feedback-a",
+      "fixture": "fixtures/review/feedback/a",
+      "skill": "review-actionable-feedback",
+      "contract": "review",
+      "schema": "skills/review-actionable-feedback/assets/review.schema.json",
+      "prompt": "Synthesize supplied raw review comments into deduplicated, actionable feedback with concrete remediation advice. Consolidate overlapping expiry comments into finding FB-001 with request_changes, or approve when no raw comments remain.",
+      "expected_keys": [
+        "FB-001"
+      ],
+      "expected_assertions": {
+        "verdict": "request_changes",
+        "finding_ids": [
+          "FB-001"
+        ],
+        "require_recommendations": true,
+        "files": [
+          "auth_token.py"
+        ]
+      }
+    },
+    {
+      "id": "review-actionable-feedback-b",
+      "fixture": "fixtures/review/feedback/b",
+      "skill": "review-actionable-feedback",
+      "contract": "review",
+      "schema": "skills/review-actionable-feedback/assets/review.schema.json",
+      "prompt": "Synthesize supplied raw review comments into deduplicated, actionable feedback with concrete remediation advice. Consolidate overlapping expiry comments into finding FB-001 with request_changes, or approve when no raw comments remain.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "approve",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-actionable-feedback-routing",
+      "fixture": "fixtures/review/feedback/a",
+      "skill": "review-actionable-feedback",
+      "contract": "review",
+      "schema": "skills/review-actionable-feedback/assets/review.schema.json",
+      "prompt": "Sibling routing request: verify escrow state machine transition invariants directly from code rather than synthesizing raw review feedback. Abstain with comment verdict and empty findings.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "comment",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "test-gap-analysis-a",
+      "fixture": "fixtures/testing/gap_analysis/a",
+      "skill": "test-gap-analysis",
+      "contract": "testing",
+      "schema": "skills/test-gap-analysis/assets/testing.schema.json",
+      "prompt": "Analyze test coverage gaps for component discount_calc under unittest. Report GAP-NEG-SUBTOTAL (exception oracle) and GAP-MAX-CAP (boundary oracle) when unasserted, or return empty test_cases when already covered.",
+      "expected_keys": [
+        "GAP-NEG-SUBTOTAL",
+        "GAP-MAX-CAP"
+      ],
+      "expected_assertions": {
+        "component": "discount_calc",
+        "framework": "unittest",
+        "oracle_types": {
+          "GAP-NEG-SUBTOTAL": "exception",
+          "GAP-MAX-CAP": "boundary"
+        }
+      }
+    },
+    {
+      "id": "test-gap-analysis-b",
+      "fixture": "fixtures/testing/gap_analysis/b",
+      "skill": "test-gap-analysis",
+      "contract": "testing",
+      "schema": "skills/test-gap-analysis/assets/testing.schema.json",
+      "prompt": "Analyze test coverage gaps for component discount_calc under unittest. Report GAP-NEG-SUBTOTAL (exception oracle) and GAP-MAX-CAP (boundary oracle) when unasserted, or return empty test_cases when already covered.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "component": "discount_calc",
+        "framework": "unittest",
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-gap-analysis-routing",
+      "fixture": "fixtures/testing/gap_analysis/a",
+      "skill": "test-gap-analysis",
+      "contract": "testing",
+      "schema": "skills/test-gap-analysis/assets/testing.schema.json",
+      "prompt": "Sibling routing request: execute existing test suites repeatedly to detect shared mutable state leakage rather than cataloging coverage gaps. Abstain with empty test_cases.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-case-generation-a",
+      "fixture": "fixtures/testing/case_generation/a",
+      "skill": "test-case-generation",
+      "contract": "testing",
+      "schema": "skills/test-case-generation/assets/testing.schema.json",
+      "writable_paths": [
+        "tests/test_rate_limiter_*.py"
+      ],
+      "prompt": "Generate automated unit test cases for component rate_limiter under unittest. When burst boundary assertions are missing, write a runnable test module under ./source/tests/ without modifying production code and record verified test case TC-BURST-LIMIT.",
+      "expected_keys": [
+        "TC-BURST-LIMIT"
+      ],
+      "expected_assertions": {
+        "component": "rate_limiter",
+        "framework": "unittest",
+        "oracle_types": {
+          "TC-BURST-LIMIT": "boundary"
+        },
+        "verified": true,
+        "generated_files": [
+          "tests/test_rate_limiter_generated.py"
+        ]
+      }
+    },
+    {
+      "id": "test-case-generation-b",
+      "fixture": "fixtures/testing/case_generation/b",
+      "skill": "test-case-generation",
+      "contract": "testing",
+      "schema": "skills/test-case-generation/assets/testing.schema.json",
+      "prompt": "Generate automated unit test cases for component rate_limiter under unittest. When burst boundary assertions are already present, leave source files unchanged and return empty test_cases.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "component": "rate_limiter",
+        "framework": "unittest",
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-case-generation-routing",
+      "fixture": "fixtures/testing/case_generation/a",
+      "skill": "test-case-generation",
+      "contract": "testing",
+      "schema": "skills/test-case-generation/assets/testing.schema.json",
+      "prompt": "Sibling routing request: produce a read-only coverage gap inventory without writing or generating any test files. Abstain with empty test_cases and leave ./source untouched.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-suite-verification-a",
+      "fixture": "fixtures/testing/suite_verification/a",
+      "skill": "test-suite-verification",
+      "contract": "testing",
+      "schema": "skills/test-suite-verification/assets/testing.schema.json",
+      "prompt": "Verify test suite isolation and failure oracles for component cache_store under unittest. Report VERIFY-STATE-ISOLATION (state oracle, verified=false) when global state leaks across runs, or return empty test_cases when hermetic.",
+      "expected_keys": [
+        "VERIFY-STATE-ISOLATION"
+      ],
+      "expected_assertions": {
+        "component": "cache_store",
+        "framework": "unittest",
+        "oracle_types": {
+          "VERIFY-STATE-ISOLATION": "state"
+        },
+        "verified": false
+      }
+    },
+    {
+      "id": "test-suite-verification-b",
+      "fixture": "fixtures/testing/suite_verification/b",
+      "skill": "test-suite-verification",
+      "contract": "testing",
+      "schema": "skills/test-suite-verification/assets/testing.schema.json",
+      "prompt": "Verify test suite isolation and failure oracles for component cache_store under unittest. Report VERIFY-STATE-ISOLATION (state oracle, verified=false) when global state leaks across runs, or return empty test_cases when hermetic.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "component": "cache_store",
+        "framework": "unittest",
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-suite-verification-routing",
+      "fixture": "fixtures/testing/suite_verification/a",
+      "skill": "test-suite-verification",
+      "contract": "testing",
+      "schema": "skills/test-suite-verification/assets/testing.schema.json",
+      "prompt": "Sibling routing request: author brand-new unit test files for uncovered rate limiter branches rather than verifying existing suite isolation. Abstain with empty test_cases.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "repo-verify-finding-a",
+      "fixture": "fixtures/workflows/verify_finding/a",
+      "skill": "repo-verify-finding",
+      "contract": "workflow",
+      "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
+      "prompt": "Verify candidate finding F-101 in ledger_writer.py against reachable safeguards. Confirm F-101 when appends lack synchronization, or mark refuted when protected by an internal lock.",
+      "expected_keys": [
+        "F-101"
+      ],
+      "expected_assertions": {
+        "finding_id": "F-101",
+        "reproduction_status": "confirmed",
+        "confidence_rating": "high",
+        "safe_controls_all_passed": true
+      }
+    },
+    {
+      "id": "repo-verify-finding-b",
+      "fixture": "fixtures/workflows/verify_finding/b",
+      "skill": "repo-verify-finding",
+      "contract": "workflow",
+      "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
+      "prompt": "Verify candidate finding F-101 in ledger_writer.py against reachable safeguards. Confirm F-101 when appends lack synchronization, or mark refuted when protected by an internal lock.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "finding_id": "F-101",
+        "reproduction_status": "refuted",
+        "confidence_rating": "high",
+        "safe_controls_all_passed": true
+      }
+    },
+    {
+      "id": "repo-verify-finding-routing",
+      "fixture": "fixtures/workflows/verify_finding/a",
+      "skill": "repo-verify-finding",
+      "contract": "workflow",
+      "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
+      "prompt": "Sibling routing request: reconcile finding fingerprints and remediation state transitions across multiple completed runs rather than reproducing candidate F-101. Abstain with finding_id none.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "finding_id": "none",
+        "reproduction_status": "needs-validation"
+      }
+    },
+    {
+      "id": "repo-specify-regression-a",
+      "fixture": "fixtures/workflows/specify_regression/a",
+      "skill": "repo-specify-regression",
+      "contract": "workflow",
+      "schema": "skills/repo-specify-regression/assets/regression.schema.json",
+      "writable_paths": [
+        "tests/test_quota_regression_*.py"
+      ],
+      "prompt": "Specify and write an independent regression test for defect F-201 in quota_ledger.py without modifying production code. Record finding_id F-201 and the generated test module path when overdrafts are unguarded.",
+      "expected_keys": [
+        "F-201"
+      ],
+      "expected_assertions": {
+        "finding_id": "F-201",
+        "test_file": "tests/test_quota_regression_spec.py",
+        "generated_files": [
+          "tests/test_quota_regression_spec.py"
+        ]
+      }
+    },
+    {
+      "id": "repo-specify-regression-b",
+      "fixture": "fixtures/workflows/specify_regression/b",
+      "skill": "repo-specify-regression",
+      "contract": "workflow",
+      "schema": "skills/repo-specify-regression/assets/regression.schema.json",
+      "prompt": "Specify an independent regression test for defect F-201 in quota_ledger.py only if overdrafts lack regression coverage; otherwise leave ./source unchanged and report finding_id none.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "finding_id": "none"
+      }
+    },
+    {
+      "id": "repo-specify-regression-routing",
+      "fixture": "fixtures/workflows/specify_regression/a",
+      "skill": "repo-specify-regression",
+      "contract": "workflow",
+      "schema": "skills/repo-specify-regression/assets/regression.schema.json",
+      "prompt": "Sibling routing request: implement a production code patch directly in quota_ledger.py rather than specifying a regression test. Abstain with finding_id none and do not edit ./source.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "finding_id": "none"
+      }
+    },
+    {
+      "id": "repo-plan-fix-a",
+      "fixture": "fixtures/workflows/plan_fix/a",
+      "skill": "repo-plan-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-plan-fix/assets/plan.schema.json",
+      "prompt": "Plan bounded, acyclic implementation tasks from verified_findings.json. Emit ordered tasks for confirmed findings, or emit a noop placeholder task with empty dependency_order when no findings are confirmed.",
+      "expected_keys": [
+        "T-1",
+        "T-2"
+      ],
+      "expected_assertions": {
+        "dependency_order": [
+          "T-1",
+          "T-2"
+        ],
+        "acyclic": true
+      }
+    },
+    {
+      "id": "repo-plan-fix-b",
+      "fixture": "fixtures/workflows/plan_fix/b",
+      "skill": "repo-plan-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-plan-fix/assets/plan.schema.json",
+      "prompt": "Plan bounded, acyclic implementation tasks from verified_findings.json. Emit ordered tasks for confirmed findings, or emit a noop placeholder task with empty dependency_order when no findings are confirmed.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "dependency_order": [],
+        "acyclic": true
+      }
+    },
+    {
+      "id": "repo-plan-fix-routing",
+      "fixture": "fixtures/workflows/plan_fix/a",
+      "skill": "repo-plan-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-plan-fix/assets/plan.schema.json",
+      "prompt": "Sibling routing request: execute post-patch before/after verification checks to certify a completed fix rather than planning tasks. Abstain with a noop task and empty dependency_order.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "dependency_order": []
+      }
+    },
+    {
+      "id": "repo-apply-fix-a",
+      "fixture": "fixtures/workflows/apply_fix/a",
+      "skill": "repo-apply-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-apply-fix/assets/fix.schema.json",
+      "writable_paths": [
+        "retry_budget.py"
+      ],
+      "prompt": "Apply an authorized bounded fix in retry_budget.py so attempts stop at max_attempts while keeping sibling modules untouched. Record modified file changes and verification execution results.",
+      "expected_keys": [
+        "retry_budget.py"
+      ],
+      "expected_assertions": {
+        "changed_files": [
+          "retry_budget.py"
+        ],
+        "all_executions_passed": true
+      }
+    },
+    {
+      "id": "repo-apply-fix-b",
+      "fixture": "fixtures/workflows/apply_fix/b",
+      "skill": "repo-apply-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-apply-fix/assets/fix.schema.json",
+      "prompt": "Apply an authorized bounded fix in retry_budget.py only if the max_attempts guard is missing; otherwise leave ./source unchanged and report file_changes as none.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "changed_files": []
+      }
+    },
+    {
+      "id": "repo-apply-fix-routing",
+      "fixture": "fixtures/workflows/apply_fix/a",
+      "skill": "repo-apply-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-apply-fix/assets/fix.schema.json",
+      "prompt": "Sibling routing request: draft an implementation task plan and handoff sequence without modifying any source files. Abstain with file_changes none and keep ./source untouched.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "changed_files": []
+      }
+    },
+    {
+      "id": "repo-verify-fix-a",
+      "fixture": "fixtures/workflows/verify_fix/a",
+      "skill": "repo-verify-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-verify-fix/assets/verification.schema.json",
+      "prompt": "Verify the proposed fix from verification_inputs.json. Record result verified-fixed when original failure reproduced, regression passed, and safe controls passed, or safe-control-regression when safe controls broke.",
+      "expected_keys": [
+        "safe-control-regression"
+      ],
+      "expected_assertions": {
+        "original_reproduced": true,
+        "regression_passed": true,
+        "safe_controls_passed": false,
+        "result": "safe-control-regression"
+      }
+    },
+    {
+      "id": "repo-verify-fix-b",
+      "fixture": "fixtures/workflows/verify_fix/b",
+      "skill": "repo-verify-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-verify-fix/assets/verification.schema.json",
+      "prompt": "Verify the proposed fix from verification_inputs.json. Record result verified-fixed when original failure reproduced, regression passed, and safe controls passed, or safe-control-regression when safe controls broke.",
+      "expected_keys": [
+        "verified-fixed"
+      ],
+      "expected_assertions": {
+        "original_reproduced": true,
+        "regression_passed": true,
+        "safe_controls_passed": true,
+        "result": "verified-fixed"
+      }
+    },
+    {
+      "id": "repo-verify-fix-routing",
+      "fixture": "fixtures/workflows/verify_fix/a",
+      "skill": "repo-verify-fix",
+      "contract": "workflow",
+      "schema": "skills/repo-verify-fix/assets/verification.schema.json",
+      "prompt": "Sibling routing request: reproduce an unpatched initial candidate finding on a single baseline revision rather than verifying a proposed fix. Abstain with result abstained.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "result": "abstained"
+      }
+    },
+    {
+      "id": "repo-reconcile-findings-a",
+      "fixture": "fixtures/workflows/reconcile_findings/a",
+      "skill": "repo-reconcile-findings",
+      "contract": "workflow",
+      "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+      "prompt": "Reconcile finding fingerprints and remediation state transitions from reconcile_inputs.json. Transition findings to verified-fixed only when verification proof exists, keep unproved findings open, and list unmapped records.",
+      "expected_keys": [
+        "F-401:verified-fixed",
+        "F-402:open"
+      ],
+      "expected_assertions": {
+        "unmapped_count": 1
+      }
+    },
+    {
+      "id": "repo-reconcile-findings-b",
+      "fixture": "fixtures/workflows/reconcile_findings/b",
+      "skill": "repo-reconcile-findings",
+      "contract": "workflow",
+      "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+      "prompt": "Reconcile finding fingerprints and remediation state transitions from reconcile_inputs.json. Transition findings to verified-fixed only when verification proof exists, keep unproved findings open, and list unmapped records.",
+      "expected_keys": [
+        "F-401:verified-fixed"
+      ],
+      "expected_assertions": {
+        "unmapped_count": 0
+      }
+    },
+    {
+      "id": "repo-reconcile-findings-routing",
+      "fixture": "fixtures/workflows/reconcile_findings/a",
+      "skill": "repo-reconcile-findings",
+      "contract": "workflow",
+      "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+      "prompt": "Sibling routing request: specify a standalone failing regression test for a single defect rather than reconciling cross-run remediation records. Abstain with empty matches, transitions, and unmapped_records.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "unmapped_count": 0
+      }
+    },
+    {
+      "id": "arch-data-evolution-a",
+      "fixture": "fixtures/architecture/data_evolution/a",
       "skill": "arch-data-evolution",
-      "prompt": "Evaluate zero-downtime rolling schema compatibility in this migration. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
+      "contract": "architecture",
+      "schema": "skills/arch-data-evolution/assets/architecture.schema.json",
+      "prompt": "Plan zero-downtime rolling schema evolution for migration.sql. Report storage boundary orders-rolling-schema and phased migration decision ADR-MIGRATE-1 when destructive column renames break concurrent N-1 instances, or return empty boundaries and decisions when already additive.",
+      "expected_keys": [
+        "orders-rolling-schema",
+        "ADR-MIGRATE-1"
+      ],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [
+          "orders-rolling-schema"
+        ],
+        "boundary_types": {
+          "orders-rolling-schema": "storage"
+        },
+        "decision_ids": [
+          "ADR-MIGRATE-1"
+        ]
+      }
     },
     {
-      "id": "api-compatibility-b",
-      "fixture": "fixtures/api_compatibility/b",
-      "skill": "review-api-compatibility",
-      "prompt": "Review public v1 wire and caller compatibility in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
-    },
-    {
-      "id": "flakiness-isolation-b",
-      "fixture": "fixtures/flakiness_isolation/b",
-      "skill": "test-flakiness-isolation",
-      "prompt": "Isolate async timing and shared-state test flakiness in this test module. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
-    },
-    {
-      "id": "data-evolution-routing",
-      "fixture": "fixtures/data_evolution/a",
+      "id": "arch-data-evolution-b",
+      "fixture": "fixtures/architecture/data_evolution/b",
       "skill": "arch-data-evolution",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not inspect the supplied source; return no findings.",
-      "expected_keys": []
+      "contract": "architecture",
+      "schema": "skills/arch-data-evolution/assets/architecture.schema.json",
+      "prompt": "Plan zero-downtime rolling schema evolution for migration.sql. Report storage boundary orders-rolling-schema and phased migration decision ADR-MIGRATE-1 when destructive column renames break concurrent N-1 instances, or return empty boundaries and decisions when already additive.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [],
+        "decision_ids": []
+      }
     },
     {
-      "id": "api-compatibility-routing",
-      "fixture": "fixtures/api_compatibility/a",
+      "id": "arch-data-evolution-routing",
+      "fixture": "fixtures/architecture/data_evolution/a",
+      "skill": "arch-data-evolution",
+      "contract": "architecture",
+      "schema": "skills/arch-data-evolution/assets/architecture.schema.json",
+      "prompt": "Sibling routing request: specify HTTP timeout budgets, retry jitter, and bulkhead capacity limits for outbound payment RPCs rather than planning database schema evolution. Abstain with draft status and empty lists.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-integration-contracts-a",
+      "fixture": "fixtures/architecture/integration_contracts/a",
+      "skill": "arch-integration-contracts",
+      "contract": "architecture",
+      "schema": "skills/arch-integration-contracts/assets/architecture.schema.json",
+      "prompt": "Specify cross-service integration contracts and idempotency invariants for webhook_publisher.py. Report service boundary order-webhook-contract and decision ADR-CONTRACT-1 when raw ORM state is emitted without versioned DTOs or idempotency keys, or return empty lists when decoupled.",
+      "expected_keys": [
+        "order-webhook-contract",
+        "ADR-CONTRACT-1"
+      ],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [
+          "order-webhook-contract"
+        ],
+        "boundary_types": {
+          "order-webhook-contract": "service"
+        },
+        "decision_ids": [
+          "ADR-CONTRACT-1"
+        ]
+      }
+    },
+    {
+      "id": "arch-integration-contracts-b",
+      "fixture": "fixtures/architecture/integration_contracts/b",
+      "skill": "arch-integration-contracts",
+      "contract": "architecture",
+      "schema": "skills/arch-integration-contracts/assets/architecture.schema.json",
+      "prompt": "Specify cross-service integration contracts and idempotency invariants for webhook_publisher.py. Report service boundary order-webhook-contract and decision ADR-CONTRACT-1 when raw ORM state is emitted without versioned DTOs or idempotency keys, or return empty lists when decoupled.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-integration-contracts-routing",
+      "fixture": "fixtures/architecture/integration_contracts/a",
+      "skill": "arch-integration-contracts",
+      "contract": "architecture",
+      "schema": "skills/arch-integration-contracts/assets/architecture.schema.json",
+      "prompt": "Sibling routing request: plan expand-backfill-contract SQL migration phases for an orders table column rename rather than specifying service webhook contracts. Abstain with draft status and empty lists.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-operational-resilience-a",
+      "fixture": "fixtures/architecture/operational_resilience/a",
+      "skill": "arch-operational-resilience",
+      "contract": "architecture",
+      "schema": "skills/arch-operational-resilience/assets/architecture.schema.json",
+      "prompt": "Specify timeout budgets, retry bounds, and bulkhead isolation for payment_client.py. Report service boundary payment-gateway-bulkhead and decision ADR-RESIL-1 when outbound calls lack socket timeouts and retry caps, or return empty lists when bounded.",
+      "expected_keys": [
+        "payment-gateway-bulkhead",
+        "ADR-RESIL-1"
+      ],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [
+          "payment-gateway-bulkhead"
+        ],
+        "boundary_types": {
+          "payment-gateway-bulkhead": "service"
+        },
+        "decision_ids": [
+          "ADR-RESIL-1"
+        ]
+      }
+    },
+    {
+      "id": "arch-operational-resilience-b",
+      "fixture": "fixtures/architecture/operational_resilience/b",
+      "skill": "arch-operational-resilience",
+      "contract": "architecture",
+      "schema": "skills/arch-operational-resilience/assets/architecture.schema.json",
+      "prompt": "Specify timeout budgets, retry bounds, and bulkhead isolation for payment_client.py. Report service boundary payment-gateway-bulkhead and decision ADR-RESIL-1 when outbound calls lack socket timeouts and retry caps, or return empty lists when bounded.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "accepted",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "arch-operational-resilience-routing",
+      "fixture": "fixtures/architecture/operational_resilience/a",
+      "skill": "arch-operational-resilience",
+      "contract": "architecture",
+      "schema": "skills/arch-operational-resilience/assets/architecture.schema.json",
+      "prompt": "Sibling routing request: define versioned JSON event envelopes and producer-consumer schema evolution rules rather than operational timeout and bulkhead architecture. Abstain with draft status and empty lists.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "status": "draft",
+        "boundary_names": [],
+        "decision_ids": []
+      }
+    },
+    {
+      "id": "review-api-compatibility-a",
+      "fixture": "fixtures/review/api_compatibility/a",
       "skill": "review-api-compatibility",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not inspect the supplied source; return no findings.",
-      "expected_keys": []
+      "contract": "review",
+      "schema": "skills/review-api-compatibility/assets/review.schema.json",
+      "prompt": "Review public v1 wire payload and caller signature compatibility in invoice_api.py. Report finding COMPAT-001 with request_changes when existing wire keys or parameter defaults are removed, or approve when backward compatible.",
+      "expected_keys": [
+        "COMPAT-001"
+      ],
+      "expected_assertions": {
+        "verdict": "request_changes",
+        "finding_ids": [
+          "COMPAT-001"
+        ],
+        "severities": {
+          "COMPAT-001": "high"
+        },
+        "files": [
+          "invoice_api.py"
+        ]
+      }
     },
     {
-      "id": "flakiness-isolation-routing",
-      "fixture": "fixtures/flakiness_isolation/a",
+      "id": "review-api-compatibility-b",
+      "fixture": "fixtures/review/api_compatibility/b",
+      "skill": "review-api-compatibility",
+      "contract": "review",
+      "schema": "skills/review-api-compatibility/assets/review.schema.json",
+      "prompt": "Review public v1 wire payload and caller signature compatibility in invoice_api.py. Report finding COMPAT-001 with request_changes when existing wire keys or parameter defaults are removed, or approve when backward compatible.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "approve",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-api-compatibility-routing",
+      "fixture": "fixtures/review/api_compatibility/a",
+      "skill": "review-api-compatibility",
+      "contract": "review",
+      "schema": "skills/review-api-compatibility/assets/review.schema.json",
+      "prompt": "Sibling routing request: review async lock acquisition ordering and cancellation races in session_cache.py rather than public API wire compatibility. Abstain with comment verdict and empty findings.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "comment",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-security-boundaries-a",
+      "fixture": "fixtures/review/security_boundaries/a",
+      "skill": "review-security-boundaries",
+      "contract": "review",
+      "schema": "skills/review-security-boundaries/assets/review.schema.json",
+      "prompt": "Review tenant authorization and filesystem path confinement in download_handler.py. Report finding SEC-001 with request_changes when tenant ownership or export root confinement is bypassed, or approve when enforced.",
+      "expected_keys": [
+        "SEC-001"
+      ],
+      "expected_assertions": {
+        "verdict": "request_changes",
+        "finding_ids": [
+          "SEC-001"
+        ],
+        "severities": {
+          "SEC-001": "critical"
+        },
+        "files": [
+          "download_handler.py"
+        ]
+      }
+    },
+    {
+      "id": "review-security-boundaries-b",
+      "fixture": "fixtures/review/security_boundaries/b",
+      "skill": "review-security-boundaries",
+      "contract": "review",
+      "schema": "skills/review-security-boundaries/assets/review.schema.json",
+      "prompt": "Review tenant authorization and filesystem path confinement in download_handler.py. Report finding SEC-001 with request_changes when tenant ownership or export root confinement is bypassed, or approve when enforced.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "approve",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-security-boundaries-routing",
+      "fixture": "fixtures/review/security_boundaries/a",
+      "skill": "review-security-boundaries",
+      "contract": "review",
+      "schema": "skills/review-security-boundaries/assets/review.schema.json",
+      "prompt": "Sibling routing request: check public SDK wire field deprecations and default parameter compatibility rather than security trust boundaries. Abstain with comment verdict and empty findings.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "comment",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-concurrency-hazards-a",
+      "fixture": "fixtures/review/concurrency_hazards/a",
+      "skill": "review-concurrency-hazards",
+      "contract": "review",
+      "schema": "skills/review-concurrency-hazards/assets/review.schema.json",
+      "prompt": "Review async lock scope and stale publication hazards in session_cache.py. Report finding CONC-001 with request_changes when asyncio.Lock is held across remote network awaits, or approve when released with generation guards.",
+      "expected_keys": [
+        "CONC-001"
+      ],
+      "expected_assertions": {
+        "verdict": "request_changes",
+        "finding_ids": [
+          "CONC-001"
+        ],
+        "severities": {
+          "CONC-001": "high"
+        },
+        "files": [
+          "session_cache.py"
+        ]
+      }
+    },
+    {
+      "id": "review-concurrency-hazards-b",
+      "fixture": "fixtures/review/concurrency_hazards/b",
+      "skill": "review-concurrency-hazards",
+      "contract": "review",
+      "schema": "skills/review-concurrency-hazards/assets/review.schema.json",
+      "prompt": "Review async lock scope and stale publication hazards in session_cache.py. Report finding CONC-001 with request_changes when asyncio.Lock is held across remote network awaits, or approve when released with generation guards.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "approve",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "review-concurrency-hazards-routing",
+      "fixture": "fixtures/review/concurrency_hazards/a",
+      "skill": "review-concurrency-hazards",
+      "contract": "review",
+      "schema": "skills/review-concurrency-hazards/assets/review.schema.json",
+      "prompt": "Sibling routing request: audit tenant authorization checks and path traversal confinement in file download endpoints rather than reviewing concurrency hazards. Abstain with comment verdict and empty findings.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "verdict": "comment",
+        "finding_ids": []
+      }
+    },
+    {
+      "id": "test-contract-harnesses-a",
+      "fixture": "fixtures/testing/contract_harnesses/a",
+      "skill": "test-contract-harnesses",
+      "contract": "testing",
+      "schema": "skills/test-contract-harnesses/assets/testing.schema.json",
+      "prompt": "Assess producer-consumer contract harness fidelity for component order_producer under unittest. Report TC-CONTRACT-DRIFT (output oracle, verified=false) when hand-rolled mocks drift from producer wire keys, or return empty test_cases when bound to live producer output.",
+      "expected_keys": [
+        "TC-CONTRACT-DRIFT"
+      ],
+      "expected_assertions": {
+        "component": "order_producer",
+        "framework": "unittest",
+        "oracle_types": {
+          "TC-CONTRACT-DRIFT": "output"
+        },
+        "verified": false
+      }
+    },
+    {
+      "id": "test-contract-harnesses-b",
+      "fixture": "fixtures/testing/contract_harnesses/b",
+      "skill": "test-contract-harnesses",
+      "contract": "testing",
+      "schema": "skills/test-contract-harnesses/assets/testing.schema.json",
+      "prompt": "Assess producer-consumer contract harness fidelity for component order_producer under unittest. Report TC-CONTRACT-DRIFT (output oracle, verified=false) when hand-rolled mocks drift from producer wire keys, or return empty test_cases when bound to live producer output.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "component": "order_producer",
+        "framework": "unittest",
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-contract-harnesses-routing",
+      "fixture": "fixtures/testing/contract_harnesses/a",
+      "skill": "test-contract-harnesses",
+      "contract": "testing",
+      "schema": "skills/test-contract-harnesses/assets/testing.schema.json",
+      "prompt": "Sibling routing request: isolate fixed time.sleep races and shared mutable globals in a flaky worker test rather than designing producer-consumer contract harnesses. Abstain with empty test_cases.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-property-invariants-a",
+      "fixture": "fixtures/testing/property_invariants/a",
+      "skill": "test-property-invariants",
+      "contract": "testing",
+      "schema": "skills/test-property-invariants/assets/testing.schema.json",
+      "prompt": "Specify deterministic property-based invariant checks for component slug_codec under unittest. Report PROP-IDEMPOTENT-SLUG (output oracle, verified=false) when only single-input happy paths exist, or return empty test_cases when seeded idempotency invariants are covered.",
+      "expected_keys": [
+        "PROP-IDEMPOTENT-SLUG"
+      ],
+      "expected_assertions": {
+        "component": "slug_codec",
+        "framework": "unittest",
+        "oracle_types": {
+          "PROP-IDEMPOTENT-SLUG": "output"
+        },
+        "verified": false
+      }
+    },
+    {
+      "id": "test-property-invariants-b",
+      "fixture": "fixtures/testing/property_invariants/b",
+      "skill": "test-property-invariants",
+      "contract": "testing",
+      "schema": "skills/test-property-invariants/assets/testing.schema.json",
+      "prompt": "Specify deterministic property-based invariant checks for component slug_codec under unittest. Report PROP-IDEMPOTENT-SLUG (output oracle, verified=false) when only single-input happy paths exist, or return empty test_cases when seeded idempotency invariants are covered.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "component": "slug_codec",
+        "framework": "unittest",
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-property-invariants-routing",
+      "fixture": "fixtures/testing/property_invariants/a",
+      "skill": "test-property-invariants",
+      "contract": "testing",
+      "schema": "skills/test-property-invariants/assets/testing.schema.json",
+      "prompt": "Sibling routing request: verify wire schema compatibility between an event producer and downstream mock consumers rather than specifying algebraic property invariants. Abstain with empty test_cases.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-flakiness-isolation-a",
+      "fixture": "fixtures/testing/flakiness_isolation/a",
       "skill": "test-flakiness-isolation",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not inspect the supplied source; return no findings.",
-      "expected_keys": []
+      "contract": "testing",
+      "schema": "skills/test-flakiness-isolation/assets/testing.schema.json",
+      "prompt": "Isolate timing and shared-state nondeterminism in component test_worker under unittest. Report FLAKE-SLEEP-POLL (state oracle, verified=false) when assertions rely on fixed sleeps and module globals, or return empty test_cases when synchronized deterministically.",
+      "expected_keys": [
+        "FLAKE-SLEEP-POLL"
+      ],
+      "expected_assertions": {
+        "component": "test_worker",
+        "framework": "unittest",
+        "oracle_types": {
+          "FLAKE-SLEEP-POLL": "state"
+        },
+        "verified": false
+      }
+    },
+    {
+      "id": "test-flakiness-isolation-b",
+      "fixture": "fixtures/testing/flakiness_isolation/b",
+      "skill": "test-flakiness-isolation",
+      "contract": "testing",
+      "schema": "skills/test-flakiness-isolation/assets/testing.schema.json",
+      "prompt": "Isolate timing and shared-state nondeterminism in component test_worker under unittest. Report FLAKE-SLEEP-POLL (state oracle, verified=false) when assertions rely on fixed sleeps and module globals, or return empty test_cases when synchronized deterministically.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "component": "test_worker",
+        "framework": "unittest",
+        "test_case_ids": []
+      }
+    },
+    {
+      "id": "test-flakiness-isolation-routing",
+      "fixture": "fixtures/testing/flakiness_isolation/a",
+      "skill": "test-flakiness-isolation",
+      "contract": "testing",
+      "schema": "skills/test-flakiness-isolation/assets/testing.schema.json",
+      "prompt": "Sibling routing request: design seeded round-trip and idempotency property tests for a pure parser rather than isolating flaky test concurrency. Abstain with empty test_cases.",
+      "expected_keys": [],
+      "expected_assertions": {
+        "test_case_ids": []
+      }
     }
   ]
 }

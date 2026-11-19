@@ -10,7 +10,7 @@
         "Specify bulkhead boundaries, bounded queues, deadline invariants, and degradation decisions in architecture.json.",
         "Keep repository code and deployment configs unchanged without explicit user permission."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral architecture task without revealing expected boundaries or decisions."
     },
     {
       "id": "arch-operational-resilience-safe",
@@ -24,11 +24,13 @@
     },
     {
       "id": "arch-operational-resilience-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Plan an expand-backfill-contract database column migration and dual-read compatibility across rolling replicas.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets arch-data-evolution rather than arch-operational-resilience.",
+        "Defer or route to arch-data-evolution instead of forcing an out-of-scope software-architecture pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform an architecture specification."
+      "evaluation_note": "Near-neighbor sibling routing check within software-architecture; verify routing to arch-data-evolution instead of arch-operational-resilience.",
+      "sibling_skill": "arch-data-evolution"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

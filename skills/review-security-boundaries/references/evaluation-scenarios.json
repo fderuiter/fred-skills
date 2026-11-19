@@ -24,11 +24,13 @@
     },
     {
       "id": "review-security-boundaries-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Inspect this pull request diff for lock-ordering deadlocks and async await interleavings across shared state.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets review-concurrency-hazards rather than review-security-boundaries.",
+        "Defer or route to review-concurrency-hazards instead of forcing an out-of-scope code-review pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform a code review."
+      "evaluation_note": "Near-neighbor sibling routing check within code-review; verify routing to review-concurrency-hazards instead of review-security-boundaries.",
+      "sibling_skill": "review-concurrency-hazards"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

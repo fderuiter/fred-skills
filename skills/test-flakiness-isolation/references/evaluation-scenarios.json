@@ -10,7 +10,7 @@
         "Specify deterministic synchronization barriers, per-test state isolation, and ephemeral port binding in testing.json without masking failures behind retries.",
         "Keep repository files untouched unless explicit user write permission is granted."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral testing task without revealing expected test specifications."
     },
     {
       "id": "test-flakiness-isolation-safe",
@@ -24,11 +24,13 @@
     },
     {
       "id": "test-flakiness-isolation-routing",
-      "prompt": "Update the copyright year in the LICENSE header.",
+      "prompt": "Design shared JSON Schema producer-consumer contract test harnesses to catch mock drift across HTTP boundaries.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets test-contract-harnesses rather than test-flakiness-isolation.",
+        "Defer or route to test-contract-harnesses instead of forcing an out-of-scope automated-testing pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to triage flaky tests."
+      "evaluation_note": "Near-neighbor sibling routing check within automated-testing; verify routing to test-contract-harnesses instead of test-flakiness-isolation.",
+      "sibling_skill": "test-contract-harnesses"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

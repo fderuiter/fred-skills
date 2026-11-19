@@ -19,4 +19,4 @@ Standard protocol for differential pull request analysis, API compatibility chec
 
 1. **Change & Contract Discovery**: Resolve diff hunks, map changed symbols and public contracts, and inventory affected trust, concurrency, and persistence boundaries.
 2. **Specialist Verification**: Trace adversarial schedules, boundary crossings, compatibility skew, and invariant breaks while recording refuted candidates as safe controls.
-3. **Synthesis & Handoff**: Validate `review.json` against [../assets/review.schema.json](../assets/review.schema.json), format human summaries with [../assets/review-template.md](../assets/review-template.md), and emit continuation records via [../assets/handoff-template.md](../assets/handoff-template.md).
+3. **Synthesis & Handoff**: Validate `review.json` against `assets/review.schema.json`, format human summaries with `assets/review-template.md`, and emit continuation records via `assets/handoff-template.md`.

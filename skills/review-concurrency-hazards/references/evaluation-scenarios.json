@@ -24,11 +24,13 @@
     },
     {
       "id": "review-concurrency-hazards-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Review this pull request diff for breaking OpenAPI wire schema removals and HTTP response status changes.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets review-api-compatibility rather than review-concurrency-hazards.",
+        "Defer or route to review-api-compatibility instead of forcing an out-of-scope code-review pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform a code review."
+      "evaluation_note": "Near-neighbor sibling routing check within code-review; verify routing to review-api-compatibility instead of review-concurrency-hazards.",
+      "sibling_skill": "review-api-compatibility"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
