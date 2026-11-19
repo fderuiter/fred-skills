@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -19,6 +20,7 @@ from typing import Any
 import jsonschema
 import yaml
 from fredlib import vetting
+from fredlib.common import FredCliError, atomic_json, read_json_object
 from skill_tools import (
     ROOT,
     estimate_tokens,
@@ -1419,37 +1421,43 @@ def resolve_new_skills(
 
 
 def _load_attempt_ledger(ledger_path: Path) -> dict[str, dict[str, Any]]:
-    if not ledger_path.is_file():
-        return {}
     try:
-        payload = json.loads(ledger_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
+        payload = read_json_object(
+            ledger_path,
+            label="Validation attempt ledger",
+            hint=f"Fix or delete corrupted '{ledger_path}', or pass --no-ledger.",
+        )
+    except FredCliError as exc:
+        if exc.code == "missing_file":
+            return {}
+        raise
     skills_obj = payload.get("skills")
     if not isinstance(skills_obj, dict):
-        return {}
-    return {
-        str(k): dict(v)
-        for k, v in skills_obj.items()
-        if isinstance(k, str) and isinstance(v, dict)
-    }
+        raise FredCliError(
+            f"Malformed validation attempt ledger '{ledger_path}': expected 'skills' object",
+            code="invalid_ledger",
+            hint=f"Ensure '{ledger_path}' contains a JSON object under 'skills', or delete it to reset.",
+        )
+    result: dict[str, dict[str, Any]] = {}
+    for k, v in skills_obj.items():
+        if not isinstance(k, str) or not isinstance(v, dict):
+            raise FredCliError(
+                f"Malformed validation attempt ledger '{ledger_path}': entry '{k}' must be an object",
+                code="invalid_ledger",
+                hint=f"Fix or delete corrupted '{ledger_path}', or pass --no-ledger.",
+            )
+        result[k] = dict(v)
+    return result
 
 
 def _save_attempt_ledger(
     ledger_path: Path, entries: Mapping[str, dict[str, Any]]
 ) -> None:
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": "1.0",
         "skills": {k: entries[k] for k in sorted(entries)},
     }
-    ledger_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic_json(ledger_path, payload)
 
 
 def format_telemetry_markdown(telemetry: Mapping[str, Any]) -> str:
@@ -1931,12 +1939,18 @@ def _print_telemetry_report(
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
-    errors, telemetry = validate_with_telemetry(
-        root=args.root,
-        base_ref=args.base_ref,
-        ledger_path=args.ledger,
-        record_attempts=not args.no_ledger,
-    )
+    try:
+        errors, telemetry = validate_with_telemetry(
+            root=args.root,
+            base_ref=args.base_ref,
+            ledger_path=args.ledger,
+            record_attempts=not args.no_ledger,
+        )
+    except FredCliError as exc:
+        print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
+        if exc.hint:
+            print(f"Hint: {exc.hint}", file=sys.stderr)
+        return 2
     for error in errors:
         print(error)
 

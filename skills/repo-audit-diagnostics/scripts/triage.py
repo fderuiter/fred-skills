@@ -2180,6 +2180,35 @@ def _find_cited_lines_for_bundle(
     return cited
 
 
+def _read_workspace_json_dict(
+    path: Path, label: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read an optional workspace JSON object, logging a scrubbed warning on corruption or I/O failure."""
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        reason = f"unable to read workspace {label} '{path}': {exc}"
+        print(scrub_credentials(f"Warning: {reason}"), file=sys.stderr)
+        return None, reason
+    try:
+        loaded = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        reason = (
+            f"malformed JSON in workspace {label} '{path}' "
+            f"(line {exc.lineno}, column {exc.colno}): {exc.msg}"
+        )
+        print(scrub_credentials(f"Warning: {reason}"), file=sys.stderr)
+        return None, reason
+    if not isinstance(loaded, dict):
+        reason = (
+            f"expected JSON object in workspace {label} '{path}', "
+            f"got {type(loaded).__name__}"
+        )
+        print(scrub_credentials(f"Warning: {reason}"), file=sys.stderr)
+        return None, reason
+    return loaded, None
+
+
 def generate_diagnostic_bundle(
     transcript_path: Path,
     workspace_dir: Path | None = None,
@@ -2194,13 +2223,15 @@ def generate_diagnostic_bundle(
     # Read workspace state if available
     run_data = None
     audit_data = None
+    workspace_warnings: list[str] = []
     if workspace_dir:
         run_file = workspace_dir / "run.json"
         if run_file.is_file():
-            with contextlib.suppress(OSError, ValueError):
-                loaded_run = json.loads(run_file.read_text(encoding="utf-8"))
-                if isinstance(loaded_run, dict):
-                    run_data = loaded_run
+            loaded_run, run_warn = _read_workspace_json_dict(run_file, "run.json")
+            if loaded_run is not None:
+                run_data = loaded_run
+            elif run_warn:
+                workspace_warnings.append(run_warn)
         _, expected_artifact, _ = _resolve_recovery_suite(run_data, workspace_dir, None)
         candidate_files = [expected_artifact] + [
             name
@@ -2210,13 +2241,14 @@ def generate_diagnostic_bundle(
         for fname in candidate_files:
             artifact_file = workspace_dir / fname
             if artifact_file.is_file():
-                with contextlib.suppress(OSError, ValueError):
-                    loaded_artifact = json.loads(
-                        artifact_file.read_text(encoding="utf-8")
-                    )
-                    if isinstance(loaded_artifact, dict):
-                        audit_data = loaded_artifact
-                        break
+                loaded_artifact, art_warn = _read_workspace_json_dict(
+                    artifact_file, fname
+                )
+                if loaded_artifact is not None:
+                    audit_data = loaded_artifact
+                    break
+                if art_warn:
+                    workspace_warnings.append(art_warn)
 
     resolved_session_id = (
         session_id
@@ -2246,6 +2278,10 @@ def generate_diagnostic_bundle(
         workspace_dir,
         specialist_skill=correlated.get("specialist_skill"),
     )
+    for warn in workspace_warnings:
+        recovery["instructions"].append(
+            f"{len(recovery['instructions']) + 1}. Repair corrupted workspace metadata before resuming ({warn})."
+        )
     recovery["instructions"] = [
         scrub_credentials(inst) for inst in recovery.get("instructions", [])
     ]
@@ -2477,9 +2513,18 @@ def _inspect_transcript_metadata(path: Path) -> dict[str, Any]:
     cwds: list[str] = []
     is_sidechain = "subagents" in {p.lower() for p in path.parts}
     raw_text = ""
+    read_error: str | None = None
 
-    with contextlib.suppress(OSError):
+    try:
         raw_text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        read_error = str(exc)
+        print(
+            scrub_credentials(
+                f"Warning: unable to read candidate transcript '{path}': {exc}"
+            ),
+            file=sys.stderr,
+        )
 
     for line in raw_text.splitlines():
         stripped = line.strip()
@@ -2532,6 +2577,7 @@ def _inspect_transcript_metadata(path: Path) -> dict[str, Any]:
         "cwds": cwds,
         "is_sidechain": is_sidechain,
         "raw_text": raw_text,
+        "read_error": read_error,
     }
 
 
@@ -2597,13 +2643,13 @@ def discover_transcript_details(
     scored_matches: list[tuple[tuple[Any, ...], Path, str, str]] = []
 
     run_data: dict[str, Any] = {}
+    run_parse_warning: str | None = None
     if workspace_dir and workspace_dir.is_dir():
         run_file = workspace_dir / "run.json"
         if run_file.is_file():
-            with contextlib.suppress(OSError, ValueError):
-                loaded = json.loads(run_file.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    run_data = loaded
+            loaded, run_parse_warning = _read_workspace_json_dict(run_file, "run.json")
+            if loaded is not None:
+                run_data = loaded
 
     run_id = run_data.get("run_id") if isinstance(run_data.get("run_id"), str) else None
     repo_path = (
@@ -2627,7 +2673,31 @@ def discover_transcript_details(
                         ws_candidates.append(extra)
 
     for cand in ws_candidates:
-        mtime = cand.stat().st_mtime
+        meta = _inspect_transcript_metadata(cand)
+        if meta.get("read_error"):
+            rejected.append(
+                {
+                    "path": str(cand),
+                    "reason": f"unreadable transcript ({meta['read_error']})",
+                }
+            )
+            continue
+        try:
+            mtime = cand.stat().st_mtime
+        except OSError as exc:
+            print(
+                scrub_credentials(
+                    f"Warning: unable to stat candidate transcript '{cand}': {exc}"
+                ),
+                file=sys.stderr,
+            )
+            rejected.append(
+                {
+                    "path": str(cand),
+                    "reason": f"unreadable transcript ({exc})",
+                }
+            )
+            continue
         name_rank = (
             -CANDIDATE_TRANSCRIPTS.index(cand.name)
             if cand.name in CANDIDATE_TRANSCRIPTS
@@ -2636,7 +2706,6 @@ def discover_transcript_details(
         root_rank = 0 if (workspace_dir and cand.parent == workspace_dir) else -1
 
         if session_id:
-            meta = _inspect_transcript_metadata(cand)
             matched_sid, sid_reason = _matches_session_id(cand, meta, session_id)
             if not matched_sid:
                 rejected.append(
@@ -2669,7 +2738,30 @@ def discover_transcript_details(
 
     for host_name, hpath in _find_host_transcript_files(resolved_home):
         meta = _inspect_transcript_metadata(hpath)
-        mtime = hpath.stat().st_mtime
+        if meta.get("read_error"):
+            rejected.append(
+                {
+                    "path": str(hpath),
+                    "reason": f"unreadable transcript ({meta['read_error']})",
+                }
+            )
+            continue
+        try:
+            mtime = hpath.stat().st_mtime
+        except OSError as exc:
+            print(
+                scrub_credentials(
+                    f"Warning: unable to stat candidate transcript '{hpath}': {exc}"
+                ),
+                file=sys.stderr,
+            )
+            rejected.append(
+                {
+                    "path": str(hpath),
+                    "reason": f"unreadable transcript ({exc})",
+                }
+            )
+            continue
         not_sidechain = 0 if meta["is_sidechain"] else 1
 
         if session_id:
@@ -2778,7 +2870,12 @@ def discover_transcript_details(
             reasons.append(f"repository path '{repo_path}'")
 
         if not reasons:
-            if not run_data:
+            if run_parse_warning:
+                reason = (
+                    "no matching workspace reference and workspace run.json "
+                    f"could not be parsed ({run_parse_warning})"
+                )
+            elif not run_data:
                 reason = "no matching workspace reference and workspace lacks run.json metadata"
             else:
                 reason = f"no matching run_id ({run_id or 'none'}) or repository path ({repo_path or 'none'})"
