@@ -10,7 +10,7 @@
         "Assign clear severity classifications (critical, high, medium, low, advisory).",
         "Provide concrete code diffs or implementation patterns to assist remediation."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw diff context and a neutral code-review task without revealing expected review findings."
     },
     {
       "id": "review-actionable-feedback-safe",
@@ -21,15 +21,17 @@
         "Summarize overall review verdict with actionable next steps.",
         "Format review feedback conforming to the review schema."
       ],
-      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+      "evaluation_note": "Construct a raw backward-compatible change control; keep expected review outcomes out of the execution prompt."
     },
     {
       "id": "review-actionable-feedback-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Inspect the pull request diff hunks to map altered function signatures and downstream caller blast radius across modules.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets review-diff-analysis rather than review-actionable-feedback.",
+        "Defer or route to review-diff-analysis instead of forcing an out-of-scope code-review pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+      "evaluation_note": "Near-neighbor sibling routing check within code-review; verify routing to review-diff-analysis instead of review-actionable-feedback.",
+      "sibling_skill": "review-diff-analysis"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

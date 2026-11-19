@@ -1,0 +1,11 @@
+{
+  "decision_needed": false,
+  "id": "ADR-001",
+  "topic": "Settled internal logging format",
+  "options": [
+    "structured-json"
+  ],
+  "constraints": [
+    "already standardized across services"
+  ]
+}

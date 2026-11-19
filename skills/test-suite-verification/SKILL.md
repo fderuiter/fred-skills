@@ -21,3 +21,4 @@ Confirm tests execute reliably, fail on seeded regressions, and leave no residua
 Record execution verification with the [testing template](assets/testing-template.md).
 Verify results payload adheres to the [testing schema](assets/testing.schema.json).
 Produce structured verification reports with pass/fail logs and execution evidence.
+Do not modify production application code without explicit user authorization, and never claim a test suite ran unless it actually executed.

@@ -21,3 +21,4 @@ Ground decisions in observed codebase constraints and explicit requirements.
 Use the [architecture template](assets/architecture-template.md) to format records.
 Verify conformance against the [architecture schema](assets/architecture.schema.json).
 Report findings with concrete source locations and rationale.
+Do not modify application code or publish external records without explicit user authorization; never claim evaluations or tests ran unless actually executed.
