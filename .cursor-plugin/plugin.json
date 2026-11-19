@@ -12,6 +12,7 @@
     "./skills/arch-decision-record",
     "./skills/repo-apply-fix",
     "./skills/repo-audit-accessibility-state",
+    "./skills/repo-audit-agent-configs",
     "./skills/repo-audit-api-consistency",
     "./skills/repo-audit-architecture",
     "./skills/repo-audit-behavioral-contracts",

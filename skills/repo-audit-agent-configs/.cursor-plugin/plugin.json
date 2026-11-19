@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-agent-configs",
+  "description": "Audit repository agent configurations, skill bundles, instruction files, and MCP server definitions with code evidence and counterexamples. Use when inspecting .claude/skills, .agents/skills, .cursor/skills, AGENTS.md, .cursorrules, or .mcp.json for prompt injection, unvetted scripts, or unsafe agent tool permissions.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

@@ -47,6 +47,8 @@ are prioritization hypotheses; they contain no claims about today's repositories
 ## Install, update, remove, or roll back
 
 ```sh
+python scripts/fred.py vet /path/to/skill
+python scripts/fred.py vet /path/to/project
 python scripts/fred.py installed --destination /path/to/project --host claude-code
 python scripts/fred.py installed --destination /path/to/project --check
 python scripts/fred.py install --destination /path/to/project --host claude-code --pack starter --dry-run
@@ -61,10 +63,10 @@ python scripts/fred.py remove --destination /path/to/project --host claude-code 
 python scripts/fred.py rollback --destination /path/to/project --host claude-code
 ```
 
-`--destination` is optional and defaults to the current working directory for
+`vet` statically scans a skill directory, configuration file, or repository root (`AGENTS.md`, `.cursorrules`, `.mcp.json`, and host skill paths) offline for network calls, shell execution, undeclared credential reads, hidden Unicode, HTML comments, prompt overrides, and remote images, exiting `1` when findings exist. `--destination` is optional on lifecycle commands and defaults to the current working directory for
 project scope or user home for `--scope user`. `installed` hashes managed packages on disk
-to report `tracked`, `modified`, `missing`, and local `untracked` skills; `--check` exits `1`
-when drift or `operation.lock` is present. Preview targets with `--dry-run`. Host paths and
+to report `tracked`, `modified`, `missing`, and local `untracked` skills (marking risky untracked skills unhealthy); `--check` exits `1`
+when drift, risky untracked skills, or `operation.lock` is present. Preview targets with `--dry-run`. Host paths and
 primary documentation sources are listed in [catalog/hosts.json](../catalog/hosts.json).
 The installer copies packages; host loading, auto-activation, context precedence, and model
 behavior still need real host checks.

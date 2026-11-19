@@ -5,12 +5,34 @@ import hashlib
 import json
 import os
 import stat
+import sys
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
+_SCRIPTS_DIR = ROOT / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from skill_tools import (
+    DOMAIN_KIND_KEY_SETS,
+    SKILL_SUITE_PREFIXES,
+    classify_domain_payload,
+    detect_artifact_suite,
+    detect_domain_artifact,
+    infer_suite_name,
+    is_audit_ledger_shape,
+    read_suites_catalog,
+    recipe_to_suite_map,
+    skill_to_suite_map,
+    suite_for_skills,
+    suite_skills_by_suite,
+)
+
+_DOMAIN_KIND_KEY_SETS = DOMAIN_KIND_KEY_SETS
+_SKILL_SUITE_PREFIXES = SKILL_SUITE_PREFIXES
 
 _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     "repository-audits": {
@@ -151,27 +173,23 @@ def read_json_object(
 
 def _load_suite_contracts(root: Path = ROOT) -> dict[str, dict[str, Any]]:
     contracts = copy.deepcopy(_DEFAULT_SUITE_CONTRACTS)
-    suites_path = root / "catalog/suites.json"
-    if suites_path.is_file():
-        try:
-            suites_doc = read_json(suites_path)
-            for suite in suites_doc.get("suites", []):
-                name = suite.get("name")
-                artifact = suite.get("artifact")
-                if (
-                    isinstance(name, str)
-                    and isinstance(artifact, dict)
-                    and isinstance(artifact.get("filename"), str)
-                    and isinstance(artifact.get("schema"), str)
-                    and isinstance(artifact.get("starter"), dict)
-                ):
-                    contracts[name] = {
-                        "filename": artifact["filename"],
-                        "schema": artifact["schema"],
-                        "starter": copy.deepcopy(artifact["starter"]),
-                    }
-        except (OSError, ValueError, TypeError):
-            pass
+    suites = read_suites_catalog(root)
+    if suites is not None:
+        for suite in suites:
+            name = suite.get("name")
+            artifact = suite.get("artifact")
+            if (
+                isinstance(name, str)
+                and isinstance(artifact, dict)
+                and isinstance(artifact.get("filename"), str)
+                and isinstance(artifact.get("schema"), str)
+                and isinstance(artifact.get("starter"), dict)
+            ):
+                contracts[name] = {
+                    "filename": artifact["filename"],
+                    "schema": artifact["schema"],
+                    "starter": copy.deepcopy(artifact["starter"]),
+                }
     return contracts
 
 
@@ -197,18 +215,14 @@ WORKFLOW_SKILL_DELIVERABLES: dict[str, tuple[str, ...]] = {
 
 def _load_workflow_companions(root: Path = ROOT) -> dict[str, str]:
     companions = dict(_DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS)
-    suites_path = root / "catalog/suites.json"
-    if suites_path.is_file():
-        try:
-            suites_doc = read_json(suites_path)
-            for suite in suites_doc.get("suites", []):
-                raw = suite.get("companions")
-                if isinstance(raw, dict):
-                    for filename, schema_rel in raw.items():
-                        if isinstance(filename, str) and isinstance(schema_rel, str):
-                            companions[filename] = schema_rel
-        except (OSError, ValueError, TypeError):
-            pass
+    suites = read_suites_catalog(root)
+    if suites is not None:
+        for suite in suites:
+            raw = suite.get("companions")
+            if isinstance(raw, dict):
+                for filename, schema_rel in raw.items():
+                    if isinstance(filename, str) and isinstance(schema_rel, str):
+                        companions[filename] = schema_rel
     return companions
 
 
@@ -226,34 +240,26 @@ DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
 }
 
 
+def _suite_skills_by_suite(root: Path = ROOT) -> dict[str, tuple[str, ...]] | None:
+    return suite_skills_by_suite(root)
+
+
+def _skill_to_suite_map(root: Path = ROOT) -> dict[str, str]:
+    return skill_to_suite_map(root)
+
+
+def _infer_suite_name(
+    skill_name: str, available_suites: Sequence[str] | None = None
+) -> str:
+    return infer_suite_name(skill_name, available_suites)
+
+
+def _task_to_suite_map(root: Path = ROOT) -> dict[str, str]:
+    return recipe_to_suite_map(root)
+
+
 def _suite_for_skills(skills: list[str], root: Path = ROOT) -> str:
-    skill_to_suite: dict[str, str] = {}
-    suites_path = root / "catalog/suites.json"
-    if suites_path.is_file():
-        try:
-            for suite in read_json(suites_path).get("suites", []):
-                suite_name = suite.get("name")
-                if isinstance(suite_name, str):
-                    for phase in suite.get("phases", []):
-                        for member in phase.get("skills", []):
-                            if isinstance(member, str):
-                                skill_to_suite[member] = suite_name
-        except (OSError, ValueError, TypeError):
-            skill_to_suite.clear()
-    if not skill_to_suite:
-        skills_path = root / "catalog/skills.json"
-        if skills_path.is_file():
-            skill_to_suite = {
-                row["name"]: row["suite"]
-                for row in read_json(skills_path)["skills"]
-                if row.get("suite")
-            }
-    suites = list(
-        dict.fromkeys(skill_to_suite[s] for s in skills if s in skill_to_suite)
-    )
-    if "repository-audits" in suites:
-        return "repository-audits"
-    return suites[0] if suites else "repository-audits"
+    return suite_for_skills(skills, root=root)
 
 
 def _suite_for_run(run: dict, root: Path = ROOT) -> str:
@@ -273,11 +279,9 @@ def _suite_for_run(run: dict, root: Path = ROOT) -> str:
             return _suite_for_skills(str_skills, root=root)
     task = plan_data.get("task")
     if isinstance(task, str):
-        recipes_path = root / "catalog/recipes.json"
-        if recipes_path.is_file():
-            recipes = read_json(recipes_path).get("recipes", {})
-            if task in recipes:
-                return _suite_for_skills(recipes[task]["skills"], root=root)
+        task_map = _task_to_suite_map(root)
+        if task in task_map:
+            return task_map[task]
     return "repository-audits"
 
 
@@ -328,105 +332,20 @@ def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path,
     return assets
 
 
-_DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
-    ("remediation", frozenset({"records"})),
-    (
-        "reconciliation",
-        frozenset(
-            {
-                "finding_fingerprint_matches",
-                "fingerprint_matches",
-                "remediation_state_transitions",
-                "state_transitions",
-                "unmapped_records",
-            }
-        ),
-    ),
-    (
-        "finding-verification",
-        frozenset(
-            {
-                "reproduction_status",
-                "safe_control_outcomes",
-                "confidence_rating",
-            }
-        ),
-    ),
-    (
-        "regression",
-        frozenset(
-            {
-                "failure_boundaries",
-                "failure_boundary",
-                "test_command_traces",
-                "assertion_expectations",
-            }
-        ),
-    ),
-    (
-        "plan",
-        frozenset(
-            {
-                "task_breakdowns",
-                "dependency_order",
-                "file_scopes",
-                "plan_id",
-            }
-        ),
-    ),
-    (
-        "fix",
-        frozenset(
-            {
-                "file_changes",
-                "diff_summaries",
-                "diff_summary",
-                "execution_results",
-                "compatibility_limits",
-            }
-        ),
-    ),
-    (
-        "verification",
-        frozenset(
-            {
-                "original_reproduced",
-                "regression_passed",
-                "before_revision",
-                "after_revision",
-                "safe_controls_passed",
-            }
-        ),
-    ),
-    ("review", frozenset({"verdict"})),
-    ("testing", frozenset({"test_cases"})),
-    ("architecture", frozenset({"boundaries", "decisions"})),
-    ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
-)
-
-
-def _is_audit_ledger_shape(data: dict[str, Any]) -> bool:
-    return "findings" in data and any(
-        key in data for key in ("evidence", "coverage", "contracts", "run_id")
-    )
+def _is_audit_ledger_shape(data: Mapping[str, Any]) -> bool:
+    return is_audit_ledger_shape(data)
 
 
 def _detect_domain_kind(data: object) -> str | None:
-    if not isinstance(data, dict) or _is_audit_ledger_shape(data):
-        return None
-    keys = set(data)
-    for kind, markers in _DOMAIN_KIND_KEY_SETS:
-        if keys & markers:
-            return kind
-    if "summary" in data and "findings" in data:
-        return "review"
-    if "component" in data and "framework" in data:
-        return "testing"
-    if "title" in data and "status" in data and "findings" not in data:
-        return "architecture"
-    if "run_id" in data:
-        return "run"
-    return None
+    return classify_domain_payload(data)
+
+
+def _detect_domain_artifact(data: object) -> str | None:
+    return detect_domain_artifact(data)
+
+
+def _detect_artifact_suite(data: object) -> str | None:
+    return detect_artifact_suite(data)
 
 
 def resolve_audit_path(path: Path | str | None = None) -> Path:
