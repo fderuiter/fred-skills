@@ -4,11 +4,11 @@ Portable Agent Skills toolkit (audit-only default; require explicit user authori
 
 - `skills/<name>/SKILL.md`: standalone skill packages; keep references skill-local and host UI metadata in `agents/`.
 - `shared/<family>/`: canonical protocols, schemas, templates, and `manifest.json` targets synced into `skills/`.
-- `catalog/`: authoring inputs (`suites.json`, `recipes.json`, `packs.json`, `profiles.json`, `hosts.json`, `experience.json`).
+- `catalog/`: authoring inputs for 6 suites, 13 packs, 9 hosts, and 57 skills (`suites.json`, `recipes.json`, `packs.json`, `profiles.json`, `hosts.json`, `experience.json`).
 - `scripts/fredlib/`: local CLI and maintenance library; distributable skills never import it.
 - `evals/`: offline evaluation harness and synthetic fixtures; never treat fixture-adapter scores as model quality.
 
-Never manually edit generated outputs: `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `gemini-extension.json` (`scripts/build_catalog.py`); `docs/experience.md`, `docs/explorer.html` (`scripts/build_experience.py`); or `skills/*/` files synced from `shared/*/manifest.json` (`scripts/sync_audit_resources.py`, including `skills/repo-audit-synthesis/scripts/audit_to_sarif.py`).
+Never manually edit generated outputs: `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json`, `skills/*/.cursor-plugin/plugin.json`, `gemini-extension.json` (`scripts/build_catalog.py`); `docs/experience.md`, `docs/explorer.html` (`scripts/build_experience.py`); or `skills/*/` files synced from `shared/*/manifest.json` (`scripts/sync_audit_resources.py`, including `skills/repo-audit-synthesis/scripts/audit_to_sarif.py`).
 
 Trapdoors:
 - `PYTHONDONTWRITEBYTECODE=1`: `scripts/validate_skills.py` rejects `__pycache__` and `.pyc` files under `skills/`.
@@ -21,6 +21,7 @@ Trapdoors:
 make check
 make fix
 python scripts/run_checks.py
+python scripts/run_checks.py --phase format
 python scripts/check_doc_links.py
 python scripts/verify_doc_snippets.py
 python scripts/package_skills.py --output /tmp/release-verify

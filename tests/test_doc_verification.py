@@ -844,7 +844,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
         """Developers can register custom tool validation handlers via prefix matching."""
         invoked_commands = []
 
-        def custom_handler(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
+        def custom_handler(parts: list[str], _root: Path, cmd: str) -> tuple[bool, str]:
             invoked_commands.append(cmd)
             if "--fail" in parts:
                 return False, "custom failure"

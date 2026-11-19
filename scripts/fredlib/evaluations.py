@@ -64,9 +64,7 @@ class _GradeOutcome:
     malformed_error: str | None = None
 
 
-def _resolve_case_contract(
-    case: dict[str, Any], root: Path, suite_map: dict[str, str]
-) -> str:
+def _resolve_case_contract(case: dict[str, Any], suite_map: dict[str, str]) -> str:
     explicit = case.get("contract")
     if explicit is not None:
         if not isinstance(explicit, str) or explicit not in _VALID_CONTRACTS:
@@ -990,7 +988,7 @@ def evaluate(
     )
     results: list[dict[str, Any]] = []
     for case in selected:
-        contract = _resolve_case_contract(case, root, suite_map)
+        contract = _resolve_case_contract(case, suite_map)
         schema_path = _resolve_case_schema(case, contract, root)
         writable_paths = case.get("writable_paths")
         for configuration in ["without_skill", "with_skill"]:

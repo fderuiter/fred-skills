@@ -45,8 +45,8 @@ misses, false positives, and environment constraints when extending the suite.
 
 ## 0.2.0 usability and correction-workflow validation
 
-The expanded deterministic suite exercises 57 total packages, generated recipes,
-packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
+The expanded deterministic suite exercises 57 total packages across 6 suites, generated
+recipes, 13 packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
 proof requirements, comparison collisions, safe SARIF imports, HTML escaping, managed
 installation lifecycle/recovery, deterministic archives/tamper detection, and evaluation
 failure/timeout/input-isolation paths. Exact test counts and CI results are recorded in
@@ -76,6 +76,6 @@ The local optional Chromium check could not launch in the managed environment be
 Unix socket creation was denied. No browser assertions passed locally and no restriction
 was bypassed. The PR's dedicated CI job runs the actual report/explorer search, filter,
 escaping, and no-external-request assertions. CI status is separate from this local record.
-Copy-path tests cover four host layouts using temporary directories; none are host runtime
-certification. Additional host versions, real repositories, all 99 original specifications,
+Copy-path tests cover 9 host layouts using temporary directories; none are host runtime
+certification. Additional host versions, real repositories, all 171 scenario specifications,
 and statistically meaningful model comparisons remain future evidence, not completed work.
