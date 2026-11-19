@@ -56,6 +56,10 @@ class ExperienceTests(unittest.TestCase):
         self.assertLess(page.index('id="status"'), page.index('id="tasks"'))
         self.assertLess(page.index('id="tasks"'), page.index('id="skills"'))
         self.assertIn(
+            '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>',
+            page,
+        )
+        self.assertIn(
             '<a href="#repo-audit-concurrency">repo-audit-concurrency</a>', page
         )
         self.assertIn('<article class="finding" id="repo-audit-concurrency"', page)

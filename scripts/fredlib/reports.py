@@ -10,11 +10,17 @@ from typing import Any
 
 import jsonschema
 
-from .common import DOMAIN_DELIVERABLE_SCHEMAS, ROOT, _detect_domain_kind, read_json
+from .common import (
+    DOMAIN_DELIVERABLE_SCHEMAS,
+    ROOT,
+    FredCliError,
+    _detect_domain_kind,
+    read_json,
+)
 from .runs import audit_errors, compare, fingerprint
 
-STYLE = """:root{--table-border:#ddd}body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--table-border);padding:.6rem}.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}.badges{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;font-size:.85rem;font-weight:650}.badge-critical,.critical{background:#fed7d7;color:#9b1c1c}.badge-high,.high{background:#feebc8;color:#7b341e}.badge-medium,.medium{background:#fefcbf;color:#744210}.badge-low,.low{background:#c6f6d5;color:#22543d}.badge-info,.info,.badge-advisory,.advisory{background:#bee3f8;color:#2a4365}.callout{border-left:4px solid #5380ab;background:#edf2f7;padding:.75rem 1rem;border-radius:6px;margin:.8rem 0}.callout p{margin:.25rem 0}.empty-state{text-align:center;padding:1.5rem;color:#53667a}.muted{color:#53667a}input,select,button{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px}button{background:#fff;cursor:pointer}label{display:inline-block;margin:.4rem}[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #1556a5}@media(prefers-color-scheme:dark){:root{--table-border:#405164}body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}.empty-state{color:#b2c6d9}.callout{background:#1e2f3f;border-left-color:#95c7ff}input,select,button{background:#101821;color:#e3ecf5;border-color:#405164}:focus-visible{outline:3px solid #95c7ff}.badge-critical,.critical{background:#742a2a;color:#feb2b2}.badge-high,.high{background:#7b341e;color:#fbd38d}.badge-medium,.medium{background:#744210;color:#faf089}.badge-low,.low{background:#22543d;color:#9ae6b4}.badge-info,.info,.badge-advisory,.advisory{background:#2a4365;color:#90cdf4}}"""
-SCRIPT = """const q=document.querySelector('#query'),sev=document.querySelector('#severity'),s=document.querySelector('#status'),rem=document.querySelector('#remediation'),e=document.querySelector('#empty-state'),r=document.querySelector('#reset-filters');function filter(){const qv=q?q.value.toLowerCase():'',toks=qv.split(/[\\s-]+/).filter(Boolean),sevv=sev?sev.value:'',sv=s?s.value:'',remv=rem?rem.value:'',tasks=document.querySelectorAll('details.task'),ms=new Set();let tn=0,n=0;for(const el of tasks){const suites=(el.dataset.suites||'').split(' ').filter(Boolean),fOk=!sv||suites.includes(sv),hay=(el.dataset.search||el.textContent||'').toLowerCase(),qOk=toks.every(t=>hay.includes(t));if(toks.length&&qOk){for(const sk of(el.dataset.skills||'').split(' '))if(sk)ms.add(sk);}el.hidden=!(fOk&&qOk);if(!el.hidden)tn++;}const a=document.querySelectorAll('article.finding');for(const el of a){const fOk=(!sevv||el.dataset.severity===sevv)&&(!sv||el.dataset.status===sv)&&(!remv||el.dataset.remediation===remv),txt=el.textContent.toLowerCase(),qOk=!toks.length||ms.has(el.id)||toks.every(t=>txt.includes(t));el.hidden=!(fOk&&qOk);if(!el.hidden)n++;}for(const sec of document.querySelectorAll('section[data-filter-section]')){sec.hidden=!sec.querySelector('details.task:not([hidden]),article.finding:not([hidden])');}const c=document.querySelector('#count');if(c){const base=c.dataset.noun||(tasks.length?'skills':'findings'),noun=n===1?base.replace(/s$/,''):base;c.textContent=tasks.length?tn+' '+(tn===1?'task':'tasks')+', '+n+' '+noun+' shown':n+' '+noun+' shown';}if(e)e.hidden=!((a.length+tasks.length)>0&&n===0&&tn===0);}function reveal(raw){if(!raw)return;let id=raw;try{id=decodeURIComponent(raw);}catch{}const el=document.getElementById(id);if(!el||!el.classList.contains('finding'))return;if(el.hidden){if(sev&&sev.value&&el.dataset.severity!==sev.value)sev.value='';if(s&&s.value&&el.dataset.status!==s.value)s.value='';if(rem&&rem.value&&el.dataset.remediation!==rem.value)rem.value='';filter();if(el.hidden&&q&&q.value){q.value='';filter();}}el.scrollIntoView();}function revealHash(){if(location.hash.length>1)reveal(location.hash.slice(1));}document.addEventListener('click',ev=>{const link=ev.target instanceof Element?ev.target.closest('a[href^="#"]'):null;if(link){const h=link.getAttribute('href')||'';if(h.length>1)reveal(h.slice(1));}});window.addEventListener('hashchange',revealHash);if(q)q.addEventListener('input',filter);if(sev)sev.addEventListener('change',filter);if(s)s.addEventListener('change',filter);if(rem)rem.addEventListener('change',filter);if(r)r.addEventListener('click',()=>{if(q)q.value='';if(sev)sev.value='';if(s)s.value='';if(rem)rem.value='';filter();});filter();revealHash();"""
+STYLE = """:root{--table-border:#ddd}body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}h1,h2,h3,p,li,summary{overflow-wrap:anywhere}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--table-border);padding:.6rem}.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}.badges{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;font-size:.85rem;font-weight:650;box-sizing:border-box;max-width:100%}.badge-critical,.critical{background:#fed7d7;color:#9b1c1c}.badge-high,.high{background:#feebc8;color:#7b341e}.badge-medium,.medium{background:#fefcbf;color:#744210}.badge-low,.low{background:#c6f6d5;color:#22543d}.badge-info,.info,.badge-advisory,.advisory{background:#bee3f8;color:#2a4365}.callout{border-left:4px solid #5380ab;background:#edf2f7;padding:.75rem 1rem;border-radius:6px;margin:.8rem 0}.callout p{margin:.25rem 0}.empty-state{text-align:center;padding:1.5rem;color:#53667a}.muted{color:#53667a}input,select,button{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px;box-sizing:border-box;max-width:100%}button{background:#fff;cursor:pointer}label{display:inline-block;margin:.4rem;box-sizing:border-box;max-width:100%}#toggle-details{margin:.4rem}[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #1556a5}@media (max-width: 640px){body{padding:.75rem}header,section,article{padding:.85rem;margin:.75rem 0}label{display:block;margin:.4rem 0}input,select{width:100%}#toggle-details{margin:.4rem 0}}@media(prefers-color-scheme:dark){:root{--table-border:#405164}body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}.empty-state{color:#b2c6d9}.callout{background:#1e2f3f;border-left-color:#95c7ff}input,select,button{background:#101821;color:#e3ecf5;border-color:#405164}:focus-visible{outline:3px solid #95c7ff}.badge-critical,.critical{background:#742a2a;color:#feb2b2}.badge-high,.high{background:#7b341e;color:#fbd38d}.badge-medium,.medium{background:#744210;color:#faf089}.badge-low,.low{background:#22543d;color:#9ae6b4}.badge-info,.info,.badge-advisory,.advisory{background:#2a4365;color:#90cdf4}}@media print{body{background:#fff;color:#172635;padding:0;max-width:none}header,section,article{background:#fff;color:#172635;border-color:#dce4eb}.callout{background:#edf2f7;color:#172635;border-left-color:#5380ab}label[for="query"],label[for="severity"],label[for="status"],label[for="remediation"],#query,#severity,#status,#remediation,#toggle-details,#empty-state,#reset-filters{display:none!important}}"""
+SCRIPT = """const q=document.querySelector('#query'),sev=document.querySelector('#severity'),s=document.querySelector('#status'),rem=document.querySelector('#remediation'),e=document.querySelector('#empty-state'),r=document.querySelector('#reset-filters'),t=document.querySelector('#toggle-details');function visibleDetails(){return[...document.querySelectorAll('article.finding:not([hidden]) details')];}function syncToggle(){if(!t)return;const v=visibleDetails(),x=v.length>0&&v.every(d=>d.open);t.setAttribute('aria-expanded',x?'true':'false');t.textContent=x?'Collapse all':'Expand all';}function filter(){const qv=q?q.value.toLowerCase():'',toks=qv.split(/[\\s-]+/).filter(Boolean),sevv=sev?sev.value:'',sv=s?s.value:'',remv=rem?rem.value:'',tasks=document.querySelectorAll('details.task'),ms=new Set();let tn=0,n=0;for(const el of tasks){const suites=(el.dataset.suites||'').split(' ').filter(Boolean),fOk=!sv||suites.includes(sv),hay=(el.dataset.search||el.textContent||'').toLowerCase(),qOk=toks.every(k=>hay.includes(k));if(toks.length&&qOk){for(const sk of(el.dataset.skills||'').split(' '))if(sk)ms.add(sk);}el.hidden=!(fOk&&qOk);if(!el.hidden)tn++;}const a=document.querySelectorAll('article.finding');for(const el of a){const fOk=(!sevv||el.dataset.severity===sevv)&&(!sv||el.dataset.status===sv)&&(!remv||el.dataset.remediation===remv),txt=el.textContent.toLowerCase(),qOk=!toks.length||ms.has(el.id)||toks.every(k=>txt.includes(k));el.hidden=!(fOk&&qOk);if(!el.hidden)n++;for(const d of el.querySelectorAll('details')){if(toks.length){if(!('preSearchOpen' in d.dataset))d.dataset.preSearchOpen=d.open?'1':'0';const dt=d.textContent.toLowerCase();if(!('prePrintOpen' in d.dataset))d.open=d.dataset.preSearchOpen==='1'||(!el.hidden&&toks.every(k=>dt.includes(k)));}else if('preSearchOpen' in d.dataset){const p=d.dataset.preSearchOpen==='1';delete d.dataset.preSearchOpen;if(!('prePrintOpen' in d.dataset))d.open=p;else d.dataset.prePrintOpen=p?'1':'0';}}}for(const sec of document.querySelectorAll('section[data-filter-section]')){sec.hidden=!sec.querySelector('details.task:not([hidden]),article.finding:not([hidden])');}const c=document.querySelector('#count');if(c){const base=c.dataset.noun||(tasks.length?'skills':'findings'),noun=n===1?base.replace(/s$/,''):base;c.textContent=tasks.length?tn+' '+(tn===1?'task':'tasks')+', '+n+' '+noun+' shown':n+' '+noun+' shown';}if(e)e.hidden=!((a.length+tasks.length)>0&&n===0&&tn===0);syncToggle();}function openPrint(){for(const d of document.querySelectorAll('details')){if(!('prePrintOpen' in d.dataset))d.dataset.prePrintOpen=d.open?'1':'0';d.open=true;}syncToggle();}function restorePrint(){for(const d of document.querySelectorAll('details')){if('prePrintOpen' in d.dataset){d.open=d.dataset.prePrintOpen==='1';delete d.dataset.prePrintOpen;}}syncToggle();}function reveal(raw){if(!raw)return;let id=raw;try{id=decodeURIComponent(raw);}catch{}const el=document.getElementById(id);if(!el||!el.classList.contains('finding'))return;if(el.hidden){if(sev&&sev.value&&el.dataset.severity!==sev.value)sev.value='';if(s&&s.value&&el.dataset.status!==s.value)s.value='';if(rem&&rem.value&&el.dataset.remediation!==rem.value)rem.value='';filter();if(el.hidden&&q&&q.value){q.value='';filter();}}el.scrollIntoView();}function revealHash(){if(location.hash.length>1)reveal(location.hash.slice(1));}document.addEventListener('click',ev=>{const tgt=ev.target instanceof Element?ev.target:null;if(tgt&&tgt.closest('summary'))queueMicrotask(syncToggle);const link=tgt?tgt.closest('a[href^="#"]'):null;if(link){const h=link.getAttribute('href')||'';if(h.length>1)reveal(h.slice(1));}});document.addEventListener('toggle',syncToggle,true);window.addEventListener('hashchange',revealHash);window.addEventListener('beforeprint',openPrint);window.addEventListener('afterprint',restorePrint);const mq=window.matchMedia?window.matchMedia('print'):null;if(mq&&mq.addEventListener)mq.addEventListener('change',ev=>ev.matches?openPrint():restorePrint());if(q)q.addEventListener('input',filter);if(sev)sev.addEventListener('change',filter);if(s)s.addEventListener('change',filter);if(rem)rem.addEventListener('change',filter);if(r)r.addEventListener('click',()=>{if(q)q.value='';if(sev)sev.value='';if(s)s.value='';if(rem)rem.value='';filter();if(q)q.focus();});if(t)t.addEventListener('click',()=>{const v=visibleDetails(),x=!(v.length>0&&v.every(d=>d.open));for(const d of v){d.open=x;if('preSearchOpen' in d.dataset)d.dataset.preSearchOpen=x?'1':'0';}syncToggle();});filter();revealHash();if(mq&&mq.matches)openPrint();"""
 
 _SEVERITY_ORDER: tuple[str, ...] = ("critical", "high", "medium", "low", "info")
 _SEVERITY_LABELS: dict[str, str] = {
@@ -146,6 +152,7 @@ def _render_architecture_html(doc: dict) -> str:
             )
         decisions_body = (
             '<label for="query">Search decisions <input id="query" type="search"></label>'
+            '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>'
             '<p id="count" data-noun="decisions" role="status" aria-live="polite"></p>'
             '<div id="empty-state" class="empty-state" hidden><p>No decisions match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
             + "".join(cards)
@@ -578,6 +585,7 @@ def _render_audit_html(
             f'<label for="severity">Severity <select id="severity"><option value="">All severities ({len(findings)})</option>{severity_options}</select></label>'
             f'<label for="status">Evidence status <select id="status"><option value="">All statuses ({len(findings)})</option>{status_options}</select></label>'
             f"{remediation_filter_html}"
+            f'<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>'
             f'<p id="count" role="status" aria-live="polite"></p>'
             f'<div id="empty-state" class="empty-state" hidden><p>No findings match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
             f"{''.join(cards)}"
@@ -626,15 +634,25 @@ def render(
     prior: dict | None = None,
     remediation: dict | None = None,
 ) -> Path:
+    if not isinstance(audit, dict):
+        raise FredCliError(
+            f"Expected JSON object for report input, got {type(audit).__name__}",
+            code="invalid_json_root",
+            hint="Pass a valid 'audit.json' or suite deliverable JSON object.",
+        )
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
         if prior is not None:
-            raise ValueError(
-                f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported"
+            raise FredCliError(
+                f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Omit --prior when rendering a domain report, or pass 'audit.json' ledgers.",
             )
         if remediation is not None:
-            raise ValueError(
-                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported"
+            raise FredCliError(
+                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Omit --remediation when rendering a domain report, or pass an 'audit.json' ledger.",
             )
         _validate_domain_payload(audit, domain_kind)
         renderers = {
@@ -658,19 +676,37 @@ def render(
 
 def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
     if format not in ("markdown", "json"):
-        raise ValueError(f"Unsupported issue format: {format}")
+        raise FredCliError(
+            f"Unsupported issue format: {format}",
+            code="invalid_issue_format",
+            hint="Choose --format markdown or --format json.",
+        )
+    if not isinstance(audit, dict):
+        raise FredCliError(
+            "Invalid ledger; cannot draft issues",
+            code="invalid_audit_ledger",
+            hint="Pass a valid 'audit.json' ledger object.",
+        )
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
-        raise ValueError(
-            f"Issue drafts ('issues') require an 'audit.json' ledger; domain artifact '{domain_kind}.json' is not supported"
+        raise FredCliError(
+            f"Issue drafts ('issues') require an 'audit.json' ledger; domain artifact '{domain_kind}.json' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger from a repository-audits run.",
         )
     errors = audit_errors(audit)
     if errors:
-        raise ValueError("Invalid ledger; cannot draft issues")
+        raise FredCliError(
+            "Invalid ledger; cannot draft issues",
+            code="invalid_audit_ledger",
+            hint="Run 'python scripts/fred.py validate-run <dir>' to inspect ledger schema errors.",
+        )
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
-        raise ValueError(
-            "Issue output directory must be empty; stale drafts will not be mixed with current results"
+        raise FredCliError(
+            "Issue output directory must be empty; stale drafts will not be mixed with current results",
+            code="non_empty_output_directory",
+            hint="Choose a new or empty --output directory for generated issue drafts.",
         )
     findings = {f["id"]: f for f in audit["findings"]}
     evidence = {e["id"]: e for e in audit["evidence"]}

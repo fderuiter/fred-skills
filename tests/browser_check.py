@@ -17,7 +17,7 @@ sys.dont_write_bytecode = True
 from build_site import build_site
 from fredlib.common import read_json
 from fredlib.reports import render
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--screenshot", type=Path)
@@ -50,13 +50,81 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("article.finding").count() == 1
         assert page.locator("img").count() == 0
         assert page.evaluate("window.injected === undefined")
+
+        # 375px mobile viewport check on audit report with hostile long title
+        page.set_viewport_size({"width": 375, "height": 812})
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth"
+        )
+        page.set_viewport_size({"width": 1100, "height": 850})
+
+        # #toggle-details expand/collapse and aria-expanded sync
+        toggle_btn = page.locator("#toggle-details")
+        assert toggle_btn.get_attribute("aria-expanded") == "false"
+        assert toggle_btn.inner_text() == "Expand all"
+        assert page.locator("details[open]").count() == 0
+        toggle_btn.click()
+        assert toggle_btn.get_attribute("aria-expanded") == "true"
+        assert toggle_btn.inner_text() == "Collapse all"
+        assert page.locator("details[open]").count() == 3
+        toggle_btn.click()
+        assert toggle_btn.get_attribute("aria-expanded") == "false"
+        assert toggle_btn.inner_text() == "Expand all"
+        assert page.locator("details[open]").count() == 0
+
+        # Search auto-open, manual pre-search state preservation, and print orthogonal state
+        page.get_by_text(
+            "Implementation: acceptance and relationships", exact=True
+        ).click()
+        assert page.locator("details").nth(2).evaluate("el => el.open") is True
+        page.get_by_label("Search findings").fill("publication fence")
+        assert page.locator("article.finding:visible").count() == 1
+        assert page.locator("details").nth(0).evaluate("el => el.open") is True
+        assert page.locator("details").nth(1).evaluate("el => el.open") is False
+        assert page.locator("details").nth(2).evaluate("el => el.open") is True
+        assert page.get_by_text("No publication fence", exact=False).is_visible()
+
+        page.emulate_media(media="print")
+        expect(page.locator("#query")).to_be_hidden()
+        expect(page.locator("#severity")).to_be_hidden()
+        expect(page.locator("#status")).to_be_hidden()
+        expect(toggle_btn).to_be_hidden()
+        expect(page.locator("#empty-state")).to_be_hidden()
+        expect(page.locator("details:not([open])")).to_have_count(0)
+        page.emulate_media(media="screen")
+        expect(page.locator("#query")).to_be_visible()
+        expect(toggle_btn).to_be_visible()
+        expect(page.locator("details[open]")).to_have_count(2)
+        assert page.locator("details").nth(0).evaluate("el => el.open") is True
+        assert page.locator("details").nth(1).evaluate("el => el.open") is False
+        assert page.locator("details").nth(2).evaluate("el => el.open") is True
+
+        page.get_by_label("Search findings").fill("")
+        assert page.locator("details").nth(0).evaluate("el => el.open") is False
+        assert page.locator("details").nth(1).evaluate("el => el.open") is False
+        assert page.locator("details").nth(2).evaluate("el => el.open") is True
+        page.get_by_text(
+            "Implementation: acceptance and relationships", exact=True
+        ).click()
+        assert page.locator("details[open]").count() == 0
+
+        # beforeprint / afterprint event handling
+        page.evaluate("window.dispatchEvent(new Event('beforeprint'))")
+        assert page.locator("details:not([open])").count() == 0
+        page.evaluate("window.dispatchEvent(new Event('afterprint'))")
+        assert page.locator("details[open]").count() == 0
+
         page.get_by_label("Evidence status").select_option("refuted")
         assert page.locator("article.finding:visible").count() == 0
         page.get_by_label("Evidence status").select_option("")
         page.get_by_label("Search findings").fill("old result")
         assert page.locator("article.finding:visible").count() == 0
-        page.get_by_label("Search findings").fill("")
+        page.get_by_role("button", name="Reset filters").click()
         assert page.locator("article.finding:visible").count() == 1
+        assert (
+            page.evaluate("document.activeElement && document.activeElement.id")
+            == "query"
+        )
         page.get_by_text(
             "Developer: failure, source, and correction", exact=True
         ).click()
@@ -78,6 +146,7 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("#remediation").count() == 0
         assert page.locator("#empty-state").count() == 0
         assert page.locator("#reset-filters").count() == 0
+        assert page.locator("#toggle-details").count() == 0
         assert (
             page.get_by_text(
                 "No findings recorded. Review coverage before drawing conclusions.",
@@ -178,6 +247,18 @@ with tempfile.TemporaryDirectory() as temporary:
         page.get_by_role("button", name="Reset filters").click()
         assert page.locator("article.finding:visible").count() == 2
         assert not page.locator("#empty-state").is_visible()
+        assert (
+            page.evaluate("document.activeElement && document.activeElement.id")
+            == "query"
+        )
+        page.set_viewport_size({"width": 375, "height": 812})
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth"
+        )
+        page.set_viewport_size({"width": 1100, "height": 850})
+        page.emulate_media(media="print")
+        expect(page.locator("#remediation")).to_be_hidden()
+        page.emulate_media(media="screen")
         page.screenshot(path="/tmp/triage_filters_and_badges.png")
         page.locator('#comparison a[href="#F-2"]').first.click()
         assert page.url.endswith("#F-2")
@@ -230,7 +311,14 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("article.finding:visible").count() == 0
         page.get_by_role("button", name="Reset filters").click()
         assert page.locator("article.finding:visible").count() == 1
+        assert (
+            page.evaluate("document.activeElement && document.activeElement.id")
+            == "query"
+        )
         page.get_by_text("Consequences and trade-offs", exact=True).click()
+        expect(page.locator("#toggle-details")).to_have_attribute(
+            "aria-expanded", "true"
+        )
         page.screenshot(path="/tmp/architecture_report.png")
 
         review_report = Path(temporary) / "review_report.html"
@@ -303,6 +391,11 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("img").count() == 0
         assert page.evaluate("window.injected === undefined")
         assert page.locator("article.finding").count() == 2
+        page.set_viewport_size({"width": 375, "height": 812})
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth"
+        )
+        page.set_viewport_size({"width": 1100, "height": 850})
         page.get_by_label("Oracle type").select_option("exception")
         assert page.locator("article.finding:visible").count() == 1
         page.get_by_label("Oracle type").select_option("")
@@ -348,9 +441,55 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("article.pack-card").count() == len(expected_packs) == 11
         assert page.locator("#hosts tbody tr").count() == len(expected_hosts)
         assert page.locator("#hosts tbody tr").count() >= 4
+        page.set_viewport_size({"width": 375, "height": 812})
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth"
+        )
+        page.set_viewport_size({"width": 1280, "height": 800})
+
+        # Search auto-open and #reset-filters focus restoration in explorer
+        query_input = page.get_by_label("Task or symptom")
+        query_input.fill("untested behavioral contracts")
+        assert page.locator("article.finding:visible").count() >= 1
+        assert page.locator("article.finding:visible details[open]").count() >= 1
+        query_input.fill("zzznonexistentworkflow")
+        assert page.locator("article.finding:visible").count() == 0
+        assert not page.locator("section#tasks").is_visible()
+        assert not page.locator("section#skills").is_visible()
+        assert page.locator("#empty-state").is_visible()
+        page.get_by_role("button", name="Reset filters").click()
+        assert (
+            page.evaluate("document.activeElement && document.activeElement.id")
+            == "query"
+        )
+        assert page.locator("article.finding details[open]").count() == 0
+        assert page.locator("section#tasks").is_visible()
+        assert page.locator("section#skills").is_visible()
+        assert page.locator("article.finding:visible").count() == count
+
+        # #toggle-details and print expansion in explorer
+        page.get_by_label("Family").select_option("repository-workflows")
+        assert page.locator("article.finding:visible").count() == 6
+        exp_toggle = page.locator("#toggle-details")
+        assert exp_toggle.get_attribute("aria-expanded") == "false"
+        exp_toggle.click()
+        assert exp_toggle.get_attribute("aria-expanded") == "true"
+        assert page.locator("article.finding:visible details[open]").count() == 6
+        assert page.locator("article.finding[hidden] details[open]").count() == 0
+        exp_toggle.click()
+        assert exp_toggle.get_attribute("aria-expanded") == "false"
+        assert page.locator("article.finding details[open]").count() == 0
+        page.get_by_label("Family").select_option("")
+        assert page.locator("article.finding:visible").count() == count
+
+        page.emulate_media(media="print")
+        expect(page.locator("#query")).to_be_hidden()
+        expect(exp_toggle).to_be_hidden()
+        expect(page.locator("details:not([open])")).to_have_count(0)
+        page.emulate_media(media="screen")
+        expect(page.locator("details[open]")).to_have_count(0)
 
         # Verify all 17 tasks match their task block and member skills
-        query_input = page.get_by_label("Task or symptom")
         for task_name, recipe in recipes.items():
             query_input.fill(task_name)
             assert page.locator(f"details#task-{task_name}").is_visible(), task_name
@@ -382,15 +521,9 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("details.task:visible").count() == 0
         assert not page.locator("section#tasks").is_visible()
         assert page.locator("section#skills").is_visible()
-
-        query_input.fill("zzzznonexistentquery")
-        assert not page.locator("section#tasks").is_visible()
-        assert not page.locator("section#skills").is_visible()
-        assert page.locator("#empty-state").is_visible()
-        page.get_by_role("button", name="Reset filters").click()
+        query_input.fill("")
         assert page.locator("section#tasks").is_visible()
         assert page.locator("section#skills").is_visible()
-        assert page.locator("article.finding:visible").count() == count
 
         # Verify cross-suite #anchor click reveals and scrolls to hidden card without resetting Family first
         page.get_by_label("Family").select_option("repository-workflows")
