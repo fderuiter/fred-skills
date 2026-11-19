@@ -366,6 +366,7 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
+        self.assertEqual("AGENTS.md", gemini_default["contextFileName"])
         root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
         self.assertEqual(root_version, marketplace_default["version"])
@@ -585,6 +586,7 @@ class PackageTests(unittest.TestCase):
         gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual(gemini_data["name"], "fred-skills")
         self.assertTrue(gemini_data["description"])
+        self.assertEqual(gemini_data["contextFileName"], "AGENTS.md")
         self.assertEqual(
             gemini_data["version"],
             (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
@@ -710,7 +712,7 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("ruff-format", skip_ids)
 
         run_cmds = [s.get("run", "") for s in validate_steps]
-        for phase in ["lint", "typecheck", "packages", "tests"]:
+        for phase in ["lint", "typecheck", "packages", "docs", "tests"]:
             self.assertTrue(
                 any(
                     f"scripts/run_checks.py --phase {phase}" in cmd for cmd in run_cmds
@@ -936,14 +938,14 @@ class PackageTests(unittest.TestCase):
             ALL_PHASES,
         )
         self.assertEqual(
-            ("lint", "format", "typecheck", "packages", "tests"),
+            ("lint", "format", "typecheck", "packages", "docs", "tests"),
             DEFAULT_PHASES,
         )
         self.assertEqual(
-            ["lint", "format", "typecheck", "packages", "tests"],
+            ["lint", "format", "typecheck", "packages", "docs", "tests"],
             resolve_phases(),
         )
-        self.assertNotIn("docs", resolve_phases())
+        self.assertIn("docs", resolve_phases())
         self.assertEqual(["docs"], resolve_phases(["docs"]))
         self.assertEqual(
             ["lint", "typecheck", "tests"],
@@ -998,8 +1000,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("[dry-run:format]", dry.stdout)
         self.assertIn("[dry-run:typecheck]", dry.stdout)
         self.assertIn("[dry-run:packages]", dry.stdout)
+        self.assertIn("[dry-run:docs]", dry.stdout)
         self.assertIn("[dry-run:tests]", dry.stdout)
-        self.assertNotIn("[dry-run:docs]", dry.stdout)
 
         invoked: list[tuple[list[str], dict[str, str]]] = []
 
@@ -2044,6 +2046,253 @@ class PackageTests(unittest.TestCase):
         (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
         snap = repository.snapshot(repo_dir)
         self.assertEqual(list(snap["files"].keys()), ["app.py"])
+
+    def test_validate_skills_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        import ast
+
+        def calculate_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+            return complexity
+
+        def max_nesting_depth(stmts: list[ast.stmt], depth: int = 0) -> int:
+            deepest = depth
+            for stmt in stmts:
+                if isinstance(
+                    stmt,
+                    (
+                        ast.If,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.While,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.Try,
+                        ast.TryStar,
+                    ),
+                ):
+                    orelse = getattr(stmt, "orelse", [])
+                    branches: list[tuple[list[ast.stmt], int]] = [
+                        (stmt.body, depth + 1),
+                        (getattr(stmt, "finalbody", []), depth + 1),
+                    ]
+                    for handler in getattr(stmt, "handlers", []):
+                        branches.append((handler.body, depth + 1))
+                    if orelse:
+                        is_elif = len(orelse) == 1 and isinstance(orelse[0], ast.If)
+                        branches.append((orelse, depth if is_elif else depth + 1))
+                    for branch_body, next_depth in branches:
+                        if branch_body:
+                            deepest = max(
+                                deepest, max_nesting_depth(branch_body, next_depth)
+                            )
+            return deepest
+
+        validator_py = ROOT / "scripts/validate_skills.py"
+        tree = ast.parse(validator_py.read_text(encoding="utf-8"))
+        functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        for item in tree.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions[item.name] = item
+                for sub in ast.walk(item):
+                    if sub is not item and isinstance(
+                        sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        functions[f"{item.name}.{sub.name}"] = sub
+            elif isinstance(item, ast.ClassDef):
+                for method in item.body:
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        functions[f"{item.name}.{method.name}"] = method
+
+        self.assertGreater(len(functions), 0)
+        for name, func_node in functions.items():
+            score = calculate_complexity(func_node)
+            self.assertLessEqual(
+                score,
+                10,
+                f"Function {name} exceeds cyclomatic complexity limit of 10 (score: {score})",
+            )
+            nesting = max_nesting_depth(func_node.body)
+            self.assertLessEqual(
+                nesting,
+                3,
+                f"Function {name} exceeds control-flow nesting limit of 3 (depth: {nesting})",
+            )
+
+    def test_frontmatter_failure_short_circuits_and_symlink_ui_is_guarded(self) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify bounded engineering workflow outcomes",
+        )
+
+        broken_skill = self.root / "skills/broken-frontmatter"
+        shutil.copytree(self.skill, broken_skill)
+        (broken_skill / "SKILL.md").write_text(
+            "# Missing YAML frontmatter\n", encoding="utf-8"
+        )
+        (broken_skill / "assets/prompt.md").unlink()
+
+        single_errors = validate_skill(broken_skill)
+        self.assertEqual(1, len(single_errors))
+        self.assertIn("missing YAML frontmatter", single_errors[0])
+
+        try:
+            symlink_skill = self.root / "skills/symlink-ui-audit"
+            shutil.copytree(self.skill, symlink_skill)
+            (symlink_skill / "SKILL.md").write_text(
+                '---\nname: symlink-ui-audit\ndescription: "Audit symlinked UI guard behavior."\n---\n\n'
+                "# Symlink UI\n\n## Deliver\n\n"
+                "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
+                encoding="utf-8",
+            )
+            symlink_ui = symlink_skill / "agents/openai.yaml"
+            symlink_ui.unlink()
+            symlink_ui.symlink_to(self.skill / "agents/openai.yaml")
+        except OSError:
+            symlink_skill = None
+
+        all_errors, telemetry = validate_with_telemetry(
+            self.root, record_attempts=False
+        )
+        pkg_by_name = {pkg["name"]: pkg for pkg in telemetry["packages"]}
+        broken_tel = pkg_by_name["broken-frontmatter"]
+        self.assertIs(broken_tel["valid"], False)
+        self.assertIs(broken_tel["has_output_schema"], False)
+        self.assertIs(broken_tel["has_prompt_constraints"], False)
+        self.assertIs(broken_tel["has_boundary_sections"], False)
+        self.assertIs(broken_tel["deterministic_constraint_coverage"], False)
+        self.assertEqual(["assets/audit.schema.json"], broken_tel["output_schemas"])
+        self.assertEqual(single_errors, broken_tel["errors"])
+
+        if symlink_skill is not None:
+            self.assertTrue(
+                any(
+                    "symlink-ui-audit: Symlink breaks standalone packaging: agents/openai.yaml"
+                    in err
+                    for err in all_errors
+                ),
+                all_errors,
+            )
+            self.assertFalse(
+                any("Duplicate UI short_description" in err for err in all_errors),
+                f"Symlinked openai.yaml must not trigger duplicate short_description: {all_errors}",
+            )
+
+    def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
+        errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
+        self.assertEqual([], errors)
+        self.assertEqual(54, telemetry["total_packages"])
+
+        bodies_by_skill: dict[str, str] = {}
+        for prompt_path in sorted((ROOT / "skills").glob("*/assets/prompt.md")):
+            lines = prompt_path.read_text(encoding="utf-8").splitlines()
+            self.assertGreater(
+                len(lines), 1, f"{prompt_path} must have a multi-line body"
+            )
+            normalized = " ".join(" ".join(lines[1:]).split())
+            self.assertTrue(normalized, f"{prompt_path} body after line 1 is empty")
+            bodies_by_skill[prompt_path.parent.parent.name] = normalized
+
+        self.assertEqual(54, len(bodies_by_skill))
+        self.assertEqual(
+            len(bodies_by_skill),
+            len(set(bodies_by_skill.values())),
+            "Every skills/*/assets/prompt.md must have a unique body after line 1",
+        )
+
+    def test_tactical_placeholders_allowed_and_duplicate_or_unknown_prompts_rejected(
+        self,
+    ) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify tactical prompt placeholder guardrails",
+        )
+        tactical_body = (
+            "Scope inspection to <directory> and <symbol> with issue <issue-number>.\n"
+            "Write `audit.json` conforming to `assets/audit.schema.json`.\n"
+            "Honor <allowed-paths> and <do-not-modify-paths>; do not modify code unauthorized.\n"
+        )
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Unknown placeholders must be rejected.
+        self.prompt.write_text(
+            "Use sample-audit on <repository> with <bogus-placeholder>.\n"
+            + tactical_body,
+            encoding="utf-8",
+        )
+        unknown_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "unauthorized placeholder '<bogus-placeholder>'" in err
+                for err in unknown_errors
+            ),
+            unknown_errors,
+        )
+
+        # Restore valid prompt on first skill and clone an identical body after line 1 onto a second skill.
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        twin = self.root / "skills/twin-audit"
+        shutil.copytree(self.skill, twin)
+        (twin / "SKILL.md").write_text(
+            '---\nname: twin-audit\ndescription: "Audit distinct topic with cloned prompt body."\n---\n\n'
+            "# Twin\n\n## Boundaries\n\nDo not modify code.\n\n## Deliver\n\n"
+            "Deliver [audit schema](assets/audit.schema.json).\n",
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            twin,
+            skill_name="twin-audit",
+            short_description="Verify distinct twin UI short description",
+        )
+        (twin / "assets/prompt.md").write_text(
+            "Use twin-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        dup_errors, _ = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertTrue(
+            any(
+                "Duplicate prompt template body: twin-audit and sample-audit" in err
+                for err in dup_errors
+            ),
+            dup_errors,
+        )
 
 
 if __name__ == "__main__":

@@ -478,6 +478,184 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
         self.assertEqual(1, telemetry["new_skills_first_pass_count"])
         self.assertEqual(100.0, telemetry["new_skills_first_pass_percentage"])
 
+    def test_single_pass_inspection_eliminates_rereads_and_preserves_telemetry_parity(
+        self,
+    ) -> None:
+        from collections import Counter
+        from unittest.mock import patch
+
+        scaffold_skill.scaffold_skill("fresh-valid-skill", root=self.repo)
+
+        partial_dir = self.repo / "skills/partial-invalid-skill"
+        scaffold_skill.scaffold_skill("partial-invalid-skill", root=self.repo)
+        (partial_dir / "assets/prompt.md").write_text(
+            "Use partial-invalid-skill on <repository> at <revision> conforming to "
+            "assets/partial-invalid-skill.schema.json.\n",
+            encoding="utf-8",
+        )
+
+        broken_fm_dir = self.repo / "skills/broken-frontmatter-skill"
+        broken_fm_dir.mkdir(parents=True)
+        (broken_fm_dir / "SKILL.md").write_text(
+            "unterminated frontmatter\n", encoding="utf-8"
+        )
+
+        total_read_counts: Counter[Path] = Counter()
+        validator_read_counts: Counter[Path] = Counter()
+        frontmatter_counts: Counter[Path] = Counter()
+        orig_read_text = Path.read_text
+        orig_read_frontmatter = validate_skills.read_frontmatter
+        validator_filename = Path(validate_skills.__file__).resolve()
+
+        def tracked_read_text(path_obj: Path, *args: Any, **kwargs: Any) -> str:
+            resolved = path_obj.resolve()
+            total_read_counts[resolved] += 1
+            caller = Path(sys._getframe(1).f_code.co_filename).resolve()
+            if caller == validator_filename:
+                validator_read_counts[resolved] += 1
+            return orig_read_text(path_obj, *args, **kwargs)
+
+        def tracked_read_frontmatter(path_obj: Path) -> tuple[dict[str, Any], str]:
+            frontmatter_counts[path_obj.resolve()] += 1
+            return orig_read_frontmatter(path_obj)
+
+        with (
+            patch.object(Path, "read_text", new=tracked_read_text),
+            patch.object(
+                validate_skills,
+                "read_frontmatter",
+                side_effect=tracked_read_frontmatter,
+            ),
+        ):
+            errors, telemetry = validate_skills.validate_with_telemetry(self.repo)
+
+        for pkg_name in (
+            "baseline-audit",
+            "fresh-valid-skill",
+            "partial-invalid-skill",
+            "broken-frontmatter-skill",
+        ):
+            pkg_dir = (self.repo / "skills" / pkg_name).resolve()
+            self.assertEqual(
+                1,
+                frontmatter_counts[pkg_dir / "SKILL.md"],
+                f"SKILL.md frontmatter parsed multiple times for {pkg_name}",
+            )
+            self.assertEqual(
+                0,
+                validator_read_counts[pkg_dir / "SKILL.md"],
+                f"validate_skills.py re-read SKILL.md directly for {pkg_name}",
+            )
+            prompt_file = pkg_dir / "assets/prompt.md"
+            if prompt_file.is_file():
+                self.assertEqual(
+                    1,
+                    validator_read_counts[prompt_file.resolve()],
+                    f"validate_skills.py read assets/prompt.md multiple times for {pkg_name}",
+                )
+            for rel_asset in (
+                f"assets/{pkg_name}.schema.json",
+                "references/evaluation-scenarios.json",
+                "agents/openai.yaml",
+            ):
+                asset_path = pkg_dir / rel_asset
+                if asset_path.is_file():
+                    self.assertEqual(
+                        1,
+                        total_read_counts[asset_path.resolve()],
+                        f"Duplicate file read detected for {pkg_name}/{rel_asset}",
+                    )
+
+        expected_top_keys = {
+            "timestamp",
+            "diff_scope",
+            "diff_base",
+            "total_packages",
+            "passed_packages",
+            "failed_packages",
+            "repository_guardrail_pass_rate",
+            "repository_guardrail_pass_rate_percentage",
+            "new_skills_count",
+            "new_skills_passed",
+            "new_skills_first_pass_count",
+            "new_skills_first_pass_rate",
+            "new_skills_first_pass_percentage",
+            "first_pass_guardrail_pass_rate",
+            "first_pass_guardrail_pass_rate_percentage",
+            "deterministic_constraint_coverage",
+            "deterministic_constraint_coverage_percentage",
+            "output_schema_coverage",
+            "output_schema_coverage_percentage",
+            "execution_time_seconds",
+            "packages",
+        }
+        self.assertEqual(expected_top_keys, set(telemetry.keys()))
+        self.assertEqual("git-diff", telemetry["diff_scope"])
+        self.assertEqual(4, telemetry["total_packages"])
+        self.assertEqual(2, telemetry["passed_packages"])
+        self.assertEqual(2, telemetry["failed_packages"])
+        self.assertEqual(0.5, telemetry["repository_guardrail_pass_rate"])
+        self.assertEqual(50.0, telemetry["repository_guardrail_pass_rate_percentage"])
+        self.assertEqual(3, telemetry["new_skills_count"])
+        self.assertEqual(1, telemetry["new_skills_passed"])
+        self.assertEqual(1, telemetry["new_skills_first_pass_count"])
+        self.assertEqual(0.3333, telemetry["new_skills_first_pass_rate"])
+        self.assertEqual(33.33, telemetry["new_skills_first_pass_percentage"])
+        self.assertEqual(0.3333, telemetry["first_pass_guardrail_pass_rate"])
+        self.assertEqual(33.33, telemetry["first_pass_guardrail_pass_rate_percentage"])
+        self.assertEqual(0.5, telemetry["deterministic_constraint_coverage"])
+        self.assertEqual(
+            50.0, telemetry["deterministic_constraint_coverage_percentage"]
+        )
+        self.assertEqual(0.75, telemetry["output_schema_coverage"])
+        self.assertEqual(75.0, telemetry["output_schema_coverage_percentage"])
+
+        pkg_by_name = {pkg["name"]: pkg for pkg in telemetry["packages"]}
+        for pkg_name, pkg_entry in pkg_by_name.items():
+            direct_errors = validate_skills.validate_skill(
+                self.repo / "skills" / pkg_name
+            )
+            self.assertEqual(direct_errors, pkg_entry["errors"])
+            for err in direct_errors:
+                self.assertIn(f"{pkg_name}: {err}", errors)
+
+        self.assertEqual(
+            {
+                "name": "partial-invalid-skill",
+                "valid": False,
+                "is_new": True,
+                "first_pass_valid": False,
+                "validation_attempts": 1,
+                "has_output_schema": True,
+                "output_schemas": ["assets/partial-invalid-skill.schema.json"],
+                "has_prompt_constraints": False,
+                "has_boundary_sections": True,
+                "deterministic_constraint_coverage": False,
+                "errors": pkg_by_name["partial-invalid-skill"]["errors"],
+            },
+            pkg_by_name["partial-invalid-skill"],
+        )
+        self.assertEqual(
+            {
+                "name": "broken-frontmatter-skill",
+                "valid": False,
+                "is_new": True,
+                "first_pass_valid": False,
+                "validation_attempts": 1,
+                "has_output_schema": False,
+                "output_schemas": [],
+                "has_prompt_constraints": False,
+                "has_boundary_sections": False,
+                "deterministic_constraint_coverage": False,
+                "errors": pkg_by_name["broken-frontmatter-skill"]["errors"],
+            },
+            pkg_by_name["broken-frontmatter-skill"],
+        )
+
+        md = validate_skills.format_telemetry_markdown(telemetry)
+        self.assertIn("| New-Skill First-Pass Rate | **33.33%** |", md)
+        self.assertIn("| Output Schema Coverage | 75.0% |", md)
+
 
 class WorkflowAndContributingGuardrailTests(unittest.TestCase):
     """Verify CI workflow telemetry setup, action pins, and CONTRIBUTING.md guardrails."""

@@ -63,6 +63,8 @@ jobs:
           path: validation-telemetry.json
           if-no-files-found: warn
           retention-days: 7
+      - name: Verify documentation links and snippets
+        run: python scripts/run_checks.py --phase docs
       - name: Verify Makefile syntax
         if: runner.os != 'Windows'
         run: make -n check

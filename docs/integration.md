@@ -6,7 +6,7 @@ All workflows follow the audit-only default policy defined in [AGENTS.md](../AGE
 
 ## Supported Agent Hosts
 
-The toolkit catalogs eight agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json), and [gemini-extension.json](../gemini-extension.json).
+The toolkit catalogs nine agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json), and [gemini-extension.json](../gemini-extension.json).
 
 | Host | Project Path | User Path | Invocation Syntax | Marker File | Behavioral Test Status |
 | --- | --- | --- | --- | --- | --- |
@@ -18,6 +18,7 @@ The toolkit catalogs eight agent hosts in [catalog/hosts.json](../catalog/hosts.
 | GitHub Copilot (`copilot`) | `.github/skills` | `.copilot/skills` | `/skill-name` or natural language | `.github/skills` (primary), `.github` (fallback) | not-executed |
 | OpenCode (`opencode`) | `.opencode/skills` | `.config/opencode/skills` | `/skill-name` or natural language | `.opencode` (project), `.config/opencode` (user) | not-executed |
 | Windsurf (`windsurf`) | `.windsurf/skills` | `.config/devin/skills` | `@skill-name` or natural language | `.windsurf`, `.devin` (project), `.config/devin` (user) | not-executed |
+| Kiro (`kiro`) | `.kiro/skills` | `.kiro/skills` | `/skill-name` or natural language | `.kiro` | not-executed |
 
 > Note: Host adapter filesystem checks verify directory layout. They do not certify host runtime behavior or model performance.
 
@@ -218,9 +219,9 @@ The function `detect_host()` in `scripts/fredlib/installation.py` identifies tar
 
 ### Marker Resolution Rules
 1. **Tiered Marker Detection**:
-   - **Primary project markers**: `.claude` (`claude-code`), `.cursor` (`cursor`), `.gemini` (`gemini-cli`), `.opencode` (`opencode`), `.windsurf` or `.devin` (`windsurf`), `.github/skills` (`copilot`), and `.agents` (`codex` by default, or `antigravity` when an `antigravity` receipt exists).
+   - **Primary project markers**: `.claude` (`claude-code`), `.cursor` (`cursor`), `.gemini` (`gemini-cli`), `.opencode` (`opencode`), `.windsurf` or `.devin` (`windsurf`), `.kiro` (`kiro`), `.github/skills` (`copilot`), and `.agents` (`codex` by default, or `antigravity` when an `antigravity` receipt exists).
    - **Fallback project marker**: Bare `.github` resolves to `copilot` only when no primary marker or conflicting host receipt exists.
-   - **User-scope markers** (`--scope user`): `.claude`, `.cursor`, `.agents`, `.gemini`, `.copilot`, `.config/opencode`, and `.config/devin`.
+   - **User-scope markers** (`--scope user`): `.claude`, `.cursor`, `.agents`, `.gemini`, `.copilot`, `.config/opencode`, `.config/devin`, and `.kiro`.
 
 2. **Multi-Host Fan-Out vs. Single-Host Safeguards**:
    - When `--host` is omitted, `install` defaults to the `starter` pack, fans out atomically across all detected markers (deduplicating shared `.agents/skills` targets), or bootstraps `.agents/skills` under `codex` when zero markers exist; `update` and `installed` also aggregate across detected hosts.
@@ -484,16 +485,82 @@ To inject a skill into a custom agent harness:
    ```json
    {
      "schema_version": "1.0",
+     "run_id": "harness-run-001",
+     "repository": {
+       "identity": "example-service",
+       "revision": "main",
+       "dirty": false,
+       "snapshot": "sha256:example"
+     },
+     "scope": ["src/queue.py"],
+     "coverage": [
+       {
+         "topic": "concurrency",
+         "scope": "src/queue.py",
+         "status": "inspected",
+         "evidence_ids": ["E-001"],
+         "notes": "Reviewed worker dispatch loop and task spawning bounds.",
+         "next_action": "Add bounded semaphore regression test."
+       }
+     ],
+     "contracts": [
+       {
+         "id": "C-001",
+         "dimension": "concurrency",
+         "scope": "src/queue.py",
+         "intended": "Worker bounds concurrent task execution",
+         "observed": "Worker spawns unbounded background tasks",
+         "enforcement": "none",
+         "evidence_ids": ["E-001"]
+       }
+     ],
+     "evidence": [
+       {
+         "id": "E-001",
+         "path": "src/queue.py",
+         "line_start": 42,
+         "line_end": 58,
+         "symbol": "QueueWorker.dispatch",
+         "context": "Worker spawns tasks without a concurrency semaphore."
+       }
+     ],
      "findings": [
        {
          "id": "F-001",
+         "topic": "concurrency",
+         "tags": ["backpressure", "worker"],
          "title": "Unbounded concurrency in queue worker",
-         "status": "candidate",
+         "status": "supported",
          "severity": "high",
-         "target": "src/queue.py",
-         "lines": [42, 58],
-         "evidence": "Worker spawns tasks without concurrency semaphore."
+         "confidence": "high",
+         "contract_ids": ["C-001"],
+         "evidence_ids": ["E-001"],
+         "preconditions": "Burst of incoming queue messages exceeds worker capacity",
+         "sequence": [
+           "Producer enqueues a large batch of jobs",
+           "QueueWorker.dispatch spawns a task per message without awaiting a semaphore"
+         ],
+         "expected": "In-flight worker tasks remain bounded by configured concurrency",
+         "actual": "Unbounded tasks exhaust memory and downstream connection pools",
+         "impact": "Worker process exhaustion under burst traffic",
+         "root_cause": "Missing concurrency semaphore around task creation",
+         "counterevidence": "No upstream rate limiter caps burst delivery to QueueWorker",
+         "remedy": "Guard task spawning with an explicit asyncio.Semaphore limit",
+         "acceptance": [
+           "Concurrent in-flight tasks never exceed the configured limit"
+         ],
+         "validation": {
+           "state": "not-run",
+           "commands": [],
+           "result": "Static inspection only; runtime load test not executed."
+         },
+         "related_findings": []
        }
-     ]
+     ],
+     "issues": [],
+     "limitations": [
+       "Static harness example; runtime load test not executed."
+     ],
+     "checks": []
    }
    ```

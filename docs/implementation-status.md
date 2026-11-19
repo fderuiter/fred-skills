@@ -7,7 +7,7 @@ actual validation. There is no claim of being the world's best skill repository.
 | Improvement | Delivered | Remaining evidence or decision |
 | --- | --- | --- |
 | Task-oriented discovery | 18 recipes, 12 packs, metadata/symptoms, [hosted](https://fderuiter.github.io/fred-skills) and [offline](explorer.html) searchable explorer | Observe real user completion and improve confusing routes |
-| Cross-host use | Explicit copy adapters for four hosts, manual standalone packages | Real host activation/precedence/behavior checks for each host/version |
+| Cross-host use | Explicit copy adapters for nine hosts, manual standalone packages | Real host activation/precedence/behavior checks for each host/version |
 | Managed installation | Dry runs, receipts/hashes, modified-content refusal, backup/rollback, prepared-install recovery | Power-loss recovery for remove/rollback remains manual (see [operational runbooks](runbooks.md)); shared-target concurrency is unsupported |
 | Bounded investigations | Plans, 3 budgets, 4 modes, explicit Git base, selected/deferred work | Budgets are investigation counts, not cost guarantees |
 | Repository context | Read-only preflight, source identities, opt-in profiles/config | Project profiles are hypotheses; no current project audit is bundled |

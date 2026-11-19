@@ -44,7 +44,7 @@ class DocLinkVerificationTests(unittest.TestCase):
         self.assertEqual([], errors, f"Found broken relative links: {errors}")
 
     def test_extract_relative_links_filters_external_and_fragments(self):
-        """External URLs and in-page anchor links must be ignored."""
+        """External URLs and in-page anchor links must be ignored by default, with opt-in fragments."""
         content = (
             "Check [Section](#heading) and [Site](https://example.com/page).\n"
             "Also [Local doc](docs/experience.md) and [Target](docs/toolkit.md#discover).\n"
@@ -54,6 +54,151 @@ class DocLinkVerificationTests(unittest.TestCase):
         self.assertIn("docs/toolkit.md#discover", links)
         self.assertNotIn("#heading", links)
         self.assertNotIn("https://example.com/page", links)
+
+        with_fragments = extract_relative_links(content, include_fragments=True)
+        self.assertIn("#heading", with_fragments)
+        self.assertIn("docs/toolkit.md#discover", with_fragments)
+        self.assertNotIn("https://example.com/page", with_fragments)
+
+    def test_cli_subprocess_verifiers_and_docs_phase(self) -> None:
+        """CLI subprocess entry points validate explorer.html, reject broken anchors/snippets, and wire run_checks docs phase."""
+        ok_explorer = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/check_doc_links.py"),
+                "docs/explorer.html",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, ok_explorer.returncode, ok_explorer.stderr)
+
+        ok_snippets = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/verify_doc_snippets.py"),
+                "--check",
+                "docs/integration.md",
+                "docs/runbooks.md",
+                "docs/api.md",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, ok_snippets.returncode, ok_snippets.stderr)
+        self.assertIn("PASS:", ok_snippets.stdout)
+
+        dry_docs = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/run_checks.py"),
+                "--phase",
+                "docs",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, dry_docs.returncode, dry_docs.stderr)
+        self.assertIn("scripts/check_doc_links.py", dry_docs.stdout)
+        self.assertIn("scripts/verify_doc_snippets.py", dry_docs.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            bad_link_doc = tmp_path / "broken_anchor.md"
+            bad_link_doc.write_text(
+                "# Valid Heading\n\nSee [Missing](#missing-section).\n",
+                encoding="utf-8",
+            )
+            bad_link_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/check_doc_links.py"),
+                    str(bad_link_doc),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(0, bad_link_proc.returncode)
+            self.assertIn("#missing-section", bad_link_proc.stderr)
+
+            bad_snippet_doc = tmp_path / "broken_snippet.md"
+            bad_snippet_doc.write_text(
+                "```sh\npython scripts/fred.py plan . --output-plan out.json\n```\n",
+                encoding="utf-8",
+            )
+            bad_snippet_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/verify_doc_snippets.py"),
+                    str(bad_snippet_doc),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(0, bad_snippet_proc.returncode)
+            self.assertIn("--output-plan", bad_snippet_proc.stderr)
+
+    def test_in_page_and_cross_file_anchor_validation(self) -> None:
+        """check_file_links and check_docs validate Markdown and HTML in-page and cross-file #fragment anchors."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            guide = tmp_path / "guide.md"
+            guide.write_text(
+                "# Guide Overview\n\n"
+                "## Module: `fredlib.runs`\n\n"
+                "### `import_sarif`\n\n"
+                "## Duplicate\n\n"
+                "## Duplicate\n\n"
+                "```md\n# Ignored Fence Heading\n[Ignored](#not-real)\n```\n",
+                encoding="utf-8",
+            )
+            explorer = tmp_path / "explorer.html"
+            explorer.write_text(
+                "<!doctype html><html><body>"
+                '<article id="repo-audit-concurrency"><a href="guide.md#module-fredlibruns">Runs</a></article>'
+                '<a href="#repo-audit-concurrency">Self</a>'
+                "</body></html>\n",
+                encoding="utf-8",
+            )
+            index_doc = tmp_path / "index.md"
+            index_doc.write_text(
+                "# Index\n\n"
+                "- [Self](#index)\n"
+                "- [Overview](guide.md#guide-overview)\n"
+                "- [Func](guide.md#import_sarif)\n"
+                "- [Dup 1](guide.md#duplicate)\n"
+                "- [Dup 2](guide.md#duplicate-1)\n"
+                "- [Card](explorer.html#repo-audit-concurrency)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], check_docs(root=tmp_path, target_files=[tmp_path]))
+
+            broken_md = tmp_path / "broken.md"
+            broken_md.write_text(
+                "# Heading\n\n"
+                "- [Bad in-page](#nonexistent-anchor)\n"
+                "- [Bad fence heading](guide.md#ignored-fence-heading)\n"
+                "- [Bad cross md](guide.md#missing-target)\n"
+                "- [Bad cross html](explorer.html#missing-skill)\n",
+                encoding="utf-8",
+            )
+            broken_errs = check_file_links(broken_md, root=tmp_path)
+            self.assertEqual(4, len(broken_errs), broken_errs)
+            self.assertTrue(any("#nonexistent-anchor" in e for e in broken_errs))
+            self.assertTrue(any("#ignored-fence-heading" in e for e in broken_errs))
+            self.assertTrue(any("#missing-target" in e for e in broken_errs))
+            self.assertTrue(any("#missing-skill" in e for e in broken_errs))
 
     def test_missing_relative_link_is_detected(self):
         """Broken relative paths must be reported as errors."""
@@ -209,17 +354,37 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover blocks in all specified documentation files",
         )
 
+        guides_with_blocks = {
+            "README.md",
+            "CONTRIBUTING.md",
+            "AGENTS.md",
+            "docs/api.md",
+            "docs/toolkit.md",
+            "docs/usage.md",
+            "docs/runbooks.md",
+            "docs/integration.md",
+        }
+        self.assertTrue(guides_with_blocks.issubset(set(DOCUMENTED_RANGES.keys())))
+
         for rel_path, (s_line, e_line) in DOCUMENTED_RANGES.items():
             blocks = discovered[rel_path]
-            self.assertTrue(
-                len(blocks) > 0,
-                f"Expected discovered blocks in {rel_path} (L{s_line}-L{e_line})",
-            )
+            if rel_path in guides_with_blocks:
+                self.assertTrue(
+                    len(blocks) > 0,
+                    f"Expected discovered blocks in {rel_path} (L{s_line}-L{e_line})",
+                )
             for block in blocks:
                 if s_line is not None:
                     self.assertGreaterEqual(block.end_line, s_line)
                 if e_line is not None:
                     self.assertLessEqual(block.start_line, e_line)
+
+        # Full-file discovery coverage for api (36 blocks), runbooks (65 blocks), and integration (32 blocks)
+        self.assertEqual(
+            len(discovered["docs/api.md"]),
+            36,
+            "Must discover all 36 Python blocks in docs/api.md",
+        )
 
         # Full-file discovery coverage for runbooks (65 blocks) and integration (32 blocks)
         self.assertEqual(
@@ -784,16 +949,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 )
 
     def test_documented_ranges_cover_all_seven_guides_completely(self) -> None:
-        """All 7 registered guides use full-file (1, None) bounds."""
-        expected_guides = {
-            "README.md",
-            "CONTRIBUTING.md",
-            "AGENTS.md",
-            "docs/toolkit.md",
-            "docs/usage.md",
-            "docs/runbooks.md",
-            "docs/integration.md",
+        """All root Markdown guides and docs/*.md files are discovered with full-file (1, None) bounds."""
+        expected_guides = {p.name for p in ROOT.glob("*.md")} | {
+            p.relative_to(ROOT).as_posix() for p in (ROOT / "docs").rglob("*.md")
         }
+        self.assertGreaterEqual(len(expected_guides), 17)
         self.assertEqual(expected_guides, set(DOCUMENTED_RANGES.keys()))
         for guide, bounds in DOCUMENTED_RANGES.items():
             self.assertEqual(
@@ -959,10 +1119,22 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertFalse(ok_bad_target)
 
     def test_agents_md_includes_doc_verification_scripts(self) -> None:
-        """AGENTS.md fallback command block includes check_doc_links.py and verify_doc_snippets.py."""
+        """AGENTS.md stays within 30 lines, includes doc verification scripts, and has thin vendor shims."""
         agents_text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        agents_lines = agents_text.splitlines()
+        self.assertLessEqual(
+            len(agents_lines),
+            30,
+            f"Expected AGENTS.md to stay at 30 lines or fewer, got {len(agents_lines)}",
+        )
         self.assertIn("python scripts/check_doc_links.py", agents_text)
         self.assertIn("python scripts/verify_doc_snippets.py", agents_text)
+        claude_text = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertEqual("@AGENTS.md", claude_text.strip())
+        copilot_text = (ROOT / ".github/copilot-instructions.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[AGENTS.md](../AGENTS.md)", copilot_text)
 
     def test_yaml_workflow_run_steps_extracted_and_reject_invalid_flags(self) -> None:
         """YAML workflow blocks in docs/integration.md execute run steps and reject invalid flags."""
@@ -1064,22 +1236,22 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 root=tmp_root, files=["README.md", "docs/usage.md"]
             )
             self.assertTrue(
-                any("README.md:L106:" in err and "v0.3.0" in err for err in ver_errors),
-                f"Expected README.md:L106 version drift failure, got: {ver_errors}",
+                any("README.md:L117:" in err and "v0.3.0" in err for err in ver_errors),
+                f"Expected README.md:L117 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L128:" in err and "v0.3.0" in err
+                    "docs/usage.md:L139:" in err and "v0.3.0" in err
                     for err in ver_errors
                 ),
-                f"Expected docs/usage.md:L128 version drift failure, got: {ver_errors}",
+                f"Expected docs/usage.md:L139 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L156:" in err and "0.3.0" in err
+                    "docs/usage.md:L167:" in err and "0.3.0" in err
                     for err in ver_errors
                 ),
-                f"Expected docs/usage.md:L156 tar version drift failure, got: {ver_errors}",
+                f"Expected docs/usage.md:L167 tar version drift failure, got: {ver_errors}",
             )
 
             # Restore VERSION and mutate catalog/packs.json skill count without updating docs
@@ -1115,6 +1287,150 @@ class DocSnippetVerificationTests(unittest.TestCase):
                     for err in count_errors
                 ),
                 f"Expected release-notes L6 count drift failure, got: {count_errors}",
+            )
+
+    def test_shell_prefixes_control_keywords_env_and_assignments_unwrapped(
+        self,
+    ) -> None:
+        """Commands prefixed by if, then, for, do, env, or VAR=val fail when inner flags are invalid."""
+        invalid_prefixed = [
+            "if python scripts/fred.py search --invalid-flag; then echo ok; fi",
+            "if [ -f audit.json ]; then python scripts/fred.py issues audit.json --invalid-flag; fi",
+            "for run_dir in a b; do python scripts/fred.py validate-run $run_dir --invalid-flag; done",
+            "for python scripts/fred.py search --invalid-flag",
+            "do make check --invalid-flag",
+            "env PYTHONDONTWRITEBYTECODE=1 python scripts/run_checks.py --invalid-flag",
+            "env -i -u HOME FOO=bar ruff check . --invalid-flag",
+            "PYTHONDONTWRITEBYTECODE=1 SKIP=mypy pre-commit run --all-files --invalid-flag",
+        ]
+        for cmd in invalid_prefixed:
+            ok, _ = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(ok, f"Expected prefixed invalid command to fail: {cmd}")
+
+        valid_prefixed = [
+            "if [ -f audit.json ]; then python scripts/fred.py issues audit.json --output audit-drafts --format markdown; fi",
+            "for tar in a b; do python scripts/fred.py installed --destination /path/to/project --host codex; done",
+            "env PYTHONDONTWRITEBYTECODE=1 python scripts/run_checks.py --phase docs",
+            "SKIP=mypy pre-commit run --all-files",
+        ]
+        for cmd in valid_prefixed:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(
+                ok, f"Expected prefixed valid command to pass: {cmd} -> {msg}"
+            )
+
+    def test_fred_catalog_flags_and_gh_subcommand_flags_validated(self) -> None:
+        """Invalid --skill, --profile, or --case values fail, while valid gh release and gh issue flags pass."""
+        invalid_catalog_cmds = [
+            "python scripts/fred.py install --destination /path/to/project --host codex --skill nonexistent-skill",
+            "python scripts/fred.py remove --destination /path/to/project --host codex --skill=nonexistent-skill",
+            "python scripts/fred.py plan /path/to/project --task review-pr --profile nonexistent-profile",
+            'python scripts/fred.py evaluate --output eval-out --adapter-argv \'["python", "a.py"]\' --case nonexistent-case',
+        ]
+        for cmd in invalid_catalog_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(ok, f"Expected invalid catalog command to fail: {cmd}")
+            self.assertTrue(msg, f"Expected non-empty failure reason for: {cmd}")
+
+        valid_catalog_cmds = [
+            "python scripts/fred.py install --destination /path/to/project --host codex --skill repo-audit-concurrency",
+            "python scripts/fred.py plan /path/to/project --task review-pr --profile web-app",
+            "python scripts/fred.py plan /path/to/project --task <task> --profile <profile>",
+            'python scripts/fred.py evaluate --output eval-out --adapter-argv \'["python", "a.py"]\' --case concurrency-a',
+            'python scripts/fred.py evaluate --output eval-out --adapter-argv \'["python", "a.py"]\' --case <case>',
+        ]
+        for cmd in valid_catalog_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(
+                ok, f"Expected valid catalog command to pass: {cmd} -> {msg}"
+            )
+
+        valid_gh_cmds = [
+            "gh release create v0.2.0 --verify-tag --target main --notes-file docs/release-notes-0.2.0.md",
+            'gh release download v0.2.0 --pattern "*.tar.gz" --clobber --repo fderuiter/fred-skills',
+            'gh issue create --title "Defect" --body "Details" --label bug --repo fderuiter/fred-skills',
+            "gh issue list --state open --limit 10 --repo fderuiter/fred-skills",
+        ]
+        for cmd in valid_gh_cmds:
+            ok, msg = execute_snippet_command(cmd, root=ROOT)
+            self.assertTrue(ok, f"Expected valid gh command to pass: {cmd} -> {msg}")
+
+        with patch("verify_doc_snippets.shutil.which", return_value=None):
+            for cmd in valid_gh_cmds:
+                ok_fb, msg_fb = execute_snippet_command(cmd, root=ROOT)
+                self.assertTrue(
+                    ok_fb, f"Expected fallback gh check to pass: {cmd} -> {msg_fb}"
+                )
+
+        invalid_gh_cmds = [
+            "gh release create v0.2.0 --deny-self-hosted-runners",
+            "gh issue create --predicate-type https://slsa.dev/provenance/v1",
+            "gh release view v0.2.0 --invalid-flag",
+            "gh issue list --invalid-flag",
+        ]
+        for cmd in invalid_gh_cmds:
+            ok, _ = execute_snippet_command(cmd, root=ROOT)
+            self.assertFalse(ok, f"Expected invalid gh subcommand flag to fail: {cmd}")
+
+    def test_python_yaml_and_audit_json_block_verification(self) -> None:
+        """Python syntax errors, invalid JSON, and broken Audit Schema 1.0 JSON blocks fail with exact line numbers."""
+        import json
+
+        from fredlib import runs
+
+        integration_blocks = discover_doc_blocks(root=ROOT)["docs/integration.md"]
+        json_blocks = [b for b in integration_blocks if b.language == "json"]
+        self.assertEqual(1, len(json_blocks))
+        parsed_audit = json.loads(json_blocks[0].content)
+        self.assertEqual([], runs.audit_errors(parsed_audit))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            doc_path = tmp_root / "docs/broken_blocks.md"
+            doc_path.parent.mkdir(parents=True)
+            doc_path.write_text(
+                "```python\n"
+                "def bad_func(x: int\n"
+                "    return x\n"
+                "```\n\n"
+                "```json\n"
+                "{\n"
+                '  "recovery": "already-committed",\n'
+                '  "skills": [...]\n'
+                "}\n"
+                "```\n\n"
+                "```json\n"
+                "{\n"
+                '  "schema_version": "1.0",\n'
+                '  "findings": [\n'
+                '    {"id": "F-001", "status": "candidate"}\n'
+                "  ]\n"
+                "}\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            errs = verify_all_snippets(root=tmp_root, files=["docs/broken_blocks.md"])
+            self.assertTrue(
+                any(
+                    "docs/broken_blocks.md:L2:" in e and "Python syntax error" in e
+                    for e in errs
+                ),
+                f"Expected Python syntax error at L2, got: {errs}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/broken_blocks.md:L9:" in e and "Invalid JSON syntax" in e
+                    for e in errs
+                ),
+                f"Expected JSON syntax error at L9, got: {errs}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/broken_blocks.md:L14:" in e
+                    and "Audit schema validation failed" in e
+                    for e in errs
+                ),
+                f"Expected Audit schema error at L14, got: {errs}",
             )
 
 

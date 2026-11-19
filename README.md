@@ -36,6 +36,16 @@ Register the marketplace catalog, then install the `fred-skills` suite plugin, a
 /plugin install complete@fred-skills
 ```
 
+### Skills CLI
+
+Install skills across supported agent hosts with the open [`skills`](https://skills.sh/docs) CLI:
+
+```sh
+npx skills add fderuiter/fred-skills
+# Or install a single specialist:
+npx skills add fderuiter/fred-skills --skill repo-audit-concurrency
+```
+
 ### Codex
 
 Install skills into `.agents/skills/` using OpenAI Codex's built-in `$skill-installer` or the local CLI:
@@ -84,8 +94,9 @@ source identity; **it does not execute an audit**. Budgets show deferred topics 
 than implying complete coverage. Use `--allow-fixes` only within a user-authorized
 correction task. Remote issue publication is a separate explicit choice.
 
-The managed installer supports explicit Codex, Claude Code, Antigravity, and Gemini CLI
-locations, with dry runs, local-change protection, receipts, backups, and rollback.
+The managed installer supports all nine cataloged agent hosts (Codex, Claude Code,
+Antigravity, Gemini CLI, Cursor, GitHub Copilot, OpenCode, Windsurf, and Kiro),
+with dry runs, local-change protection, receipts, backups, and rollback.
 Copy-path checks do not establish behavior on those hosts. Manual directory copying
 remains supported; Python is unnecessary for instruction-only use.
 
