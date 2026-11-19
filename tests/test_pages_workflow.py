@@ -451,7 +451,7 @@ class PagesWorkflowTests(unittest.TestCase):
         }
 
         def fake_ls_remote(
-            cmd: list[str], **kwargs: Any
+            cmd: list[str], **_kwargs: Any
         ) -> subprocess.CompletedProcess[str]:
             url = cmd[-1]
             return subprocess.CompletedProcess(

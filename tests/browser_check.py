@@ -572,7 +572,7 @@ with tempfile.TemporaryDirectory() as temporary:
         build_site(mounted_site, root=ROOT)
 
         class _QuietStaticHandler(http.server.SimpleHTTPRequestHandler):
-            def log_message(self, format: str, *log_args: object) -> None:
+            def log_message(self, _format: str, *_log_args: object) -> None:
                 return
 
         handler_cls = functools.partial(_QuietStaticHandler, directory=str(web_root))

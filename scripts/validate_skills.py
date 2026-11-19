@@ -62,7 +62,6 @@ ALLOWED_PROMPT_PLACEHOLDERS = frozenset(
         "<symbol>",
     }
 )
-ALLOWED_PLACEHOLDERS = ALLOWED_PROMPT_PLACEHOLDERS
 
 NEGATIVE_CONSTRAINT_PATTERN = re.compile(
     r"\b(do not|never|must not|cannot|should not|prohibit\w*|forbid\w*|avoid\w*|disallow\w*)\b",
@@ -75,10 +74,6 @@ GUARDRAIL_HEADING_PATTERN = re.compile(
 DELIVERY_HEADING_PATTERN = re.compile(
     r"^##+\s+.*\b(deliver\w*|produce)\b",
     re.IGNORECASE,
-)
-BOUNDARY_SECTION_PATTERN = re.compile(
-    r"^##+\s+.*\b(guardrail\w*|prohibit\w*|constraint\w*|non-goal\w*|out of scope|deliver\w*|produce)\b",
-    re.IGNORECASE | re.MULTILINE,
 )
 PROMPT_HEADING_PATTERN = re.compile(r"^\s*#+", re.MULTILINE)
 REPEATED_WORD_PATTERN = re.compile(r"\b([A-Za-z0-9]+)\s+\1\b", re.IGNORECASE)

@@ -127,8 +127,6 @@ def normalize_cli_token(token: str) -> str:
 
 @dataclass
 class CommandBlock:
-    file_path: Path
-    relative_path: str
     start_line: int
     end_line: int
     language: str
@@ -341,6 +339,7 @@ def extract_blocks_from_file(
     root: Path = ROOT,
 ) -> list[CommandBlock]:
     """Extract fenced code blocks and commands from a markdown file within an optional line range."""
+    del root
     if not file_path.is_file():
         return []
 
@@ -348,11 +347,6 @@ def extract_blocks_from_file(
         lines = file_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
-
-    try:
-        rel_path = file_path.resolve().relative_to(root.resolve()).as_posix()
-    except ValueError:
-        rel_path = str(file_path).replace("\\", "/")
 
     raw_blocks = _parse_fenced_blocks(lines)
     heading_map = _headings_by_block_start(
@@ -367,8 +361,6 @@ def extract_blocks_from_file(
         raw_content = "\n".join(text for _, text in b_lines)
         blocks.append(
             CommandBlock(
-                file_path=file_path,
-                relative_path=rel_path,
                 start_line=b_start,
                 end_line=b_end,
                 language=b_lang,
