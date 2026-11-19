@@ -301,14 +301,14 @@ An audit workflow separates responsibilities into three agent roles:
 - **Structured Communication**: Agents communicate only through validated schema files.
 
 ### Artifact Handoff Protocol
-Agents exchange information through structured artifacts:
+Agents exchange information through structured artifacts (`fred.py` exits `1` on runtime/schema errors, `2` on invalid CLI flags):
 
 | Artifact | Schema Contract | Purpose in Multi-Agent Handoff |
 | --- | --- | --- |
 | `run.json` | `schemas/run.schema.json` | Records run ID, Git commit hash, file inventory hashes, selected skills, and checkpoints. |
 | `audit.json` | Existing schema 1.0 | Canonical audit ledger holding evidence, findings, checks, coverage, and contracts. |
 | `prompt.md` | Markdown contract | Self-contained instructions for downstream agents. |
-| `freshness.json` | `schemas/freshness.schema.json` | Records file changes between audit runs to invalidate stale findings. |
+| `revalidation.json` | `resume` / `revalidate` JSON | Records file changes between snapshots (`resume`) to flag stale findings. |
 
 ### End-to-End Multi-Agent Workflow Example
 
@@ -356,7 +356,7 @@ You can run automated audit checks in continuous integration pipelines with stri
 1. Set repository permissions to read-only (`contents: read`).
 2. Do not supply write tokens or issue creation permissions.
 3. Save audit ledgers and draft reports as workflow artifacts.
-4. Fail the workflow if ledger schema validation fails.
+4. Fail the workflow if ledger schema validation fails (`validate-run` exits `1`; invalid CLI flags exit `2`).
 
 ### Complete GitHub Actions Workflow Example
 

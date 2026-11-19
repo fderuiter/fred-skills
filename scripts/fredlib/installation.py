@@ -10,11 +10,13 @@ from typing import Any
 
 from .common import (
     ROOT,
+    FredCliError,
     atomic_json,
     choose_skills,
     digest,
     package_files,
     read_json,
+    read_json_object,
     relative_path,
     version,
 )
@@ -363,10 +365,12 @@ def lock(state: Path):
 
 def receipt(state: Path) -> dict:
     path = state / "receipt.json"
-    return (
-        read_json(path)
-        if path.exists()
-        else {"schema_version": "1.0", "skills": {}, "history": []}
+    if not path.exists():
+        return {"schema_version": "1.0", "skills": {}, "history": []}
+    return read_json_object(
+        path,
+        label="Installation receipt 'receipt.json'",
+        hint="Inspect '.fred-skills/<host>-<scope>/receipt.json' for corruption before retrying.",
     )
 
 
@@ -1520,6 +1524,35 @@ def _normalize_recover_args(
     return tgt, opt
 
 
+def _load_recovery_journal(state: Path) -> dict:
+    op_path = state / "operation.json"
+    if not op_path.is_file():
+        raise FredCliError(
+            f"No interrupted installation journal 'operation.json' found in {state}",
+            code="missing_operation_journal",
+            hint="Check installation status with 'python scripts/fred.py installed' (or '--check'); 'recover-install' is only needed when an interrupted operation left 'operation.json'.",
+        )
+    journal = read_json_object(
+        op_path,
+        label="Installation journal 'operation.json'",
+        hint="Inspect 'operation.json' and check 'python scripts/fred.py installed' status before retrying.",
+    )
+    required_keys = {"id", "skills", "before", "after_hashes", "backups"}
+    if (
+        not required_keys.issubset(journal)
+        or not isinstance(journal["skills"], list)
+        or not isinstance(journal["before"], dict)
+        or not isinstance(journal["after_hashes"], dict)
+        or not isinstance(journal["backups"], str)
+    ):
+        raise FredCliError(
+            f"Malformed installation journal in {op_path}; no recovery changes made",
+            code="invalid_operation_journal",
+            hint="Inspect 'operation.json' manually and check 'python scripts/fred.py installed' status.",
+        )
+    return journal
+
+
 def recover(
     target: TargetEnvironment | Path | str | RecoverOptions | None = None,
     options: RecoverOptions | None = None,
@@ -1542,8 +1575,10 @@ def recover(
         root=root,
     )
     if not opt.confirm_interrupted:
-        raise ValueError(
-            "Recovery requires --confirm-interrupted after verifying the previous writer has stopped"
+        raise FredCliError(
+            "Recovery requires --confirm-interrupted after verifying the previous writer has stopped",
+            code="confirmation_required",
+            hint="Check 'python scripts/fred.py installed', confirm the previous writer exited, and rerun with --confirm-interrupted.",
         )
     resolved_host = _resolve_lifecycle_host(
         env.destination, env.host, env.scope, env.root
@@ -1551,7 +1586,7 @@ def recover(
     target_path, state_path = locations(
         env.destination, resolved_host, env.scope, env.root
     )
-    journal = read_json(state_path / "operation.json")
+    journal = _load_recovery_journal(state_path)
     current = receipt(state_path)
     committed_result = _check_already_committed_recovery(
         target_path, state_path, journal, current

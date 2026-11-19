@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 from fredlib import installation, releases
-from fredlib.common import atomic_json, read_json
+from fredlib.common import FredCliError, atomic_json, read_json
 
 
 class InstallationTests(unittest.TestCase):
@@ -1176,6 +1176,68 @@ class InstallationTests(unittest.TestCase):
                             4,
                             f"Method {item.name}.{method.name} has {pos_count} positional parameters (limit is 4)",
                         )
+
+    def test_recover_without_operation_journal_advises_checking_installed(self):
+        self.destination.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(FredCliError) as fresh_ctx:
+            installation.recover(
+                self.destination,
+                "codex",
+                confirm_interrupted=True,
+                root=self.source,
+            )
+        self.assertEqual("missing_operation_journal", fresh_ctx.exception.code)
+        self.assertIn("installed", fresh_ctx.exception.hint or "")
+
+        self.install()
+        _, state = installation.locations(
+            self.destination, "codex", "project", self.source
+        )
+        (state / "operation.json").unlink()
+        with self.assertRaises(FredCliError) as ctx:
+            installation.recover(
+                self.destination,
+                "codex",
+                confirm_interrupted=True,
+                root=self.source,
+            )
+        self.assertEqual("missing_operation_journal", ctx.exception.code)
+        self.assertIsNotNone(ctx.exception.hint)
+        self.assertIn("installed", ctx.exception.hint or "")
+
+    def test_release_verify_resolves_directory_and_guards_manifest_inputs(self):
+        rel_out = self.root / "release-bundle"
+        releases.build(rel_out, "starter", root=self.source)
+        # Directory path resolves manifest.json automatically
+        verified = releases.verify(rel_out)
+        self.assertEqual(2, verified["verified_archives"])
+
+        empty_dir = self.root / "empty-release"
+        empty_dir.mkdir()
+        with self.assertRaises(FredCliError) as missing_man:
+            releases.verify(empty_dir)
+        self.assertEqual("missing_manifest", missing_man.exception.code)
+        self.assertTrue(missing_man.exception.hint)
+
+        arr_manifest = self.root / "array-manifest.json"
+        arr_manifest.write_text("[]", encoding="utf-8")
+        with self.assertRaises(FredCliError) as arr_ctx:
+            releases.verify(arr_manifest)
+        self.assertEqual("invalid_json_root", arr_ctx.exception.code)
+
+        missing_keys = self.root / "missing-keys.json"
+        atomic_json(missing_keys, {})
+        with self.assertRaises(FredCliError) as keys_ctx:
+            releases.verify(missing_keys)
+        self.assertEqual("invalid_manifest", keys_ctx.exception.code)
+
+        # Missing archive file raises missing_archive FredCliError
+        archive_files = list(rel_out.glob("*.zip"))
+        self.assertTrue(archive_files)
+        archive_files[0].unlink()
+        with self.assertRaises(FredCliError) as miss_arch:
+            releases.verify(rel_out)
+        self.assertEqual("missing_archive", miss_arch.exception.code)
 
 
 if __name__ == "__main__":
