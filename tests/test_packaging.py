@@ -66,18 +66,22 @@ class PackageTests(unittest.TestCase):
                             "id": "sample-audit-failure",
                             "prompt": "Audit synthetic contracts when explicitly requested.",
                             "expected_behavior": ["Report finding with evidence."],
+                            "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral audit task without revealing expected findings.",
                         },
                         {
                             "id": "sample-audit-safe",
                             "prompt": "Audit synthetic contracts when explicitly requested.",
                             "expected_behavior": ["Safeguards verified, no defect."],
+                            "evaluation_note": "Construct a raw safe control; keep expected audit outcomes out of the execution prompt.",
                         },
                         {
                             "id": "sample-audit-routing",
-                            "prompt": "Fix a spelling mistake in the project description.",
+                            "sibling_skill": "sample-sibling-audit",
+                            "prompt": "Audit asynchronous cancellation propagation and stale completion handlers across worker tasks.",
                             "expected_behavior": [
-                                "Do not activate this specialist solely because the task concerns a repository."
+                                "Route this request to sample-sibling-audit instead of activating sample-audit."
                             ],
+                            "evaluation_note": "Near-neighbor sibling routing check within repository-audits; verify routing to sample-sibling-audit.",
                         },
                     ],
                 }
@@ -117,6 +121,142 @@ class PackageTests(unittest.TestCase):
         errors = validate_skill(self.skill)
         self.assertTrue(
             any("references/evaluation-scenarios.json" in error for error in errors)
+        )
+
+    def test_generic_typo_routing_prompt_and_misplaced_audit_notes_are_rejected(self):
+        # 1. Generic spelling/typo prompt is rejected
+        data = json.loads(self.scenarios_file.read_text(encoding="utf-8"))
+        data["scenarios"][2]["prompt"] = (
+            "Fix a spelling mistake in the project description."
+        )
+        self.scenarios_file.write_text(json.dumps(data), encoding="utf-8")
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("generic typo or proofreading prompt" in error for error in errors),
+            f"Expected generic typo prompt error, got: {errors}",
+        )
+
+        # 2. Misplaced audit notes inside a software-architecture skill are rejected
+        arch_skill = self.root / "skills/arch-sample-spec"
+        shutil.copytree(self.skill, arch_skill)
+        (arch_skill / "SKILL.md").write_text(
+            '---\nname: arch-sample-spec\ndescription: "Specify sample architecture boundaries."\n---\n\n# Arch Sample\n\n## Deliver\n\nDeliver architecture spec.\n',
+            encoding="utf-8",
+        )
+        (arch_skill / "assets/prompt.md").write_text(
+            "Use arch-sample-spec on <repository> at <revision>. Do not invent ungrounded boundaries.\n",
+            encoding="utf-8",
+        )
+        (arch_skill / "references/evaluation-scenarios.json").write_text(
+            json.dumps(
+                {
+                    "topic": "arch-sample-spec",
+                    "scenarios": [
+                        {
+                            "id": "arch-sample-spec-failure",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Document trust boundary."],
+                            "evaluation_note": "Execute without revealing expected findings.",
+                        },
+                        {
+                            "id": "arch-sample-spec-safe",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Verify clean gateway."],
+                            "evaluation_note": "Construct a raw safe implementation.",
+                        },
+                        {
+                            "id": "arch-sample-spec-routing",
+                            "sibling_skill": "arch-decision-record",
+                            "prompt": "Author an architectural decision record comparing queue trade-offs.",
+                            "expected_behavior": [
+                                "Route to arch-decision-record instead."
+                            ],
+                            "evaluation_note": "This is an activation test, not an instruction to perform an audit.",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        arch_errors = validate_skill(arch_skill)
+        self.assertTrue(
+            any("misplaced" in err or "legacy audit" in err for err in arch_errors),
+            f"Expected misplaced audit note errors, got: {arch_errors}",
+        )
+
+        # 3. Out-of-suite sibling_skill is rejected when catalog/suites.json defines suite siblings
+        (self.root / "catalog").mkdir(exist_ok=True)
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "software-architecture",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Arch",
+                                    "skills": [
+                                        "arch-sample-spec",
+                                        "arch-decision-record",
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "code-review",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Review",
+                                    "skills": ["review-diff-analysis"],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (arch_skill / "references/evaluation-scenarios.json").write_text(
+            json.dumps(
+                {
+                    "topic": "arch-sample-spec",
+                    "scenarios": [
+                        {
+                            "id": "arch-sample-spec-failure",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Document trust boundary."],
+                            "evaluation_note": "Execute without revealing expected boundary outcomes.",
+                        },
+                        {
+                            "id": "arch-sample-spec-safe",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Verify clean gateway."],
+                            "evaluation_note": "Construct a raw safe boundary control.",
+                        },
+                        {
+                            "id": "arch-sample-spec-routing",
+                            "sibling_skill": "review-diff-analysis",
+                            "prompt": "Inspect pull request diff hunks and caller blast radius.",
+                            "expected_behavior": [
+                                "Route to review-diff-analysis instead."
+                            ],
+                            "evaluation_note": "Sibling routing check for review-diff-analysis.",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cross_suite_errors = validate_skill(arch_skill)
+        self.assertTrue(
+            any(
+                "not a member of suite 'software-architecture'" in err
+                for err in cross_suite_errors
+            ),
+            f"Expected cross-suite sibling error, got: {cross_suite_errors}",
         )
 
     def test_name_mismatch_is_rejected(self):
