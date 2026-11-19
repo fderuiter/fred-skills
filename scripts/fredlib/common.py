@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -243,8 +244,21 @@ def resolve_audit_path(path: Path | str | None = None) -> Path:
     return p
 
 
+def _target_file_mode(path: Path) -> int:
+    try:
+        st = path.lstat()
+        if not stat.S_ISLNK(st.st_mode):
+            return stat.S_IMODE(st.st_mode)
+    except OSError:
+        pass
+    umask = os.umask(0o077)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
 def atomic_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode = _target_file_mode(path)
     fd, name = tempfile.mkstemp(prefix=".fred-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -252,9 +266,12 @@ def atomic_json(path: Path, data) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(name, mode)
         os.replace(name, path)
     finally:
         if os.path.exists(name):
+            if os.name == "nt":
+                os.chmod(name, stat.S_IWRITE)
             os.unlink(name)
 
 
@@ -286,7 +303,10 @@ def package_files(package: Path) -> dict[str, str]:
     if package.is_symlink() or not package.is_dir():
         raise ValueError(f"Expected a real package directory: {package}")
     result = {}
-    for path in sorted(package.rglob("*")):
+    for path in sorted(
+        package.rglob("*"),
+        key=lambda p: p.relative_to(package).as_posix(),
+    ):
         if path.is_symlink():
             raise ValueError(f"Symlinks are not supported in packages: {path}")
         if (

@@ -34,12 +34,14 @@ privileged `release` job entirely. Setting `inputs.publish` to `true` (with opti
 idempotent recovery publication or draft promotion at `target_sha`. Ordinary pull requests
 have no `contents: write` job and never invoke live model adapters.
 
-ZIP and TAR archives contain standalone skill directories; the repository source is
-still needed for root CLI tooling. Archive content uses fixed paths/order/timestamps and
-permissions. ZIP compression bytes may differ across Python/zlib versions, so compare
-checksums produced in the same release environment. `manifest.json` and `SHA256SUMS`
-record integrity; they are not a signature or publisher attestation. Release manifests
-honestly report license state and never certify host behavior.
+ZIP, TAR, and `.tar.gz` archives contain standalone skill directories; the repository
+source is still needed for root CLI tooling. Archive entries use fixed POSIX path order,
+normalized timestamps, and deterministic permissions (`0755` for executable skill scripts
+and `0644` for regular files) with level-9 DEFLATE compression. Compressed `.zip` and
+`.tar.gz` bytes may differ across Python or zlib versions, so compare checksums produced in
+the same release environment. `manifest.json`, `SHA256SUMS`, and `checksums.sha256` record
+integrity; they are not a signature or publisher attestation. Release manifests honestly
+report license state and never certify host behavior.
 
 Do not commit generated archives, personal installation receipts, real audits, or local
 benchmark outputs. Keep release notes concrete: task outcome, compatibility, validation
