@@ -1,48 +1,134 @@
-# Investigation method: Cancellation Propagation
+# Cancellation Propagation: Specialist Method and Examples
 
-## Scope selection
+## Following Abort Signals Across Child Work and State Commits
 
-Review one critical workflow end to end, then expand by resource/actor/data ownership.
-For each inventory class, record concrete instances, relevant source paths, existing
-enforcement, and coverage. Do not mark an entire class reviewed from one example.
+1. Follow `AbortSignal`, `context.Context`, `CancellationToken`, or task-cancel handles from request entry points into every spawned HTTP fetch, subprocess, timer, and worker promise.
+2. Spot faux-cancellation patterns such as `Promise.race([work(), onAbort])` or `asyncio.wait_for` shields where the caller returns early on abort while the losing child coroutine keeps running and mutates shared state upon completion.
+3. Account for documented non-cancelable commit regions (such as finalizing an already-charged payment ledger entry) where post-commit state reconciliation is intentional rather than a leak.
 
-## Contract worksheet
+## Failure Trace vs. Safe Control: Detached `Promise.race` Winner vs. Signal-Aware Fetch
 
-Record the exact predicate or guarantee, independent requirement basis, scope/lifetime,
-establishing operation, invalidating operations, observers, enforcing authority, and
-existing tests. If intended semantics are unknown, record the question and keep the
-finding at needs-validation or hardening until a supported requirement exists.
+```typescript
+// Defect trace: Promise.race rejects on abort, yet fetchPreview keeps running and overwrites previewState
+async function loadDocumentPreview(docId: string, signal: AbortSignal) {
+  const abortPromise = new Promise<never>((_, reject) =>
+    signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
+  );
+  const html = await Promise.race([
+    fetch(`/api/docs/${docId}/preview`).then((r) => r.text()).then((body) => {
+      previewStore.setHtml(docId, body); // runs even after signal aborted!
+      return body;
+    }),
+    abortPromise,
+  ]);
+  return html;
+}
 
-## Topic-specific discovery probes
+// Safe control: forward signal into fetch() and fence store mutation on signal.aborted
+async function loadDocumentPreviewSafe(docId: string, signal: AbortSignal) {
+  const response = await fetch(`/api/docs/${docId}/preview`, { signal });
+  const body = await response.text();
+  if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  previewStore.setHtml(docId, body);
+  return body;
+}
+```
 
-Apply the five topic-specific investigation steps in SKILL.md to each inventoried boundary. Record both passing safeguards and unresolved cases.
+## Cancellation `audit.json` Output Example
 
-## Adversarial case
+Run `python3 <this-skill>/scripts/validate_audit.py cancellation-audit.json` to verify conformance with `assets/audit.schema.json`:
 
-Promise.race returns on abort but the losing request later writes shared state and emits completion.
-
-Find matching reachable code, name the actors and boundaries, and write exact numbered
-steps. Inspect the strongest prevention mechanism. If no real path matches, report
-that this illustrative failure was not established; do not turn the example into evidence.
-
-## Safe control
-
-A documented noncancelable commit region can be correct if its outcome is reconciled and cancellation semantics are explicit.
-
-Preserve the safe control while selecting a correction. Compare mechanisms, not syntax.
-
-## Independent validation
-
-Hold a dependency pending, cancel, then release it; assert children settle, owned resources release, and stale effects cannot publish.
-
-Derive expected results from the contract. Use a bounded deterministic local harness
-where practical, record actual commands/results, and retain limitations. An unavailable
-tool changes the validation plan, not the claimed certainty. Record the smallest missing
-piece of evidence that would resolve each open finding.
-
-## Cross-topic boundary
-
-Keep this topic's inventory complete but hand off a different root cause to the specialist
-named in SKILL.md. Preserve the same evidence IDs and avoid issuing duplicate defect
-reports for one underlying contract violation. Distinct independently fixable causes
-remain separate even when they produce the same observed symptom.
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "cancellation-sample",
+  "repository": {
+    "identity": "acme/docs-web",
+    "revision": "34de06a",
+    "dirty": false,
+    "snapshot": "git-tree:34de06a"
+  },
+  "scope": [
+    "src/preview/loader.ts"
+  ],
+  "coverage": [
+    {
+      "topic": "cancellation",
+      "scope": "src/preview/loader.ts",
+      "status": "inspected",
+      "evidence_ids": [
+        "E-214"
+      ],
+      "notes": "Traced AbortController propagation from route navigation handler through loadDocumentPreview.",
+      "next_action": "Hand off timer cleanup review to repo-audit-lifecycle if needed."
+    }
+  ],
+  "contracts": [
+    {
+      "id": "C-214",
+      "dimension": "cancellation",
+      "scope": "loadDocumentPreview",
+      "intended": "Aborting a preview load terminates network I/O and prevents canceled loads from mutating previewStore.",
+      "observed": "Promise.race abandons awaiting the fetch without passing signal to fetch() or gating previewStore.setHtml.",
+      "enforcement": "none on child fetch or store write in src/preview/loader.ts",
+      "evidence_ids": [
+        "E-214"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-214",
+      "path": "src/preview/loader.ts",
+      "line_start": 9,
+      "line_end": 21,
+      "symbol": "loadDocumentPreview",
+      "context": "Wraps fetch() in Promise.race against abortPromise without forwarding { signal } or checking signal.aborted before previewStore.setHtml."
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-214",
+      "topic": "cancellation",
+      "tags": [
+        "concurrency",
+        "lifecycle"
+      ],
+      "title": "Aborted preview load continues background fetch and mutates previewStore after navigation",
+      "status": "supported",
+      "severity": "medium",
+      "confidence": "high",
+      "contract_ids": [
+        "C-214"
+      ],
+      "evidence_ids": [
+        "E-214"
+      ],
+      "preconditions": "User navigates from large doc-A to doc-B, triggering AbortController.abort() on doc-A.",
+      "sequence": [
+        "loadDocumentPreview('doc-A', signalA) starts fetch('/api/docs/doc-A/preview') without signalA.",
+        "Navigation aborts signalA; Promise.race rejects caller immediately while doc-A fetch stays in flight.",
+        "doc-A fetch resolves after doc-B rendered and calls previewStore.setHtml('doc-A', body)."
+      ],
+      "expected": "Aborting signalA cancels the underlying HTTP request and suppresses previewStore writes.",
+      "actual": "Background fetch consumes bandwidth and writes stale preview state after cancellation.",
+      "impact": "Canceled document loads waste client sockets and overwrite active UI state.",
+      "root_cause": "Caller-side Promise.race detaches observation without propagating AbortSignal to child I/O.",
+      "counterevidence": "Non-aborted single-document navigation completes normally.",
+      "remedy": "Pass { signal } to fetch() and check signal.aborted before mutating previewStore.",
+      "acceptance": [
+        "Aborting signalA mid-flight cancels fetch and performs zero previewStore.setHtml calls."
+      ],
+      "validation": {
+        "state": "not-run",
+        "commands": [],
+        "result": "Static trace verified across navigation controller and loadDocumentPreview."
+      },
+      "related_findings": []
+    }
+  ],
+  "issues": [],
+  "limitations": [],
+  "checks": []
+}
+```

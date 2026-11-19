@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-api-consistency",
+  "description": "Audit API design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

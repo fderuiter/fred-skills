@@ -1,0 +1,12 @@
+{
+  "name": "spec-authoring",
+  "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

@@ -11,7 +11,7 @@ redact sensitive credentials, and produce structured recovery instructions.
 ## Triage workflow
 
 Read [diagnostics guide](references/diagnostics-guide.md) for failure patterns and scrubbing rules.
-Consult [protocol](references/protocol.md) for multi-pass coordination invariants.
+Consult [protocol](references/protocol.md) for multi-pass coordination invariants and [worked examples](references/examples.md) for sample bundles.
 
 1. **Ingest transcript and run state:** Load the agent session transcript (`.json`, `.jsonl`,
    `.md`, or raw log text) from an explicit path, the workspace, `~/.claude/projects/`, or

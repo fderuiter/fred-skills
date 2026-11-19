@@ -19,6 +19,6 @@ Focus on behavioral contracts, state consistency, and regression hazards.
 ## Deliver
 
 Record invariant issues using the [review template](assets/review-template.md).
-Verify findings schema compliance with [review schema](assets/review.schema.json).
+Verify findings schema compliance with [review schema](assets/review.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_review.py <artifact.json>`.
 Provide actionable defect explanations with code citations and concrete violation scenarios.
 Do not modify application code or conflate unverified hypotheses with confirmed defects; preserve the audit-only default unless explicitly authorized.

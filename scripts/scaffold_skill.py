@@ -195,7 +195,8 @@ def _render_skill_markdown(
         f"description: {_yaml_double_quoted(description)}\n"
         "---\n\n"
         f"# {title}\n\n"
-        f"Review the [starting prompt](assets/prompt.md) and "
+        f"Review the [starting prompt](assets/prompt.md), "
+        f"[worked examples](references/examples.md), and "
         f"[evaluation scenarios](references/evaluation-scenarios.json) when validating scope.\n"
         "Ground every conclusion in observed repository evidence rather than unverified assumptions.\n\n"
         "## Workflow\n\n"
@@ -208,8 +209,9 @@ def _render_skill_markdown(
         "- Keep unrelated modules, public interfaces, and unverified claims unchanged.\n"
         "- Distinguish observed execution evidence from static inference.\n\n"
         "## Deliver\n\n"
-        f"Format structured results conforming to the [output schema](assets/{schema_filename}){extra_clause}.\n"
-        "Cite exact relative file paths, Concrete evidence, and remaining verification limits.\n"
+        f"Format structured results conforming to the [output schema](assets/{schema_filename}){extra_clause}, "
+        "and verify deliverables with [output validator](scripts/validate_output.py).\n"
+        "Cite exact relative file paths, concrete evidence, and remaining verification limits.\n"
     )
 
 
@@ -399,6 +401,107 @@ def _render_evaluation_scenarios(
         "execution_state": "specified-not-executed; see docs/validation.md for executed evaluations",
     }
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+
+def _render_examples_markdown(name: str, title: str, schema_filename: str) -> str:
+    sample_output = {
+        "schema_version": "1.0",
+        "skill": name,
+        "summary": f"Inspected {title.lower()} boundaries across src/service/handler.py.",
+        "findings": [
+            {
+                "id": "F-001",
+                "title": f"Unchecked boundary precondition in {name} handler",
+                "severity": "medium",
+                "evidence": [
+                    "src/service/handler.py:18-24 omits boundary precondition guard before state mutation."
+                ],
+            }
+        ],
+        "limitations": [
+            "Static source inspection only; live integration harness was not executed."
+        ],
+    }
+    rendered_json = json.dumps(sample_output, indent=2, ensure_ascii=False)
+    return (
+        f"# Worked Examples: {title}\n\n"
+        f"Load these examples on demand when formatting deliverables for `assets/{schema_filename}` "
+        "and running `scripts/validate_output.py`.\n\n"
+        "## 1. Representative Input Context\n\n"
+        "```python\n"
+        "# src/service/handler.py\n"
+        "def apply_transition(record: dict[str, object], payload: dict[str, object]) -> None:\n"
+        "    record['state'] = payload['target_state']  # mutates state without boundary guard\n"
+        "```\n\n"
+        f"## 2. Valid Deliverable Output (`assets/{schema_filename}`)\n\n"
+        "```json\n"
+        f"{rendered_json}\n"
+        "```\n"
+    )
+
+
+def _render_validator_script(schema_filename: str) -> str:
+    return (
+        "#!/usr/bin/env python3\n"
+        '"""Validate skill deliverable JSON against the bundled output schema."""\n\n'
+        "from __future__ import annotations\n\n"
+        "import argparse\n"
+        "import json\n"
+        "import pathlib\n"
+        "import sys\n"
+        "from collections.abc import Mapping\n"
+        "from typing import Any\n\n\n"
+        "def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:\n"
+        "    try:\n"
+        "        import jsonschema\n"
+        "    except ImportError as exc:\n"
+        "        raise RuntimeError(\n"
+        '            "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."\n'
+        "        ) from exc\n"
+        "    errors = [\n"
+        '        (("/".join(map(str, err.absolute_path)) or "root") + ": " + err.message)\n'
+        "        for err in jsonschema.Draft202012Validator(schema).iter_errors(data)\n"
+        "    ]\n"
+        "    if errors or not isinstance(data, Mapping):\n"
+        "        return errors\n"
+        "    seen_ids: set[str] = set()\n"
+        "    for item in data.get('findings', []):\n"
+        "        if isinstance(item, Mapping) and isinstance(item.get('id'), str):\n"
+        "            fid = item['id']\n"
+        "            if fid in seen_ids:\n"
+        '                errors.append(f"Duplicate IDs in findings: {fid}")\n'
+        "            seen_ids.add(fid)\n"
+        "    return errors\n\n\n"
+        "def main() -> int:\n"
+        "    parser = argparse.ArgumentParser(description=__doc__)\n"
+        '    parser.add_argument("artifact", type=pathlib.Path)\n'
+        "    parser.add_argument(\n"
+        '        "--schema",\n'
+        "        type=pathlib.Path,\n"
+        "        default=pathlib.Path(__file__).resolve().parents[1]\n"
+        f'        / "assets/{schema_filename}",\n'
+        "    )\n"
+        "    args = parser.parse_args()\n"
+        "    try:\n"
+        "        errors = validate(\n"
+        '            json.loads(args.artifact.read_text(encoding="utf-8")),\n'
+        '            json.loads(args.schema.read_text(encoding="utf-8")),\n'
+        "        )\n"
+        "    except (OSError, ValueError) as exc:\n"
+        '        print(f"Invalid input: {exc}", file=sys.stderr)\n'
+        "        return 2\n"
+        "    except (ImportError, RuntimeError) as exc:\n"
+        '        print(f"{exc}", file=sys.stderr)\n'
+        "        return 2\n"
+        "    if errors:\n"
+        "        for err in errors:\n"
+        "            print(err, file=sys.stderr)\n"
+        "        return 1\n"
+        '    print("PASS: deliverable structure and finding IDs; semantic claims require review.")\n'
+        "    return 0\n\n\n"
+        'if __name__ == "__main__":\n'
+        "    sys.exit(main())\n"
+    )
 
 
 def _validate_inputs(
@@ -694,6 +797,14 @@ def scaffold_skill(
             suite_name=effective_suite,
             sibling_skill=sibling_skill,
         ),
+        "references/examples.md": _render_examples_markdown(
+            name=name,
+            title=effective_title,
+            schema_filename=schema_filename,
+        ),
+        "scripts/validate_output.py": _render_validator_script(
+            schema_filename=schema_filename,
+        ),
     }
 
     planned_paths = [package_dir / rel for rel in sorted(package_files)]
@@ -704,6 +815,8 @@ def scaffold_skill(
             target = package_dir / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8", newline="\n")
+            if rel_path.startswith("scripts/"):
+                target.chmod(0o755)
 
         if sync_catalog:
             catalog_paths = _sync_catalog_files(

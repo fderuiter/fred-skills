@@ -1,0 +1,12 @@
+{
+  "name": "review-diff-analysis",
+  "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

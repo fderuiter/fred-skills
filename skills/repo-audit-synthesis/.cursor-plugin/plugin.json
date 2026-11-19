@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-synthesis",
+  "description": "Consolidate specialist audit outputs into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use when synthesizing completed audit passes or turning topic reports into a prioritized issue backlog.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

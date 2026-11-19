@@ -1,0 +1,12 @@
+{
+  "name": "review-invariant-violations",
+  "description": "Verify pull request patches for broken safety assumptions, rollback regressions, and unbalanced resource lifecycles. Use when inspecting proposed diff hunks for broken preconditions, race hazards, or corrupted state transitions before merge.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

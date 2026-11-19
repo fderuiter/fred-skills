@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-domain-models",
+  "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, conflated identifiers or units, unmodeled value objects, or scattered entity rules.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

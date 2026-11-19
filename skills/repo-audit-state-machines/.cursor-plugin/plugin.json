@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-state-machines",
+  "description": "Audit implicit state machines with code evidence and counterexamples. Use when investigating ad-hoc status flags, unreachable or missing transitions, unguarded mode switches, or illegal lifecycle combinations.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

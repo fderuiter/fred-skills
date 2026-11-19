@@ -61,7 +61,6 @@ security details or sensitive source payloads into public records. Verify return
 partial failures; distinguish drafted, created, and linked records. Translate this workflow
 to available capabilities; do not fabricate tool names or labels.
 
-Keep audit.json consistent with [schema](assets/audit.schema.json). Use the coordinator's
-validator if available or schema checks in the local environment. Report consolidation
+Keep audit.json consistent with [schema](assets/audit.schema.json) and run `python3 <this-skill>/scripts/validate_audit.py <audit.json>` when Python 3 and `jsonschema` are available; see [worked examples](references/examples.md) for consolidation samples. Report consolidation
 decisions, retained uncertainty, issue mappings, dependency order, and actual publication
 state. Use [invocation prompt](assets/prompt.md) to run this skill independently.

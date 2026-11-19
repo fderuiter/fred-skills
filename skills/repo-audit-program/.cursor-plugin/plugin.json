@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-program",
+  "description": "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

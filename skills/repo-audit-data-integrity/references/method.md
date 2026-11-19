@@ -1,48 +1,125 @@
-# Investigation method: Data Transformation Integrity
+# Data Transformation Integrity: Specialist Method and Examples
 
-## Scope selection
+## Auditing Precision, Units, and Lossless Round-Trips
 
-Review one critical workflow end to end, then expand by resource/actor/data ownership.
-For each inventory class, record concrete instances, relevant source paths, existing
-enforcement, and coverage. Do not mark an entire class reviewed from one example.
+1. Follow monetary amounts, physical measurements, timestamps, and Unicode identifiers across JSON/CSV/Protobuf parsers, in-memory domain structs, SQL column types, and outbound exports.
+2. Flag lossy intermediate representations—such as binary IEEE-754 `float` arithmetic on decimal currency, naive timezone-stripped `datetime` conversions, or silent `int32` narrowing—that corrupt stored or exported values.
+3. Distinguish display-only presentation formatting (for example, rendering `"$19.99"` in a UI template while keeping `1999` integer minor units in state and API payloads) from storage-path precision loss.
 
-## Contract worksheet
+## Failure Trace vs. Safe Control: Binary Float Invoice Conversion vs. Integer Minor Units
 
-Record the exact predicate or guarantee, independent requirement basis, scope/lifetime,
-establishing operation, invalidating operations, observers, enforcing authority, and
-existing tests. If intended semantics are unknown, record the question and keep the
-finding at needs-validation or hardening until a supported requirement exists.
+```python
+# Defect trace: parsing decimal CSV prices through float introduces IEEE-754 representation drift
+def parse_line_item_cents_buggy(unit_price_str: str, quantity: int) -> int:
+    unit_dollars = float(unit_price_str)  # float("19.99") * 100 -> 1998.9999999999998
+    return int(unit_dollars * 100) * quantity  # truncates 19.99 to 1998 cents!
 
-## Topic-specific discovery probes
 
-Apply the five topic-specific investigation steps in SKILL.md to each inventoried boundary. Record both passing safeguards and unresolved cases.
+# Safe control: parse exact Decimal and quantize to integer minor units with explicit rounding mode
+from decimal import Decimal, ROUND_HALF_UP
 
-## Adversarial case
 
-A decimal measurement is converted through a binary float and exported with changed precision or units.
+def parse_line_item_cents_safe(unit_price_str: str, quantity: int) -> int:
+    cents = (Decimal(unit_price_str) * Decimal("100")).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    return int(cents) * quantity
+```
 
-Find matching reachable code, name the actors and boundaries, and write exact numbered
-steps. Inspect the strongest prevention mechanism. If no real path matches, report
-that this illustrative failure was not established; do not turn the example into evidence.
+## Data-Integrity `audit.json` Deliverable Example
 
-## Safe control
+Validate this transformation-integrity ledger using `python3 <this-skill>/scripts/validate_audit.py data-integrity-audit.json` against `assets/audit.schema.json`:
 
-A rounded display value can be valid when storage and downstream computation retain required precision.
-
-Preserve the safe control while selecting a correction. Compare mechanisms, not syntax.
-
-## Independent validation
-
-Use independent golden vectors, round-trip properties where applicable, and metamorphic checks for units, dates, missing values, and encoding.
-
-Derive expected results from the contract. Use a bounded deterministic local harness
-where practical, record actual commands/results, and retain limitations. An unavailable
-tool changes the validation plan, not the claimed certainty. Record the smallest missing
-piece of evidence that would resolve each open finding.
-
-## Cross-topic boundary
-
-Keep this topic's inventory complete but hand off a different root cause to the specialist
-named in SKILL.md. Preserve the same evidence IDs and avoid issuing duplicate defect
-reports for one underlying contract violation. Distinct independently fixable causes
-remain separate even when they produce the same observed symptom.
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "data-integrity-sample",
+  "repository": {
+    "identity": "acme/invoice-importer",
+    "revision": "56fa28c",
+    "dirty": false,
+    "snapshot": "git-tree:56fa28c"
+  },
+  "scope": [
+    "src/importer/csv_prices.py"
+  ],
+  "coverage": [
+    {
+      "topic": "data-integrity",
+      "scope": "src/importer/csv_prices.py",
+      "status": "inspected",
+      "evidence_ids": [
+        "E-216"
+      ],
+      "notes": "Inspected CSV unit_price parser, line-item subtotal math, and Postgres integer cents writer.",
+      "next_action": "Hand off negative price guard inspection to repo-audit-domain-models if needed."
+    }
+  ],
+  "contracts": [
+    {
+      "id": "C-216",
+      "dimension": "data-integrity",
+      "scope": "parse_line_item_cents",
+      "intended": "Decimal dollar strings in imported CSVs convert losslessly into exact USD integer cents.",
+      "observed": "int(float(unit_price_str) * 100) truncates binary float imprecision, losing 1 cent per unit on values like '19.99'.",
+      "enforcement": "none; binary float conversion in src/importer/csv_prices.py",
+      "evidence_ids": [
+        "E-216"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-216",
+      "path": "src/importer/csv_prices.py",
+      "line_start": 18,
+      "line_end": 22,
+      "symbol": "parse_line_item_cents",
+      "context": "Computes int(float(unit_price_str) * 100) * quantity when importing vendor invoice rows."
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-216",
+      "topic": "data-integrity",
+      "tags": [
+        "numeric-precision"
+      ],
+      "title": "Float-to-int truncation undercharges imported CSV unit prices such as 19.99",
+      "status": "supported",
+      "severity": "high",
+      "confidence": "high",
+      "contract_ids": [
+        "C-216"
+      ],
+      "evidence_ids": [
+        "E-216"
+      ],
+      "preconditions": "CSV row contains decimal unit price without exact binary-float representation (e.g. '19.99', quantity 100).",
+      "sequence": [
+        "Importer reads unit_price_str = '19.99' and quantity = 100.",
+        "float('19.99') * 100 evaluates to 1998.9999999999998.",
+        "int(...) truncates to 1998 cents/unit, persisting 199800 cents ($1,998.00) instead of 199900 cents ($1,999.00)."
+      ],
+      "expected": "parse_line_item_cents('19.99', 100) returns 199900 cents.",
+      "actual": "Function returns 199800 cents, silently dropping $1.00 across 100 units.",
+      "impact": "Imported invoices systematically underbill decimal unit prices.",
+      "root_cause": "Decimal currency string converted via IEEE-754 binary float followed by floor truncation.",
+      "counterevidence": "Power-of-two fractions like '19.50' evaluate exactly in binary float and mask the defect in unit tests.",
+      "remedy": "Parse currency strings with decimal.Decimal and quantize to integer minor units before multiplying.",
+      "acceptance": [
+        "parse_line_item_cents('19.99', 100) == 199900 and rejects >2 fractional digits unless configured."
+      ],
+      "validation": {
+        "state": "not-run",
+        "commands": [],
+        "result": "Verified IEEE-754 evaluation path in src/importer/csv_prices.py."
+      },
+      "related_findings": []
+    }
+  ],
+  "issues": [],
+  "limitations": [],
+  "checks": []
+}
+```

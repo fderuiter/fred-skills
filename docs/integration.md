@@ -6,7 +6,7 @@ All workflows follow the audit-only default policy defined in [AGENTS.md](../AGE
 
 ## Supported Agent Hosts
 
-The toolkit catalogs nine agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json), and [gemini-extension.json](../gemini-extension.json).
+The toolkit catalogs nine agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json), [.cursor-plugin/plugin.json](../.cursor-plugin/plugin.json), and [gemini-extension.json](../gemini-extension.json).
 
 | Host | Project Path | User Path | Invocation Syntax | Marker File | Behavioral Test Status |
 | --- | --- | --- | --- | --- | --- |
@@ -119,6 +119,46 @@ Activate a skill using slash syntax or natural language:
 Verify the skill files on the filesystem:
 ```sh
 ls -la /path/to/project/.claude/skills/repo-audit-concurrency/SKILL.md
+```
+
+---
+
+### Cursor
+
+Cursor discovers skills in `.cursor/skills` and loads Cursor Plugins from `.cursor-plugin/plugin.json` and `.cursor-plugin/marketplace.json`.
+
+#### Installation Paths
+- **Project Scope**: `<project-root>/.cursor/skills/<skill-name>/`
+- **User Scope**: `<user-home>/.cursor/skills/<skill-name>/`
+
+#### Installation Commands
+Import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace from **Dashboard -> Plugins & MCPs** (**Import from Repo**) and install `fred-skills` or an individual specialist from **Customize** in the sidebar, or install curated packs and skills locally with the toolkit CLI:
+
+1. **Toolkit CLI (Project Scope)**:
+   ```sh
+   python scripts/fred.py install --destination /path/to/project --host cursor --pack starter
+   ```
+
+2. **Toolkit CLI (User Scope)**:
+   ```sh
+   python scripts/fred.py install --destination "$HOME" --host cursor --scope user --pack starter
+   ```
+
+3. **Install individual skills**:
+   ```sh
+   python scripts/fred.py install --destination /path/to/project --host cursor --skill repo-audit-concurrency
+   ```
+
+#### Invocation Syntax
+Activate a skill from **Customize** or invoke it with slash syntax or natural language in chat:
+```text
+/repo-audit-concurrency Trace concurrency hazards and cancellation boundaries in src/jobs/
+```
+
+#### Verification
+Verify the skill files on the filesystem:
+```sh
+ls -la /path/to/project/.cursor/skills/repo-audit-concurrency/SKILL.md
 ```
 
 ---

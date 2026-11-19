@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-error-semantics",
+  "description": "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

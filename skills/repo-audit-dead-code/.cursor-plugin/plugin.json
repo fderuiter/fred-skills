@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-dead-code",
+  "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when investigating unreachable branches, stale feature toggles, unreferenced exports, retired shims, or orphaned fallbacks.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

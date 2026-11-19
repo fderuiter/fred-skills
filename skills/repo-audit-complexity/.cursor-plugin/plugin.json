@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-complexity",
+  "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

@@ -19,5 +19,5 @@ Generate deterministic tests with independent oracles and clean boundary conditi
 ## Deliver
 
 Use the [testing template](assets/testing-template.md) to record generated test cases.
-Validate test structures against the [testing schema](assets/testing.schema.json).
+Validate test structures against the [testing schema](assets/testing.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_testing.py <artifact.json>`.
 Produce runnable test files integrated cleanly into repository test frameworks when authorized; do not modify production code or write repository test files without explicit user authorization.

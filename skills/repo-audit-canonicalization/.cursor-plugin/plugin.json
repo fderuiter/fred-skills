@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-canonicalization",
+  "description": "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

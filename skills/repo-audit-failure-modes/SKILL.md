@@ -46,7 +46,7 @@ checking a framework/tool limitation. No listed tool is a prerequisite.
 
 Produce the topic inventory and report using [report template](assets/report-template.md).
 Record findings, healthy counterexamples, and coverage in audit.json according to
-[run schema](assets/audit.schema.json). The schema validates structure, not truth.
+[run schema](assets/audit.schema.json), and verify with [audit validator](scripts/validate_audit.py). The schema validates structure, not truth.
 Use [handoff template](assets/handoff-template.md) for continuation and
 [invocation prompt](assets/prompt.md) for a standalone or resumed audit.
 
