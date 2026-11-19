@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-configuration",
+  "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

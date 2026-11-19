@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-domain-models",
+  "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

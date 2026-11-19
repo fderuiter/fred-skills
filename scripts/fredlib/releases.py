@@ -35,6 +35,7 @@ DOCUMENTED_PACKS: tuple[str, ...] = _load_documented_packs()
 
 _EXCLUDED_DIR_NAMES = {
     "__pycache__",
+    ".cursor-plugin",
     ".git",
     ".github",
     ".venv",

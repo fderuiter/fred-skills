@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-cache-coherence",
+  "description": "Audit cache coherence with code evidence and counterexamples. Use when auditing stale caches, invalidation races, cache keys, tenant leakage through caches, or competing cache layers.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

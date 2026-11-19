@@ -1,0 +1,12 @@
+{
+  "name": "test-case-generation",
+  "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

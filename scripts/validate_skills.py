@@ -86,6 +86,38 @@ EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
     r"\bexpected\s+findings\b",
     re.IGNORECASE,
 )
+CURSOR_PLUGIN_NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
+CURSOR_PLUGIN_SEMVER_PATTERN = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\Z")
+CURSOR_PLUGIN_ALLOWED_FIELDS = frozenset(
+    {
+        "name",
+        "displayName",
+        "description",
+        "version",
+        "author",
+        "homepage",
+        "repository",
+        "license",
+        "keywords",
+        "logo",
+        "rules",
+        "agents",
+        "skills",
+        "commands",
+        "hooks",
+        "mcpServers",
+        "variables",
+    }
+)
+CURSOR_PLUGIN_PATH_FIELDS = (
+    "logo",
+    "rules",
+    "agents",
+    "skills",
+    "commands",
+    "hooks",
+    "mcpServers",
+)
 
 
 _NON_AUDIT_NOTE_SUITES = frozenset(
@@ -735,8 +767,133 @@ def _validate_evaluation_scenarios(
     return errors
 
 
+def _extract_cursor_path_strings(value: object) -> tuple[list[str], bool]:
+    if isinstance(value, str):
+        return [value], bool(value.strip())
+    if isinstance(value, list) and value:
+        valid = all(isinstance(item, str) and bool(item.strip()) for item in value)
+        return ([str(item) for item in value] if valid else []), valid
+    return [], False
+
+
+def _is_safe_cursor_rel_path(raw_path: str) -> bool:
+    if not raw_path.strip() or "\\" in raw_path or raw_path.startswith("/"):
+        return False
+    if PureWindowsPath(raw_path).is_absolute():
+        return False
+    return ".." not in Path(raw_path).parts
+
+
+def _check_resolved_cursor_path(
+    plugin_dir: Path, field: str, raw_path: str, label: str
+) -> list[str]:
+    candidate = plugin_dir / raw_path
+    if candidate.is_symlink():
+        return [f"{label}: '{field}' path '{raw_path}' must not be a symlink"]
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(plugin_dir.resolve()) or not resolved.exists():
+        return [
+            f"{label}: '{field}' path '{raw_path}' does not exist inside plugin directory"
+        ]
+    if field == "skills" and not (resolved / "SKILL.md").is_file():
+        return [f"{label}: 'skills' path '{raw_path}' missing SKILL.md"]
+    return []
+
+
+def _validate_cursor_plugin_path(
+    plugin_dir: Path, field: str, raw_path: str, label: str
+) -> list[str]:
+    if field == "logo" and raw_path.startswith(("http://", "https://")):
+        return []
+    if not _is_safe_cursor_rel_path(raw_path):
+        return [
+            f"{label}: '{field}' path '{raw_path}' must be a relative path without '..' or absolute prefixes"
+        ]
+    return _check_resolved_cursor_path(plugin_dir, field, raw_path, label)
+
+
+def _validate_cursor_author_and_license(
+    data: Mapping[str, Any], label: str
+) -> list[str]:
+    errors: list[str] = []
+    author = data.get("author")
+    author_name = author.get("name") if isinstance(author, dict) else None
+    if not isinstance(author_name, str) or not author_name.strip():
+        errors.append(f"{label}: 'author.name' must be a non-empty string")
+    lic = data.get("license")
+    if "license" in data and (not isinstance(lic, str) or not lic.strip()):
+        errors.append(f"{label}: 'license' must be a non-empty string")
+    return errors
+
+
+def _validate_cursor_metadata_fields(
+    data: Mapping[str, Any], expected_name: str, label: str
+) -> list[str]:
+    errors: list[str] = []
+    unknown = sorted(set(data.keys()) - CURSOR_PLUGIN_ALLOWED_FIELDS)
+    if unknown:
+        errors.append(
+            f"{label}: unsupported plugin manifest field(s): {', '.join(unknown)}"
+        )
+    raw_name = data.get("name")
+    if not isinstance(raw_name, str) or not CURSOR_PLUGIN_NAME_PATTERN.match(raw_name):
+        errors.append(f"{label}: 'name' must be lowercase kebab-case")
+    elif raw_name != expected_name:
+        errors.append(f"{label}: 'name' must equal '{expected_name}'")
+    desc = data.get("description")
+    if not isinstance(desc, str) or not desc.strip():
+        errors.append(f"{label}: 'description' must be a non-empty string")
+    ver = data.get("version")
+    if not isinstance(ver, str) or not CURSOR_PLUGIN_SEMVER_PATTERN.match(ver):
+        errors.append(f"{label}: 'version' must be a semantic version")
+    errors.extend(_validate_cursor_author_and_license(data, label))
+    return errors
+
+
+def _validate_cursor_field_paths(
+    plugin_dir: Path, field: str, values: Sequence[str], label: str
+) -> list[str]:
+    errors: list[str] = []
+    for raw_val in values:
+        errors.extend(_validate_cursor_plugin_path(plugin_dir, field, raw_val, label))
+    return errors
+
+
+def _validate_cursor_paths_section(
+    plugin_dir: Path, data: Mapping[str, Any], label: str
+) -> list[str]:
+    errors: list[str] = []
+    _, skills_ok = _extract_cursor_path_strings(data.get("skills"))
+    if not skills_ok:
+        errors.append(
+            f"{label}: 'skills' must be a non-empty relative path string or list of strings"
+        )
+    for field in CURSOR_PLUGIN_PATH_FIELDS:
+        if field not in data:
+            continue
+        vals, ok = _extract_cursor_path_strings(data[field])
+        if not ok and field != "skills" and not isinstance(data[field], dict):
+            errors.append(f"{label}: invalid '{field}' path specification")
+        errors.extend(_validate_cursor_field_paths(plugin_dir, field, vals, label))
+    return errors
+
+
+def _validate_cursor_plugin_manifest(
+    plugin_dir: Path,
+    expected_name: str,
+    data: object,
+    label: str = ".cursor-plugin/plugin.json",
+) -> list[str]:
+    if not isinstance(data, dict):
+        return [f"{label}: plugin manifest must be a JSON object"]
+    errors = _validate_cursor_metadata_fields(data, expected_name, label)
+    errors.extend(_validate_cursor_paths_section(plugin_dir, data, label))
+    return errors
+
+
 def _inspect_json_file(
     path: Path,
+    package: Path,
     rel_posix: str,
     cached_texts: Mapping[Path, str],
     valid_closed_schemas: set[Path],
@@ -745,6 +902,8 @@ def _inspect_json_file(
         cached_texts[path] if path in cached_texts else path.read_text(encoding="utf-8")
     )
     data = json.loads(raw_json)
+    if rel_posix == ".cursor-plugin/plugin.json":
+        return _validate_cursor_plugin_manifest(package, package.name, data, rel_posix)
     if not path.name.endswith(".schema.json"):
         return []
     _check_draft202012_schema(raw_json, data)
@@ -810,14 +969,19 @@ def _inspect_package_entry(
         ]
     if not path.is_file():
         return []
+    rel_parts = path.relative_to(package).parts
     rel_posix = path.relative_to(package).as_posix()
     errors: list[str] = []
+    if rel_parts[0] == ".cursor-plugin" and rel_posix != ".cursor-plugin/plugin.json":
+        errors.append(f"Unexpected file in .cursor-plugin directory: {rel_posix}")
     if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
         errors.append(f"Generated Python cache in package: {rel_posix}")
     try:
         if path.suffix == ".json":
             errors.extend(
-                _inspect_json_file(path, rel_posix, cached_texts, valid_closed_schemas)
+                _inspect_json_file(
+                    path, package, rel_posix, cached_texts, valid_closed_schemas
+                )
             )
         elif path.suffix == ".md":
             errors.extend(
@@ -1340,6 +1504,21 @@ def _build_package_telemetry_entry(
     }
 
 
+def _validate_root_cursor_manifest(root: Path) -> list[str]:
+    root_manifest = root / ".cursor-plugin/plugin.json"
+    if root_manifest.is_symlink():
+        return ["Root .cursor-plugin/plugin.json must not be a symlink"]
+    if not root_manifest.exists():
+        return []
+    try:
+        data = json.loads(root_manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [f".cursor-plugin/plugin.json: {exc}"]
+    return _validate_cursor_plugin_manifest(
+        root, "fred-skills", data, ".cursor-plugin/plugin.json"
+    )
+
+
 def _validate_suite_manifest(root: Path) -> list[str]:
     if not (root / "catalog/suites.json").is_file():
         return []
@@ -1356,6 +1535,7 @@ def _validate_suite_manifest(root: Path) -> list[str]:
                 )
     except (OSError, ValueError, KeyError) as exc:
         problems.append(f"Invalid suite manifest: {exc}")
+    problems.extend(_validate_root_cursor_manifest(root))
     return problems
 
 

@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-architecture",
+  "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

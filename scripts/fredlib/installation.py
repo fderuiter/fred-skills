@@ -757,7 +757,7 @@ def _stage_skills(
         shutil.copytree(
             root / "skills" / name,
             staged / name,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".cursor-plugin"),
         )
     return staged, backups
 

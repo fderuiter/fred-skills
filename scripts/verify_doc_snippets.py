@@ -134,6 +134,7 @@ class CommandBlock:
     language: str
     commands: list[tuple[int, str]]  # (line_no, command_str)
     content: str = ""
+    headings: tuple[str, ...] = ()
 
 
 def _is_block_in_range(
@@ -299,6 +300,40 @@ def _parse_fenced_blocks(
     return blocks
 
 
+_ATX_SECTION_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+_CURSOR_HEADING_RE = re.compile(r"\bcursor\b", re.IGNORECASE)
+
+
+def _update_heading_stack(active: dict[int, str], line: str) -> None:
+    """Update active ATX heading hierarchy when line is a Markdown heading."""
+    match = _ATX_SECTION_HEADING_RE.match(line)
+    if not match:
+        return
+    level = len(match.group(1))
+    for deeper in [k for k in active if k >= level]:
+        del active[deeper]
+    active[level] = match.group(2).strip()
+
+
+def _headings_by_block_start(
+    lines: list[str],
+    block_ranges: list[tuple[int, int]],
+) -> dict[int, tuple[str, ...]]:
+    """Map each fenced block start line to its active Markdown heading hierarchy."""
+    fenced_lines = {
+        ln for b_start, b_end in block_ranges for ln in range(b_start, b_end + 1)
+    }
+    block_starts = {b_start for b_start, _ in block_ranges}
+    active: dict[int, str] = {}
+    result: dict[int, tuple[str, ...]] = {}
+    for idx, line in enumerate(lines, start=1):
+        if idx in block_starts:
+            result[idx] = tuple(active[k] for k in sorted(active))
+        if idx not in fenced_lines:
+            _update_heading_stack(active, line)
+    return result
+
+
 def extract_blocks_from_file(
     file_path: Path,
     start_line: int | None = None,
@@ -320,6 +355,9 @@ def extract_blocks_from_file(
         rel_path = str(file_path).replace("\\", "/")
 
     raw_blocks = _parse_fenced_blocks(lines)
+    heading_map = _headings_by_block_start(
+        lines, [(b_start, b_end) for b_start, b_end, _, _ in raw_blocks]
+    )
     blocks: list[CommandBlock] = []
 
     for b_start, b_end, b_lang, b_lines in raw_blocks:
@@ -336,6 +374,7 @@ def extract_blocks_from_file(
                 language=b_lang,
                 commands=cmds,
                 content=raw_content,
+                headings=heading_map.get(b_start, ()),
             )
         )
 
@@ -2440,6 +2479,28 @@ def _block_command_tokens(block: CommandBlock) -> list[tuple[int, list[str]]]:
     return tokenized
 
 
+def _active_cursor_heading(block: CommandBlock) -> str | None:
+    """Return the innermost active Markdown heading naming Cursor, if any."""
+    for heading in reversed(block.headings):
+        if _CURSOR_HEADING_RE.search(heading):
+            return heading
+    return None
+
+
+def _verify_cursor_heading_block(rel_path: str, block: CommandBlock) -> list[str]:
+    """Reject Claude Code /plugin commands inside sections whose headings name Cursor."""
+    cursor_heading = _active_cursor_heading(block)
+    if cursor_heading is None:
+        return []
+    errors: list[str] = []
+    for line_no, parts in _block_command_tokens(block):
+        if parts[:1] == ["/plugin"]:
+            errors.append(
+                f"{rel_path}:L{line_no}: Unsupported '/plugin' command under Cursor heading '{cursor_heading}'; use Dashboard -> Plugins & MCPs and Customize"
+            )
+    return errors
+
+
 def _verify_marketplace_block(rel_path: str, block: CommandBlock) -> list[str]:
     """Reject incomplete Claude marketplace blocks or unsupported Codex plugin commands."""
     if rel_path not in MARKETPLACE_ONBOARDING_DOCS:
@@ -2665,16 +2726,17 @@ def _verify_single_block(
     root: Path,
 ) -> list[str]:
     """Dispatch validation for a single fenced code block according to language."""
+    errors = _verify_cursor_heading_block(rel_path, block)
     lang = block.language.lower()
     if lang in ("sh", "bash", "shell"):
-        return _verify_shell_block(rel_path, block, root)
+        return errors + _verify_shell_block(rel_path, block, root)
     if lang in ("yaml", "yml"):
-        return _verify_yaml_block(rel_path, block, root)
+        return errors + _verify_yaml_block(rel_path, block, root)
     if lang in ("python", "py"):
-        return _verify_python_block(rel_path, block)
+        return errors + _verify_python_block(rel_path, block)
     if lang == "json":
-        return _verify_json_block(rel_path, block, root)
-    return []
+        return errors + _verify_json_block(rel_path, block, root)
+    return errors
 
 
 def _verify_file_snippets(

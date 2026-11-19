@@ -9,7 +9,12 @@ from pathlib import Path
 from skill_tools import ROOT, build_outputs, read_frontmatter, suite_members
 
 
-def _pack_plugins(root: Path, known_skills: set[str]) -> list[dict[str, object]]:
+def _pack_plugins(
+    root: Path,
+    known_skills: set[str],
+    version: str,
+    author: dict[str, str],
+) -> list[dict[str, object]]:
     packs_path = root / "catalog/packs.json"
     if not packs_path.exists():
         return []
@@ -30,12 +35,18 @@ def _pack_plugins(root: Path, known_skills: set[str]) -> list[dict[str, object]]
             {
                 "name": pack_name,
                 "description": pack_data["description"],
+                "version": version,
+                "author": dict(author),
                 "source": "./",
                 "strict": False,
                 "skills": [f"./skills/{skill_name}" for skill_name in pack_skills],
             }
         )
     return bundles
+
+
+def _json_text(payload: object) -> str:
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
 def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
@@ -92,24 +103,6 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         "Portable engineering workflows for investigating repositories, planning"
         " useful fixes, and verifying that those fixes work."
     )
-    suite_plugin: dict[str, object] = {
-        "name": "fred-skills",
-        "description": description,
-        "source": "./",
-        "strict": False,
-        "skills": [f"./skills/{name}" for name in sorted(membership)],
-    }
-    standalone_plugins: list[dict[str, object]] = [
-        {
-            "name": entry["name"],
-            "description": entry["description"],
-            "source": f"./skills/{entry['name']}",
-            "skills": ["."],
-        }
-        for entry in sorted(entries, key=lambda item: item["name"])
-        if entry["name"] in membership
-    ]
-    plugins = [suite_plugin, *_pack_plugins(root, set(membership)), *standalone_plugins]
     version_path = root / "VERSION"
     extension_version = (
         version_path.read_text(encoding="utf-8").strip() or "0.0.0"
@@ -124,18 +117,100 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         if marketplace_version_path.is_file()
         else "0.0.0"
     )
-    marketplace = {
+    author = {"name": "fderuiter"}
+    sorted_member_names = sorted(membership)
+    member_entries = [
+        entry
+        for entry in sorted(entries, key=lambda item: item["name"])
+        if entry["name"] in membership
+    ]
+    suite_plugin: dict[str, object] = {
+        "name": "fred-skills",
+        "description": description,
+        "version": marketplace_version,
+        "author": dict(author),
+        "source": "./",
+        "strict": False,
+        "skills": [f"./skills/{name}" for name in sorted_member_names],
+    }
+    standalone_plugins: list[dict[str, object]] = [
+        {
+            "name": entry["name"],
+            "description": entry["description"],
+            "version": marketplace_version,
+            "author": dict(author),
+            "source": f"./skills/{entry['name']}",
+            "skills": ["."],
+        }
+        for entry in member_entries
+    ]
+    claude_plugins = [
+        suite_plugin,
+        *_pack_plugins(root, set(membership), marketplace_version, author),
+        *standalone_plugins,
+    ]
+    claude_marketplace = {
         "name": "fred-skills",
         "version": marketplace_version,
         "description": description,
-        "owner": {"name": "fderuiter"},
+        "owner": dict(author),
         "metadata": {
             "description": description,
             "version": marketplace_version,
         },
-        "plugins": plugins,
+        "plugins": claude_plugins,
     }
-    marketplace_text = json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"
+    cursor_root_plugin: dict[str, object] = {
+        "name": "fred-skills",
+        "description": description,
+        "version": marketplace_version,
+        "author": dict(author),
+        "license": "MIT",
+        "skills": [f"./skills/{name}" for name in sorted_member_names],
+    }
+    cursor_skill_manifests: dict[str, str] = {
+        f"skills/{entry['name']}/.cursor-plugin/plugin.json": _json_text(
+            {
+                "name": entry["name"],
+                "description": entry["description"],
+                "version": marketplace_version,
+                "author": dict(author),
+                "license": "MIT",
+                "skills": ["."],
+            }
+        )
+        for entry in member_entries
+    }
+    cursor_plugins: list[dict[str, object]] = [
+        {
+            "name": "fred-skills",
+            "source": "./",
+            "description": description,
+            "version": marketplace_version,
+            "author": dict(author),
+            "license": "MIT",
+        },
+        *[
+            {
+                "name": entry["name"],
+                "source": f"./skills/{entry['name']}",
+                "description": entry["description"],
+                "version": marketplace_version,
+                "author": dict(author),
+                "license": "MIT",
+            }
+            for entry in member_entries
+        ],
+    ]
+    cursor_marketplace = {
+        "name": "fred-skills",
+        "owner": dict(author),
+        "metadata": {
+            "description": description,
+            "version": marketplace_version,
+        },
+        "plugins": cursor_plugins,
+    }
     gemini_extension = {
         "name": "fred-skills",
         "description": description,
@@ -143,20 +218,13 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         "contextFileName": "AGENTS.md",
     }
     return {
-        "catalog/skills.json": (
-            json.dumps(
-                {"schema_version": "1.0", "skills": entries},
-                indent=2,
-                ensure_ascii=False,
-            )
-            + "\n"
-        ),
+        "catalog/skills.json": _json_text({"schema_version": "1.0", "skills": entries}),
         "docs/catalog.md": markdown,
-        ".claude-plugin/marketplace.json": marketplace_text,
-        ".cursor-plugin/marketplace.json": marketplace_text,
-        "gemini-extension.json": (
-            json.dumps(gemini_extension, indent=2, ensure_ascii=False) + "\n"
-        ),
+        ".claude-plugin/marketplace.json": _json_text(claude_marketplace),
+        ".cursor-plugin/marketplace.json": _json_text(cursor_marketplace),
+        ".cursor-plugin/plugin.json": _json_text(cursor_root_plugin),
+        **cursor_skill_manifests,
+        "gemini-extension.json": _json_text(gemini_extension),
     }
 
 

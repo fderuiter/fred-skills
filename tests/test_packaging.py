@@ -359,9 +359,15 @@ class PackageTests(unittest.TestCase):
         self.assertEqual([], build(self.root))
         marketplace_path = self.root / ".claude-plugin/marketplace.json"
         cursor_marketplace_path = self.root / ".cursor-plugin/marketplace.json"
+        cursor_root_plugin_path = self.root / ".cursor-plugin/plugin.json"
+        cursor_skill_plugin_path = (
+            self.root / "skills/sample-audit/.cursor-plugin/plugin.json"
+        )
         gemini_ext_path = self.root / "gemini-extension.json"
         self.assertTrue(marketplace_path.is_file())
         self.assertTrue(cursor_marketplace_path.is_file())
+        self.assertTrue(cursor_root_plugin_path.is_file())
+        self.assertTrue(cursor_skill_plugin_path.is_file())
         self.assertTrue(gemini_ext_path.is_file())
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
@@ -372,6 +378,10 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(root_version, marketplace_default["version"])
         self.assertEqual(root_version, marketplace_default["metadata"]["version"])
         self.assertTrue(marketplace_default["description"])
+        cursor_root_default = json.loads(
+            cursor_root_plugin_path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(root_version, cursor_root_default["version"])
 
         (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
         problems_version = build(self.root, check=True)
@@ -384,6 +394,21 @@ class PackageTests(unittest.TestCase):
                 for problem in problems_version
             )
         )
+        self.assertTrue(
+            any(
+                ".cursor-plugin/marketplace.json" in problem
+                for problem in problems_version
+            )
+        )
+        self.assertTrue(
+            any(".cursor-plugin/plugin.json" in problem for problem in problems_version)
+        )
+        self.assertTrue(
+            any(
+                "skills/sample-audit/.cursor-plugin/plugin.json" in problem
+                for problem in problems_version
+            )
+        )
         self.assertEqual([], build(self.root))
         self.assertEqual(
             "1.2.3",
@@ -392,9 +417,19 @@ class PackageTests(unittest.TestCase):
         updated_marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
         self.assertEqual("1.2.3", updated_marketplace["version"])
         self.assertEqual("1.2.3", updated_marketplace["metadata"]["version"])
+        self.assertEqual(
+            "1.2.3",
+            json.loads(cursor_root_plugin_path.read_text(encoding="utf-8"))["version"],
+        )
+        self.assertEqual(
+            "1.2.3",
+            json.loads(cursor_skill_plugin_path.read_text(encoding="utf-8"))["version"],
+        )
 
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
         cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
+        cursor_root_plugin_path.write_text('{"tampered": true}', encoding="utf-8")
+        cursor_skill_plugin_path.write_text('{"tampered": true}', encoding="utf-8")
         gemini_ext_path.write_text('{"tampered": true}', encoding="utf-8")
         problems = build(self.root, check=True)
         self.assertTrue(
@@ -402,6 +437,15 @@ class PackageTests(unittest.TestCase):
         )
         self.assertTrue(
             any(".cursor-plugin/marketplace.json" in problem for problem in problems)
+        )
+        self.assertTrue(
+            any(".cursor-plugin/plugin.json" in problem for problem in problems)
+        )
+        self.assertTrue(
+            any(
+                "skills/sample-audit/.cursor-plugin/plugin.json" in problem
+                for problem in problems
+            )
         )
         self.assertTrue(any("gemini-extension.json" in problem for problem in problems))
 
@@ -457,6 +501,19 @@ class PackageTests(unittest.TestCase):
         )
         names = [plugin["name"] for plugin in manifest["plugins"]]
         self.assertEqual(names, ["fred-skills", "sample-audit", "sample-workflow"])
+        cursor_manifest = json.loads(
+            (self.root / ".cursor-plugin/marketplace.json").read_text(encoding="utf-8")
+        )
+        cursor_names = [plugin["name"] for plugin in cursor_manifest["plugins"]]
+        self.assertEqual(
+            cursor_names, ["fred-skills", "sample-audit", "sample-workflow"]
+        )
+        self.assertTrue(
+            (self.root / "skills/sample-audit/.cursor-plugin/plugin.json").is_file()
+        )
+        self.assertTrue(
+            (self.root / "skills/sample-workflow/.cursor-plugin/plugin.json").is_file()
+        )
 
     def test_marketplace_manifest_emits_inline_pack_bundles_and_rejects_invalid_packs(
         self,
@@ -474,6 +531,7 @@ class PackageTests(unittest.TestCase):
         packs_file = self.root / "catalog/packs.json"
         packs_file.write_text(json.dumps(packs_doc), encoding="utf-8")
         self.assertEqual([], build(self.root))
+        root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         manifest = json.loads(
             (self.root / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
         )
@@ -483,6 +541,8 @@ class PackageTests(unittest.TestCase):
                 {
                     "name": "fred-skills",
                     "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
+                    "version": root_version,
+                    "author": {"name": "fderuiter"},
                     "source": "./",
                     "strict": False,
                     "skills": ["./skills/sample-audit"],
@@ -490,6 +550,8 @@ class PackageTests(unittest.TestCase):
                 {
                     "name": "starter",
                     "description": "Starter bundle.",
+                    "version": root_version,
+                    "author": {"name": "fderuiter"},
                     "source": "./",
                     "strict": False,
                     "skills": ["./skills/sample-audit"],
@@ -497,8 +559,34 @@ class PackageTests(unittest.TestCase):
                 {
                     "name": "sample-audit",
                     "description": "Audit synthetic contracts when explicitly requested.",
+                    "version": root_version,
+                    "author": {"name": "fderuiter"},
                     "source": "./skills/sample-audit",
                     "skills": ["."],
+                },
+            ],
+        )
+        cursor_manifest = json.loads(
+            (self.root / ".cursor-plugin/marketplace.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            cursor_manifest["plugins"],
+            [
+                {
+                    "name": "fred-skills",
+                    "source": "./",
+                    "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
+                    "version": root_version,
+                    "author": {"name": "fderuiter"},
+                    "license": "MIT",
+                },
+                {
+                    "name": "sample-audit",
+                    "source": "./skills/sample-audit",
+                    "description": "Audit synthetic contracts when explicitly requested.",
+                    "version": root_version,
+                    "author": {"name": "fderuiter"},
+                    "license": "MIT",
                 },
             ],
         )
@@ -518,68 +606,123 @@ class PackageTests(unittest.TestCase):
     def test_committed_marketplace_manifest_is_valid_and_current(self):
         self.assertEqual([], build(ROOT, check=True))
         self.assertFalse((ROOT / ".claude-plugin/plugin.json").exists())
-        self.assertFalse((ROOT / ".cursor-plugin/plugin.json").exists())
+        self.assertTrue((ROOT / ".cursor-plugin/plugin.json").is_file())
         suite_skills = get_suite_skills(ROOT)
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
         ]
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        for rel_manifest in [
-            ".claude-plugin/marketplace.json",
-            ".cursor-plugin/marketplace.json",
-        ]:
-            manifest_path = ROOT / rel_manifest
-            self.assertTrue(manifest_path.is_file())
-            data = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(data["name"], "fred-skills")
-            self.assertEqual(data["version"], active_version)
-            self.assertTrue(data["description"])
-            self.assertEqual(data["description"], data["metadata"]["description"])
-            self.assertEqual(data["metadata"]["version"], active_version)
-            self.assertEqual(data["owner"]["name"], "fderuiter")
-            plugins = data["plugins"]
-            self.assertEqual(len(plugins), 1 + len(packs) + len(suite_skills))
-            plugin_names = [plugin["name"] for plugin in plugins]
-            self.assertEqual(len(plugin_names), len(set(plugin_names)))
-            skill_plugins = [p for p in plugins if p["source"].startswith("./skills/")]
-            bundle_plugins = [p for p in plugins if p["source"] == "./"]
-            self.assertEqual(len(skill_plugins) + len(bundle_plugins), len(plugins))
-            self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
+
+        claude_manifest_path = ROOT / ".claude-plugin/marketplace.json"
+        self.assertTrue(claude_manifest_path.is_file())
+        claude_data = json.loads(claude_manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(claude_data["name"], "fred-skills")
+        self.assertEqual(claude_data["version"], active_version)
+        self.assertTrue(claude_data["description"])
+        self.assertEqual(
+            claude_data["description"], claude_data["metadata"]["description"]
+        )
+        self.assertEqual(claude_data["metadata"]["version"], active_version)
+        self.assertEqual(claude_data["owner"], {"name": "fderuiter"})
+        claude_plugins = claude_data["plugins"]
+        self.assertEqual(len(claude_plugins), 1 + len(packs) + len(suite_skills))
+        claude_names = [plugin["name"] for plugin in claude_plugins]
+        self.assertEqual(len(claude_names), len(set(claude_names)))
+        skill_plugins = [
+            p for p in claude_plugins if p["source"].startswith("./skills/")
+        ]
+        bundle_plugins = [p for p in claude_plugins if p["source"] == "./"]
+        self.assertEqual(len(skill_plugins) + len(bundle_plugins), len(claude_plugins))
+        self.assertEqual({p["name"] for p in skill_plugins}, set(suite_skills))
+        self.assertEqual({p["name"] for p in bundle_plugins}, {"fred-skills", *packs})
+        suite_plugin = bundle_plugins[0]
+        self.assertEqual(suite_plugin["name"], "fred-skills")
+        self.assertIs(suite_plugin["strict"], False)
+        self.assertEqual(suite_plugin["version"], active_version)
+        self.assertEqual(suite_plugin["author"], {"name": "fderuiter"})
+        self.assertEqual(
+            suite_plugin["skills"],
+            [f"./skills/{member}" for member in sorted(suite_skills)],
+        )
+        for workflow_skill in get_suite_skills(ROOT, suite_name="repository-workflows"):
+            self.assertIn(workflow_skill, set(claude_names))
+        for plugin in skill_plugins:
+            self.assertIn("description", plugin)
+            self.assertEqual(plugin["version"], active_version)
+            self.assertEqual(plugin["author"], {"name": "fderuiter"})
+            self.assertNotIn("strict", plugin)
+            self.assertEqual(plugin["skills"], ["."])
+            for rel_skill in plugin["skills"]:
+                entry_file = ROOT / plugin["source"] / rel_skill / "SKILL.md"
+                self.assertTrue(entry_file.is_file())
+        for plugin in bundle_plugins[1:]:
+            expected_pack = packs[plugin["name"]]
+            self.assertEqual(plugin["description"], expected_pack["description"])
+            self.assertEqual(plugin["version"], active_version)
+            self.assertEqual(plugin["author"], {"name": "fderuiter"})
+            self.assertIs(plugin["strict"], False)
             self.assertEqual(
-                {p["name"] for p in bundle_plugins}, {"fred-skills", *packs}
+                plugin["skills"],
+                [f"./skills/{member}" for member in expected_pack["skills"]],
             )
-            suite_plugin = bundle_plugins[0]
-            self.assertEqual(suite_plugin["name"], "fred-skills")
-            self.assertIs(suite_plugin["strict"], False)
-            self.assertEqual(
-                suite_plugin["skills"],
-                [f"./skills/{member}" for member in sorted(suite_skills)],
-            )
-            for workflow_skill in get_suite_skills(
-                ROOT, suite_name="repository-workflows"
-            ):
-                self.assertIn(workflow_skill, set(plugin_names))
-            for plugin in skill_plugins:
-                self.assertIn("description", plugin)
-                self.assertNotIn("strict", plugin)
-                self.assertEqual(plugin["skills"], ["."])
-                for rel_skill in plugin["skills"]:
-                    entry_file = ROOT / plugin["source"] / rel_skill / "SKILL.md"
-                    self.assertTrue(entry_file.is_file())
-            for plugin in bundle_plugins[1:]:
-                expected_pack = packs[plugin["name"]]
-                self.assertEqual(plugin["description"], expected_pack["description"])
-                self.assertIs(plugin["strict"], False)
-                self.assertEqual(
-                    plugin["skills"],
-                    [f"./skills/{member}" for member in expected_pack["skills"]],
+        for plugin in bundle_plugins:
+            for member_source in plugin["skills"]:
+                self.assertTrue(member_source.startswith("./skills/"))
+                self.assertTrue(
+                    (ROOT / plugin["source"] / member_source / "SKILL.md").is_file()
                 )
-            for plugin in bundle_plugins:
-                for member_source in plugin["skills"]:
-                    self.assertTrue(member_source.startswith("./skills/"))
-                    self.assertTrue(
-                        (ROOT / plugin["source"] / member_source / "SKILL.md").is_file()
-                    )
+
+        cursor_root_manifest = json.loads(
+            (ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(cursor_root_manifest["name"], "fred-skills")
+        self.assertEqual(cursor_root_manifest["version"], active_version)
+        self.assertEqual(cursor_root_manifest["author"], {"name": "fderuiter"})
+        self.assertEqual(cursor_root_manifest["license"], "MIT")
+        self.assertNotIn("strict", cursor_root_manifest)
+        self.assertEqual(
+            cursor_root_manifest["skills"],
+            [f"./skills/{member}" for member in sorted(suite_skills)],
+        )
+
+        cursor_manifest_path = ROOT / ".cursor-plugin/marketplace.json"
+        self.assertTrue(cursor_manifest_path.is_file())
+        cursor_data = json.loads(cursor_manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(cursor_data["name"], "fred-skills")
+        self.assertEqual(cursor_data["owner"], {"name": "fderuiter"})
+        self.assertEqual(cursor_data["metadata"]["version"], active_version)
+        self.assertTrue(cursor_data["metadata"]["description"])
+        cursor_plugins = cursor_data["plugins"]
+        self.assertEqual(len(cursor_plugins), 1 + len(suite_skills))
+        cursor_names = [p["name"] for p in cursor_plugins]
+        self.assertEqual(len(cursor_names), len(set(cursor_names)))
+        self.assertEqual(set(cursor_names), {"fred-skills", *suite_skills})
+        for pack_name in packs:
+            self.assertNotIn(pack_name, set(cursor_names))
+        for entry in cursor_plugins:
+            self.assertNotIn("strict", entry)
+            self.assertNotIn("skills", entry)
+            self.assertNotIn("..", entry["source"])
+            self.assertEqual(entry["version"], active_version)
+            self.assertEqual(entry["author"], {"name": "fderuiter"})
+            self.assertEqual(entry["license"], "MIT")
+            plugin_dir = (ROOT / entry["source"]).resolve()
+            plugin_manifest_path = plugin_dir / ".cursor-plugin/plugin.json"
+            self.assertTrue(
+                plugin_manifest_path.is_file(),
+                f"Missing .cursor-plugin/plugin.json for {entry['name']}",
+            )
+            plugin_manifest = json.loads(
+                plugin_manifest_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(plugin_manifest["name"], entry["name"])
+            self.assertEqual(plugin_manifest["version"], active_version)
+            self.assertEqual(plugin_manifest["author"], {"name": "fderuiter"})
+            self.assertEqual(plugin_manifest["license"], "MIT")
+            self.assertNotIn("strict", plugin_manifest)
+            for rel_skill in plugin_manifest["skills"]:
+                self.assertNotIn("..", rel_skill)
+                self.assertTrue((plugin_dir / rel_skill / "SKILL.md").is_file())
 
         gemini_ext_path = ROOT / "gemini-extension.json"
         self.assertTrue(gemini_ext_path.is_file())
@@ -1077,6 +1220,11 @@ class PackageTests(unittest.TestCase):
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
         self.assertIn("/plugin install fred-skills@fred-skills", usage_text)
         self.assertIn("/plugin install complete@fred-skills", usage_text)
+        self.assertIn("### Claude Code", usage_text)
+        self.assertIn("### Cursor", usage_text)
+        self.assertNotIn("### Claude Code and Cursor", usage_text)
+        self.assertIn("Dashboard -> Plugins & MCPs", usage_text)
+        self.assertIn("Customize", usage_text)
         self.assertIn("$skill-installer", usage_text)
         self.assertIn(".agents/skills/", usage_text)
         self.assertNotIn("codex plugin", usage_text)
@@ -1096,6 +1244,9 @@ class PackageTests(unittest.TestCase):
 
         integration_text = (ROOT / "docs/integration.md").read_text(encoding="utf-8")
         self.assertIn("/plugin install fred-skills@fred-skills", integration_text)
+        self.assertIn("### Cursor", integration_text)
+        self.assertIn("Dashboard -> Plugins & MCPs", integration_text)
+        self.assertIn("Customize", integration_text)
         self.assertIn("$skill-installer", integration_text)
         self.assertNotIn("codex plugin", integration_text)
 
@@ -2199,6 +2350,60 @@ class PackageTests(unittest.TestCase):
                 any("Duplicate UI short_description" in err for err in all_errors),
                 f"Symlinked openai.yaml must not trigger duplicate short_description: {all_errors}",
             )
+
+    def test_cursor_plugin_manifest_validation_and_install_exclusion(self) -> None:
+        from fredlib import installation
+
+        cursor_dir = self.skill / ".cursor-plugin"
+        cursor_dir.mkdir(parents=True, exist_ok=True)
+        plugin_json = cursor_dir / "plugin.json"
+        valid_manifest = {
+            "name": "sample-audit",
+            "description": "Audit synthetic contracts when explicitly requested.",
+            "version": "0.2.0",
+            "author": {"name": "fderuiter"},
+            "license": "MIT",
+            "skills": ["."],
+        }
+        plugin_json.write_text(json.dumps(valid_manifest), encoding="utf-8")
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Unexpected file inside .cursor-plugin/ is rejected
+        extra_file = cursor_dir / "extra.json"
+        extra_file.write_text("{}", encoding="utf-8")
+        errs_extra = validate_skill(self.skill)
+        self.assertTrue(
+            any("Unexpected file in .cursor-plugin" in e for e in errs_extra),
+            errs_extra,
+        )
+        extra_file.unlink()
+
+        # Unsupported strict field or mismatched name or parent traversal is rejected
+        bad_manifest = {
+            **valid_manifest,
+            "name": "wrong-name",
+            "strict": False,
+            "skills": ["../escape"],
+        }
+        plugin_json.write_text(json.dumps(bad_manifest), encoding="utf-8")
+        errs_bad = validate_skill(self.skill)
+        self.assertTrue(any("must equal 'sample-audit'" in e for e in errs_bad))
+        self.assertTrue(any("strict" in e for e in errs_bad))
+        self.assertTrue(any("'..'" in e for e in errs_bad))
+
+        # CLI installation excludes .cursor-plugin from installed destination
+        dest_project = self.root / "dest-project"
+        dest_project.mkdir(parents=True, exist_ok=True)
+        install_res = installation.install(
+            skills=["repo-audit-concurrency"],
+            destination=dest_project,
+            host="cursor",
+            scope="project",
+            root=ROOT,
+        )
+        installed_dir = Path(install_res["target"]) / "repo-audit-concurrency"
+        self.assertTrue((installed_dir / "SKILL.md").is_file())
+        self.assertFalse((installed_dir / ".cursor-plugin").exists())
 
 
 if __name__ == "__main__":

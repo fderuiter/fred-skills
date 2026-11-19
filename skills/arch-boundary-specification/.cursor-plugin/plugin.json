@@ -1,0 +1,12 @@
+{
+  "name": "arch-boundary-specification",
+  "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

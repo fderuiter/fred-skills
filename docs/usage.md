@@ -19,7 +19,7 @@ behavior, permissions, or tool availability across agents.
 
 Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`), or an individual skill, use `npx skills add`, install a native extension, or install via the local CLI. For complete host configuration and orchestration guides across OpenAI Codex, Claude Code, Cursor, GitHub Copilot, Antigravity, Gemini CLI, OpenCode, Windsurf, and Kiro, see the [integration guide](integration.md).
 
-### Claude Code and Cursor
+### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
@@ -27,6 +27,14 @@ Register the marketplace catalog and install the `fred-skills` suite plugin, a c
 # Or install a curated pack:
 /plugin install starter@fred-skills
 /plugin install complete@fred-skills
+```
+
+### Cursor
+
+Import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace through **Dashboard -> Plugins & MCPs** (**Import from Repo**), then open **Customize** in the sidebar to install `fred-skills` or an individual specialist at project or user scope. To install a curated pack into `.cursor/skills/` locally, use the toolkit CLI:
+
+```sh
+python scripts/fred.py install --destination /path/to/project --host cursor --pack starter
 ```
 
 ### Skills CLI

@@ -26,6 +26,7 @@ SITE_ROOT_FILES: tuple[str, ...] = (
     "evals/README.md",
     ".claude-plugin/marketplace.json",
     ".cursor-plugin/marketplace.json",
+    ".cursor-plugin/plugin.json",
 )
 SITE_DIRECTORIES: tuple[str, ...] = (
     "docs",

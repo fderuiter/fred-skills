@@ -1,0 +1,12 @@
+{
+  "name": "review-invariant-violations",
+  "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "repo-reconcile-findings",
+  "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}
