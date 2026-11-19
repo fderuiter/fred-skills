@@ -624,6 +624,11 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
         "hosts"
     ]
     catalog_by_name = {entry["name"]: entry for entry in catalog_list}
+    suites_list: list[dict[str, Any]] | None = (
+        read_json(resolved_root / "catalog/suites.json")["suites"]
+        if (resolved_root / "catalog/suites.json").is_file()
+        else None
+    )
     suites_by_skill = (
         suite_members(resolved_root)
         if (resolved_root / "catalog/suites.json").is_file()
@@ -724,6 +729,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
     web_explorer_html = _render_explorer_html(
         catalog_list,
         recipes,
+        suites_list,
         packs=packs,
         hosts=hosts,
         root_prefix="../",
