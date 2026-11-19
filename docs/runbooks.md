@@ -1,6 +1,6 @@
 # Operational Runbooks and Troubleshooting Guide
 
-This guide provides operational troubleshooting runbooks and disaster recovery procedures for `fred-skills` installation, state management, and planning workflows. It covers lock contention, interrupted installations, power-loss events, corrupted receipts, and Git revision resolution failures.
+This guide provides operational troubleshooting runbooks and disaster recovery procedures for `fred-skills` installation, state management, planning, session triage, run validation, and finding reconciliation workflows. It covers lock contention, interrupted installations, corrupted receipts, Git revision resolution, stalled session triage, run ledger validation, and remediation proof checks.
 
 ---
 
@@ -36,7 +36,7 @@ The toolkit manages installation lifecycle state locally on disk without externa
 
 ### Context and Cause
 
-The installation subsystem acquires an exclusive lock (`operation.lock`) via `os.open` with `O_CREAT | O_EXCL` flags in `scripts/fredlib/installation.py:L107-L121` during `install`, `update`, `remove`, and `rollback` operations. If a previous invocation was killed, crashed, or disconnected, the lock file remains on disk, blocking subsequent operations.
+The installation subsystem acquires an exclusive lock (`operation.lock`) via `os.open` with `O_CREAT | O_EXCL` flags in `fredlib.installation.lock` during `install`, `update`, `remove`, and `rollback` operations. If a previous invocation was killed, crashed, or disconnected, the lock file remains on disk, blocking subsequent operations.
 
 ### Symptoms
 
@@ -73,10 +73,10 @@ The installation subsystem acquires an exclusive lock (`operation.lock`) via `os
    cat /path/to/project/.fred-skills/<host>-<scope>/operation.json
    ```
    Check the `phase` field in the JSON output:
-   - `"phase": "prepared"`: The operation was interrupted during staging or filesystem swap. Automated recovery is required.
-   - `"phase": "committed"`: The filesystem changes and receipt were committed, but the lock file was not unlinked prior to termination.
-   - `"phase": "recovered"`: A previous recovery completed, but the lock file lingered.
-   - File does not exist or is empty: The operation aborted before journal initialization.
+   - `"phase": "prepared"`: Interrupted during staging or swap; run `recover-install --confirm-interrupted` (`fredlib.installation.recover`).
+   - `"phase": "committed"`: Swap and receipt committed before lock unlink; run `recover-install --confirm-interrupted` (`fredlib.installation._check_already_committed_recovery`).
+   - `"phase": "recovered"`: Prior recovery already finished (`fredlib.installation._validate_recovery_journal` rejects non-`"prepared"` journals); confirm no writer runs and delete `operation.lock` manually (Scenario C).
+   - File does not exist or is empty: Aborted before journal initialization (`fredlib.installation._load_recovery_journal` requires `operation.json`); confirm no writer runs and delete `operation.lock` manually (Scenario C).
 
 4. **Compare operation ID with `receipt.json`:**
    Check if the journal's `id` already appears in `receipt.json` under `history`:
@@ -123,13 +123,13 @@ When `operation.json` indicates `phase: "committed"` or the operation ID is reco
    }
    ```
 
-#### Scenario C: Stale Lock with No Pending Operations
-If no `fred.py` process is running, `operation.json` does not exist (or was cleaned up), and `receipt.json` is consistent:
-1. Verify no process holds an open file descriptor on the lock:
+#### Scenario C: Stale Lock with Missing or `"recovered"` Journal
+`recover-install` requires a `"prepared"` or `"committed"` `operation.json` and rejects missing or `"recovered"` journals (`fredlib.installation._load_recovery_journal`, `fredlib.installation._validate_recovery_journal`). After confirming via `pgrep` that no `fred.py` writer is running:
+1. Verify no process holds an open file descriptor on `operation.lock`:
    ```sh
    lsof /path/to/project/.fred-skills/<host>-<scope>/operation.lock 2>/dev/null || true
    ```
-2. Safely remove only the stale lock file:
+2. Safely remove only the stale lock file (preserving `receipt.json`, `operation.json`, and `backups/`):
    ```sh
    rm /path/to/project/.fred-skills/<host>-<scope>/operation.lock
    ```
@@ -140,11 +140,11 @@ If no `fred.py` process is running, `operation.json` does not exist (or was clea
    ```sh
    test ! -f /path/to/project/.fred-skills/<host>-<scope>/operation.lock && echo "Lock successfully cleared"
    ```
-2. Run a non-mutating preview check to confirm lock acquisition and state health:
+2. Verify lock clearance and installation health (`fredlib.installation._is_state_locked`, `fred.main`):
    ```sh
-   python scripts/fred.py install --destination /path/to/project --host <host> --pack starter --dry-run
+   python scripts/fred.py installed --destination /path/to/project --host <host> --check
    ```
-   The command should succeed and output the preview JSON payload without raising a lock error.
+   `installed --check` exits `0` when unlocked and healthy, or `1` if `operation.lock` or drift remains (unlike `fredlib.installation.install`, which returns early on `--dry-run` before acquiring `operation.lock`).
 
 ---
 
@@ -152,9 +152,9 @@ If no `fred.py` process is running, `operation.json` does not exist (or was clea
 
 ### Context and Cause
 
-An installation or update operation consists of staging files, creating a backup of pre-existing skills, atomically recording a journal (`operation.json`), replacing target directories, committing `receipt.json`, and finally updating the journal phase to `committed`. If power loss, SIGKILL, or hardware interruption occurs during this window (`scripts/fredlib/installation.py:L381-L459`), the destination skills directory may be in a partially swapped state.
+An installation or update operation consists of staging files, creating a backup of pre-existing skills, atomically recording a journal (`operation.json`), replacing target directories, committing `receipt.json`, and finally updating the journal phase to `committed`. If power loss, SIGKILL, or hardware interruption occurs during this window (`fredlib.installation._execute_install`), the destination skills directory may be in a partially swapped state.
 
-Similarly, `remove` and `rollback` operations (`scripts/fredlib/installation.py:L269-L380`) move skills between the target directory and `backups/`. A power loss during these operations can result in skills residing in `backups/` while `receipt.json` remains unupdated.
+Similarly, `remove` and `rollback` operations (`fredlib.installation._execute_remove_operation`, `fredlib.installation._execute_rollback_operation`) move skills between the target directory and `backups/`. A power loss during these operations can result in skills residing in `backups/` while `receipt.json` remains unupdated.
 
 ### Symptoms
 
@@ -277,9 +277,9 @@ This happens if files in the destination were modified by an editor or outside t
    ```sh
    test -f /path/to/project/<target_path>/<skill-name>/SKILL.md && echo "Skill entry point verified"
    ```
-2. Run a dry-run update to verify that all installed skills match receipt digests:
+2. Run a dry-run update without `--pack` so `fredlib.installation._select_install_skills` verifies every installed skill in `receipt.json`:
    ```sh
-   python scripts/fred.py update --destination /path/to/project --host <host> --pack starter --dry-run
+   python scripts/fred.py update --destination /path/to/project --host <host> --dry-run
    ```
 
 ---
@@ -288,7 +288,7 @@ This happens if files in the destination were modified by an editor or outside t
 
 ### Context and Cause
 
-The file `receipt.json` located at `<destination>/.fred-skills/<host>-<scope>/receipt.json` is the source of truth for managed skills, versions, and cryptographic hashes (`scripts/fredlib/installation.py:L123-L153`). Validation errors occur when:
+The file `receipt.json` located at `<destination>/.fred-skills/<host>-<scope>/receipt.json` is the source of truth for managed skills, versions, and cryptographic hashes (`fredlib.installation.receipt`, `fredlib.installation.require_unmodified`, `fredlib.installation.checked_target`). Validation errors occur when:
 - The receipt file is corrupted or contains invalid JSON syntax.
 - Managed files are modified locally in the target directory (`Locally modified skill`).
 - An unmanaged skill exists in the target directory with the same name (`Refusing to replace unmanaged skill`).
@@ -399,12 +399,12 @@ If blocked by `Managed skill is missing: <name>`:
 
 #### Scenario C: Non-Destructive Repair and Reconstruction of Corrupted `receipt.json`
 **Never delete the `.fred-skills/` directory.** If `receipt.json` is missing or unparseable:
-1. Back up the existing corrupted receipt:
+1. Back up the existing corrupted receipt only when `receipt.json` exists on disk:
    ```sh
-   cp /path/to/project/.fred-skills/<host>-<scope>/receipt.json \
-      /path/to/project/.fred-skills/<host>-<scope>/receipt.json.corrupt-bak
+   test -f /path/to/project/.fred-skills/<host>-<scope>/receipt.json && \
+     cp /path/to/project/.fred-skills/<host>-<scope>/receipt.json /path/to/project/.fred-skills/<host>-<scope>/receipt.json.corrupt-bak || true
    ```
-2. Reconstruct `receipt.json` by calculating current file hashes using `fredlib.common`:
+2. Reconstruct `receipt.json` for catalog-recognized skills (`fredlib.common.choose_skills`) using `fredlib.common`:
    ```sh
    python -c "
    import sys, pathlib, json
@@ -416,13 +416,14 @@ If blocked by `Managed skill is missing: <name>`:
    scope = 'project'
    state = destination / '.fred-skills' / f'{host}-{scope}'
    hosts = json.loads((ROOT / 'catalog/hosts.json').read_text())['hosts']
+   catalog_skills = {s['name'] for s in json.loads((ROOT / 'catalog/skills.json').read_text())['skills']}
    target = destination / hosts[host][scope + '_path']
    source_ver = version(ROOT)
 
-   # Scan target directory for valid skills
+   # Scan target directory for catalog-recognized skills (keep custom skills untracked)
    skills_records = {}
-   for child in sorted(target.iterdir()):
-       if child.is_dir() and (child / 'SKILL.md').is_file() and not child.is_symlink():
+   for child in (sorted(target.iterdir()) if target.is_dir() else []):
+       if child.name in catalog_skills and child.is_dir() and (child / 'SKILL.md').is_file() and not child.is_symlink():
            files = package_files(child)
            skills_records[child.name] = {
                'source_version': source_ver,
@@ -430,20 +431,17 @@ If blocked by `Managed skill is missing: <name>`:
                'content_hash': digest(files)
            }
 
-   receipt_data = {
-       'schema_version': '1.0',
-       'host': host,
-       'skills': skills_records,
-       'history': []
-   }
+   receipt_data = {'schema_version': '1.0', 'host': host, 'skills': skills_records, 'history': []}
 
-   # Re-attach history from previous corrupted receipt or backups if parseable
-   try:
-       old_receipt = json.loads((state / 'receipt.json.corrupt-bak').read_text())
-       receipt_data['history'] = old_receipt.get('history', [])
-   except Exception:
-       pass
+   # Re-attach history from previous corrupted receipt if parseable
+   if (state / 'receipt.json.corrupt-bak').is_file():
+       try:
+           old_receipt = json.loads((state / 'receipt.json.corrupt-bak').read_text())
+           receipt_data['history'] = old_receipt.get('history', [])
+       except Exception:
+           pass
 
+   state.mkdir(parents=True, exist_ok=True)
    atomic_json(state / 'receipt.json', receipt_data)
    print(f'Reconstructed receipt.json with {len(skills_records)} managed skills')
    "
@@ -455,9 +453,9 @@ If blocked by `Managed skill is missing: <name>`:
    ```sh
    python -m json.tool /path/to/project/.fred-skills/<host>-<scope>/receipt.json > /dev/null && echo "Receipt syntax valid"
    ```
-2. Perform a dry-run update to confirm receipt and package agreement:
+2. Perform a dry-run update without `--pack` so `fredlib.installation._select_install_skills` validates every skill recorded in `receipt.json` while custom folders remain `untracked`:
    ```sh
-   python scripts/fred.py update --destination /path/to/project --host <host> --pack starter --dry-run
+   python scripts/fred.py update --destination /path/to/project --host <host> --dry-run
    ```
 
 ---
@@ -466,7 +464,7 @@ If blocked by `Managed skill is missing: <name>`:
 
 ### Context and Cause
 
-When running change-based audit planning (`scripts/fred.py plan` or `scripts/fred.py init`) with `--mode changes` or tasks requiring a base revision (`review-pr`), the toolkit resolves the Git revision and changed files in `scripts/fredlib/runs.py:L65-L71` and `scripts/fredlib/repository.py:L25-L42`, `L102-L135`.
+When running change-based audit planning (`scripts/fred.py plan` or `scripts/fred.py init`) with `--mode changes` or tasks requiring a base revision (`review-pr`), the toolkit resolves the Git revision and changed files in `fredlib.runs.plan`, `fredlib.repository.git`, and `fredlib.repository.changed_files`.
 
 Failure occurs when:
 - `--base` revision argument is omitted.
@@ -506,14 +504,14 @@ Failure occurs when:
    If `true`, Git may be unable to calculate `git merge-base` against upstream branches without unshallowing.
 
 4. **Verify the candidate base revision resolves to a commit:**
-   Test the exact Git command used by `scripts/fredlib/repository.py:L104-L111`:
+   Test the exact Git command used by `fredlib.repository.changed_files`:
    ```sh
    git -C /path/to/repository rev-parse --verify --end-of-options "<revision>^{commit}"
    ```
    If this outputs an error (e.g., `fatal: Needed a single revision`), `<revision>` is invalid or not fetched.
 
 5. **Test merge-base computation against HEAD:**
-   Test the exact Git command used by `scripts/fredlib/repository.py:L115`:
+   Test the exact merge-base command used by `fredlib.repository.changed_files`:
    ```sh
    git -C /path/to/repository merge-base "<revision>" HEAD
    ```
@@ -570,11 +568,11 @@ If `Git is required for a revision/diff-based plan` occurs:
    ```sh
    git -C /path/to/repository merge-base "<base>" HEAD
    ```
-2. Run `fred.py plan` in `changes` mode:
+2. Run `fred.py plan` in `changes` mode with `--json` (`fred.main` renders human tables on interactive TTYs unless `--json` is passed):
    ```sh
-   python scripts/fred.py plan /path/to/repository --task review-pr --mode changes --base "<base>"
+   python scripts/fred.py plan /path/to/repository --task review-pr --mode changes --base "<base>" --json
    ```
-   Verify that the command succeeds with exit code `0` and outputs a valid JSON plan containing `changed_files` and `resolved_base`.
+   Verify that the command succeeds with exit code `0` and outputs a valid JSON object containing `plan.base_revision` and `plan.changed_files` (`fredlib.runs.plan`).
 
 ---
 
@@ -593,7 +591,11 @@ The session triage subsystem (`scripts/fred.py triage` and `skills/repo-audit-di
 ### Core Operational Safeguards
 
 1. **Strict preservation of canonical session ledgers:** Triage operates as a read-only analytical diagnostic tool. Modifying canonical session ledgers (`run.json`, `audit.json`) or mutating historical audit findings during triage remains strictly out of scope.
-2. **Automated credential scrubbing:** Triage applies deterministic regex sanitizers (`skills/repo-audit-diagnostics/scripts/triage.py:L16-L60`) to redact sensitive authentication material prior to exporting bundles. This scrubs authorization headers (`Bearer`, `Basic`, `Token`), OpenAI/Anthropic API keys (`sk-...`), GitHub personal access tokens (`ghp_...`, `github_pat_...`), Slack tokens (`xox...`), AWS access keys (`AKIA...`), JWT tokens, private key blocks, and key-value secret definitions (`password`, `secret`, `api_key`).
+2. **Automated key-aware and pattern-based credential scrubbing:** Triage applies recursive JSON/escaped-string key inspection (`triage._SENSITIVE_KEY_EXACT`, `triage._is_sensitive_json_key`, `triage.scrub_credentials_with_stats`) alongside categorized regex sanitizers (`triage.CREDENTIAL_PATTERNS_CATEGORIZED`) before exporting bundles. This redacts values assigned to sensitive keys (`password`, `secret`, `api_key`, `access_token`, `authorization`, `cookie`, `private_key`) even inside nested or stringified JSON payloads, as well as authorization headers (`Bearer`, `Basic`, `Token`), OpenAI/Anthropic API keys (`sk-...`), GitHub tokens (`ghp_...`, `github_pat_...`), Slack tokens (`xox...`), AWS access keys (`AKIA...`), JWTs, and PEM private keys.
+3. **Configurable redaction tiers (`--redaction-tier`):** Operators control how much tool output is retained via `fred.parser`, `triage.REDACTION_TIERS`, and `triage.OMITTED_TOOL_OUTPUT_PLACEHOLDER`:
+   - `skeleton`: Replaces all tool outputs with `[OMITTED_TOOL_OUTPUT]`, preserving only turn structure, failure classification, and scrubbed error summaries for safe external sharing.
+   - `evidence`: Retains scrubbed tool outputs only on turns cited as decisive failure evidence and replaces unrelated tool outputs with `[OMITTED_TOOL_OUTPUT]`.
+   - `full` (default): Retains all tool outputs after recursive key-aware and regex credential scrubbing.
 
 ### Symptoms
 
@@ -602,28 +604,44 @@ The session triage subsystem (`scripts/fred.py triage` and `skills/repo-audit-di
 - Session transcript ends abruptly or contains unhandled traceback or error lines.
 - Triage CLI errors on `stderr`:
   - `fred-skills: Transcript file path is required`
+  - `fred-skills: Workspace directory not found: <path>`
   - `fred-skills: Transcript file not found: <path>`
   - `fred-skills: Triage script not found at <path>`
   - `fred-skills: Schema validation error: <details>`
 
 ### Diagnostic Checks and Procedures
 
-1. **Identify the session transcript and workspace directory:**
-   Locate the agent transcript file (`.json`, `.jsonl`, `.txt`, `.md`) and optional audit workspace containing `run.json` and `audit.json`:
+1. **Identify the session transcript or rely on automatic discovery:**
+   Check the audit workspace directory (`run.json`, `audit.json`, and any local transcript logs):
    ```sh
    ls -la audit-output/bug/
    ```
+   When the positional `<transcript>` argument is omitted, `fred.handle_diagnostics` invokes `triage.discover_transcript_details` to locate the latest matching session transcript automatically from `--workspace` (searching workspace logs and host session stores for Claude Code, Codex, Gemini CLI, and Cursor) or directly by `--session-id`.
 
-2. **Execute session triage to extract scrubbed diagnostics:**
-   Run `scripts/fred.py triage` pointing to the transcript and output directory:
+2. **Execute session triage (explicit transcript or automatic discovery):**
+   Run `scripts/fred.py triage` with an explicit transcript file, or omit `<transcript>` to auto-discover via `--workspace` or `--session-id`:
    ```sh
+   # Explicit transcript path:
    python scripts/fred.py triage audit-output/bug/session-transcript.jsonl --workspace audit-output/bug --output audit-output/bug/diagnostics
+
+   # Automatic transcript discovery from workspace directory:
+   python scripts/fred.py triage --workspace audit-output/bug --output audit-output/bug/diagnostics
+
+   # Automatic transcript discovery by host session ID:
+   python scripts/fred.py triage --session-id <session-id> --output audit-output/bug/diagnostics
    ```
 
-3. **Validate diagnostic bundle schema conformance:**
-   Add `--check-schema` to ensure the generated `diagnostic_bundle.json` strictly satisfies `bundle.schema.json`:
+3. **Select a `--redaction-tier` and validate bundle schema conformance:**
+   Choose `skeleton`, `evidence`, or `full` (`triage.REDACTION_TIERS`) and pass `--check-schema` (`triage.validate_bundle`) to verify `diagnostic_bundle.json` against `bundle.schema.json`:
    ```sh
-   python scripts/fred.py triage audit-output/bug/session-transcript.jsonl --workspace audit-output/bug --output audit-output/bug/diagnostics --check-schema
+   # Minimal shareable bundle (all tool outputs omitted):
+   python scripts/fred.py triage --workspace audit-output/bug --output audit-output/bug/diagnostics --redaction-tier skeleton --check-schema
+
+   # Retain only failure-cited tool outputs:
+   python scripts/fred.py triage --workspace audit-output/bug --output audit-output/bug/diagnostics --redaction-tier evidence --check-schema
+
+   # Full scrubbed diagnostic bundle (default tier):
+   python scripts/fred.py triage --workspace audit-output/bug --output audit-output/bug/diagnostics --redaction-tier full --check-schema
    ```
 
 4. **Interpret failure signatures and determine remediation:**
@@ -666,25 +684,225 @@ The session triage subsystem (`scripts/fred.py triage` and `skills/repo-audit-di
 
 ---
 
+## Runbook 6: Run Workspace and Ledger Integrity Recovery (`validate-run`)
+
+### Context and Cause
+
+The `validate-run` command (`fred.parser`, `fred.handle_runs`, `fredlib.runs.validate_run`) enforces structural and cryptographic invariants across an initialized run workspace (`run.json`, primary deliverable such as `audit.json`, and optional workflow companion artifacts such as `remediation.json` or `verification.json`). Specifically, `fredlib.runs.validate_run` and `fredlib.runs.audit_errors` verify:
+- `run.json` conforms to `schemas/run.schema.json`.
+- The suite deliverable (`audit.json` or domain deliverable) satisfies its JSON schema and semantic invariants (unique IDs, grounded evidence references, repository-relative paths).
+- `run.snapshot.digest` equals the canonical SHA-256 digest of `{files, skipped, exclude}` (`fredlib.common.digest`).
+- `audit.run_id` matches `run.run_id`, and `audit.repository.snapshot` matches `run.snapshot.digest` (or a recorded `loop.snapshot_history` entry).
+- Any present workflow companion files (`remediation.json`, `verification.json`) conform to their schemas (`fredlib.runs._validate_present_workflow_companions`).
+
+### Symptoms
+
+- `python scripts/fred.py validate-run <dir>` or `advance` fails with exit code `1` (`schema_validation_failed` in `fred.handle_runs`).
+- Error messages on `stderr`:
+  - `fred-skills: Snapshot content identity does not match its recorded file inventory`
+  - `fred-skills: Run and audit IDs differ`
+  - `fred-skills: Audit evidence is not tied to the current run snapshot`
+  - `fred-skills: <field/schema errors in run.json, audit.json, or companion artifacts>`
+
+### Diagnostic Checks
+
+1. **Run `validate-run` with `--json` to inspect structured error details:**
+   ```sh
+   python scripts/fred.py validate-run audit-output/bug --json
+   ```
+2. **Compare `run_id` and `snapshot` fields across `run.json` and `audit.json`:**
+   ```sh
+   python -c "
+   import json, pathlib
+   run_dir = pathlib.Path('audit-output/bug')
+   run = json.loads((run_dir / 'run.json').read_text()) if (run_dir / 'run.json').is_file() else {}
+   audit = json.loads((run_dir / 'audit.json').read_text()) if (run_dir / 'audit.json').is_file() else {}
+   print('run.run_id:', run.get('run_id'), '| audit.run_id:', audit.get('run_id'))
+   print('run.snapshot:', run.get('snapshot', {}).get('digest'), '| audit.snapshot:', audit.get('repository', {}).get('snapshot'))
+   "
+   ```
+
+### Step-by-Step Remediation
+
+#### Scenario A: Snapshot Digest Drift (`Snapshot content identity does not match its recorded file inventory`)
+This occurs if `run.json` had `snapshot.files`, `snapshot.skipped`, or `snapshot.exclude` edited manually without recomputing `snapshot.digest`.
+1. Recompute `run.snapshot.digest` from the recorded inventory using `fredlib.common.digest` and update `audit.repository.snapshot` if tied to the same run:
+   ```sh
+   python -c "
+   import sys, json, pathlib
+   sys.path.insert(0, 'scripts')
+   from fredlib.common import digest, atomic_json
+
+   run_dir = pathlib.Path('audit-output/bug')
+   if (run_dir / 'run.json').is_file():
+       run = json.loads((run_dir / 'run.json').read_text())
+       snap = run['snapshot']
+       snap['digest'] = digest({k: snap[k] for k in ('files', 'skipped', 'exclude')})
+       atomic_json(run_dir / 'run.json', run)
+       if (run_dir / 'audit.json').is_file():
+           audit = json.loads((run_dir / 'audit.json').read_text())
+           audit.setdefault('repository', {})['snapshot'] = snap['digest']
+           atomic_json(run_dir / 'audit.json', audit)
+   "
+   ```
+2. If instead repository source files changed on disk after `init`, do not hand-edit `snapshot.files`; run `resume` (`fredlib.runs.revalidate`) to record `revalidation.json` and identify stale findings:
+   ```sh
+   python scripts/fred.py resume audit-output/bug --json
+   ```
+
+#### Scenario B: Run ID or Snapshot Mismatch (`Run and audit IDs differ` / `Audit evidence is not tied to the current run snapshot`)
+This occurs when an `audit.json` file from another run workspace was copied into `audit-output/bug/` or emitted with placeholder metadata.
+1. Verify the findings in `audit.json` actually belong to the repository revision recorded in `run.json`. If `audit.json` came from a different run, move it back to its originating run directory rather than overwriting IDs blindly.
+2. When an agent wrote findings for the current workspace but stamped a placeholder `run_id` or `repository.snapshot`, synchronize `audit.json` identity headers from `run.json`:
+   ```sh
+   python -c "
+   import sys, json, pathlib
+   sys.path.insert(0, 'scripts')
+   from fredlib.common import atomic_json
+
+   run_dir = pathlib.Path('audit-output/bug')
+   if (run_dir / 'run.json').is_file() and (run_dir / 'audit.json').is_file():
+       run = json.loads((run_dir / 'run.json').read_text())
+       audit = json.loads((run_dir / 'audit.json').read_text())
+       audit['run_id'] = run['run_id']
+       audit.setdefault('repository', {})['snapshot'] = run['snapshot']['digest']
+       atomic_json(run_dir / 'audit.json', audit)
+   "
+   ```
+
+#### Scenario C: Ledger or Companion Schema Validation Errors
+If `run.json`, `audit.json`, or a companion file (`remediation.json`) fails schema validation (`fredlib.runs.audit_errors`, `fredlib.runs._schema_errors`):
+1. Check JSON syntax across workspace ledgers:
+   ```sh
+   python -m json.tool audit-output/bug/run.json > /dev/null
+   python -m json.tool audit-output/bug/audit.json > /dev/null
+   ```
+2. Repair the reported field constraint in `audit.json` (for example, ensuring every `finding.evidence_ids` entry exists in `evidence`, `line_start <= line_end`, and finding IDs are unique) or in `run.json` against `schemas/run.schema.json`.
+
+### Verification Steps
+
+1. Run `validate-run` and confirm exit code `0` with `{"valid": true, "semantic_claims_verified": false}`:
+   ```sh
+   python scripts/fred.py validate-run audit-output/bug --json
+   ```
+
+---
+
+## Runbook 7: Finding Remediation State and Verification Proof Recovery (`reconcile`)
+
+### Context and Cause
+
+The `reconcile` command (`fred.parser`, `fred.handle_runs`, `fredlib.runs.reconcile`) records lifecycle transitions (`open`, `in-progress`, `fixed-pending-verification`, `verified-fixed`, `regressed`, `accepted-risk`) in `<run-dir>/remediation.json` keyed by finding ID and stable root-cause fingerprint (`fredlib.runs.fingerprint`). Transitioning a finding to `verified-fixed` enforces strict proof gates against `skills/repo-verify-fix/assets/verification.schema.json`, while `remediation.json` is validated against `skills/repo-reconcile-findings/assets/reconciliation.schema.json`.
+
+### Symptoms
+
+- `python scripts/fred.py reconcile ...` exits with code `1`.
+- Error messages on `stderr`:
+  - `fred-skills: Unknown finding or remediation state`
+  - `fred-skills: verified-fixed requires a verification JSON artifact`
+  - `fred-skills: Verification artifact does not satisfy the proof schema: <details>`
+  - `fred-skills: Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result`
+  - `fred-skills: Malformed remediation ledger '<path>': 'records' must be a JSON array`
+  - `fred-skills: Remediation ledger does not satisfy reconciliation.schema.json: <details>`
+
+### Diagnostic Checks
+
+1. **List available finding IDs in `audit.json`:**
+   ```sh
+   python -c "
+   import json, pathlib
+   audit_file = pathlib.Path('audit-output/bug/audit.json')
+   findings = json.loads(audit_file.read_text()).get('findings', []) if audit_file.is_file() else []
+   print([f.get('id') for f in findings])
+   "
+   ```
+2. **Inspect any candidate `verification.json` artifact:**
+   ```sh
+   python -m json.tool audit-output/bug/verification.json
+   ```
+
+### Step-by-Step Remediation
+
+#### Scenario A: Unknown Finding ID or Unsupported Remediation State
+If `reconcile` fails with `Unknown finding or remediation state`:
+1. Confirm the `--finding` ID matches an exact `findings[].id` entry in `audit-output/bug/audit.json` (`fredlib.runs._require_audit_directory`).
+2. Use one of the six supported `--state` values (`open`, `in-progress`, `fixed-pending-verification`, `verified-fixed`, `regressed`, `accepted-risk`):
+   ```sh
+   python scripts/fred.py reconcile audit-output/bug --finding F-1 --state in-progress --note "Investigating root cause and reproduction test"
+   ```
+
+#### Scenario B: Missing or Incomplete Proof Artifact for `verified-fixed`
+`fredlib.runs.reconcile` refuses to mark a finding `verified-fixed` unless `--verification <path>` points to a JSON object that satisfies `skills/repo-verify-fix/assets/verification.schema.json` with `original_reproduced: true`, `regression_passed: true`, `safe_controls_passed: true`, and a non-empty `commands` array.
+1. If fixes are applied but reproduction/regression checks have not yet been executed, record `fixed-pending-verification` instead:
+   ```sh
+   python scripts/fred.py reconcile audit-output/bug --finding F-1 --state fixed-pending-verification --note "Patch applied; awaiting reproduction and regression verification"
+   ```
+2. Once before/after reproduction, regression tests, and safe-control tests pass, write a complete `verification.json` artifact:
+   ```json
+   {
+     "before_revision": "a1b2c3d",
+     "after_revision": "e4f5g6h",
+     "original_reproduced": true,
+     "regression_passed": true,
+     "safe_controls_passed": true,
+     "commands": [
+       "python -m unittest tests.test_regression"
+     ],
+     "result": "Original failure reproduced prior to fix; regression and safe-control tests pass on patched revision."
+   }
+   ```
+3. Run `reconcile` with `--state verified-fixed` and `--verification`:
+   ```sh
+   python scripts/fred.py reconcile audit-output/bug --finding F-1 --state verified-fixed --verification audit-output/bug/verification.json --note "Verified fix with reproduction and safe controls"
+   ```
+
+#### Scenario C: Malformed `remediation.json` Ledger
+If `remediation.json` was truncated or manually edited so `records` is missing or violates `reconciliation.schema.json`:
+1. Back up the malformed file before repairing:
+   ```sh
+   test -f audit-output/bug/remediation.json && cp audit-output/bug/remediation.json audit-output/bug/remediation.json.corrupt-bak || true
+   ```
+2. Restore valid `schema_version` (`"1.0"`) and `records` array entries in `audit-output/bug/remediation.json`, then re-run `reconcile`.
+
+### Verification Steps
+
+1. Validate both `remediation.json` and the full run workspace via `validate-run` (`fredlib.runs._validate_present_workflow_companions`):
+   ```sh
+   python scripts/fred.py validate-run audit-output/bug --json
+   ```
+
+---
+
 ## Operational Diagnostic Quick Reference
 
-| Error Message | Exit Code | Source Location | Root Cause | Immediate Action |
+| Error Message | Exit Code | Source Symbol | Root Cause | Immediate Action |
 | --- | --- | --- | --- | --- |
-| `Another install operation or interrupted operation holds the lock` | 1 | `installation.py:L113` | Lock file exists from active or crashed command | Check `pgrep -fl fred.py`; run `recover-install --confirm-interrupted` |
-| `Journal/receipt disagreement needs manual inspection` | 1 | `installation.py:L408` | Filesystem or receipt modified during interrupted run | Diff target vs `backups/<id>`; restore before running recovery |
-| `Modified recovery destination: <name>` | 1 | `installation.py:L421` | Files modified during or after interrupted install | Backup modifications to `/tmp`; restore matching before/after hash |
-| `Refusing to replace unmanaged skill: <name>` | 1 | `installation.py:L144` | Directory exists at target but missing from receipt | Review skill directory; reconstruct `receipt.json` or move directory |
-| `Locally modified skill: <name>` | 1 | `installation.py:L146` | Files modified in target after installation | Diff against source; revert local changes or rename custom skill |
-| `Managed skill is missing: <name>` | 1 | `installation.py:L150` | Skill in receipt but missing from disk | Restore from `backups/` or re-copy from source repository |
-| `A change review requires --base <revision>` | 1 | `runs.py:L68` | `--mode changes` specified without `--base` | Pass `--base <ref>` (e.g. `--base origin/main`) |
-| `Git could not resolve the requested repository or revision` | 1 | `repository.py:L38` | Base branch not fetched, invalid ref, or shallow clone | Run `git fetch origin <branch>`; test `git merge-base` |
-| `Base did not resolve to a commit` | 1 | `repository.py:L113` | Ref points to non-commit object | Use commit SHA or `<tag>^{commit}` |
-| `Git is required for a revision/diff-based plan` | 1 | `repository.py:L28` | `git` executable not found in `PATH` | Install Git and add to `PATH` |
-| `Transcript file path is required` | 1 | `fred.py:L785` | Transcript positional or `--transcript` argument omitted | Pass transcript path: `python scripts/fred.py triage <transcript>` |
-| `Transcript file not found: <path>` | 1 | `fred.py:L787` | Transcript path does not exist or unreadable | Check file path and read permissions |
-| `Triage script not found at <path>` | 1 | `fred.py:L795` | `repo-audit-diagnostics` skill package missing or moved | Reinstall `repo-audit-diagnostics` package via `fred.py install` |
-| `Schema validation error: <details>` | 1 | `triage.py:L459` | Generated bundle violates `bundle.schema.json` | Review transcript format or run without `--check-schema` for raw dump |
-| `Tool execution timed out: <cmd>` | 0 | `triage.py:L167` | Tool/subprocess execution deadline exceeded during audit | Increase tool timeout budget or isolate hanging command |
-| `Audit schema validation error: <msg>` | 0 | `triage.py:L178` | Agent output violated audit schema invariants | Review transcript schema mismatch line and repair prompt constraints |
-| `Context window token limit exceeded: <msg>` | 0 | `triage.py:L189` | Model context window limit reached | Use `--budget brief`, exclude verbose paths, or split audit run |
-| `Unclassified execution failure: <line>` | 0 | `triage.py:L200` | Unhandled traceback or runtime error in transcript | Review sanitized traceback in `diagnostic_report.md` |
+| `Another install operation or interrupted operation holds the lock` (`"prepared"` or `"committed"` journal) | 1 | `fredlib.installation.lock` | Lock file remains from an interrupted `"prepared"` or `"committed"` operation | Check `pgrep -fl fred.py`; run `recover-install --confirm-interrupted`; verify with `installed --check` |
+| `Another install operation or interrupted operation holds the lock` (missing or `"recovered"` journal) | 1 | `fredlib.installation._validate_recovery_journal` | Stale `operation.lock` with missing `operation.json` or `"phase": "recovered"` | Confirm no `fred.py` process runs (`pgrep`/`lsof`), `rm operation.lock`, then run `installed --check` |
+| `No interrupted installation journal 'operation.json' found` | 1 | `fredlib.installation._load_recovery_journal` | `recover-install` invoked when `operation.json` is absent | Check active processes, remove stale `operation.lock` manually, and verify with `installed --check` |
+| `Journal/receipt disagreement needs manual inspection` | 1 | `fredlib.installation._validate_recovery_journal` | Non-`"prepared"` journal or modified receipt during interrupted run | If `"recovered"`, remove stale `operation.lock`; otherwise diff target vs `backups/<id>` before recovery |
+| `Modified recovery destination: <name>` | 1 | `fredlib.installation._validate_recovery_skill` | Files modified during or after interrupted install | Backup modifications to `/tmp`; restore matching before/after hash from `backups/<id>` |
+| `Refusing to replace unmanaged skill: <name>` | 1 | `fredlib.installation.require_unmodified` | Directory exists at target but missing from receipt | Review skill directory; reconstruct catalog entries in `receipt.json` or rename custom folder |
+| `Locally modified skill: <name>` | 1 | `fredlib.installation.require_unmodified` | Files modified in target after installation | Run `update --force` (archives backup) or copy edits to `<name>-custom` |
+| `Managed skill is missing: <name>` | 1 | `fredlib.installation.require_unmodified` | Skill in receipt but missing from disk | Restore with `install --force` or drop from receipt with `remove --force` |
+| `A change review requires --base <revision>` | 1 | `fredlib.runs.plan` | `--mode changes` specified without `--base` | Pass `--base <ref>` and `--json` to inspect `plan.base_revision` |
+| `Git could not resolve the requested repository or revision` | 1 | `fredlib.repository.git` | Base branch not fetched, invalid ref, or shallow clone | Run `git fetch origin <branch>`; test `git merge-base` |
+| `Base did not resolve to a commit` | 1 | `fredlib.repository.changed_files` | Ref points to non-commit object | Use commit SHA or `<tag>^{commit}` |
+| `Git is required for a revision/diff-based plan` | 1 | `fredlib.repository.git` | `git` executable not found in `PATH` | Install Git and add to `PATH` |
+| `Transcript file path is required` | 1 | `fred.handle_diagnostics` | Transcript, `--workspace`, and `--session-id` all omitted | Pass `<transcript>`, `--workspace <dir>`, or `--session-id <id>` |
+| `Workspace directory not found: <path>` | 1 | `fred.handle_diagnostics` | `--workspace` directory does not exist | Verify the run workspace directory path before running `triage` |
+| `Transcript file not found: <path>` | 1 | `fred.handle_diagnostics` | Explicit transcript path does not exist or unreadable | Check file path or omit `<transcript>` with `--workspace` / `--session-id` |
+| `Triage script not found at <path>` | 1 | `fred._load_triage_module` | `repo-audit-diagnostics` skill package missing or moved | Restore `skills/repo-audit-diagnostics/scripts/triage.py` |
+| `Schema validation error: <details>` | 1 | `triage.validate_bundle` | Generated bundle violates `bundle.schema.json` | Inspect mismatch or re-run with `--redaction-tier skeleton` |
+| `Tool execution timed out: <cmd>` | 0 | `triage.TIMEOUT_PATTERNS` | Tool/subprocess execution deadline exceeded during audit | Increase tool timeout budget or isolate hanging command |
+| `Audit schema validation error: <msg>` | 0 | `triage.SCHEMA_PATTERNS` | Agent output violated audit schema invariants | Review transcript schema mismatch line and repair prompt constraints |
+| `Context window token limit exceeded: <msg>` | 0 | `triage.CONTEXT_PATTERNS` | Model context window limit reached | Use `--budget brief`, exclude verbose paths, or split audit run |
+| `Unclassified execution failure: <line>` | 0 | `triage._build_unclassified_from_turn` | Unhandled traceback or runtime error in transcript | Review sanitized traceback in `diagnostic_report.md` |
+| `Snapshot content identity does not match its recorded file inventory` | 1 | `fredlib.runs.validate_run` | `run.snapshot.digest` drifted from `{files, skipped, exclude}` | Recompute `snapshot.digest` via `fredlib.common.digest` or run `fred.py resume` |
+| `Run and audit IDs differ` | 1 | `fredlib.runs.validate_run` | `audit.run_id` does not match `run.run_id` | Verify `audit.json` belongs to the run and align `run_id` |
+| `Audit evidence is not tied to the current run snapshot` | 1 | `fredlib.runs.validate_run` | `audit.repository.snapshot` absent from run snapshot(s) | Run `fred.py resume` or synchronize `audit.repository.snapshot` with `run.snapshot.digest` |
+| `Unknown finding or remediation state` | 1 | `fredlib.runs.reconcile` | Finding ID missing in `audit.json` or invalid `--state` | Check `findings[].id` in `audit.json` and pass a valid remediation `--state` |
+| `verified-fixed requires a verification JSON artifact` | 1 | `fredlib.runs.reconcile` | `--state verified-fixed` passed without `--verification` | Use `fixed-pending-verification` or pass `--verification <verification.json>` |
+| `Verification artifact does not satisfy the proof schema` | 1 | `fredlib.runs.reconcile` | `--verification` JSON violates `verification.schema.json` | Include required fields (`before_revision`, `after_revision`, booleans, `commands`, `result`) |
+| `Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result` | 1 | `fredlib.runs.reconcile` | Proof booleans not `true` or `commands` empty | Execute reproduction, regression, and safe-control checks and set all three booleans `true` |
+| `Remediation ledger does not satisfy reconciliation.schema.json` | 1 | `fredlib.runs.reconcile` | `remediation.json` violates `reconciliation.schema.json` | Back up `remediation.json` and repair malformed `records` entries |
