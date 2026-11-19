@@ -424,6 +424,43 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
     return read_json(audit_path)
 
 
+def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for field in ("decisions", "findings", "test_cases"):
+        items = deliverable.get(field)
+        if not isinstance(items, list):
+            continue
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str):
+                if item_id in seen and item_id not in duplicates:
+                    errors.append(f"Duplicate IDs in {field}: {item_id}")
+                    duplicates.add(item_id)
+                seen.add(item_id)
+    findings = deliverable.get("findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            fpath = finding.get("file")
+            fid = finding.get("id", "unknown")
+            if not isinstance(fpath, str):
+                continue
+            try:
+                checked = relative_path(fpath)
+                if not checked.parts:
+                    raise ValueError(f"Unsafe relative path: {fpath!r}")
+            except ValueError as exc:
+                errors.append(
+                    f"Finding file path must be repository-relative ({fid}): {exc}"
+                )
+    return errors
+
+
 def validate_run(directory: Path) -> list[str]:
     run = read_json(directory / "run.json")
     contract = _artifact_contract_for_run(run)
@@ -443,7 +480,10 @@ def validate_run(directory: Path) -> list[str]:
             "Snapshot content identity does not match its recorded file inventory"
         )
     if expected_name != "audit.json":
-        errors.extend(_schema_errors(deliverable, schema_rel))
+        schema_errs = _schema_errors(deliverable, schema_rel)
+        errors.extend(schema_errs)
+        if not schema_errs and isinstance(deliverable, dict):
+            errors.extend(_domain_deliverable_errors(deliverable))
     else:
         errors.extend(audit_errors(deliverable))
         if run["run_id"] != deliverable.get("run_id"):
@@ -468,6 +508,17 @@ def checkpoint(directory: Path, state: str, note: str) -> dict:
     return run
 
 
+def _normalize_deliverable_path(raw_path: object) -> str | None:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    candidate = raw_path.strip().replace("\\", "/")
+    try:
+        checked = relative_path(candidate)
+    except ValueError:
+        return candidate
+    return checked.as_posix() if checked.parts else candidate
+
+
 def _revalidate_domain_records(
     deliverable: dict[str, Any],
     expected_name: str,
@@ -478,9 +529,10 @@ def _revalidate_domain_records(
     stale: list[str] = []
     if expected_name == "review.json":
         findings = deliverable.get("findings", [])
+        changed_set = set(changed)
         for finding in findings:
-            fpath = finding.get("file")
-            if fpath in changed or fpath in skipped or not complete:
+            norm_path = _normalize_deliverable_path(finding.get("file"))
+            if norm_path in changed_set or norm_path in skipped or not complete:
                 stale.append(finding["id"])
         impact = [f["id"] for f in findings] if changed else []
         return stale, impact
