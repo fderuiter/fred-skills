@@ -13,7 +13,7 @@ import re
 import shlex
 import sys
 from collections.abc import Collection
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 
 REDACTION_TIERS: tuple[str, ...] = ("skeleton", "evidence", "full")
@@ -1641,14 +1641,14 @@ def correlate_audit_domain(
 
 def _resolve_recovery_suite(
     run_data: dict[str, Any] | None,
-    workspace_dir: Path | None,
+    workspace_dir: PurePath | None,
     specialist_skill: str | None,
 ) -> tuple[str, str, str]:
     if workspace_dir is None and run_data is None:
         fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
         return "repository-audits", fname, schema_rel
     if (
-        workspace_dir is not None
+        isinstance(workspace_dir, Path)
         and workspace_dir.is_dir()
         and (workspace_dir / "audit.json").is_file()
     ):
@@ -1658,7 +1658,7 @@ def _resolve_recovery_suite(
     if run_suite is not None:
         fname, schema_rel = _SUITE_ARTIFACTS[run_suite]
         return run_suite, fname, schema_rel
-    if workspace_dir is not None and workspace_dir.is_dir():
+    if isinstance(workspace_dir, Path) and workspace_dir.is_dir():
         for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
             if (workspace_dir / fname).is_file():
                 return sname, fname, schema_rel
@@ -1725,19 +1725,32 @@ def _sanitize_report_inline(value: object) -> str:
     return single
 
 
+_SAFE_POSIX_ARG_RE = re.compile(r"\A[A-Za-z0-9_@%+=:,./-][A-Za-z0-9_@%+=:,./~-]*\Z")
+_SAFE_WINDOWS_ARG_RE = re.compile(
+    r"\A[A-Za-z0-9_@%+=:,./\\-][A-Za-z0-9_@%+=:,./\\~-]*\Z"
+)
+
+
 def _format_workspace_arg(
-    workspace_dir: Path | None, placeholder: str, subpath: str | None = None
+    workspace_dir: PurePath | None, placeholder: str, subpath: str | None = None
 ) -> str:
     if workspace_dir is None:
         return f"{placeholder}/{subpath}" if subpath else placeholder
     raw = f"{workspace_dir}/{subpath}" if subpath else str(workspace_dir)
+    safe_re = (
+        _SAFE_WINDOWS_ARG_RE
+        if isinstance(workspace_dir, PureWindowsPath)
+        else _SAFE_POSIX_ARG_RE
+    )
+    if safe_re.match(raw):
+        return raw
     return shlex.quote(raw)
 
 
 def formulate_recovery_instructions(
     failure: dict[str, Any],
     run_data: dict[str, Any] | None = None,
-    workspace_dir: Path | None = None,
+    workspace_dir: PurePath | None = None,
     specialist_skill: str | None = None,
 ) -> dict[str, Any]:
     """Generate concrete recovery steps to resume a run from the last valid checkpoint."""

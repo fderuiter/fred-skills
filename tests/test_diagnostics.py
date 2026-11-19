@@ -1925,6 +1925,42 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertIn("``/tmp/log`tick`/session.jsonl``", report_md)
         self.assertNotIn("\n# Injected Summary", report_md)
 
+        # Benign Windows runner temp paths (drive colon, backslashes, 8.3 '~') stay unquoted,
+        # while Windows paths containing spaces or shell metacharacters are quoted via shlex.quote.
+        from pathlib import PurePosixPath, PureWindowsPath
+
+        win_clean_ws = PureWindowsPath(
+            r"C:\Users\RUNNER~1\AppData\Local\Temp\tmp1234\ws_has_audit_json"
+        )
+        self.assertEqual(
+            f"{win_clean_ws}/audit.json",
+            triage._format_workspace_arg(win_clean_ws, "<audit-run-dir>", "audit.json"),
+        )
+        win_spaced_ws = PureWindowsPath(
+            r"C:\Users\RUNNER~1\AppData\Local\Temp\workspace with spaces & $vars"
+        )
+        self.assertEqual(
+            shlex.quote(f"{win_spaced_ws}/audit.json"),
+            triage._format_workspace_arg(
+                win_spaced_ws, "<audit-run-dir>", "audit.json"
+            ),
+        )
+        posix_backslash_ws = PurePosixPath("/tmp/dir\\with\\backslash")
+        self.assertEqual(
+            shlex.quote(f"{posix_backslash_ws}/audit.json"),
+            triage._format_workspace_arg(
+                posix_backslash_ws, "<audit-run-dir>", "audit.json"
+            ),
+        )
+        win_rec = triage.formulate_recovery_instructions(
+            failure,
+            run_data=None,
+            workspace_dir=win_clean_ws,
+        )
+        win_steps = "\n".join(win_rec["instructions"])
+        self.assertIn(f"validate_audit.py {win_clean_ws}/audit.json", win_steps)
+        self.assertIn(f"python scripts/fred.py resume {win_clean_ws}", win_steps)
+
 
 if __name__ == "__main__":
     unittest.main()
