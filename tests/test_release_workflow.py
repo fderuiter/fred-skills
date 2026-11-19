@@ -9,12 +9,42 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import traceback
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 import yaml
+
+if os.environ.get("GITHUB_ACTIONS") == "true":
+    _orig_add_failure = unittest.TextTestResult.addFailure
+    _orig_add_error = unittest.TextTestResult.addError
+    _orig_add_subtest = unittest.TextTestResult.addSubTest
+
+    def _emit_gha_err(label: str, err: Any) -> None:
+        formatted = "".join(traceback.format_exception(*err))
+        escaped = (
+            formatted.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        )
+        print(f"\n::error title={label}::{escaped}", flush=True)
+
+    def _gha_add_failure(self: Any, test: Any, err: Any) -> None:
+        _emit_gha_err(test.id(), err)
+        _orig_add_failure(self, test, err)
+
+    def _gha_add_error(self: Any, test: Any, err: Any) -> None:
+        _emit_gha_err(test.id(), err)
+        _orig_add_error(self, test, err)
+
+    def _gha_add_subtest(self: Any, test: Any, subtest: Any, err: Any) -> None:
+        if err is not None:
+            _emit_gha_err(subtest.id(), err)
+        _orig_add_subtest(self, test, subtest, err)
+
+    unittest.TextTestResult.addFailure = _gha_add_failure  # type: ignore[method-assign]
+    unittest.TextTestResult.addError = _gha_add_error  # type: ignore[method-assign]
+    unittest.TextTestResult.addSubTest = _gha_add_subtest  # type: ignore[method-assign]
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
