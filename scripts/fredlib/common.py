@@ -574,6 +574,7 @@ def relative_path(value: str) -> Path:
 _IGNORED_SKILL_DIR_NAMES = frozenset(
     {
         "__pycache__",
+        ".cursor-plugin",
         ".git",
         ".github",
         ".venv",
@@ -724,15 +725,15 @@ def package_files(package: Path) -> dict[str, str]:
                 code="unsupported_symlink",
                 hint="Replace symlinks inside skill packages with regular files.",
             )
+        rel = path.relative_to(package)
         if (
             not path.is_file()
-            or "__pycache__" in path.parts
+            or "__pycache__" in rel.parts
+            or ".cursor-plugin" in rel.parts
             or path.suffix in {".pyc", ".pyo"}
         ):
             continue
-        result[path.relative_to(package).as_posix()] = hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
+        result[rel.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return result
 
 

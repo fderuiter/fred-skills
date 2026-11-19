@@ -1,0 +1,12 @@
+{
+  "name": "repo-audit-temporal-coupling",
+  "description": "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

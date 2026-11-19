@@ -1,7 +1,5 @@
 {
   "name": "fred-skills",
-  "version": "0.2.0",
-  "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
   "owner": {
     "name": "fderuiter"
   },
@@ -12,743 +10,563 @@
   "plugins": [
     {
       "name": "fred-skills",
+      "source": "./",
       "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/arch-boundary-specification",
-        "./skills/arch-component-decomposition",
-        "./skills/arch-decision-record",
-        "./skills/repo-apply-fix",
-        "./skills/repo-audit-accessibility-state",
-        "./skills/repo-audit-agent-configs",
-        "./skills/repo-audit-api-consistency",
-        "./skills/repo-audit-architecture",
-        "./skills/repo-audit-behavioral-contracts",
-        "./skills/repo-audit-boundary-conditions",
-        "./skills/repo-audit-cache-coherence",
-        "./skills/repo-audit-cancellation",
-        "./skills/repo-audit-canonicalization",
-        "./skills/repo-audit-capacity",
-        "./skills/repo-audit-cohesion",
-        "./skills/repo-audit-compatibility",
-        "./skills/repo-audit-complexity",
-        "./skills/repo-audit-concurrency",
-        "./skills/repo-audit-configuration",
-        "./skills/repo-audit-data-integrity",
-        "./skills/repo-audit-dead-code",
-        "./skills/repo-audit-diagnostics",
-        "./skills/repo-audit-domain-models",
-        "./skills/repo-audit-error-semantics",
-        "./skills/repo-audit-failure-modes",
-        "./skills/repo-audit-idempotency",
-        "./skills/repo-audit-invariants",
-        "./skills/repo-audit-lifecycle",
-        "./skills/repo-audit-nondeterminism",
-        "./skills/repo-audit-observability",
-        "./skills/repo-audit-program",
-        "./skills/repo-audit-protocol-drift",
-        "./skills/repo-audit-side-effects",
-        "./skills/repo-audit-sources-of-truth",
-        "./skills/repo-audit-state-machines",
-        "./skills/repo-audit-synthesis",
-        "./skills/repo-audit-temporal-coupling",
-        "./skills/repo-audit-test-contracts",
-        "./skills/repo-audit-test-oracles",
-        "./skills/repo-audit-transactions",
-        "./skills/repo-audit-trust-boundaries",
-        "./skills/repo-plan-fix",
-        "./skills/repo-reconcile-findings",
-        "./skills/repo-specify-regression",
-        "./skills/repo-verify-finding",
-        "./skills/repo-verify-fix",
-        "./skills/review-actionable-feedback",
-        "./skills/review-diff-analysis",
-        "./skills/review-invariant-violations",
-        "./skills/spec-authoring",
-        "./skills/spec-convergence",
-        "./skills/spec-interview",
-        "./skills/test-case-generation",
-        "./skills/test-gap-analysis",
-        "./skills/test-suite-verification"
-      ]
-    },
-    {
-      "name": "starter",
-      "description": "A small starting set for understanding and reviewing a workflow.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-audit-program",
-        "./skills/repo-audit-behavioral-contracts",
-        "./skills/repo-audit-concurrency",
-        "./skills/repo-audit-trust-boundaries",
-        "./skills/repo-audit-test-contracts",
-        "./skills/repo-audit-synthesis"
-      ]
-    },
-    {
-      "name": "async-correctness",
-      "description": "Timing, state, ownership, and cancellation.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-audit-behavioral-contracts",
-        "./skills/repo-audit-concurrency",
-        "./skills/repo-audit-cancellation",
-        "./skills/repo-audit-lifecycle",
-        "./skills/repo-audit-temporal-coupling",
-        "./skills/repo-audit-state-machines",
-        "./skills/repo-audit-synthesis"
-      ]
-    },
-    {
-      "name": "backend-consistency",
-      "description": "Authoritative writes, permissions, transactions, and replay.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-audit-invariants",
-        "./skills/repo-audit-transactions",
-        "./skills/repo-audit-idempotency",
-        "./skills/repo-audit-trust-boundaries",
-        "./skills/repo-audit-data-integrity",
-        "./skills/repo-audit-synthesis"
-      ]
-    },
-    {
-      "name": "web-review",
-      "description": "Client/server boundaries and interactive behavior.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-audit-trust-boundaries",
-        "./skills/repo-audit-canonicalization",
-        "./skills/repo-audit-concurrency",
-        "./skills/repo-audit-cache-coherence",
-        "./skills/repo-audit-accessibility-state",
-        "./skills/repo-audit-synthesis"
-      ]
-    },
-    {
-      "name": "release-readiness",
-      "description": "Compatibility, migrations, configuration, and recovery.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-audit-compatibility",
-        "./skills/repo-audit-configuration",
-        "./skills/repo-audit-protocol-drift",
-        "./skills/repo-audit-failure-modes",
-        "./skills/repo-audit-test-contracts",
-        "./skills/repo-audit-synthesis"
-      ]
-    },
-    {
-      "name": "verified-fixes",
-      "description": "From a reported finding to verified correction and reconciliation.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-verify-finding",
-        "./skills/repo-specify-regression",
-        "./skills/repo-plan-fix",
-        "./skills/repo-apply-fix",
-        "./skills/repo-verify-fix",
-        "./skills/repo-reconcile-findings"
-      ]
-    },
-    {
-      "name": "software-architecture",
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/arch-decision-record",
-        "./skills/arch-boundary-specification",
-        "./skills/arch-component-decomposition"
-      ]
-    },
-    {
-      "name": "code-review",
-      "description": "Pull request diff review, invariant verification, and actionable feedback.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/review-diff-analysis",
-        "./skills/review-invariant-violations",
-        "./skills/review-actionable-feedback"
-      ]
-    },
-    {
-      "name": "automated-testing",
-      "description": "Test gap detection, regression test generation, and test suite verification.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/test-gap-analysis",
-        "./skills/test-case-generation",
-        "./skills/test-suite-verification"
-      ]
-    },
-    {
-      "name": "spec-driven-development",
-      "description": "Pre-code Socratic interviewing, SPEC.md authoring, and plan/implementation convergence verification.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/spec-interview",
-        "./skills/spec-authoring",
-        "./skills/spec-convergence"
-      ]
-    },
-    {
-      "name": "full-audit",
-      "description": "All 34 specialist audits plus coordinator, diagnostics, and synthesis.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/repo-audit-accessibility-state",
-        "./skills/repo-audit-agent-configs",
-        "./skills/repo-audit-api-consistency",
-        "./skills/repo-audit-architecture",
-        "./skills/repo-audit-behavioral-contracts",
-        "./skills/repo-audit-boundary-conditions",
-        "./skills/repo-audit-cache-coherence",
-        "./skills/repo-audit-cancellation",
-        "./skills/repo-audit-canonicalization",
-        "./skills/repo-audit-capacity",
-        "./skills/repo-audit-cohesion",
-        "./skills/repo-audit-compatibility",
-        "./skills/repo-audit-complexity",
-        "./skills/repo-audit-concurrency",
-        "./skills/repo-audit-configuration",
-        "./skills/repo-audit-data-integrity",
-        "./skills/repo-audit-dead-code",
-        "./skills/repo-audit-diagnostics",
-        "./skills/repo-audit-domain-models",
-        "./skills/repo-audit-error-semantics",
-        "./skills/repo-audit-failure-modes",
-        "./skills/repo-audit-idempotency",
-        "./skills/repo-audit-invariants",
-        "./skills/repo-audit-lifecycle",
-        "./skills/repo-audit-nondeterminism",
-        "./skills/repo-audit-observability",
-        "./skills/repo-audit-program",
-        "./skills/repo-audit-protocol-drift",
-        "./skills/repo-audit-side-effects",
-        "./skills/repo-audit-sources-of-truth",
-        "./skills/repo-audit-state-machines",
-        "./skills/repo-audit-synthesis",
-        "./skills/repo-audit-temporal-coupling",
-        "./skills/repo-audit-test-contracts",
-        "./skills/repo-audit-test-oracles",
-        "./skills/repo-audit-transactions",
-        "./skills/repo-audit-trust-boundaries"
-      ]
-    },
-    {
-      "name": "complete",
-      "description": "Every audit and engineering workflow.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/arch-boundary-specification",
-        "./skills/arch-component-decomposition",
-        "./skills/arch-decision-record",
-        "./skills/repo-audit-accessibility-state",
-        "./skills/repo-audit-agent-configs",
-        "./skills/repo-audit-api-consistency",
-        "./skills/repo-audit-architecture",
-        "./skills/repo-audit-behavioral-contracts",
-        "./skills/repo-audit-boundary-conditions",
-        "./skills/repo-audit-cache-coherence",
-        "./skills/repo-audit-cancellation",
-        "./skills/repo-audit-canonicalization",
-        "./skills/repo-audit-capacity",
-        "./skills/repo-audit-cohesion",
-        "./skills/repo-audit-compatibility",
-        "./skills/repo-audit-complexity",
-        "./skills/repo-audit-concurrency",
-        "./skills/repo-audit-configuration",
-        "./skills/repo-audit-data-integrity",
-        "./skills/repo-audit-dead-code",
-        "./skills/repo-audit-diagnostics",
-        "./skills/repo-audit-domain-models",
-        "./skills/repo-audit-error-semantics",
-        "./skills/repo-audit-failure-modes",
-        "./skills/repo-audit-idempotency",
-        "./skills/repo-audit-invariants",
-        "./skills/repo-audit-lifecycle",
-        "./skills/repo-audit-nondeterminism",
-        "./skills/repo-audit-observability",
-        "./skills/repo-audit-program",
-        "./skills/repo-audit-protocol-drift",
-        "./skills/repo-audit-side-effects",
-        "./skills/repo-audit-sources-of-truth",
-        "./skills/repo-audit-state-machines",
-        "./skills/repo-audit-synthesis",
-        "./skills/repo-audit-temporal-coupling",
-        "./skills/repo-audit-test-contracts",
-        "./skills/repo-audit-test-oracles",
-        "./skills/repo-audit-transactions",
-        "./skills/repo-audit-trust-boundaries",
-        "./skills/repo-verify-finding",
-        "./skills/repo-specify-regression",
-        "./skills/repo-plan-fix",
-        "./skills/repo-apply-fix",
-        "./skills/repo-verify-fix",
-        "./skills/repo-reconcile-findings",
-        "./skills/review-actionable-feedback",
-        "./skills/review-diff-analysis",
-        "./skills/review-invariant-violations",
-        "./skills/spec-authoring",
-        "./skills/spec-convergence",
-        "./skills/spec-interview",
-        "./skills/test-case-generation",
-        "./skills/test-gap-analysis",
-        "./skills/test-suite-verification"
-      ]
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "arch-boundary-specification",
-      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
       "source": "./skills/arch-boundary-specification",
-      "skills": [
-        "."
-      ]
+      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "arch-component-decomposition",
-      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
       "source": "./skills/arch-component-decomposition",
-      "skills": [
-        "."
-      ]
+      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "arch-decision-record",
-      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
       "source": "./skills/arch-decision-record",
-      "skills": [
-        "."
-      ]
+      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-apply-fix",
-      "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
       "source": "./skills/repo-apply-fix",
-      "skills": [
-        "."
-      ]
+      "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-accessibility-state",
-      "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
       "source": "./skills/repo-audit-accessibility-state",
-      "skills": [
-        "."
-      ]
+      "description": "Audit accessibility state consistency with code evidence and counterexamples. Use when auditing divergence between UI state, focus, keyboard behavior, ARIA state, or screen-reader announcements.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-agent-configs",
-      "description": "Audit repository agent configurations, skill bundles, instruction files, and MCP server definitions with code evidence and counterexamples. Use when inspecting .claude/skills, .agents/skills, .cursor/skills, AGENTS.md, .cursorrules, or .mcp.json for prompt injection, unvetted scripts, or unsafe agent tool permissions.",
       "source": "./skills/repo-audit-agent-configs",
-      "skills": [
-        "."
-      ]
+      "description": "Audit repository agent configurations, skill bundles, instruction files, and MCP server definitions with code evidence and counterexamples. Use when inspecting .claude/skills, .agents/skills, .cursor/skills, AGENTS.md, .cursorrules, or .mcp.json for prompt injection, unvetted scripts, or unsafe agent tool permissions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-api-consistency",
-      "description": "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
       "source": "./skills/repo-audit-api-consistency",
-      "skills": [
-        "."
-      ]
+      "description": "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-architecture",
-      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
       "source": "./skills/repo-audit-architecture",
-      "skills": [
-        "."
-      ]
+      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-behavioral-contracts",
-      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
       "source": "./skills/repo-audit-behavioral-contracts",
-      "skills": [
-        "."
-      ]
+      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-boundary-conditions",
-      "description": "Audit boundary-condition correctness with code evidence and counterexamples. Use when auditing empty inputs, limits, off-by-one errors, numeric overflow, Unicode, or malformed boundary values.",
       "source": "./skills/repo-audit-boundary-conditions",
-      "skills": [
-        "."
-      ]
+      "description": "Audit boundary-condition correctness with code evidence and counterexamples. Use when auditing empty inputs, limits, off-by-one errors, numeric overflow, Unicode, or malformed boundary values.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-cache-coherence",
-      "description": "Audit cache coherence with code evidence and counterexamples. Use when auditing stale caches, invalidation races, cache keys, tenant leakage through caches, or competing cache layers.",
       "source": "./skills/repo-audit-cache-coherence",
-      "skills": [
-        "."
-      ]
+      "description": "Audit cache coherence with code evidence and counterexamples. Use when auditing stale caches, invalidation races, cache keys, tenant leakage through caches, or competing cache layers.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-cancellation",
-      "description": "Audit cancellation propagation with code evidence and counterexamples. Use when auditing abort propagation, cancelled tasks that keep running, stale publication after cancellation, or shutdown draining.",
       "source": "./skills/repo-audit-cancellation",
-      "skills": [
-        "."
-      ]
+      "description": "Audit cancellation propagation with code evidence and counterexamples. Use when auditing abort propagation, cancelled tasks that keep running, stale publication after cancellation, or shutdown draining.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-canonicalization",
-      "description": "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement.",
       "source": "./skills/repo-audit-canonicalization",
-      "skills": [
-        "."
-      ]
+      "description": "Audit security-sensitive canonicalization with code evidence and counterexamples. Use when auditing URL/path/Unicode normalization, ambiguous encodings, allowlist bypasses, or parser disagreement.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-capacity",
-      "description": "Audit resource bounds and backpressure with code evidence and counterexamples. Use when auditing unbounded memory, queues, retries, fan-out, polling, backpressure, or resource exhaustion.",
       "source": "./skills/repo-audit-capacity",
-      "skills": [
-        "."
-      ]
+      "description": "Audit resource bounds and backpressure with code evidence and counterexamples. Use when auditing unbounded memory, queues, retries, fan-out, polling, backpressure, or resource exhaustion.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-cohesion",
-      "description": "Audit cohesion and responsibility with code evidence and counterexamples. Use when auditing mixed module responsibilities, unrelated reasons to change, god objects, or weak cohesion.",
       "source": "./skills/repo-audit-cohesion",
-      "skills": [
-        "."
-      ]
+      "description": "Audit cohesion and responsibility with code evidence and counterexamples. Use when auditing mixed module responsibilities, unrelated reasons to change, god objects, or weak cohesion.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-compatibility",
-      "description": "Audit compatibility and migration contracts with code evidence and counterexamples. Use when auditing breaking persisted-state changes, migrations, older-client compatibility, or rolling deployment contracts.",
       "source": "./skills/repo-audit-compatibility",
-      "skills": [
-        "."
-      ]
+      "description": "Audit compatibility and migration contracts with code evidence and counterexamples. Use when auditing breaking persisted-state changes, migrations, older-client compatibility, or rolling deployment contracts.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-complexity",
-      "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
       "source": "./skills/repo-audit-complexity",
-      "skills": [
-        "."
-      ]
+      "description": "Audit algorithmic complexity with code evidence and counterexamples. Use when auditing pathological input costs, quadratic work, excessive allocations, or algorithmic denial of service.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-concurrency",
-      "description": "Audit concurrency and race conditions with code evidence and counterexamples. Use when auditing races, stale asynchronous results, reentrancy, lost updates, or unsafe overlapping operations.",
       "source": "./skills/repo-audit-concurrency",
-      "skills": [
-        "."
-      ]
+      "description": "Audit concurrency and race conditions with code evidence and counterexamples. Use when auditing races, stale asynchronous results, reentrancy, lost updates, or unsafe overlapping operations.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-configuration",
-      "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
       "source": "./skills/repo-audit-configuration",
-      "skills": [
-        "."
-      ]
+      "description": "Audit configuration combinatorics with code evidence and counterexamples. Use when auditing invalid feature-flag combinations, configuration precedence, environment drift, or unsafe configuration transitions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-data-integrity",
-      "description": "Audit data transformation integrity with code evidence and counterexamples. Use when auditing lossy mappings, serialization errors, precision loss, provenance gaps, or parser-to-model data corruption.",
       "source": "./skills/repo-audit-data-integrity",
-      "skills": [
-        "."
-      ]
+      "description": "Audit data transformation integrity with code evidence and counterexamples. Use when auditing lossy mappings, serialization errors, precision loss, provenance gaps, or parser-to-model data corruption.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-dead-code",
-      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths.",
       "source": "./skills/repo-audit-dead-code",
-      "skills": [
-        "."
-      ]
+      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-diagnostics",
-      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
       "source": "./skills/repo-audit-diagnostics",
-      "skills": [
-        "."
-      ]
+      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-domain-models",
-      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
       "source": "./skills/repo-audit-domain-models",
-      "skills": [
-        "."
-      ]
+      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-error-semantics",
-      "description": "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation.",
       "source": "./skills/repo-audit-error-semantics",
-      "skills": [
-        "."
-      ]
+      "description": "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-failure-modes",
-      "description": "Audit failure-mode completeness with code evidence and counterexamples. Use when auditing partial failures, timeouts, recovery gaps, interrupted workflows, or failure transition completeness.",
       "source": "./skills/repo-audit-failure-modes",
-      "skills": [
-        "."
-      ]
+      "description": "Audit failure-mode completeness with code evidence and counterexamples. Use when auditing partial failures, timeouts, recovery gaps, interrupted workflows, or failure transition completeness.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-idempotency",
-      "description": "Audit idempotency and replay safety with code evidence and counterexamples. Use when auditing duplicate deliveries, unsafe retries, repeated initialization, replay handling, or idempotency keys.",
       "source": "./skills/repo-audit-idempotency",
-      "skills": [
-        "."
-      ]
+      "description": "Audit idempotency and replay safety with code evidence and counterexamples. Use when auditing duplicate deliveries, unsafe retries, repeated initialization, replay handling, or idempotency keys.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-invariants",
-      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values.",
       "source": "./skills/repo-audit-invariants",
-      "skills": [
-        "."
-      ]
+      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-lifecycle",
-      "description": "Audit ownership and lifecycle boundaries with code evidence and counterexamples. Use when auditing resource ownership, missing cleanup, use after disposal, leaked listeners, streams, timers, or tasks.",
       "source": "./skills/repo-audit-lifecycle",
-      "skills": [
-        "."
-      ]
+      "description": "Audit ownership and lifecycle boundaries with code evidence and counterexamples. Use when auditing resource ownership, missing cleanup, use after disposal, leaked listeners, streams, timers, or tasks.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-nondeterminism",
-      "description": "Audit nondeterministic behavior with code evidence and counterexamples. Use when auditing flaky tests, clock/randomness dependence, global state leakage, or order-sensitive workflows.",
       "source": "./skills/repo-audit-nondeterminism",
-      "skills": [
-        "."
-      ]
+      "description": "Audit nondeterministic behavior with code evidence and counterexamples. Use when auditing flaky tests, clock/randomness dependence, global state leakage, or order-sensitive workflows.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-observability",
-      "description": "Audit observability gaps with code evidence and counterexamples. Use when auditing undiagnosable failures, missing correlation, misleading telemetry, or insufficient recovery visibility.",
       "source": "./skills/repo-audit-observability",
-      "skills": [
-        "."
-      ]
+      "description": "Audit observability gaps with code evidence and counterexamples. Use when auditing undiagnosable failures, missing correlation, misleading telemetry, or insufficient recovery visibility.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-program",
-      "description": "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program.",
       "source": "./skills/repo-audit-program",
-      "skills": [
-        "."
-      ]
+      "description": "Coordinate comprehensive repository audits for hidden behavioral contracts. Use when a user requests a multi-topic architecture/correctness audit or this three-pass audit program.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-protocol-drift",
-      "description": "Audit protocol contract drift with code evidence and counterexamples. Use when auditing producer-consumer disagreement, wire format drift, message versioning, or incompatible protocol assumptions.",
       "source": "./skills/repo-audit-protocol-drift",
-      "skills": [
-        "."
-      ]
+      "description": "Audit protocol contract drift with code evidence and counterexamples. Use when auditing producer-consumer disagreement, wire format drift, message versioning, or incompatible protocol assumptions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-side-effects",
-      "description": "Audit hidden side effects with code evidence and counterexamples. Use when investigating unexpected mutations, hidden I/O, effectful getters, render effects, or misleading function contracts.",
       "source": "./skills/repo-audit-side-effects",
-      "skills": [
-        "."
-      ]
+      "description": "Audit hidden side effects with code evidence and counterexamples. Use when investigating unexpected mutations, hidden I/O, effectful getters, render effects, or misleading function contracts.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-sources-of-truth",
-      "description": "Audit duplicated sources of truth with code evidence and counterexamples. Use when auditing duplicated domain state, conflicting authorities, independently maintained derived fields, or divergent projections.",
       "source": "./skills/repo-audit-sources-of-truth",
-      "skills": [
-        "."
-      ]
+      "description": "Audit duplicated sources of truth with code evidence and counterexamples. Use when auditing duplicated domain state, conflicting authorities, independently maintained derived fields, or divergent projections.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-state-machines",
-      "description": "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior.",
       "source": "./skills/repo-audit-state-machines",
-      "skills": [
-        "."
-      ]
+      "description": "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-synthesis",
-      "description": "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan.",
       "source": "./skills/repo-audit-synthesis",
-      "skills": [
-        "."
-      ]
+      "description": "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-temporal-coupling",
-      "description": "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts.",
       "source": "./skills/repo-audit-temporal-coupling",
-      "skills": [
-        "."
-      ]
+      "description": "Audit temporal coupling with code evidence and counterexamples. Use when investigating hidden call-order dependencies, startup/shutdown order, initialization sequencing, or typestate contracts.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-test-contracts",
-      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
       "source": "./skills/repo-audit-test-contracts",
-      "skills": [
-        "."
-      ]
+      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-test-oracles",
-      "description": "Audit test oracle quality with code evidence and counterexamples. Use when auditing assertions that mirror implementation, ineffective mocks, weak expected results, or surviving mutations.",
       "source": "./skills/repo-audit-test-oracles",
-      "skills": [
-        "."
-      ]
+      "description": "Audit test oracle quality with code evidence and counterexamples. Use when auditing assertions that mirror implementation, ineffective mocks, weak expected results, or surviving mutations.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-transactions",
-      "description": "Audit implicit transaction boundaries with code evidence and counterexamples. Use when auditing multi-step consistency, partial commits, transaction scope, dual writes, or compensation guarantees.",
       "source": "./skills/repo-audit-transactions",
-      "skills": [
-        "."
-      ]
+      "description": "Audit implicit transaction boundaries with code evidence and counterexamples. Use when auditing multi-step consistency, partial commits, transaction scope, dual writes, or compensation guarantees.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-audit-trust-boundaries",
-      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
       "source": "./skills/repo-audit-trust-boundaries",
-      "skills": [
-        "."
-      ]
+      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-plan-fix",
-      "description": "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff.",
       "source": "./skills/repo-plan-fix",
-      "skills": [
-        "."
-      ]
+      "description": "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-reconcile-findings",
-      "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
       "source": "./skills/repo-reconcile-findings",
-      "skills": [
-        "."
-      ]
+      "description": "Use when reconciling audit findings, verified fixes, regression evidence, and issue state across runs.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-specify-regression",
-      "description": "Use when defining an independent regression test for a supported behavioral defect.",
       "source": "./skills/repo-specify-regression",
-      "skills": [
-        "."
-      ]
+      "description": "Use when defining an independent regression test for a supported behavioral defect.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-verify-finding",
-      "description": "Use when verifying, reproducing, refuting, or narrowing an existing repository finding.",
       "source": "./skills/repo-verify-finding",
-      "skills": [
-        "."
-      ]
+      "description": "Use when verifying, reproducing, refuting, or narrowing an existing repository finding.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "repo-verify-fix",
-      "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
       "source": "./skills/repo-verify-fix",
-      "skills": [
-        "."
-      ]
+      "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "review-actionable-feedback",
-      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
       "source": "./skills/review-actionable-feedback",
-      "skills": [
-        "."
-      ]
+      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "review-diff-analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
       "source": "./skills/review-diff-analysis",
-      "skills": [
-        "."
-      ]
+      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "review-invariant-violations",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
       "source": "./skills/review-invariant-violations",
-      "skills": [
-        "."
-      ]
+      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "spec-authoring",
-      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
       "source": "./skills/spec-authoring",
-      "skills": [
-        "."
-      ]
+      "description": "Use when turning settled feature requirements and interview decisions into a structured SPEC.md document and validated spec.json contract before implementation.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "spec-convergence",
-      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
       "source": "./skills/spec-convergence",
-      "skills": [
-        "."
-      ]
+      "description": "Use when verifying that planned task breakdowns and implemented repository changes align with SPEC.md scope boundaries, non-goals, and verification commands.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "spec-interview",
-      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
       "source": "./skills/spec-interview",
-      "skills": [
-        "."
-      ]
+      "description": "Use when starting a feature or change before writing code to pause implementation and surface non-obvious UX, architecture, trade-off, and edge-case questions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "test-case-generation",
-      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
       "source": "./skills/test-case-generation",
-      "skills": [
-        "."
-      ]
+      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "test-gap-analysis",
-      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
       "source": "./skills/test-gap-analysis",
-      "skills": [
-        "."
-      ]
+      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     },
     {
       "name": "test-suite-verification",
-      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
       "source": "./skills/test-suite-verification",
-      "skills": [
-        "."
-      ]
+      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "version": "0.2.0",
+      "author": {
+        "name": "fderuiter"
+      },
+      "license": "MIT"
     }
   ]
 }

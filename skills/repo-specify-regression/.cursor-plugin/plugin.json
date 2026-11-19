@@ -1,0 +1,12 @@
+{
+  "name": "repo-specify-regression",
+  "description": "Use when defining an independent regression test for a supported behavioral defect.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

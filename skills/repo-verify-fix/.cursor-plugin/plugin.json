@@ -1,0 +1,12 @@
+{
+  "name": "repo-verify-fix",
+  "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

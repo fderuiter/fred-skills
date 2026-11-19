@@ -1,0 +1,12 @@
+{
+  "name": "repo-apply-fix",
+  "description": "Use when the user authorizes implementing a bounded correction for an established repository finding.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}
