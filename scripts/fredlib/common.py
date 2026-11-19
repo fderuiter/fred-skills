@@ -77,8 +77,76 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 
+class FredCliError(ValueError):
+    """Structured CLI and boundary validation error with an actionable recovery hint."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "cli_error",
+        hint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.hint = hint
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "hint": self.hint,
+        }
+
+
 def read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_json_object(
+    path: Path | str,
+    *,
+    label: str = "JSON file",
+    hint: str | None = None,
+) -> dict[str, Any]:
+    p = Path(path)
+    if not p.exists():
+        raise FredCliError(
+            f"{label} not found: {p}",
+            code="missing_file",
+            hint=hint or f"Verify that '{p}' exists and check the path spelling.",
+        )
+    if p.is_dir():
+        raise FredCliError(
+            f"Expected {label.lower()} at '{p}', got a directory",
+            code="invalid_path_type",
+            hint=hint or f"Pass a JSON file path instead of directory '{p}'.",
+        )
+    try:
+        raw_text = p.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FredCliError(
+            f"Unable to read {label.lower()} '{p}': {exc}",
+            code="io_error",
+            hint=hint or f"Check file permissions and readability for '{p}'.",
+        ) from exc
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise FredCliError(
+            f"Malformed JSON in {label.lower()} '{p}' (line {exc.lineno}, column {exc.colno}): {exc.msg}",
+            code="invalid_json",
+            hint=hint or f"Fix the JSON syntax in '{p}' near line {exc.lineno}.",
+        ) from exc
+    if not isinstance(data, dict):
+        actual = type(data).__name__
+        raise FredCliError(
+            f"Expected JSON object in {label.lower()} '{p}', got {actual}",
+            code="invalid_json_root",
+            hint=hint or f"Ensure the root value in '{p}' is a JSON object ({{...}}).",
+        )
+    return data
 
 
 def _load_suite_contracts(root: Path = ROOT) -> dict[str, dict[str, Any]]:
@@ -150,7 +218,8 @@ def _suite_for_skills(skills: list[str], root: Path = ROOT) -> str:
 
 
 def _suite_for_run(run: dict, root: Path = ROOT) -> str:
-    plan_data = run.get("plan", {}) if isinstance(run, dict) else {}
+    raw_plan = run.get("plan") if isinstance(run, dict) else None
+    plan_data = raw_plan if isinstance(raw_plan, dict) else {}
     outputs = plan_data.get("expected_outputs", [])
     contracts = _load_suite_contracts(root)
     if isinstance(outputs, list):
@@ -159,8 +228,10 @@ def _suite_for_run(run: dict, root: Path = ROOT) -> str:
             if filename != "audit.json" and filename in outputs:
                 return suite_name
     skills = plan_data.get("skills", [])
-    if isinstance(skills, list) and skills:
-        return _suite_for_skills(skills, root=root)
+    if isinstance(skills, list):
+        str_skills = [s for s in skills if isinstance(s, str)]
+        if str_skills:
+            return _suite_for_skills(str_skills, root=root)
     task = plan_data.get("task")
     if isinstance(task, str):
         recipes_path = root / "catalog/recipes.json"
@@ -174,7 +245,8 @@ def _suite_for_run(run: dict, root: Path = ROOT) -> str:
 def _artifact_contract_for_run(run: dict, root: Path = ROOT) -> dict[str, Any]:
     contracts = _load_suite_contracts(root)
     suite_name = _suite_for_run(run, root=root)
-    plan_data = run.get("plan", {}) if isinstance(run, dict) else {}
+    raw_plan = run.get("plan") if isinstance(run, dict) else None
+    plan_data = raw_plan if isinstance(raw_plan, dict) else {}
     outputs = plan_data.get("expected_outputs", [])
     if isinstance(outputs, list):
         for candidate in contracts.values():
@@ -246,11 +318,15 @@ def resolve_audit_path(path: Path | str | None = None) -> Path:
             if target.is_file():
                 return target
             if expected == "audit.json":
-                raise ValueError(
-                    f"Audit ledger 'audit.json' not found in directory: {p}"
+                raise FredCliError(
+                    f"Audit ledger 'audit.json' not found in directory: {p}",
+                    code="missing_audit_ledger",
+                    hint="Pass an audit run directory containing 'audit.json' or an explicit 'audit.json' file path.",
                 )
-            raise ValueError(
-                f"Suite deliverable '{expected}' not found in directory: {p}"
+            raise FredCliError(
+                f"Suite deliverable '{expected}' not found in directory: {p}",
+                code="missing_deliverable",
+                hint=f"Ensure '{expected}' exists in '{p}' or re-initialize the run workspace.",
             )
         audit_file = p / "audit.json"
         if audit_file.is_file():
@@ -262,10 +338,65 @@ def resolve_audit_path(path: Path | str | None = None) -> Path:
             return domain_files[0]
         if len(domain_files) > 1:
             names = ", ".join(f.name for f in domain_files)
-            raise ValueError(
-                f"Multiple suite deliverables ({names}) found in directory {p}; specify an explicit file path"
+            raise FredCliError(
+                f"Multiple suite deliverables ({names}) found in directory {p}; specify an explicit file path",
+                code="ambiguous_deliverable",
+                hint="Pass an explicit deliverable JSON file path instead of the directory.",
             )
-        raise ValueError(f"Audit ledger 'audit.json' not found in directory: {p}")
+        raise FredCliError(
+            f"Audit ledger 'audit.json' not found in directory: {p}",
+            code="missing_audit_ledger",
+            hint="Pass an audit run directory containing 'audit.json' or an explicit 'audit.json' file path.",
+        )
+    return p
+
+
+def resolve_manifest_path(path: Path | str) -> Path:
+    p = Path(path)
+    if not p.exists():
+        raise FredCliError(
+            f"Release manifest not found: {p}",
+            code="missing_manifest",
+            hint="Pass a path to 'manifest.json' or a release directory produced by 'python scripts/fred.py release'.",
+        )
+    if p.is_dir():
+        candidate = p / "manifest.json"
+        if candidate.is_file():
+            return candidate
+        raise FredCliError(
+            f"Release manifest 'manifest.json' not found in directory: {p}",
+            code="missing_manifest",
+            hint="Run 'python scripts/fred.py release --output <dir>' first, or pass an explicit 'manifest.json' path.",
+        )
+    if not p.is_file():
+        raise FredCliError(
+            f"Release manifest path is not a regular file: {p}",
+            code="invalid_manifest_path",
+            hint="Pass a path to 'manifest.json' or a release directory containing 'manifest.json'.",
+        )
+    return p
+
+
+def resolve_run_directory(path: Path | str, *, require_run_json: bool = True) -> Path:
+    p = Path(path)
+    if not p.exists():
+        raise FredCliError(
+            f"Run directory not found: {p}",
+            code="missing_run_directory",
+            hint="Initialize a run workspace with 'python scripts/fred.py init <repo> --task <task> --output <dir>' or check the directory path.",
+        )
+    if not p.is_dir():
+        raise FredCliError(
+            f"Expected a run directory, got file: {p}",
+            code="invalid_run_directory",
+            hint="Pass the audit run directory containing 'run.json' rather than an individual file.",
+        )
+    if require_run_json and not (p / "run.json").is_file():
+        raise FredCliError(
+            f"Run metadata 'run.json' not found in directory: {p}",
+            code="missing_run_json",
+            hint="Ensure the directory was initialized with 'python scripts/fred.py init' and contains 'run.json'.",
+        )
     return p
 
 
@@ -312,28 +443,44 @@ def relative_path(value: str) -> Path:
     from pathlib import PurePosixPath, PureWindowsPath
 
     if not isinstance(value, str) or not value or "\\" in value:
-        raise ValueError("Expected a nonempty repository-relative POSIX path")
+        raise FredCliError(
+            "Expected a nonempty repository-relative POSIX path",
+            code="invalid_relative_path",
+            hint="Use forward slashes ('/') and a relative path inside the directory.",
+        )
     pure = PurePosixPath(value)
     if (
         pure.is_absolute()
         or PureWindowsPath(value).drive
         or any(part in {"..", ".git"} for part in pure.parts)
     ):
-        raise ValueError(f"Unsafe relative path: {value!r}")
+        raise FredCliError(
+            f"Unsafe relative path: {value!r}",
+            code="unsafe_relative_path",
+            hint="Remove leading '/', drive letters, '..', and '.git' path segments.",
+        )
     return Path(*pure.parts)
 
 
 def package_files(package: Path) -> dict[str, str]:
     """Identity by bytes and relative names; timestamps are intentionally irrelevant."""
     if package.is_symlink() or not package.is_dir():
-        raise ValueError(f"Expected a real package directory: {package}")
+        raise FredCliError(
+            f"Expected a real package directory: {package}",
+            code="invalid_package_directory",
+            hint="Ensure the skill package path exists as a regular directory and is not a symlink.",
+        )
     result = {}
     for path in sorted(
         package.rglob("*"),
         key=lambda p: p.relative_to(package).as_posix(),
     ):
         if path.is_symlink():
-            raise ValueError(f"Symlinks are not supported in packages: {path}")
+            raise FredCliError(
+                f"Symlinks are not supported in packages: {path}",
+                code="unsupported_symlink",
+                hint="Replace symlinks inside skill packages with regular files.",
+            )
         if (
             not path.is_file()
             or "__pycache__" in path.parts
@@ -360,12 +507,24 @@ def choose_skills(
     if pack:
         packs = read_json(root / "catalog/packs.json")["packs"]
         if pack not in packs:
-            raise ValueError(f"Unknown pack {pack!r}; use fred.py packs")
+            raise FredCliError(
+                f"Unknown pack {pack!r}; use fred.py packs",
+                code="unknown_pack",
+                hint=f"Available packs: {', '.join(sorted(packs))}.",
+            )
         selected.extend(packs[pack]["skills"])
     if not selected:
-        raise ValueError("Select a pack or at least one --skill")
+        raise FredCliError(
+            "Select a pack or at least one --skill",
+            code="missing_skill_selection",
+            hint="Pass --pack <pack> or one or more --skill <name> flags (see 'python scripts/fred.py packs').",
+        )
     selected = list(dict.fromkeys(selected))
     unknown = set(selected) - catalog
     if unknown:
-        raise ValueError(f"Unknown skills: {sorted(unknown)}")
+        raise FredCliError(
+            f"Unknown skills: {sorted(unknown)}",
+            code="unknown_skill",
+            hint="Run 'python scripts/fred.py search \"\"' to inspect valid skill names.",
+        )
     return selected

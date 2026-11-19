@@ -10,7 +10,13 @@ from typing import Any
 
 import jsonschema
 
-from .common import DOMAIN_DELIVERABLE_SCHEMAS, ROOT, _detect_domain_kind, read_json
+from .common import (
+    DOMAIN_DELIVERABLE_SCHEMAS,
+    ROOT,
+    FredCliError,
+    _detect_domain_kind,
+    read_json,
+)
 from .runs import audit_errors, compare, fingerprint
 
 STYLE = """:root{--table-border:#ddd}body{font:16px/1.6 system-ui,sans-serif;margin:auto;max-width:1150px;padding:2rem;color:#172635;background:#f5f7fa}header,section,article{background:white;border:1px solid #dce4eb;border-radius:12px;padding:1.2rem;margin:1rem 0}h1,h2,h3{line-height:1.2}nav{display:flex;gap:1rem;flex-wrap:wrap}a{color:#1556a5}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--table-border);padding:.6rem}.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}.badges{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.badge{display:inline-block;padding:.2rem .6rem;border-radius:999px;font-size:.85rem;font-weight:650}.badge-critical,.critical{background:#fed7d7;color:#9b1c1c}.badge-high,.high{background:#feebc8;color:#7b341e}.badge-medium,.medium{background:#fefcbf;color:#744210}.badge-low,.low{background:#c6f6d5;color:#22543d}.badge-info,.info,.badge-advisory,.advisory{background:#bee3f8;color:#2a4365}.callout{border-left:4px solid #5380ab;background:#edf2f7;padding:.75rem 1rem;border-radius:6px;margin:.8rem 0}.callout p{margin:.25rem 0}.empty-state{text-align:center;padding:1.5rem;color:#53667a}.muted{color:#53667a}input,select,button{font:inherit;padding:.5rem;border:1px solid #9baec1;border-radius:5px}button{background:#fff;cursor:pointer}label{display:inline-block;margin:.4rem}article[hidden]{display:none}.trace{border-left:3px solid #5380ab;padding-left:1rem}:focus-visible{outline:3px solid #1556a5}@media(prefers-color-scheme:dark){:root{--table-border:#405164}body{background:#101821;color:#e3ecf5}header,section,article{background:#182531;border-color:#405164}a{color:#95c7ff}.muted{color:#b2c6d9}.empty-state{color:#b2c6d9}.callout{background:#1e2f3f;border-left-color:#95c7ff}input,select,button{background:#101821;color:#e3ecf5;border-color:#405164}:focus-visible{outline:3px solid #95c7ff}.badge-critical,.critical{background:#742a2a;color:#feb2b2}.badge-high,.high{background:#7b341e;color:#fbd38d}.badge-medium,.medium{background:#744210;color:#faf089}.badge-low,.low{background:#22543d;color:#9ae6b4}.badge-info,.info,.badge-advisory,.advisory{background:#2a4365;color:#90cdf4}}"""
@@ -626,15 +632,25 @@ def render(
     prior: dict | None = None,
     remediation: dict | None = None,
 ) -> Path:
+    if not isinstance(audit, dict):
+        raise FredCliError(
+            f"Expected JSON object for report input, got {type(audit).__name__}",
+            code="invalid_json_root",
+            hint="Pass a valid 'audit.json' or suite deliverable JSON object.",
+        )
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
         if prior is not None:
-            raise ValueError(
-                f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported"
+            raise FredCliError(
+                f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Omit --prior when rendering a domain report, or pass 'audit.json' ledgers.",
             )
         if remediation is not None:
-            raise ValueError(
-                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported"
+            raise FredCliError(
+                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported",
+                code="unsupported_domain_artifact",
+                hint="Omit --remediation when rendering a domain report, or pass an 'audit.json' ledger.",
             )
         _validate_domain_payload(audit, domain_kind)
         renderers = {
@@ -658,19 +674,37 @@ def render(
 
 def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
     if format not in ("markdown", "json"):
-        raise ValueError(f"Unsupported issue format: {format}")
+        raise FredCliError(
+            f"Unsupported issue format: {format}",
+            code="invalid_issue_format",
+            hint="Choose --format markdown or --format json.",
+        )
+    if not isinstance(audit, dict):
+        raise FredCliError(
+            "Invalid ledger; cannot draft issues",
+            code="invalid_audit_ledger",
+            hint="Pass a valid 'audit.json' ledger object.",
+        )
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
-        raise ValueError(
-            f"Issue drafts ('issues') require an 'audit.json' ledger; domain artifact '{domain_kind}.json' is not supported"
+        raise FredCliError(
+            f"Issue drafts ('issues') require an 'audit.json' ledger; domain artifact '{domain_kind}.json' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger from a repository-audits run.",
         )
     errors = audit_errors(audit)
     if errors:
-        raise ValueError("Invalid ledger; cannot draft issues")
+        raise FredCliError(
+            "Invalid ledger; cannot draft issues",
+            code="invalid_audit_ledger",
+            hint="Run 'python scripts/fred.py validate-run <dir>' to inspect ledger schema errors.",
+        )
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
-        raise ValueError(
-            "Issue output directory must be empty; stale drafts will not be mixed with current results"
+        raise FredCliError(
+            "Issue output directory must be empty; stale drafts will not be mixed with current results",
+            code="non_empty_output_directory",
+            hint="Choose a new or empty --output directory for generated issue drafts.",
         )
     findings = {f["id"]: f for f in audit["findings"]}
     evidence = {e["id"]: e for e in audit["evidence"]}

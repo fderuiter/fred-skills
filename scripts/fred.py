@@ -17,15 +17,18 @@ sys.dont_write_bytecode = True
 from fredlib import evaluations, installation, releases, reports, repository, runs
 from fredlib.common import (
     ROOT,
+    FredCliError,
     _detect_domain_kind,
     atomic_json,
     read_json,
+    read_json_object,
     resolve_audit_path,
 )
 
 HOST_CHOICES = sorted(read_json(ROOT / "catalog/hosts.json")["hosts"].keys())
 TASK_CHOICES = sorted(read_json(ROOT / "catalog/recipes.json")["recipes"].keys())
 PACK_CHOICES = sorted(read_json(ROOT / "catalog/packs.json")["packs"].keys())
+PROFILE_CHOICES = sorted(read_json(ROOT / "catalog/profiles.json")["profiles"].keys())
 
 LIFECYCLE_GROUPS = {
     "Discovery": [
@@ -704,7 +707,8 @@ def parser() -> argparse.ArgumentParser:
         )
         sub.add_argument(
             "--profile",
-            help="Project archetype or technology profile name",
+            choices=PROFILE_CHOICES,
+            help=f"Project archetype or technology profile name ({', '.join(PROFILE_CHOICES)})",
         )
         sub.add_argument(
             "--exclude",
@@ -846,8 +850,16 @@ def parser() -> argparse.ArgumentParser:
         parents=[sub_common],
         help="Compare two audit runs to detect newly introduced, resolved, or regressed findings",
     )
-    sub_cmp.add_argument("before", type=Path, help="Path to earlier audit.json file")
-    sub_cmp.add_argument("after", type=Path, help="Path to later audit.json file")
+    sub_cmp.add_argument(
+        "before",
+        type=Path,
+        help="Path to earlier audit.json file or audit run directory",
+    )
+    sub_cmp.add_argument(
+        "after",
+        type=Path,
+        help="Path to later audit.json file or audit run directory",
+    )
 
     sub_rec = commands.add_parser(
         "reconcile",
@@ -1147,7 +1159,7 @@ def parser() -> argparse.ArgumentParser:
     sub_vrel.add_argument(
         "manifest",
         type=Path,
-        help="Path to manifest.json file to verify",
+        help="Path to manifest.json file or release directory to verify",
     )
 
     # Custom argument groups for root help output
@@ -1238,7 +1250,11 @@ def handle_runs(a: argparse.Namespace) -> Any:
     if a.command == "validate-run":
         errors = runs.validate_run(a.directory)
         if errors:
-            raise ValueError("; ".join(errors))
+            raise FredCliError(
+                "; ".join(errors),
+                code="schema_validation_failed",
+                hint="Fix the schema or identity errors in 'run.json' and the deliverable artifact, then rerun 'validate-run'.",
+            )
         return {"valid": True, "semantic_claims_verified": False}
     if a.command == "resume":
         return runs.revalidate(a.directory)
@@ -1249,9 +1265,19 @@ def handle_runs(a: argparse.Namespace) -> Any:
         atomic_json(a.output, data)
         return {"output": str(a.output), "contracts": len(data["contracts"])}
     if a.command == "compare":
+        before_path = _resolve_audit_only_input(a.before, "compare")
+        after_path = _resolve_audit_only_input(a.after, "compare")
         return runs.compare(
-            read_json(resolve_audit_path(a.before)),
-            read_json(resolve_audit_path(a.after)),
+            read_json_object(
+                before_path,
+                label="Audit ledger",
+                hint="Pass a valid 'audit.json' file or audit run directory.",
+            ),
+            read_json_object(
+                after_path,
+                label="Audit ledger",
+                hint="Pass a valid 'audit.json' file or audit run directory.",
+            ),
         )
     if a.command == "reconcile":
         return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
@@ -1309,8 +1335,10 @@ def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
         resolved.name != "audit.json"
         and resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
     ):
-        raise ValueError(
-            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported"
+        raise FredCliError(
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger from a repository-audits run.",
         )
     return resolved
 
@@ -1323,22 +1351,31 @@ def handle_reporting(a: argparse.Namespace) -> Any:
             audit_path = _resolve_audit_only_input(a.audit, "report --prior")
             prior_path = _resolve_audit_only_input(a.prior, "report --prior")
             prior_data = runs._require_audit_ledger(
-                read_json(prior_path), "report --prior"
+                read_json_object(prior_path, label="Prior audit ledger"),
+                "report --prior",
             )
         elif explicit_remediation is not None:
             audit_path = _resolve_audit_only_input(a.audit, "report --remediation")
         else:
             audit_path = resolve_audit_path(a.audit)
-        audit_data = read_json(audit_path)
+        audit_data = read_json_object(audit_path, label="Audit ledger")
         remediation_data = None
         if explicit_remediation is not None:
-            remediation_data = read_json(explicit_remediation)
+            remediation_data = read_json_object(
+                explicit_remediation,
+                label="Remediation ledger",
+                hint="Pass a valid 'remediation.json' file containing a 'records' array.",
+            )
         elif _detect_domain_kind(audit_data) is None and (
             a.audit.is_dir() or audit_path.name == "audit.json"
         ):
             sibling_remediation = audit_path.parent / "remediation.json"
             if sibling_remediation.is_file():
-                remediation_data = read_json(sibling_remediation)
+                remediation_data = read_json_object(
+                    sibling_remediation,
+                    label="Remediation ledger",
+                    hint="Ensure 'remediation.json' is a JSON object containing a 'records' array.",
+                )
         target = reports.render(
             audit_data,
             a.output,
@@ -1350,7 +1387,9 @@ def handle_reporting(a: argparse.Namespace) -> Any:
         audit_path = _resolve_audit_only_input(a.audit, "issues")
         return {
             "drafts": reports.issue_drafts(
-                read_json(audit_path), a.output, format=a.format
+                read_json_object(audit_path, label="Audit ledger"),
+                a.output,
+                format=a.format,
             ),
             "remote_writes": 0,
         }
@@ -1498,12 +1537,64 @@ def dispatch(a: argparse.Namespace) -> Any:
     return handler(a)
 
 
+def _to_cli_error(exc: BaseException) -> FredCliError:
+    if isinstance(exc, FredCliError):
+        return exc
+    if isinstance(exc, json.JSONDecodeError):
+        return FredCliError(
+            f"Malformed JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}",
+            code="invalid_json",
+            hint="Fix the JSON syntax and rerun the command.",
+        )
+    if isinstance(exc, FileNotFoundError):
+        target = exc.filename or str(exc)
+        return FredCliError(
+            f"File or directory not found: {target}",
+            code="missing_file",
+            hint="Verify that the path exists and check its spelling.",
+        )
+    if isinstance(exc, IsADirectoryError):
+        target = exc.filename or str(exc)
+        return FredCliError(
+            f"Expected a file, got directory: {target}",
+            code="invalid_path_type",
+            hint="Pass a file path or a subcommand-supported directory.",
+        )
+    if isinstance(exc, OSError):
+        return FredCliError(
+            str(exc),
+            code="io_error",
+            hint="Check filesystem paths and permissions, then retry.",
+        )
+    return FredCliError(
+        str(exc),
+        code="cli_error",
+        hint="Run with '--help' to review expected arguments and artifact contracts.",
+    )
+
+
 def main() -> int:
     args = parser().parse_args()
     try:
         result = dispatch(args)
-    except (ValueError, OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        print(f"fred-skills: {exc}", file=sys.stderr)
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        json.JSONDecodeError,
+    ) as exc:
+        cli_err = _to_cli_error(exc)
+        if getattr(args, "as_json", False):
+            print(
+                json.dumps(cli_err.to_dict(), indent=2, ensure_ascii=False),
+                file=sys.stderr,
+            )
+        else:
+            print(f"fred-skills: {cli_err.message}", file=sys.stderr)
+            if cli_err.hint:
+                print(f"Hint: {cli_err.hint}", file=sys.stderr)
         return 1
     if sys.stdout.isatty() and not getattr(args, "as_json", False):
         print(render_tty_output(args.command, result, args))

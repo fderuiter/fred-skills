@@ -2081,5 +2081,248 @@ class FredDispatchRegistryTests(unittest.TestCase):
             self.assertTrue(callable(handler))
 
 
+class FredStructuredCliErrorsTests(unittest.TestCase):
+    def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(FRED_PY), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def assertNoTraceback(self, stderr: str) -> None:
+        self.assertNotIn("Traceback (most recent call last)", stderr)
+
+    def test_malformed_yaml_on_plan_and_init_exits_1_with_hint_and_json_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
+            bad_cfg = root / "malformed.yaml"
+            bad_cfg.write_text("profile: [unclosed\n", encoding="utf-8")
+
+            plan_proc = self.run_cli(
+                "plan",
+                str(repo),
+                "--task",
+                "investigate-bug",
+                "--config",
+                str(bad_cfg),
+            )
+            self.assertEqual(1, plan_proc.returncode)
+            self.assertNoTraceback(plan_proc.stderr)
+            self.assertIn("fred-skills:", plan_proc.stderr)
+            self.assertIn("Malformed YAML", plan_proc.stderr)
+            self.assertIn("line", plan_proc.stderr)
+            self.assertIn("Hint:", plan_proc.stderr)
+
+            init_proc = self.run_cli(
+                "init",
+                str(repo),
+                "--task",
+                "investigate-bug",
+                "--config",
+                str(bad_cfg),
+                "--output",
+                str(root / "out"),
+            )
+            self.assertEqual(1, init_proc.returncode)
+            self.assertNoTraceback(init_proc.stderr)
+            self.assertIn("Hint:", init_proc.stderr)
+
+            json_proc = self.run_cli(
+                "plan",
+                str(repo),
+                "--task",
+                "investigate-bug",
+                "--config",
+                str(bad_cfg),
+                "--json",
+            )
+            self.assertEqual(1, json_proc.returncode)
+            self.assertEqual("", json_proc.stdout)
+            payload = json.loads(json_proc.stderr)
+            self.assertEqual("invalid_yaml", payload["code"])
+            self.assertIn("Malformed YAML", payload["message"])
+            self.assertTrue(payload["hint"])
+
+    def test_profile_choices_on_cli_exit_2_and_yaml_profile_exits_1_listing_profiles(
+        self,
+    ):
+        profiles = sorted(
+            json.loads((ROOT / "catalog/profiles.json").read_text(encoding="utf-8"))[
+                "profiles"
+            ].keys()
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+            cli_proc = self.run_cli(
+                "plan",
+                str(repo),
+                "--task",
+                "investigate-bug",
+                "--profile",
+                "unknown-profile",
+            )
+            self.assertEqual(2, cli_proc.returncode)
+            self.assertNoTraceback(cli_proc.stderr)
+            for prof in profiles:
+                self.assertIn(prof, cli_proc.stderr)
+
+            bad_prof_cfg = root / "bad-profile.yaml"
+            bad_prof_cfg.write_text("profile: unknown-profile\n", encoding="utf-8")
+            yaml_proc = self.run_cli(
+                "plan",
+                str(repo),
+                "--task",
+                "investigate-bug",
+                "--config",
+                str(bad_prof_cfg),
+            )
+            self.assertEqual(1, yaml_proc.returncode)
+            self.assertNoTraceback(yaml_proc.stderr)
+            self.assertIn("Hint:", yaml_proc.stderr)
+            for prof in profiles:
+                self.assertIn(prof, yaml_proc.stderr)
+
+    def test_json_arrays_and_primitives_exit_1_with_zero_tracebacks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            arr_file = root / "array.json"
+            arr_file.write_text("[1, 2]", encoding="utf-8")
+            prim_file = root / "primitive.json"
+            prim_file.write_text("42", encoding="utf-8")
+
+            ws_arr = root / "ws-arr"
+            ws_arr.mkdir()
+            (ws_arr / "run.json").write_text("[]", encoding="utf-8")
+            (ws_arr / "audit.json").write_text("[]", encoding="utf-8")
+
+            ws_prim = root / "ws-prim"
+            ws_prim.mkdir()
+            (ws_prim / "run.json").write_text('"scalar"', encoding="utf-8")
+            (ws_prim / "audit.json").write_text("true", encoding="utf-8")
+
+            invocations = [
+                ("validate-run", str(arr_file)),
+                ("validate-run", str(ws_arr)),
+                ("validate-run", str(ws_prim)),
+                ("import-sarif", str(arr_file), "--output", str(root / "sarif1.json")),
+                ("import-sarif", str(prim_file), "--output", str(root / "sarif2.json")),
+                ("compare", str(arr_file), str(arr_file)),
+                ("compare", str(prim_file), str(prim_file)),
+                ("verify-release", str(arr_file)),
+                ("verify-release", str(prim_file)),
+            ]
+            for args in invocations:
+                with self.subTest(args=args):
+                    proc = self.run_cli(*args)
+                    self.assertEqual(1, proc.returncode)
+                    self.assertNoTraceback(proc.stderr)
+                    self.assertIn("fred-skills:", proc.stderr)
+                    self.assertIn("Hint:", proc.stderr)
+
+    def test_validate_run_empty_ledgers_prints_all_23_schema_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "empty-ledgers"
+            ws.mkdir()
+            (ws / "run.json").write_text("{}\n", encoding="utf-8")
+            (ws / "audit.json").write_text("{}\n", encoding="utf-8")
+
+            proc = self.run_cli("validate-run", str(ws))
+            self.assertEqual(1, proc.returncode)
+            self.assertNoTraceback(proc.stderr)
+            self.assertNotEqual("fred-skills: 'snapshot'", proc.stderr.splitlines()[0])
+            self.assertEqual(23, proc.stderr.count("is a required property"))
+            self.assertIn("Hint:", proc.stderr)
+
+    def test_compare_and_verify_release_accept_directories_and_hint_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+            ws1 = root / "run1"
+            ws2 = root / "run2"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "investigate-bug",
+                    "--budget",
+                    "brief",
+                    "--output",
+                    str(ws1),
+                ).returncode,
+            )
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "investigate-bug",
+                    "--budget",
+                    "brief",
+                    "--output",
+                    str(ws2),
+                ).returncode,
+            )
+            cmp_ok = self.run_cli("compare", str(ws1), str(ws2), "--json")
+            self.assertEqual(0, cmp_ok.returncode, cmp_ok.stderr)
+            self.assertIn("introduced", json.loads(cmp_ok.stdout))
+
+            empty_dir = root / "empty-dir"
+            empty_dir.mkdir()
+            cmp_miss = self.run_cli("compare", str(empty_dir), str(ws2))
+            self.assertEqual(1, cmp_miss.returncode)
+            self.assertNoTraceback(cmp_miss.stderr)
+            self.assertIn("audit.json", cmp_miss.stderr)
+            self.assertIn("Hint:", cmp_miss.stderr)
+
+            rel_dir = root / "rel"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "release", "--pack", "starter", "--output", str(rel_dir)
+                ).returncode,
+            )
+            ver_ok = self.run_cli("verify-release", str(rel_dir), "--json")
+            self.assertEqual(0, ver_ok.returncode, ver_ok.stderr)
+            self.assertGreater(json.loads(ver_ok.stdout)["verified_archives"], 0)
+
+            ver_miss = self.run_cli("verify-release", str(empty_dir))
+            self.assertEqual(1, ver_miss.returncode)
+            self.assertNoTraceback(ver_miss.stderr)
+            self.assertIn("manifest.json", ver_miss.stderr)
+            self.assertIn("Hint:", ver_miss.stderr)
+
+    def test_recover_install_missing_operation_json_exits_1_and_advises_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "project"
+            dest.mkdir()
+            proc = self.run_cli(
+                "recover-install",
+                "--destination",
+                str(dest),
+                "--host",
+                "codex",
+                "--confirm-interrupted",
+            )
+            self.assertEqual(1, proc.returncode)
+            self.assertNoTraceback(proc.stderr)
+            self.assertIn("operation.json", proc.stderr)
+            self.assertIn("Hint:", proc.stderr)
+            self.assertIn("installed", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

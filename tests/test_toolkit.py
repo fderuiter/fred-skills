@@ -13,9 +13,13 @@ from fredlib import reports, repository, runs
 from fredlib.common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     SUITE_DELIVERABLES,
+    FredCliError,
     atomic_json,
     read_json,
+    read_json_object,
     resolve_audit_path,
+    resolve_manifest_path,
+    resolve_run_directory,
 )
 
 
@@ -1975,6 +1979,147 @@ class ReportTests(unittest.TestCase):
             }
             with self.assertRaises(ValueError):
                 reports.render(bad_testing, tmp_path / "bad.html")
+
+
+class BoundaryGuardAndContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        (self.repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_fred_cli_error_subclasses_value_error_and_serializes(self):
+        err = FredCliError(
+            "Broken input", code="invalid_input", hint="Fix the input file."
+        )
+        self.assertIsInstance(err, ValueError)
+        self.assertEqual("invalid_input", err.code)
+        self.assertEqual("Broken input", err.message)
+        self.assertEqual("Fix the input file.", err.hint)
+        self.assertEqual(
+            {
+                "code": "invalid_input",
+                "message": "Broken input",
+                "hint": "Fix the input file.",
+            },
+            err.to_dict(),
+        )
+
+    def test_common_json_and_path_helpers_guard_boundaries(self):
+        missing = self.root / "missing.json"
+        with self.assertRaises(FredCliError) as ctx_missing:
+            read_json_object(missing, label="Ledger")
+        self.assertEqual("missing_file", ctx_missing.exception.code)
+        self.assertTrue(ctx_missing.exception.hint)
+
+        with self.assertRaises(FredCliError) as ctx_dir:
+            read_json_object(self.repo, label="Ledger")
+        self.assertEqual("invalid_path_type", ctx_dir.exception.code)
+
+        bad_syntax = self.root / "bad.json"
+        bad_syntax.write_text("{\n  bad\n}\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as ctx_syntax:
+            read_json_object(bad_syntax, label="Ledger")
+        self.assertEqual("invalid_json", ctx_syntax.exception.code)
+        self.assertIn("line 2", ctx_syntax.exception.message)
+
+        for idx, raw in enumerate(["[]", "42", '"hello"', "true", "null"]):
+            prim = self.root / f"prim-{idx}.json"
+            prim.write_text(raw, encoding="utf-8")
+            with self.assertRaises(FredCliError) as ctx_root:
+                read_json_object(prim, label="Ledger")
+            self.assertEqual("invalid_json_root", ctx_root.exception.code)
+
+        rel_dir = self.root / "rel"
+        rel_dir.mkdir()
+        with self.assertRaises(FredCliError) as ctx_man:
+            resolve_manifest_path(rel_dir)
+        self.assertEqual("missing_manifest", ctx_man.exception.code)
+        manifest_file = rel_dir / "manifest.json"
+        manifest_file.write_text("{}", encoding="utf-8")
+        self.assertEqual(manifest_file, resolve_manifest_path(rel_dir))
+
+        file_not_dir = self.root / "not-a-dir.json"
+        file_not_dir.write_text("[]", encoding="utf-8")
+        with self.assertRaises(FredCliError) as ctx_rundir:
+            resolve_run_directory(file_not_dir)
+        self.assertEqual("invalid_run_directory", ctx_rundir.exception.code)
+
+    def test_validate_run_short_circuits_empty_ledgers_with_all_23_schema_errors(self):
+        ws = self.root / "empty-ws"
+        ws.mkdir()
+        atomic_json(ws / "run.json", {})
+        atomic_json(ws / "audit.json", {})
+        errors = runs.validate_run(ws)
+        self.assertEqual(23, len(errors))
+        self.assertTrue(all("is a required property" in err for err in errors))
+
+        # Non-dict plan inside run.json also collects schema errors without AttributeError
+        atomic_json(ws / "run.json", {"plan": []})
+        plan_errors = runs.validate_run(ws)
+        self.assertGreaterEqual(len(plan_errors), 22)
+
+    def test_plan_catches_malformed_yaml_and_lists_profiles(self):
+        bad_yaml = self.root / "broken.yaml"
+        bad_yaml.write_text("profile: [\nunterminated\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as yaml_ctx:
+            runs.plan(self.repo, "investigate-bug", config=bad_yaml)
+        self.assertEqual("invalid_yaml", yaml_ctx.exception.code)
+        self.assertIn("line", yaml_yaml_msg := yaml_ctx.exception.message)
+        self.assertIn("Malformed YAML", yaml_yaml_msg)
+        self.assertTrue(yaml_ctx.exception.hint)
+
+        expected_profiles = sorted(
+            read_json(ROOT / "catalog/profiles.json")["profiles"].keys()
+        )
+        unknown_profile_yaml = self.root / "unknown-profile.yaml"
+        unknown_profile_yaml.write_text(
+            "profile: not-a-real-profile\n", encoding="utf-8"
+        )
+        with self.assertRaises(FredCliError) as prof_ctx:
+            runs.plan(self.repo, "investigate-bug", config=unknown_profile_yaml)
+        self.assertEqual("invalid_profile", prof_ctx.exception.code)
+        for prof in expected_profiles:
+            self.assertIn(prof, prof_ctx.exception.message)
+            self.assertIn(prof, prof_ctx.exception.hint or "")
+
+    def test_import_sarif_and_compare_guard_non_object_and_nested_types(self):
+        arr = self.root / "arr.sarif"
+        arr.write_text("[1, 2, 3]", encoding="utf-8")
+        with self.assertRaises(FredCliError) as sarif_arr:
+            runs.import_sarif(arr)
+        self.assertEqual("invalid_json_root", sarif_arr.exception.code)
+
+        bad_runs = self.root / "bad-runs.sarif"
+        atomic_json(bad_runs, {"runs": "not-a-list"})
+        with self.assertRaises(FredCliError) as sarif_runs:
+            runs.import_sarif(bad_runs)
+        self.assertEqual("invalid_sarif", sarif_runs.exception.code)
+
+        with self.assertRaises(FredCliError):
+            runs.compare([], {})  # type: ignore[arg-type]
+        with self.assertRaises(FredCliError):
+            runs.compare(
+                {"findings": "bad", "evidence": []}, {"findings": [], "evidence": []}
+            )
+
+    def test_docs_name_revalidation_json_and_exit_codes_1_and_2(self):
+        toolkit_doc = (ROOT / "docs/toolkit.md").read_text(encoding="utf-8")
+        integration_doc = (ROOT / "docs/integration.md").read_text(encoding="utf-8")
+        self.assertIn("revalidation.json", toolkit_doc)
+        self.assertNotIn("freshness.json", toolkit_doc)
+        self.assertIn("exit `1`", toolkit_doc)
+        self.assertIn("exit `2`", toolkit_doc)
+
+        self.assertIn("revalidation.json", integration_doc)
+        self.assertNotIn("freshness.json", integration_doc)
+        self.assertNotIn("freshness.schema.json", integration_doc)
+        self.assertIn("`1`", integration_doc)
+        self.assertIn("`2`", integration_doc)
 
 
 if __name__ == "__main__":
