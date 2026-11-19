@@ -1,6 +1,6 @@
 ---
 name: repo-audit-side-effects
-description: "Audit hidden side effects with code evidence and counterexamples. Use when investigating unexpected mutations, hidden I/O, effectful getters, render effects, or misleading function contracts."
+description: "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits."
 ---
 
 # Hidden Side Effects

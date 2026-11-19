@@ -1,6 +1,7 @@
 ---
 name: repo-audit-synthesis
-description: "Consolidate specialist audit outputs into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use when synthesizing completed audit passes or turning topic reports into a prioritized issue backlog."
+description: "Consolidate audit ledgers into issue drafts. Use when publishing audit findings. Do not use for plans."
+disable-model-invocation: true
 ---
 
 # Audit Findings and Issue Planning

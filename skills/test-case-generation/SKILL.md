@@ -1,6 +1,7 @@
 ---
 name: test-case-generation
-description: "Author deterministic unit, integration, and regression tests with isolated fixtures and independent assertion oracles. Use when writing executable test suites from gap backlogs or turning reproduced bug specs into automated checks."
+description: "Write executable unit and property test files. Use when generating suites. Do not use for bug specs."
+disable-model-invocation: true
 ---
 
 # Test Case Generation

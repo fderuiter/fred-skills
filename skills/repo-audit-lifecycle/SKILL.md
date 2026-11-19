@@ -1,6 +1,6 @@
 ---
 name: repo-audit-lifecycle
-description: "Audit ownership and lifecycle boundaries with code evidence and counterexamples. Use when auditing resource ownership, missing cleanup, use after disposal, leaked listeners, streams, timers, or tasks."
+description: "Audit resource ownership, disposal, and leaks. Use when checking handle teardown. Do not use for sizing."
 ---
 
 # Ownership and Lifecycle Boundaries

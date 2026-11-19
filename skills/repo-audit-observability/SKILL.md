@@ -1,6 +1,6 @@
 ---
 name: repo-audit-observability
-description: "Audit observability gaps with code evidence and counterexamples. Use when auditing undiagnosable failures, missing correlation, misleading telemetry, or insufficient recovery visibility."
+description: "Audit missing trace IDs and blind telemetry. Use when checking blind spots. Do not use for errors."
 ---
 
 # Observability Gaps

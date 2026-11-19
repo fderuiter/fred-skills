@@ -1,6 +1,6 @@
 ---
 name: repo-audit-error-semantics
-description: "Audit error semantics and taxonomy with code evidence and counterexamples. Use when auditing swallowed errors, error classification, incorrect recovery, misleading failures, or exception propagation."
+description: "Audit swallowed exceptions and fault types. Use when checking error flow. Do not use for metrics."
 ---
 
 # Error Semantics and Taxonomy

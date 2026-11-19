@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-boundary-conditions",
-  "description": "Audit boundary-condition correctness with code evidence and counterexamples. Use when auditing empty inputs, limits, off-by-one errors, numeric overflow, Unicode, or malformed boundary values.",
+  "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking numeric edges. Do not use for tests.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

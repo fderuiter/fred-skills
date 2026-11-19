@@ -1,6 +1,6 @@
 ---
 name: arch-decision-record
-description: "Use when creating, evaluating, or recording architectural decision records and system trade-offs."
+description: "Author structured ADRs weighing trade-offs. Use when recording design choices. Do not use for audits."
 ---
 
 # Architectural Decision Records

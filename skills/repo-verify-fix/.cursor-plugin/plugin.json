@@ -1,6 +1,6 @@
 {
   "name": "repo-verify-fix",
-  "description": "Use when checking whether a proposed or merged correction actually resolves a reported defect without breaking safe behavior.",
+  "description": "Verify a proposed patch fixes its bug safely. Use when checking patch safety. Do not use for triage.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

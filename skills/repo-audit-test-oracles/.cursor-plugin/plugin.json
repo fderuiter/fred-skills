@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-test-oracles",
-  "description": "Audit test oracle quality with code evidence and counterexamples. Use when auditing assertions that mirror implementation, ineffective mocks, weak expected results, or surviving mutations.",
+  "description": "Audit tautological mocks and weak asserts. Use when checking surviving bugs. Do not use for gaps.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

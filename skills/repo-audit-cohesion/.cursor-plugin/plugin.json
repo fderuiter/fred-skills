@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-cohesion",
-  "description": "Audit cohesion and responsibility with code evidence and counterexamples. Use when auditing mixed module responsibilities, unrelated reasons to change, god objects, or weak cohesion.",
+  "description": "Audit god objects and mixed module duties. Use when checking low cohesion. Do not use for design.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

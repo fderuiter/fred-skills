@@ -1,6 +1,6 @@
 ---
 name: repo-audit-nondeterminism
-description: "Audit nondeterministic behavior with code evidence and counterexamples. Use when auditing flaky tests, clock/randomness dependence, global state leakage, or order-sensitive workflows."
+description: "Audit clock, random, and order flakiness. Use when tracing non-determinism. Do not use for runners."
 ---
 
 # Nondeterministic Behavior

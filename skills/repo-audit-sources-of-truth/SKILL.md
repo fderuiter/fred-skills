@@ -1,6 +1,6 @@
 ---
 name: repo-audit-sources-of-truth
-description: "Audit duplicated sources of truth with code evidence and counterexamples. Use when auditing duplicated domain state, conflicting authorities, independently maintained derived fields, or divergent projections."
+description: "Audit split authorities and drifted views. Use when checking dual state. Do not use for cache TTLs."
 ---
 
 # Duplicated Sources of Truth

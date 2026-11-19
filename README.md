@@ -24,16 +24,16 @@ Start with a task in the [task guide](docs/experience.md), browse the
 
 ## Installation
 
-Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 57 skills or `starter` for 6 core audit skills), or any individual skill:
+Register the marketplace catalog, then install `starter` for 6 core audit skills (`<= 1,500` raw characters), another curated pack, any individual skill, or `complete` for all 57 skills:
 
 ### Claude Code
 
 ```sh
 /plugin marketplace add fderuiter/fred-skills
-/plugin install fred-skills@fred-skills
-# Or install a curated pack:
 /plugin install starter@fred-skills
+/plugin install repo-audit-concurrency@fred-skills
 /plugin install complete@fred-skills
+/plugin install fred-skills@fred-skills
 ```
 
 ### Skills CLI
@@ -41,24 +41,23 @@ Register the marketplace catalog, then install the `fred-skills` suite plugin, a
 Install skills across supported agent hosts with the open [`skills`](https://skills.sh/docs) CLI:
 
 ```sh
-npx skills add fderuiter/fred-skills
-# Or install a single specialist:
 npx skills add fderuiter/fred-skills --skill repo-audit-concurrency
+npx skills add fderuiter/fred-skills
 ```
 
 ### Codex
 
-Install skills into `.agents/skills/` using OpenAI Codex's built-in `$skill-installer` or the local CLI:
-
-```text
-$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
-```
+Install skills into `.agents/skills/` using the local CLI (`starter` pack by default) or OpenAI Codex's built-in `$skill-installer`:
 
 ```sh
 python scripts/fred.py install --destination /path/to/project --host codex --pack starter
 ```
 
-Replace `fred-skills`, `complete`, or `starter` with any of the 13 packs in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Running `python scripts/fred.py install` without flags installs the `starter` pack across detected workspace hosts (or bootstraps `.agents/skills/` when no host markers exist).
+```text
+$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency
+```
+
+Replace `starter` with any of the 13 packs in [`catalog/packs.json`](catalog/packs.json) or an individual skill name (for example, `repo-audit-concurrency@fred-skills`). Running `python scripts/fred.py install` without flags installs the 6-skill `starter` pack across detected workspace hosts (or bootstraps `.agents/skills/` when no host markers exist). **Stage-1 context budget warning:** Start with `starter@fred-skills` (`6` skills, `<= 1,500` raw characters) or focused domain packs; installing `complete@fred-skills` or `fred-skills@fred-skills` loads all 57 skills at startup, which can crowd or exceed Stage-1 discovery budgets on smaller context windows in [OpenAI Codex](https://developers.openai.com/codex/skills) (`2%` of context or `8,000`-character fallback) and [Claude Code](https://code.claude.com/docs/en/skills) (`1%` of context, `skillListingBudgetFraction = 0.01`).
 
 ## Try the local walkthrough
 
@@ -102,22 +101,26 @@ remains supported; Python is unnecessary for instruction-only use.
 
 ## Release archives and supply chain verification
 
-Official releases provide standalone tarball archives for each of the 57 skills
-(e.g., `repo-audit-concurrency.tar.gz`), as well as a consolidated suite archive
-(`fred-skills-suite.tar.gz`). Every published archive is accompanied by a SHA-256
-checksum manifest (`checksums.sha256`) and cryptographically signed SLSA provenance
-attestations.
+Official releases provide versioned curated pack archives led by the 6-skill `starter` pack (`fred-skills-0.2.0-starter.tar`),
+standalone tarball archives for each of the 57 skills (e.g., `repo-audit-concurrency.tar.gz`), and a consolidated suite archive
+(`fred-skills-suite.tar.gz`), accompanied by SHA-256 checksum manifests (`SHA256SUMS` and `checksums.sha256`) and signed SLSA provenance attestations.
+**Stage-1 context budget warning (`fred-skills-suite.tar.gz`):** Extracting `fred-skills-suite.tar.gz` installs all 57 skills at once, which can crowd or exceed Stage-1 skill-listing budgets on smaller context windows in [OpenAI Codex](https://developers.openai.com/codex/skills) (`2%` of context or `8,000`-character fallback) and [Claude Code](https://code.claude.com/docs/en/skills) (`1%` of context, `skillListingBudgetFraction = 0.01`);
+prefer `fred-skills-0.2.0-starter.tar` (`6` skills, `<= 1,500` raw characters) or individual skill tarballs by default.
 
 ### Download release artifacts
 
-Download individual specialist packages or the full suite from GitHub Releases:
+Download the `starter` pack archive, an individual specialist package, or the full suite from GitHub Releases:
 
 ```sh
-# Single skill archive and manifest
+# Recommended 6-skill starter pack archive and checksum manifest
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-starter.tar
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS
+
+# Single skill archive and tarball checksum manifest
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/repo-audit-concurrency.tar.gz
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/checksums.sha256
 
-# Complete audit suite archive
+# Complete audit suite archive (loads all 57 skills; see Stage-1 budget warning above)
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-suite.tar.gz
 ```
 
@@ -126,25 +129,30 @@ curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-
 Verify cryptographic checksums and build provenance before extracting:
 
 ```sh
-# Verify SHA-256 checksum for downloaded archives
+# Verify SHA-256 checksums for downloaded archives
+sha256sum --ignore-missing -c SHA256SUMS
 sha256sum --ignore-missing -c checksums.sha256
 
 # Verify SLSA build provenance attestation using GitHub CLI
+gh attestation verify fred-skills-0.2.0-starter.tar --repo fderuiter/fred-skills
 gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills
 gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
 ```
 
 ### Install into an agent environment
 
-Extract the verified tarball directly into your agent's skills directory:
+Extract the verified archive directly into your agent's skills directory:
 
 ```sh
 mkdir -p /path/to/project/.agents/skills/
 
-# Extract single specialist (creates repo-audit-concurrency/ directory)
+# Extract recommended 6-skill starter pack
+tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/
+
+# Or extract a single specialist (creates repo-audit-concurrency/ directory)
 tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/
 
-# Extract complete suite (creates all 57 skill directories)
+# Extract complete suite (creates all 57 skill directories; see Stage-1 budget warning above)
 tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agents/skills/
 ```
 

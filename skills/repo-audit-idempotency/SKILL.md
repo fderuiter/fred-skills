@@ -1,6 +1,6 @@
 ---
 name: repo-audit-idempotency
-description: "Audit idempotency and replay safety with code evidence and counterexamples. Use when auditing duplicate deliveries, unsafe retries, repeated initialization, replay handling, or idempotency keys."
+description: "Audit duplicate delivery and replay safety. Use when checking dedup keys. Do not use for locks."
 ---
 
 # Idempotency and Replay Safety

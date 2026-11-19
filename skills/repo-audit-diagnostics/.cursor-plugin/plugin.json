@@ -1,6 +1,6 @@
 {
   "name": "repo-audit-diagnostics",
-  "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles. Use when triaging interrupted audit runs, inspecting failed session logs, redacting transcript secrets, or producing checkpoint resume instructions.",
+  "description": "Triage a stalled audit log and scrub secrets. Use when fixing a stalled audit. Do not use for code.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

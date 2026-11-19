@@ -1,6 +1,6 @@
 ---
 name: repo-plan-fix
-description: "Use when converting verified findings into bounded implementation tasks and an implementation-agent handoff."
+description: "Sequence verified bugs into bounded tasks. Use when planning safe remediation. Do not use for synthesis."
 ---
 
 # Scoped Implementation Planning

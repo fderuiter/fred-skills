@@ -1,6 +1,6 @@
 ---
 name: repo-audit-data-integrity
-description: "Audit data transformation integrity with code evidence and counterexamples. Use when auditing lossy mappings, serialization errors, precision loss, provenance gaps, or parser-to-model data corruption."
+description: "Audit lossy serialization and precision casts. Use when tracing corrupt data. Do not use for URLs."
 ---
 
 # Data Transformation Integrity

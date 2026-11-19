@@ -1,6 +1,6 @@
 {
   "name": "review-diff-analysis",
-  "description": "Use when analyzing pull request diffs to evaluate behavioral impact, blast radius, and unintended regressions.",
+  "description": "Analyze pull request hunks and blast radius. Use when triaging PR changes. Do not use for audits.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

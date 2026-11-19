@@ -26,6 +26,7 @@ from run_checks import (
 from skill_tools import build_outputs
 from sync_audit_resources import sync
 from validate_skills import (
+    EXPLICIT_INVOCATION_ONLY_SKILLS,
     _validate_documentation_invariants,
     validate_skill,
     validate_with_telemetry,
@@ -40,7 +41,7 @@ class PackageTests(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts offline. Use when testing package rules. Do not use for production."\n---\n\n'
             "# Sample\n\nInspect the supplied contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
             "Deliver the audit output conforming to [audit schema](assets/audit.schema.json), "
             "verify with [audit validator](scripts/validate_audit.py), and run standalone via [prompt](assets/prompt.md).\n"
@@ -586,7 +587,7 @@ class PackageTests(unittest.TestCase):
                 },
                 {
                     "name": "sample-audit",
-                    "description": "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance.",
+                    "description": "Audit synthetic contracts offline. Use when testing package rules. Do not use for production.",
                     "version": root_version,
                     "author": {"name": "fderuiter"},
                     "source": "./skills/sample-audit",
@@ -611,7 +612,7 @@ class PackageTests(unittest.TestCase):
                 {
                     "name": "sample-audit",
                     "source": "./skills/sample-audit",
-                    "description": "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance.",
+                    "description": "Audit synthetic contracts offline. Use when testing package rules. Do not use for production.",
                     "version": root_version,
                     "author": {"name": "fderuiter"},
                     "license": "MIT",
@@ -1245,14 +1246,30 @@ class PackageTests(unittest.TestCase):
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
         self.assertIn("complete 57-package pack", usage_text)
+        self.assertIn(f"fred-skills-{active_version}-starter.tar", usage_text)
         self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
+        self.assertLess(
+            usage_text.index(f"fred-skills-{active_version}-starter.tar"),
+            usage_text.index(f"fred-skills-{active_version}-complete.tar"),
+        )
         self.assertIn(
-            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 57 packages or `starter`)",
+            "Register the marketplace catalog and install `starter` for 6 core audit skills (`<= 1,500` raw characters)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
+        self.assertIn("/plugin install starter@fred-skills", usage_text)
         self.assertIn("/plugin install fred-skills@fred-skills", usage_text)
         self.assertIn("/plugin install complete@fred-skills", usage_text)
+        self.assertLess(
+            usage_text.index("/plugin install starter@fred-skills"),
+            usage_text.index("/plugin install complete@fred-skills"),
+        )
+        self.assertLess(
+            usage_text.index("/plugin install starter@fred-skills"),
+            usage_text.index("/plugin install fred-skills@fred-skills"),
+        )
+        self.assertIn("https://developers.openai.com/codex/skills", usage_text)
+        self.assertIn("https://code.claude.com/docs/en/skills", usage_text)
         self.assertIn("### Claude Code", usage_text)
         self.assertIn("### Cursor", usage_text)
         self.assertNotIn("### Claude Code and Cursor", usage_text)
@@ -1264,24 +1281,60 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 57 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install `starter` for 6 core audit skills (`<= 1,500` raw characters)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
+        self.assertIn("/plugin install starter@fred-skills", readme_text)
         self.assertIn("/plugin install fred-skills@fred-skills", readme_text)
         self.assertIn("/plugin install complete@fred-skills", readme_text)
+        self.assertLess(
+            readme_text.index("/plugin install starter@fred-skills"),
+            readme_text.index("/plugin install complete@fred-skills"),
+        )
+        self.assertLess(
+            readme_text.index("/plugin install starter@fred-skills"),
+            readme_text.index("/plugin install fred-skills@fred-skills"),
+        )
+        self.assertLess(
+            readme_text.index(f"fred-skills-{active_version}-starter.tar"),
+            readme_text.index("fred-skills-suite.tar.gz"),
+        )
+        self.assertIn("https://developers.openai.com/codex/skills", readme_text)
+        self.assertIn("https://code.claude.com/docs/en/skills", readme_text)
         self.assertIn("$skill-installer", readme_text)
         self.assertIn(".agents/skills/", readme_text)
         self.assertNotIn("codex plugin", readme_text)
         self.assertNotIn("single marketplace command", readme_text)
 
         integration_text = (ROOT / "docs/integration.md").read_text(encoding="utf-8")
+        self.assertIn("/plugin install starter@fred-skills", integration_text)
         self.assertIn("/plugin install fred-skills@fred-skills", integration_text)
+        self.assertLess(
+            integration_text.index("/plugin install starter@fred-skills"),
+            integration_text.index("/plugin install complete@fred-skills"),
+        )
+        self.assertLess(
+            integration_text.index("/plugin install starter@fred-skills"),
+            integration_text.index("/plugin install fred-skills@fred-skills"),
+        )
+        self.assertIn("https://developers.openai.com/codex/skills", integration_text)
+        self.assertIn("https://code.claude.com/docs/en/skills", integration_text)
         self.assertIn("### Cursor", integration_text)
         self.assertIn("Dashboard -> Plugins & MCPs", integration_text)
         self.assertIn("Customize", integration_text)
         self.assertIn("$skill-installer", integration_text)
         self.assertNotIn("codex plugin", integration_text)
+
+        gemini_ext = json.loads(
+            (ROOT / "gemini-extension.json").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "https://developers.openai.com/codex/skills", gemini_ext["description"]
+        )
+        self.assertIn(
+            "https://code.claude.com/docs/en/skills", gemini_ext["description"]
+        )
 
         for doc_name in [
             "docs/architecture.md",
@@ -1374,7 +1427,7 @@ class PackageTests(unittest.TestCase):
         )
         self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 57 |",
+            "| `complete` | Every audit and engineering workflow (57 skills; prefer starter for bounded Stage-1 discovery within Codex and Claude Code context budgets). | 57 |",
             exp_text,
         )
 
@@ -1805,8 +1858,19 @@ class PackageTests(unittest.TestCase):
                 f"Expected rejection for {bad_val!r}, got: {bad_val_errors}",
             )
 
-        # Explicit booleans True and False both succeed
+        # Explicit booleans True and False both succeed when paired with matching SKILL.md policy
+        orig_entry = self.entry.read_text(encoding="utf-8")
         for valid_bool in (True, False):
+            if valid_bool:
+                self.entry.write_text(orig_entry, encoding="utf-8")
+            else:
+                self.entry.write_text(
+                    orig_entry.replace(
+                        "name: sample-audit\n",
+                        "name: sample-audit\ndisable-model-invocation: true\n",
+                    ),
+                    encoding="utf-8",
+                )
             self._write_ui_metadata(
                 policy={
                     "products": ["chatgpt", "codex", "api", "atlas"],
@@ -1814,6 +1878,7 @@ class PackageTests(unittest.TestCase):
                 }
             )
             self.assertEqual([], validate_skill(self.skill))
+        self.entry.write_text(orig_entry, encoding="utf-8")
 
     def test_ui_metadata_repeated_adjacent_words_in_short_description_is_rejected(self):
         for bad_short in (
@@ -1859,7 +1924,7 @@ class PackageTests(unittest.TestCase):
         second_skill = self.root / "skills/second-audit"
         shutil.copytree(self.skill, second_skill)
         (second_skill / "SKILL.md").write_text(
-            '---\nname: second-audit\ndescription: "Audit secondary contracts with deterministic checks. Use when verifying secondary contract invariants, caller obligations, or boundary rules."\n---\n\n'
+            '---\nname: second-audit\ndescription: "Audit secondary contracts offline. Use when testing suite rules. Do not use for production."\n---\n\n'
             "# Second\n\nInspect the secondary contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
             "Deliver the audit output conforming to [audit schema](assets/audit.schema.json), "
             "[audit validator](scripts/validate_audit.py), and [prompt](assets/prompt.md).\n"
@@ -1916,7 +1981,16 @@ class PackageTests(unittest.TestCase):
             set(suite_to_skills),
         )
 
-        explicit_only = {"repo-apply-fix", "test-case-generation"}
+        explicit_only = {
+            "repo-apply-fix",
+            "repo-audit-diagnostics",
+            "repo-audit-program",
+            "repo-audit-synthesis",
+            "repo-reconcile-findings",
+            "repo-specify-regression",
+            "test-case-generation",
+        }
+        self.assertEqual(explicit_only, set(EXPLICIT_INVOCATION_ONLY_SKILLS))
         expected_products = ["chatgpt", "codex", "api", "atlas"]
         repeated_word_re = re.compile(r"\b([A-Za-z0-9]+)\s+\1\b", re.IGNORECASE)
         heading_re = re.compile(r"^\s*#+", re.MULTILINE)
@@ -1971,16 +2045,23 @@ class PackageTests(unittest.TestCase):
                 )
                 short_descriptions[short] = skill_name
 
+                skill_fm = yaml.safe_load(
+                    (pkg / "SKILL.md").read_text(encoding="utf-8").split("---", 2)[1]
+                )
                 policy = ui_doc.get("policy")
                 self.assertIsInstance(policy, dict, skill_name)
                 allow_implicit = policy.get("allow_implicit_invocation")
                 self.assertIsInstance(allow_implicit, bool, skill_name)
+                self.assertEqual(expected_products, policy.get("products"), skill_name)
                 if skill_name in explicit_only:
                     self.assertIs(allow_implicit, False, skill_name)
+                    self.assertIs(
+                        skill_fm.get("disable-model-invocation"), True, skill_name
+                    )
                 else:
                     self.assertIs(allow_implicit, True, skill_name)
-                    self.assertEqual(
-                        expected_products, policy.get("products"), skill_name
+                    self.assertNotEqual(
+                        skill_fm.get("disable-model-invocation"), True, skill_name
                     )
 
                 prompt_text = prompt_path.read_text(encoding="utf-8")
@@ -2119,7 +2200,7 @@ class PackageTests(unittest.TestCase):
 
         # Dedicated ## Guardrails section with explicit prohibition and linked companions is accepted
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts offline. Use when testing package rules. Do not use for production."\n---\n\n'
             "# Sample\n\nSee [worked examples](references/examples.md).\n\n"
             "## Guardrails\n\n- Never modify application code without authorization.\n\n"
             "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries with "
@@ -2765,7 +2846,7 @@ class PackageTests(unittest.TestCase):
         plugin_json = cursor_dir / "plugin.json"
         valid_manifest = {
             "name": "sample-audit",
-            "description": "Audit synthetic contracts when explicitly requested.",
+            "description": "Audit synthetic contracts offline. Use when testing package rules. Do not use for production.",
             "version": "0.2.0",
             "author": {"name": "fderuiter"},
             "license": "MIT",
@@ -3115,13 +3196,13 @@ class PackageTests(unittest.TestCase):
         )
 
         write_sample(
-            "Audit API design consistency. Use when inspecting sample design signatures, pagination cursors, or error shapes."
+            "Audit API design consistency. Use when inspecting sample design signatures or cursors. Do not use for live patches."
         )
         self.assertEqual([], validate_skill(self.skill))
 
-        # Valid single-clause 'Use when' workflow description passes without false acronym errors.
+        # Valid workflow description without heading acronyms passes without false acronym errors.
         write_sample(
-            "Use when verifying, reproducing, refuting, or narrowing an existing repository finding."
+            "Verify candidate defect claims offline. Use when reproducing or narrowing a repository finding. Do not use for edits."
         )
         self.assertEqual([], validate_skill(self.skill))
 
@@ -3147,12 +3228,12 @@ class PackageTests(unittest.TestCase):
 
         # Restore valid sample-audit and add a second skill sharing bigram 'behavioral contracts'.
         write_sample(
-            "Audit behavioral contracts with deterministic checks. Use when mapping undocumented preconditions, postconditions, or caller obligations."
+            "Audit behavioral contracts with static checks. Use when mapping undocumented caller obligations. Do not use for fixes."
         )
         peer_skill = self.root / "skills/peer-skill"
         shutil.copytree(self.skill, peer_skill)
         (peer_skill / "SKILL.md").write_text(
-            '---\nname: peer-skill\ndescription: "Generate automated checks. Use when testing behavioral contracts, isolated fixtures, or regression oracles."\n---\n\n'
+            '---\nname: peer-skill\ndescription: "Generate automated test suites. Use when testing behavioral contracts or isolated oracles. Do not use for triage."\n---\n\n'
             "# Peer Skill\n\nSee [worked examples](references/examples.md) and [prompt](assets/prompt.md).\n\n## Deliver\n\n"
             "Deliver [audit schema](assets/audit.schema.json) verified with [audit validator](scripts/validate_audit.py). Do not modify code.\n",
             encoding="utf-8",
@@ -3378,9 +3459,9 @@ class PackageTests(unittest.TestCase):
         second = self.root / "skills/second-specialist"
         shutil.copytree(self.skill, second)
         (second / "SKILL.md").write_text(
-            '---\nname: second-specialist\ndescription: "Audit second specialist domain. Use when checking secondary specialist preconditions, invariants, or caller obligations."\n---\n\n'
-            "# Second Specialist\n\nRead [method](references/method.md).\n\n## Deliver\n\n"
-            "Emit [audit schema](assets/audit.schema.json). Do not modify application code.\n",
+            '---\nname: second-specialist\ndescription: "Audit second specialist domain. Use when checking secondary preconditions or invariants. Do not use for live edits."\n---\n\n'
+            "# Second Specialist\n\nRead [method](references/method.md) and [prompt](assets/prompt.md).\n\n## Deliver\n\n"
+            "Emit [audit schema](assets/audit.schema.json) with [validator](scripts/validate_audit.py). Do not modify application code.\n",
             encoding="utf-8",
         )
         (second / "references/method.md").write_text(
@@ -3499,6 +3580,270 @@ class PackageTests(unittest.TestCase):
                 any(re.search(pat, canonical_sample) for pat in excludes),
                 f"Canonical validator {canonical_sample} must remain typechecked by mypy",
             )
+
+    def test_description_contract_rejects_missing_clauses_and_length_overflow(
+        self,
+    ) -> None:
+        orig_entry = self.entry.read_text(encoding="utf-8")
+
+        def _set_desc(desc: str) -> list[str]:
+            self.entry.write_text(
+                orig_entry.replace(
+                    "Audit synthetic contracts offline. Use when testing package rules. Do not use for production.",
+                    desc,
+                ),
+                encoding="utf-8",
+            )
+            return validate_skill(self.skill)
+
+        # 1. Missing leading capability clause
+        no_cap_errors = _set_desc(
+            "Use when testing package rules. Do not use for production."
+        )
+        self.assertTrue(
+            any("must state capability before 'Use when'" in e for e in no_cap_errors),
+            no_cap_errors,
+        )
+
+        # 2. Missing Use when trigger clause
+        no_trigger_errors = _set_desc(
+            "Audit synthetic contracts offline. Do not use for production."
+        )
+        self.assertTrue(
+            any("missing 'Use when' trigger clause" in e for e in no_trigger_errors),
+            no_trigger_errors,
+        )
+
+        # 3. Missing Do not use negative-boundary clause
+        no_boundary_errors = _set_desc(
+            "Audit synthetic contracts offline. Use when testing package rules."
+        )
+        self.assertTrue(
+            any(
+                "missing 'Do not use' negative-boundary clause" in e
+                for e in no_boundary_errors
+            ),
+            no_boundary_errors,
+        )
+
+        # 4. Exceeding 140 characters despite having all three clauses
+        over_140 = (
+            "Audit synthetic behavioral contracts across complex multi-service boundaries. "
+            "Use when testing package validation rules. Do not use for live fixes."
+        )
+        self.assertGreater(len(over_140), 140)
+        len_errors = _set_desc(over_140)
+        self.assertTrue(
+            any("exceeds 140 characters" in e for e in len_errors), len_errors
+        )
+
+        self.entry.write_text(orig_entry, encoding="utf-8")
+        self.assertEqual([], validate_skill(self.skill))
+
+    def test_stage1_budgets_and_cross_suite_jaccard_gates(self) -> None:
+        from validate_skills import (
+            _validate_cross_suite_jaccard,
+            _validate_stage1_char_budgets,
+        )
+
+        # Verify live suite meets all Stage-1 character budgets and cross-suite Jaccard caps
+        suites_doc = json.loads(
+            (ROOT / "catalog/suites.json").read_text(encoding="utf-8")
+        )
+        packs_doc = json.loads(
+            (ROOT / "catalog/packs.json").read_text(encoding="utf-8")
+        )
+        live_descs: dict[str, str] = {}
+        skill_to_suite: dict[str, str] = {}
+        for s_obj in suites_doc["suites"]:
+            for phase in s_obj["phases"]:
+                for sk in phase["skills"]:
+                    skill_to_suite[sk] = s_obj["name"]
+                    fm = yaml.safe_load(
+                        (ROOT / "skills" / sk / "SKILL.md")
+                        .read_text(encoding="utf-8")
+                        .split("---", 2)[1]
+                    )
+                    live_descs[sk] = fm["description"]
+                    self.assertLessEqual(len(fm["description"]), 140, sk)
+
+        total_raw = sum(len(k) + len(v) for k, v in live_descs.items())
+        self.assertLess(total_raw, 8000)
+        starter_raw = sum(
+            len(sk) + len(live_descs[sk])
+            for sk in packs_doc["packs"]["starter"]["skills"]
+        )
+        self.assertLessEqual(starter_raw, 1500)
+        for pack_name, pack_obj in packs_doc["packs"].items():
+            if pack_name in {"complete", "full-audit"}:
+                continue
+            pack_raw = sum(len(sk) + len(live_descs[sk]) for sk in pack_obj["skills"])
+            self.assertLess(pack_raw, 2500, pack_name)
+
+        self.assertEqual([], _validate_stage1_char_budgets(ROOT, live_descs))
+        self.assertEqual([], _validate_cross_suite_jaccard(ROOT, live_descs))
+
+        # Verify cross-suite Jaccard overlap > 0.20 is rejected while same-suite overlap is ignored
+        jaccard_root = self.root / "jaccard-fixture"
+        (jaccard_root / "catalog").mkdir(parents=True, exist_ok=True)
+        overlap_descs = {
+            "alpha-skill": "Audit boundary contracts and trust payloads. Use when reviewing inputs. Do not use for patches.",
+            "beta-skill": "Specify boundary contracts and trust payloads. Use when designing inputs. Do not use for audits.",
+        }
+        (jaccard_root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "suites": [
+                        {
+                            "name": "suite-a",
+                            "phases": [{"id": 1, "skills": ["alpha-skill"]}],
+                        },
+                        {
+                            "name": "suite-b",
+                            "phases": [{"id": 1, "skills": ["beta-skill"]}],
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        jaccard_errors = _validate_cross_suite_jaccard(jaccard_root, overlap_descs)
+        self.assertTrue(
+            any("Cross-suite description overlap" in e for e in jaccard_errors),
+            jaccard_errors,
+        )
+        (jaccard_root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "suites": [
+                        {
+                            "name": "suite-a",
+                            "phases": [
+                                {"id": 1, "skills": ["alpha-skill", "beta-skill"]}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual([], _validate_cross_suite_jaccard(jaccard_root, overlap_descs))
+
+        # Verify Stage-1 budget overflow rejections (starter > 1500, curated pack >= 2500, aggregate >= 8000)
+        (self.root / "catalog").mkdir(exist_ok=True)
+        synth_descs = {f"skill-{i:02d}": "x" * 130 for i in range(60)}
+        (self.root / "catalog/packs.json").write_text(
+            json.dumps(
+                {
+                    "packs": {
+                        "starter": {"skills": [f"skill-{i:02d}" for i in range(12)]},
+                        "focused": {"skills": [f"skill-{i:02d}" for i in range(20)]},
+                        "complete": {"skills": list(synth_descs)},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        budget_errors = _validate_stage1_char_budgets(self.root, synth_descs)
+        self.assertTrue(
+            any(
+                "Aggregate Stage-1 skill metadata exceeds budget" in e
+                and "8000 raw characters" in e
+                for e in budget_errors
+            ),
+            budget_errors,
+        )
+        self.assertTrue(
+            any(
+                "Pack 'starter'" in e and "1500 raw characters" in e
+                for e in budget_errors
+            ),
+            budget_errors,
+        )
+        self.assertTrue(
+            any(
+                "Pack 'focused'" in e and "2500 raw characters" in e
+                for e in budget_errors
+            ),
+            budget_errors,
+        )
+
+    def test_invocation_policy_parity_and_guarded_skills_rejected_when_mismatched(
+        self,
+    ) -> None:
+        orig_entry = self.entry.read_text(encoding="utf-8")
+
+        # 1. Non-boolean disable-model-invocation in SKILL.md is rejected
+        self.entry.write_text(
+            orig_entry.replace(
+                "name: sample-audit\n",
+                'name: sample-audit\ndisable-model-invocation: "true"\n',
+            ),
+            encoding="utf-8",
+        )
+        non_bool_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "'disable-model-invocation' must be a boolean" in e
+                for e in non_bool_errors
+            ),
+            non_bool_errors,
+        )
+
+        # 2. disable-model-invocation: true paired with allow_implicit_invocation: true is rejected
+        self.entry.write_text(
+            orig_entry.replace(
+                "name: sample-audit\n",
+                "name: sample-audit\ndisable-model-invocation: true\n",
+            ),
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(policy={"allow_implicit_invocation": True})
+        mismatch_true_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "Invocation policy mismatch: SKILL.md 'disable-model-invocation' (True) conflicts with agents/openai.yaml 'policy.allow_implicit_invocation' (True)"
+                in e
+                for e in mismatch_true_errors
+            ),
+            mismatch_true_errors,
+        )
+
+        # 3. Omitted disable-model-invocation paired with allow_implicit_invocation: false is rejected
+        self.entry.write_text(orig_entry, encoding="utf-8")
+        self._write_ui_metadata(policy={"allow_implicit_invocation": False})
+        mismatch_false_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "Invocation policy mismatch: SKILL.md 'disable-model-invocation' (False) conflicts with agents/openai.yaml 'policy.allow_implicit_invocation' (False)"
+                in e
+                for e in mismatch_false_errors
+            ),
+            mismatch_false_errors,
+        )
+
+        # 4. Guarded mutating/publishing/transcript/multi-pass skill without explicit-only guards is rejected
+        guarded_dir = self.root / "skills/repo-audit-diagnostics"
+        shutil.copytree(self.skill, guarded_dir)
+        (guarded_dir / "SKILL.md").write_text(
+            orig_entry.replace("name: sample-audit", "name: repo-audit-diagnostics"),
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            guarded_dir,
+            skill_name="repo-audit-diagnostics",
+            short_description="Diagnose stalled audit sessions safely",
+            policy={"allow_implicit_invocation": True},
+        )
+        guarded_errors = validate_skill(guarded_dir)
+        self.assertTrue(
+            any("disable-model-invocation: true" in e for e in guarded_errors),
+            guarded_errors,
+        )
+        self.assertTrue(
+            any("allow_implicit_invocation: false" in e for e in guarded_errors),
+            guarded_errors,
+        )
 
 
 if __name__ == "__main__":
