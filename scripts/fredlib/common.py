@@ -2,14 +2,57 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
+_STDLIB_VALIDATOR_MODULE: ModuleType | None = None
+
+
+def _skill_schema_path(schema_rel: str) -> str:
+    return f"assets/{Path(schema_rel).name}" if schema_rel else ""
+
+
+def _load_stdlib_validator() -> ModuleType:
+    global _STDLIB_VALIDATOR_MODULE
+    if _STDLIB_VALIDATOR_MODULE is not None:
+        return _STDLIB_VALIDATOR_MODULE
+    script_path = ROOT / "scripts/validate_output.py"
+    spec = importlib.util.spec_from_file_location(
+        "fredlib_stdlib_validate_output", script_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load stdlib validator from {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    try:
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    _STDLIB_VALIDATOR_MODULE = module
+    return module
+
+
+def _validate_schema_payload(payload: Any, schema: dict[str, Any] | bool) -> list[str]:
+    try:
+        import jsonschema
+
+        return [
+            str(err.message)
+            for err in jsonschema.Draft202012Validator(schema).iter_errors(payload)
+        ]
+    except ImportError:
+        validator = _load_stdlib_validator()
+        raw_errors: list[str] = validator.validate_schema(payload, schema)
+        return [err.split(": ", 1)[1] if ": " in err else err for err in raw_errors]
 
 
 _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {

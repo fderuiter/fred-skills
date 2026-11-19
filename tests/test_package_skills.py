@@ -286,19 +286,24 @@ class PackageSkillsTests(unittest.TestCase):
                 self.assertEqual(0o755, tf.getmember("b/script.py").mode)
 
     def test_release_archives_preserve_0755_script_modes_and_shebang_fallback(self):
+        selected_skills = [
+            "repo-audit-diagnostics",
+            "repo-audit-program",
+            "repo-audit-synthesis",
+        ]
         expected_scripts = {
             "repo-audit-diagnostics/scripts/triage.py",
+            "repo-audit-diagnostics/scripts/validate_output.py",
             "repo-audit-program/scripts/validate_audit.py",
+            "repo-audit-program/scripts/validate_output.py",
             "repo-audit-synthesis/scripts/audit_to_sarif.py",
+            "repo-audit-synthesis/scripts/generate_issues.py",
+            "repo-audit-synthesis/scripts/validate_output.py",
         }
         rel_out = self.output_dir / "modes_bundle"
         manifest = releases.build(
             rel_out,
-            skills=[
-                "repo-audit-diagnostics",
-                "repo-audit-program",
-                "repo-audit-synthesis",
-            ],
+            skills=selected_skills,
             root=ROOT,
         )
         ver = manifest["version"]
@@ -326,11 +331,17 @@ class PackageSkillsTests(unittest.TestCase):
                     f"Unexpected TAR mode for {member.name}",
                 )
 
+        suite_expected_scripts = expected_scripts | {
+            f"{skill_name}/scripts/validate_output.py"
+            for skill_name in get_suite_skills(ROOT)
+        }
         tgz_out = self.output_dir / "standalone_tgz"
         package_skills(tgz_out, root=ROOT)
         with tarfile.open(tgz_out / "fred-skills-suite.tar.gz", "r:gz") as suite_tf:
             for member in suite_tf.getmembers():
-                expected_mode = 0o755 if member.name in expected_scripts else 0o644
+                expected_mode = (
+                    0o755 if member.name in suite_expected_scripts else 0o644
+                )
                 self.assertEqual(
                     expected_mode,
                     member.mode,

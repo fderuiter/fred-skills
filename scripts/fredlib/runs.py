@@ -10,9 +10,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-import jsonschema
-import yaml
-
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
@@ -23,9 +20,11 @@ from .common import (
     _deliverable_for_run,
     _detect_domain_kind,
     _load_suite_contracts,
+    _skill_schema_path,
     _suite_for_run,
     _suite_for_skills,
     _suite_shared_assets,
+    _validate_schema_payload,
     atomic_json,
     digest,
     read_json,
@@ -42,7 +41,7 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _format_yaml_error(config_path: Path, exc: yaml.YAMLError) -> FredCliError:
+def _format_yaml_error(config_path: Path, exc: Exception) -> FredCliError:
     mark = getattr(exc, "problem_mark", None)
     problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
     loc = (
@@ -90,6 +89,14 @@ def plan(
                 f"Unable to read project config '{config_path}': {exc}",
                 code="io_error",
                 hint=f"Check file permissions for '{config_path}'.",
+            ) from exc
+        try:
+            import yaml
+        except ImportError as exc:
+            raise FredCliError(
+                "PyYAML is required to parse --config YAML files",
+                code="missing_dependency",
+                hint="Install PyYAML ('pip install pyyaml') or pass --profile / --exclude CLI flags directly.",
             ) from exc
         try:
             loaded = yaml.safe_load(raw_yaml)
@@ -337,22 +344,17 @@ def _workflow_companions_for_run(run: dict | None) -> list[tuple[str, str]]:
 def _deliverable_prompt_rules(
     deliverable: str, schema_rel: str, run: dict | None = None
 ) -> str:
-    local_schema = f"assets/{Path(schema_rel).name}" if schema_rel else ""
-    domain_schema_ref = (
-        f"{local_schema} ({schema_rel})"
-        if schema_rel and schema_rel != local_schema
-        else (schema_rel or local_schema)
-    )
+    local_schema = _skill_schema_path(schema_rel)
     if deliverable == "architecture.json":
         return f"""Work in bounded slices. Update architecture.json using assets/architecture-template.md
-for narrative records and verify conformance against {domain_schema_ref}
+for narrative records and verify conformance against {local_schema or "assets/architecture.schema.json"}
 (schema_version, title, status, boundaries, and decisions; additionalProperties is false).
 Report architectural decisions and system boundaries with concrete source locations,
 rationale, and consequences. Stop with a precise checkpoint when the selected work
 cannot be completed. Empty boundaries or decisions lists are valid starter states."""
     if deliverable == "review.json":
         return f"""Work in bounded slices. Update review.json using assets/review-template.md to structure
-change findings and validate findings format against {domain_schema_ref}
+change findings and validate findings format against {local_schema or "assets/review.schema.json"}
 (schema_version, verdict, summary, and findings; additionalProperties is false).
 Report change impact surfaces and invariant checks with precise file paths, line
 ranges, and actionable recommendations. Stop with a precise checkpoint when the
@@ -377,7 +379,7 @@ selected work cannot be completed. An empty findings list is valid."""
                 "files, or ask the operator to re-initialize with `--allow-fixes`."
             )
         return f"""Work in bounded slices. Update testing.json using assets/testing-template.md to document
-uncovered gaps and ensure test gap specifications conform to {domain_schema_ref}
+uncovered gaps and ensure test gap specifications conform to {local_schema or "assets/testing.schema.json"}
 (schema_version, component, framework, and test_cases; additionalProperties is false).
 Provide prioritized test scenarios with deterministic, independent assertion oracles
 (state, exception, output, or boundary). Stop with a precise checkpoint when the
@@ -385,12 +387,15 @@ selected work cannot be completed. An empty test_cases list is valid.{fixes_guid
     companions = _workflow_companions_for_run(run)
     companion_guidance = ""
     if companions:
-        pairs = ", ".join(f"{name} ({schema})" for name, schema in companions)
+        pairs = ", ".join(
+            f"{name} ({_skill_schema_path(schema)})" for name, schema in companions
+        )
         companion_guidance = (
             f"\nWhen workflow steps produce companion deliverables, write and validate "
             f"them against their schemas: {pairs}."
         )
-    return f"""Work in bounded slices. Validate the ledger against {schema_rel} and maintain the existing
+    audit_schema_ref = local_schema or "assets/audit.schema.json"
+    return f"""Work in bounded slices. Validate the ledger against {audit_schema_ref} and maintain the existing
 audit schema and IDs, evidence, coverage, counterevidence, uncertainty, and independent
 acceptance criteria. Keep remediation state in remediation.json, distinct from evidence
 certainty. A missing finding on a later run is not proof of resolution. Preserve unrelated
@@ -528,10 +533,7 @@ def audit_errors(audit: dict) -> list[str]:
 
 def _schema_errors(payload: object, schema_rel: str) -> list[str]:
     schema = read_json(ROOT / schema_rel)
-    return [
-        str(error.message)
-        for error in jsonschema.Draft202012Validator(schema).iter_errors(payload)
-    ]
+    return _validate_schema_payload(payload, schema)
 
 
 def _require_audit_ledger(payload: object, command_name: str) -> dict:
@@ -1014,13 +1016,13 @@ def reconcile(
         schema = read_json(
             ROOT / "skills/repo-verify-fix/assets/verification.schema.json"
         )
-        failures = list(jsonschema.Draft202012Validator(schema).iter_errors(proof))
+        failures = _validate_schema_payload(proof, schema)
         if failures:
             raise FredCliError(
                 "Verification artifact does not satisfy the proof schema: "
-                + failures[0].message,
+                + failures[0],
                 code="invalid_verification",
-                hint="Update the verification artifact to satisfy skills/repo-verify-fix/assets/verification.schema.json.",
+                hint="Update the verification artifact to satisfy assets/verification.schema.json.",
             )
         required = [
             "before_revision",

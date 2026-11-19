@@ -502,6 +502,7 @@ class _ParsedSkillPackage:
         "has_boundary_sections",
         "has_output_schema",
         "has_prompt_constraints",
+        "has_validator_script",
         "output_schemas",
         "short_description",
     )
@@ -512,6 +513,7 @@ class _ParsedSkillPackage:
         errors: list[str],
         output_schemas: list[str] | None = None,
         has_output_schema: bool = False,
+        has_validator_script: bool = False,
         has_prompt_constraints: bool = False,
         has_boundary_sections: bool = False,
         description: str | None = None,
@@ -520,10 +522,14 @@ class _ParsedSkillPackage:
         self.errors = errors
         self.output_schemas = output_schemas if output_schemas is not None else []
         self.has_output_schema = has_output_schema
+        self.has_validator_script = has_validator_script
         self.has_prompt_constraints = has_prompt_constraints
         self.has_boundary_sections = has_boundary_sections
         self.deterministic_constraint_coverage = (
-            has_output_schema and has_prompt_constraints and has_boundary_sections
+            has_output_schema
+            and has_validator_script
+            and has_prompt_constraints
+            and has_boundary_sections
         )
         self.description = description
         self.short_description = short_description
@@ -925,6 +931,59 @@ def _validate_ui_metadata(package: Path, name: object) -> tuple[list[str], str |
     return errors, short_description
 
 
+def _check_script_contract(
+    script_path: Path, rel_posix: str, raw_text: str, is_validator: bool
+) -> list[str]:
+    errors: list[str] = []
+    if "dont_write_bytecode" not in raw_text:
+        errors.append(
+            f"{rel_posix}: skill script must set sys.dont_write_bytecode = True"
+        )
+    has_shebang = raw_text.startswith("#!")
+    if is_validator and not has_shebang:
+        errors.append(f"{rel_posix}: validator script must start with a #! shebang")
+    needs_exec = is_validator or has_shebang
+    if needs_exec and os.name != "nt" and not (script_path.stat().st_mode & 0o111):
+        errors.append(
+            f"{rel_posix}: executable skill script must have +x permissions (0o755)"
+        )
+    return errors
+
+
+def _inspect_python_script(script_path: Path, package: Path) -> tuple[list[str], bool]:
+    rel_posix = script_path.relative_to(package).as_posix()
+    try:
+        raw_text = script_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"{rel_posix}: {exc}"], False
+    if not raw_text.strip():
+        return [f"{rel_posix}: skill script must not be empty"], False
+    is_validator = script_path.name.startswith("validate_")
+    errors = _check_script_contract(script_path, rel_posix, raw_text, is_validator)
+    return errors, (is_validator and not errors)
+
+
+def _validate_skill_scripts(package: Path) -> tuple[list[str], bool]:
+    scripts_dir = package / "scripts"
+    missing_msg = (
+        f"Missing executable validator: {package.name} must include an executable "
+        "validator in scripts/ (e.g. scripts/validate_output.py)"
+    )
+    if not scripts_dir.is_dir() or scripts_dir.is_symlink():
+        return [missing_msg], False
+    py_scripts = sorted(
+        p for p in scripts_dir.glob("*.py") if p.is_file() and not p.is_symlink()
+    )
+    has_validator_file = any(p.name.startswith("validate_") for p in py_scripts)
+    errors: list[str] = [] if has_validator_file else [missing_msg]
+    valid_validator = False
+    for script_path in py_scripts:
+        script_errors, ok_validator = _inspect_python_script(script_path, package)
+        errors.extend(script_errors)
+        valid_validator = valid_validator or ok_validator
+    return errors, valid_validator
+
+
 def _inspect_skill_package(
     package: Path, scenario_schema: dict | None = None
 ) -> _ParsedSkillPackage:
@@ -953,6 +1012,9 @@ def _inspect_skill_package(
         package, body, assets_schemas, output_schemas
     )
     errors.extend(schema_link_errors)
+
+    script_errors, has_validator_script = _validate_skill_scripts(package)
+    errors.extend(script_errors)
 
     prompt_errors, has_prompt_constraints = _validate_prompt_template(
         package, output_schemas, cached_texts
@@ -983,6 +1045,7 @@ def _inspect_skill_package(
         errors=errors,
         output_schemas=[p.relative_to(package).as_posix() for p in output_schemas],
         has_output_schema=has_output_schema,
+        has_validator_script=has_validator_script,
         has_prompt_constraints=has_prompt_constraints,
         has_boundary_sections=has_boundary_sections,
         description=raw_description if isinstance(raw_description, str) else None,
@@ -1612,6 +1675,19 @@ def _write_telemetry_outputs(
             fh.write(format_telemetry_markdown(telemetry))
 
 
+def _executable_validator_coverage_pct(telemetry: Mapping[str, Any]) -> float:
+    pkgs = [pkg for pkg in telemetry.get("packages", []) if isinstance(pkg, Mapping)]
+    if not pkgs:
+        return 0.0
+    covered = sum(
+        1
+        for pkg in pkgs
+        if pkg.get("has_output_schema")
+        and not any("validator" in str(err).lower() for err in pkg.get("errors", []))
+    )
+    return _rate_pair(covered, len(pkgs))[1]
+
+
 def _print_telemetry_report(
     errors: Sequence[str], telemetry: Mapping[str, Any]
 ) -> None:
@@ -1620,6 +1696,7 @@ def _print_telemetry_report(
         if telemetry["new_skills_first_pass_percentage"] is not None
         else "N/A (0 new skills)"
     )
+    validator_pct = _executable_validator_coverage_pct(telemetry)
     print("=" * 60)
     print("Validation Telemetry:")
     print(f"  Total Packages: {telemetry['total_packages']}")
@@ -1631,6 +1708,7 @@ def _print_telemetry_report(
     print(
         f"  First-pass Guardrail Pass Rate: {telemetry['first_pass_guardrail_pass_rate_percentage']}%"
     )
+    print(f"  Executable Validator Coverage: {validator_pct}%")
     print(
         f"  Deterministic Constraint Coverage: {telemetry['deterministic_constraint_coverage_percentage']}%"
     )

@@ -5,5 +5,8 @@
     "references/architecture-protocol.md",
     "assets/architecture-template.md",
     "assets/architecture.schema.json"
+  ],
+  "scripts": [
+    "scripts/validate_output.py"
   ]
 }

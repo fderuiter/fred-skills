@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.dont_write_bytecode = True
+
 FINGERPRINT_KEY = "fred-skills/v1"
 
 SEVERITY_TO_SARIF_LEVEL = {

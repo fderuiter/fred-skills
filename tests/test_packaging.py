@@ -1,6 +1,7 @@
 """Negative package fixtures and generated-artifact drift checks."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,14 @@ class PackageTests(unittest.TestCase):
                 }
             )
         )
+        self.validator_script = self.skill / "scripts/validate_output.py"
+        self.validator_script.parent.mkdir(parents=True, exist_ok=True)
+        self.validator_script.write_text(
+            "#!/usr/bin/env python3\nimport sys\nsys.dont_write_bytecode = True\n",
+            encoding="utf-8",
+        )
+        if os.name != "nt":
+            self.validator_script.chmod(0o755)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -118,6 +127,43 @@ class PackageTests(unittest.TestCase):
 
     def test_minimal_portable_package_is_valid(self):
         self.assertEqual([], validate_skill(self.skill))
+
+    def test_missing_or_non_executable_validator_script_is_rejected(self):
+        if os.name != "nt":
+            self.validator_script.chmod(0o644)
+            mode_errors = validate_skill(self.skill)
+            self.assertTrue(
+                any("+x permissions" in err for err in mode_errors),
+                mode_errors,
+            )
+            self.validator_script.chmod(0o755)
+
+        self.validator_script.write_text(
+            "#!/usr/bin/env python3\nprint('missing bytecode guard')\n",
+            encoding="utf-8",
+        )
+        if os.name != "nt":
+            self.validator_script.chmod(0o755)
+        bytecode_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("dont_write_bytecode" in err for err in bytecode_errors),
+            bytecode_errors,
+        )
+
+        self.validator_script.unlink()
+        missing_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("Missing executable validator" in err for err in missing_errors),
+            missing_errors,
+        )
+
+        repo_errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
+        self.assertEqual([], repo_errors)
+        self.assertEqual(51, telemetry["total_packages"])
+        self.assertEqual(51, telemetry["passed_packages"])
+        self.assertEqual(
+            100.0, telemetry["deterministic_constraint_coverage_percentage"]
+        )
 
     def test_missing_evaluation_scenarios_is_rejected(self):
         self.scenarios_file.unlink()
@@ -1945,10 +1991,16 @@ class PackageTests(unittest.TestCase):
         for candidate_path in (
             "skills/repo-audit-synthesis/scripts/audit_to_sarif.py",
             r"skills\repo-audit-synthesis\scripts\audit_to_sarif.py",
+            "skills/repo-audit-synthesis/scripts/generate_issues.py",
+            r"skills\repo-audit-synthesis\scripts\generate_issues.py",
+            "skills/repo-audit-concurrency/scripts/validate_output.py",
+            r"skills\repo-audit-concurrency\scripts\validate_output.py",
+            "skills/arch-decision-record/scripts/validate_output.py",
+            r"skills\arch-decision-record\scripts\validate_output.py",
         ):
             self.assertTrue(
                 any(re.search(pattern, candidate_path) for pattern in excludes),
-                f"Synced audit_to_sarif.py copy ({candidate_path}) must be excluded from batch mypy discovery",
+                f"Synced script copy ({candidate_path}) must be excluded from batch mypy discovery",
             )
         overrides = mypy_cfg.get("overrides", [])
         self.assertEqual(len(overrides), 1)

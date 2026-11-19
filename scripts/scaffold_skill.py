@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -220,6 +221,7 @@ def _render_skill_markdown(
         "- Distinguish observed execution evidence from static inference.\n\n"
         "## Deliver\n\n"
         f"Format structured results conforming to the [output schema](assets/{schema_filename}){extra_clause}.\n"
+        "Run `python3 <this-skill>/scripts/validate_output.py <output.json>` to verify schema compliance.\n"
         "Cite exact relative file paths, Concrete evidence, and remaining verification limits.\n"
     )
 
@@ -602,6 +604,13 @@ def _sync_catalog_files(
     return touched
 
 
+def _load_validator_script(root: Path) -> str:
+    candidate = root / "scripts/validate_output.py"
+    if not candidate.is_file():
+        candidate = ROOT / "scripts/validate_output.py"
+    return candidate.read_text(encoding="utf-8")
+
+
 def scaffold_skill(
     name: str,
     *,
@@ -703,6 +712,7 @@ def scaffold_skill(
             suite_name=effective_suite,
             sibling_skill=sibling_skill,
         ),
+        "scripts/validate_output.py": _load_validator_script(resolved_root),
     }
 
     planned_paths = [package_dir / rel for rel in sorted(package_files)]
@@ -713,6 +723,8 @@ def scaffold_skill(
             target = package_dir / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8", newline="\n")
+            if content.startswith("#!") and os.name != "nt":
+                target.chmod(0o755)
 
         if sync_catalog:
             catalog_paths = _sync_catalog_files(

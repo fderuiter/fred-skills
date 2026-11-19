@@ -203,20 +203,51 @@ Bearer sk-proj-1234567890abcdef1234567890
         triage.validate_bundle(bundle)
 
     def test_validate_bundle_schema_validation_error_chains_cause(self):
-        import jsonschema
-
         with self.assertRaises(ValueError) as ctx:
             triage.validate_bundle({"schema_version": "invalid-schema"})
         self.assertIn("Schema validation error", str(ctx.exception))
-        self.assertIsInstance(ctx.exception.__cause__, jsonschema.ValidationError)
+        self.assertIsInstance(
+            ctx.exception.__cause__, triage.BundleSchemaValidationError
+        )
         self.assertTrue(ctx.exception.__suppress_context__)
 
-    def test_validate_bundle_missing_jsonschema_suppresses_context(self):
+    def test_validate_bundle_succeeds_without_jsonschema_and_under_python_no_site(
+        self,
+    ):
+        transcript_file = self.temp_path / "no_site_transcript.txt"
+        transcript_file.write_text(
+            "Running repo-audit-concurrency\nTool execution timed out after 120s\n",
+            encoding="utf-8",
+        )
+        bundle_out = self.temp_path / "no_site_bundle"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                str(SCRIPT),
+                str(transcript_file),
+                "--output-dir",
+                str(bundle_out),
+                "--check-schema",
+            ],
+            cwd=self.temp_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        bundle = json.loads(
+            (bundle_out / "diagnostic_bundle.json").read_text(encoding="utf-8")
+        )
+        standalone_blob = "\n".join(bundle["recovery"]["instructions"])
+        self.assertNotIn("scripts/fred.py", standalone_blob)
+        self.assertIn("validate_output.py", standalone_blob)
+
         with patch.dict("sys.modules", {"jsonschema": None}):
+            triage.validate_bundle(bundle)
             with self.assertRaises(ValueError) as ctx:
                 triage.validate_bundle({})
-            self.assertIn("jsonschema not installed", str(ctx.exception))
-            self.assertIsNone(ctx.exception.__cause__)
+            self.assertIn("Schema validation error", str(ctx.exception))
             self.assertTrue(ctx.exception.__suppress_context__)
 
     def test_generate_bundle_suppresses_corrupted_workspace_state(self):
@@ -1831,7 +1862,10 @@ Bearer sk-proj-1234567890abcdef1234567890
             specialist_skill="review-diff-analysis",
         )
         no_ws_blob = "\n".join(no_ws_rec["instructions"])
-        self.assertIn("validate_audit.py <audit-run-dir>/audit.json", no_ws_blob)
+        self.assertIn(
+            "validate_output.py <audit-run-dir>/audit.json --check-ledger", no_ws_blob
+        )
+        self.assertNotIn("validate_audit.py", no_ws_blob)
         self.assertNotIn("validate-run", no_ws_blob)
 
         audit_ws = self.temp_path / "ws_has_audit_json"
@@ -1844,7 +1878,10 @@ Bearer sk-proj-1234567890abcdef1234567890
             specialist_skill="arch-decision-record",
         )
         audit_ws_blob = "\n".join(audit_ws_rec["instructions"])
-        self.assertIn(f"validate_audit.py {audit_ws}/audit.json", audit_ws_blob)
+        self.assertIn(
+            f"validate_output.py {audit_ws}/audit.json --check-ledger", audit_ws_blob
+        )
+        self.assertNotIn("validate_audit.py", audit_ws_blob)
         self.assertNotIn("architecture.json", audit_ws_blob)
 
         # 6. Workspace-file-only resolution (no run.json) resolves active domain deliverable

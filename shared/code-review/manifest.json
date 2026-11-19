@@ -5,5 +5,8 @@
     "references/review-protocol.md",
     "assets/review-template.md",
     "assets/review.schema.json"
+  ],
+  "scripts": [
+    "scripts/validate_output.py"
   ]
 }

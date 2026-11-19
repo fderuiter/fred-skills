@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path, PureWindowsPath
 
 from skill_tools import ROOT, suite_members
+
+_SYNTHESIS_ONLY_SCRIPTS = frozenset(
+    {
+        "scripts/audit_to_sarif.py",
+        "scripts/generate_issues.py",
+    }
+)
 
 
 def _safe_relative_path(raw_path: str) -> Path:
@@ -21,6 +29,13 @@ def _safe_relative_path(raw_path: str) -> Path:
     ):
         raise ValueError(f"Invalid shared resource path: {raw_path}")
     return rel
+
+
+def _resolve_script_source(shared: Path, root: Path, rel: Path) -> Path:
+    for candidate in (shared / "resources" / rel, root / rel, ROOT / rel):
+        if candidate.is_file():
+            return candidate
+    return root / rel
 
 
 def sync(root: Path = ROOT, check: bool = False) -> list[str]:
@@ -47,19 +62,15 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                 for s_path, s_targets in scripts.items():
                     if name in s_targets:
                         rel = _safe_relative_path(s_path)
-                        source = shared / "resources" / rel
-                        if not source.is_file():
-                            source = root / rel
+                        source = _resolve_script_source(shared, root, rel)
                         file_targets.append((s_path, source))
             elif isinstance(scripts, list):
                 for s_item in scripts:
                     if isinstance(s_item, str):
                         rel = _safe_relative_path(s_item)
-                        if s_item == "scripts/audit_to_sarif.py":
+                        if s_item in _SYNTHESIS_ONLY_SCRIPTS:
                             if name == "repo-audit-synthesis":
-                                source = shared / "resources" / rel
-                                if not source.is_file():
-                                    source = root / rel
+                                source = _resolve_script_source(shared, root, rel)
                                 file_targets.append((s_item, source))
                             elif (package / s_item).is_file():
                                 if check:
@@ -69,18 +80,14 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                                 else:
                                     (package / s_item).unlink()
                         else:
-                            source = shared / "resources" / rel
-                            if not source.is_file():
-                                source = root / rel
+                            source = _resolve_script_source(shared, root, rel)
                             file_targets.append((s_item, source))
                     elif isinstance(s_item, dict):
                         rel_path = s_item.get("path") or s_item.get("file")
                         targets = s_item.get("targets") or s_item.get("skills", [])
                         if rel_path and name in targets:
                             rel = _safe_relative_path(rel_path)
-                            source = shared / "resources" / rel
-                            if not source.is_file():
-                                source = root / rel
+                            source = _resolve_script_source(shared, root, rel)
                             file_targets.append((rel_path, source))
 
             for relative, source in file_targets:
@@ -89,13 +96,23 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                 if not target.resolve().is_relative_to(package.resolve()):
                     raise ValueError(f"Shared destination escapes package: {target}")
                 expected = source.read_bytes()
-                if target.is_file() and target.read_bytes() == expected:
+                needs_exec = expected.startswith(b"#!")
+                has_exec = os.name == "nt" or (
+                    target.is_file() and bool(target.stat().st_mode & 0o111)
+                )
+                if (
+                    target.is_file()
+                    and target.read_bytes() == expected
+                    and (not needs_exec or has_exec)
+                ):
                     continue
                 if check:
                     problems.append(f"Shared resource drift: {name}/{relative}")
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(expected)
+                    if needs_exec and os.name != "nt":
+                        target.chmod(0o755)
     return problems
 
 

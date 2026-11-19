@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime
+import importlib.util
 import json
 import os
 import platform
@@ -13,7 +14,10 @@ import re
 import sys
 from collections.abc import Collection
 from pathlib import Path
+from types import ModuleType
 from typing import Any
+
+sys.dont_write_bytecode = True
 
 REDACTION_TIERS: tuple[str, ...] = ("skeleton", "evidence", "full")
 OMITTED_TOOL_OUTPUT_PLACEHOLDER = "[OMITTED_TOOL_OUTPUT]"
@@ -329,11 +333,11 @@ _SKILL_TO_SUITE: dict[str, str] = {
 _SUITE_ARTIFACTS: dict[str, tuple[str, str]] = {
     "repository-audits": (
         "audit.json",
-        "shared/repo-audit/resources/assets/audit.schema.json",
+        "assets/audit.schema.json",
     ),
     "repository-workflows": (
         "audit.json",
-        "shared/repo-audit/resources/assets/audit.schema.json",
+        "assets/audit.schema.json",
     ),
     "software-architecture": (
         "architecture.json",
@@ -1669,6 +1673,27 @@ def _resolve_recovery_suite(
     return "repository-audits", fname, schema_rel
 
 
+def _has_fred_cli(workspace_dir: Path | None, run_data: dict[str, Any] | None) -> bool:
+    candidates: list[Path] = [Path.cwd()]
+    if workspace_dir is not None:
+        with contextlib.suppress(OSError):
+            candidates.append(workspace_dir.resolve().parent)
+    if isinstance(run_data, dict):
+        repo_meta = run_data.get("repository")
+        if isinstance(repo_meta, dict):
+            repo_path = repo_meta.get("path")
+            if isinstance(repo_path, str) and repo_path.strip():
+                candidates.append(Path(repo_path))
+    return any((base / "scripts/fred.py").is_file() for base in candidates)
+
+
+def _local_validator_display_path() -> str:
+    validator = Path(__file__).resolve().parent / "validate_output.py"
+    with contextlib.suppress(OSError, ValueError):
+        return validator.relative_to(Path.cwd().resolve()).as_posix()
+    return validator.as_posix()
+
+
 def formulate_recovery_instructions(
     failure: dict[str, Any],
     run_data: dict[str, Any] | None = None,
@@ -1683,6 +1708,13 @@ def formulate_recovery_instructions(
         run_data, workspace_dir, specialist_skill
     )
     is_domain_suite = deliverable != "audit.json"
+    has_cli = _has_fred_cli(workspace_dir, run_data)
+    validator_cmd = f"python3 {_local_validator_display_path()}"
+    effective_schema = (
+        schema_rel
+        if has_cli and (Path.cwd() / schema_rel).is_file()
+        else f"assets/{Path(schema_rel).name}"
+    )
     dir_str = (
         str(workspace_dir)
         if workspace_dir
@@ -1703,50 +1735,83 @@ def formulate_recovery_instructions(
         instructions.append(
             "2. Add file exclusion patterns or narrow the target scope in the tool arguments."
         )
-        instructions.append(
-            f"3. Mark current state paused: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Paused after tool timeout triage'."
-        )
-        if is_domain_suite:
+        if has_cli:
             instructions.append(
-                f"4. Validate {deliverable} and resume {suite_name} workflow: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                f"3. Mark current state paused: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Paused after tool timeout triage'."
             )
+            if is_domain_suite:
+                instructions.append(
+                    f"4. Validate {deliverable} and resume {suite_name} workflow: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                )
+            else:
+                instructions.append(
+                    f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}"
+                )
         else:
             instructions.append(
-                f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}"
+                f"3. Record a paused checkpoint note in {dir_str}/run.json before retrying with narrowed scope."
             )
+            if is_domain_suite:
+                instructions.append(
+                    f"4. Validate {deliverable} ({validator_cmd} {dir_str}/{deliverable} --schema {effective_schema}) and resume {suite_name} workflow from {dir_str}/prompt.md."
+                )
+            else:
+                instructions.append(
+                    f"4. Validate {dir_str}/audit.json ({validator_cmd} {dir_str}/audit.json --check-ledger) and re-run the specialist with bounded scope."
+                )
 
     elif ftype == "schema_validation_error":
         instructions.append(
             f"1. Inspect the schema validation error at line {failure.get('line_number')}: '{failure.get('matched_line', '')}'."
         )
         if is_domain_suite:
-            instructions.append(
-                f"2. Validate {deliverable} against {schema_rel}: python scripts/fred.py validate-run {dir_str}"
-            )
+            if has_cli:
+                instructions.append(
+                    f"2. Validate {deliverable} against {effective_schema}: python scripts/fred.py validate-run {dir_str}"
+                )
+            else:
+                instructions.append(
+                    f"2. Validate {deliverable} against {effective_schema}: {validator_cmd} {dir_str}/{deliverable} --schema {effective_schema}"
+                )
             instructions.append(
                 f"3. Correct missing required properties, invalid enum values, duplicate IDs, unsafe relative paths, or undeclared keys in {dir_str}/{deliverable} (additionalProperties is false)."
             )
-            instructions.append(
-                f"4. Re-verify {deliverable} conformance, then resume {suite_name} run: python scripts/fred.py resume {dir_str}"
-            )
+            if has_cli:
+                instructions.append(
+                    f"4. Re-verify {deliverable} conformance, then resume {suite_name} run: python scripts/fred.py resume {dir_str}"
+                )
+            else:
+                instructions.append(
+                    f"4. Re-verify {deliverable} conformance with {validator_cmd}, then resume {suite_name} run from {dir_str}/prompt.md."
+                )
         else:
             instructions.append(
-                f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {dir_str}/audit.json"
+                f"2. Validate current audit.json ledger: {validator_cmd} {dir_str}/audit.json --check-ledger"
             )
             instructions.append(
                 "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json."
             )
-            instructions.append(
-                f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}"
-            )
+            if has_cli:
+                instructions.append(
+                    f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}"
+                )
+            else:
+                instructions.append(
+                    f"4. Re-verify ledger validity with {validator_cmd} {dir_str}/audit.json --check-ledger, then resume audit coordination from {dir_str}/prompt.md."
+                )
 
     elif ftype == "context_limit":
         instructions.append(
             f"1. Context limit reached at line {failure.get('line_number')}."
         )
-        instructions.append(
-            f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Context limit reached; clearing context'."
-        )
+        if has_cli:
+            instructions.append(
+                f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Context limit reached; clearing context'."
+            )
+        else:
+            instructions.append(
+                f"2. Record current progress as a paused checkpoint in {dir_str}/run.json before clearing session context."
+            )
         if is_domain_suite:
             instructions.append(
                 f"3. Persist completed entries in {dir_str}/{deliverable} and split remaining {suite_name} phases into smaller slices."
@@ -1755,9 +1820,14 @@ def formulate_recovery_instructions(
             instructions.append(
                 "3. Split the specialist analysis into smaller bounded workflow slices."
             )
-        instructions.append(
-            f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {dir_str}"
-        )
+        if has_cli:
+            instructions.append(
+                f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {dir_str}"
+            )
+        else:
+            instructions.append(
+                f"4. Start a fresh agent session and resume from the last checkpoint in {dir_str}/run.json and {dir_str}/prompt.md."
+            )
 
     else:
         instructions.append(
@@ -1765,23 +1835,38 @@ def formulate_recovery_instructions(
         )
         if is_domain_suite:
             instructions.append(
-                f"2. Inspect {dir_str}/run.json and {dir_str}/{deliverable} (schema: {schema_rel}) for partial progress."
+                f"2. Inspect {dir_str}/run.json and {dir_str}/{deliverable} (schema: {effective_schema}) for partial progress."
             )
             if suite_name == "automated-testing":
-                instructions.append(
-                    f"3. Confirm `--allow-fixes` authority in {dir_str}/run.json if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
-                )
+                if has_cli:
+                    instructions.append(
+                        f"3. Confirm `--allow-fixes` authority in {dir_str}/run.json if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                    )
+                else:
+                    instructions.append(
+                        f"3. Confirm `--allow-fixes` authority in {dir_str}/run.json if writing runnable test files, validate {dir_str}/{deliverable} with {validator_cmd}, and resume from {dir_str}/prompt.md."
+                    )
             else:
-                instructions.append(
-                    f"3. Validate {deliverable} and resume {suite_name} run from the last valid checkpoint: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
-                )
+                if has_cli:
+                    instructions.append(
+                        f"3. Validate {deliverable} and resume {suite_name} run from the last valid checkpoint: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
+                    )
+                else:
+                    instructions.append(
+                        f"3. Validate {dir_str}/{deliverable} with {validator_cmd} and resume {suite_name} run from the last valid checkpoint in {dir_str}/run.json."
+                    )
         else:
             instructions.append(
                 f"2. Inspect {dir_str}/run.json and {dir_str}/audit.json for partial progress."
             )
-            instructions.append(
-                f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
-            )
+            if has_cli:
+                instructions.append(
+                    f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
+                )
+            else:
+                instructions.append(
+                    f"3. Validate {dir_str}/audit.json with {validator_cmd} --check-ledger and resume from the last valid checkpoint in {dir_str}/run.json."
+                )
 
     if suite_name == "automated-testing" and not any(
         "--allow-fixes" in step for step in instructions
@@ -2022,28 +2107,49 @@ have been redacted from this bundle.
 """
 
 
+_BUNDLE_VALIDATOR_MODULE: ModuleType | None = None
+
+
+class BundleSchemaValidationError(ValueError):
+    """Raised when a generated diagnostic bundle fails Draft 2020-12 schema validation."""
+
+
+def _load_bundle_validator() -> ModuleType:
+    global _BUNDLE_VALIDATOR_MODULE
+    if _BUNDLE_VALIDATOR_MODULE is not None:
+        return _BUNDLE_VALIDATOR_MODULE
+    candidate = Path(__file__).resolve().parent / "validate_output.py"
+    if not candidate.is_file():
+        candidate = Path(__file__).resolve().parents[3] / "scripts/validate_output.py"
+    spec = importlib.util.spec_from_file_location("fred_triage_validator", candidate)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load stdlib bundle validator from {candidate}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    try:
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    _BUNDLE_VALIDATOR_MODULE = module
+    return module
+
+
 def validate_bundle(bundle: dict[str, Any], schema_path: Path | None = None) -> None:
-    """Validate generated bundle against bundle.schema.json."""
+    """Validate generated bundle against bundle.schema.json using stdlib only."""
     schema_file = (
         schema_path or Path(__file__).resolve().parents[1] / "assets/bundle.schema.json"
     )
     if not schema_file.is_file():
         raise ValueError(f"Bundle schema not found at {schema_file}")
     try:
-        import jsonschema
-
-        jsonschema.validate(bundle, json.loads(schema_file.read_text(encoding="utf-8")))
-    except ImportError:
-        raise ValueError(
-            "jsonschema not installed, cannot validate bundle schema"
-        ) from None
-    except (
-        ValueError,
-        OSError,
-        jsonschema.ValidationError,
-        jsonschema.SchemaError,
-    ) as e:
-        raise ValueError(f"Schema validation error: {e}") from e
+        schema = json.loads(schema_file.read_text(encoding="utf-8"))
+        validator = _load_bundle_validator()
+        errors: list[str] = validator.validate_schema(bundle, schema)
+        if errors:
+            raise BundleSchemaValidationError("; ".join(errors[:5]))
+    except (ValueError, TypeError, OSError) as exc:
+        raise ValueError(f"Schema validation error: {exc}") from exc
 
 
 CANDIDATE_TRANSCRIPTS: tuple[str, ...] = (

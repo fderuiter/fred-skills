@@ -7,6 +7,8 @@
     "assets/handoff-template.md"
   ],
   "scripts": [
-    "scripts/audit_to_sarif.py"
+    "scripts/validate_output.py",
+    "scripts/audit_to_sarif.py",
+    "scripts/generate_issues.py"
   ]
 }

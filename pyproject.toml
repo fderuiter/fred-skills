@@ -5,7 +5,11 @@ files = ["scripts", "tests", "evals", "examples", "skills"]
 explicit_package_bases = true
 namespace_packages = true
 show_error_codes = true
-exclude = ["^skills[\\\\/]repo-audit-synthesis[\\\\/]scripts[\\\\/]audit_to_sarif\\.py$"]
+exclude = [
+  "^skills[\\\\/]repo-audit-synthesis[\\\\/]scripts[\\\\/]audit_to_sarif\\.py$",
+  "^skills[\\\\/]repo-audit-synthesis[\\\\/]scripts[\\\\/]generate_issues\\.py$",
+  "^skills[\\\\/][^\\\\/]+[\\\\/]scripts[\\\\/]validate_output\\.py$",
+]
 
 [[tool.mypy.overrides]]
 module = ["playwright", "playwright.*"]

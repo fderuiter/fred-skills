@@ -13,10 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from .common import (
     ROOT,
+    _validate_schema_payload,
     atomic_json,
     digest,
     package_files,
@@ -207,26 +206,20 @@ def _validate_contract_payload(
             raise ValueError("Adapter result must be an object with a findings array")
         if schema_path is not None:
             schema_doc = read_json(schema_path)
-            errors = sorted(
-                jsonschema.Draft202012Validator(schema_doc).iter_errors(payload),
-                key=lambda err: [str(p) for p in err.path],
-            )
+            errors = _validate_schema_payload(payload, schema_doc)
             if errors:
                 raise ValueError(
-                    f"Adapter result failed {schema_path.name} validation: {errors[0].message}"
+                    f"Adapter result failed {schema_path.name} validation: {errors[0]}"
                 )
         return
 
     if schema_path is None:
         raise ValueError(f"Missing schema path for {contract} contract")
     schema_doc = read_json(schema_path)
-    errors = sorted(
-        jsonschema.Draft202012Validator(schema_doc).iter_errors(payload),
-        key=lambda err: [str(p) for p in err.path],
-    )
+    errors = _validate_schema_payload(payload, schema_doc)
     if errors:
         raise ValueError(
-            f"Adapter result failed {schema_path.name} validation: {errors[0].message}"
+            f"Adapter result failed {schema_path.name} validation: {errors[0]}"
         )
 
 

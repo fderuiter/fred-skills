@@ -31,8 +31,8 @@ Consult [protocol](references/protocol.md) for multi-pass coordination invariant
    escaped `tool_result` secrets, URI passwords, private keys, and environment secrets across
    `skeleton` (strip all tool outputs), `evidence` (keep cited tool outputs only), and `full` tiers.
 5. **Formulate recovery steps:** Inspect the last recorded checkpoint in `run.json`.
-   Produce actionable resumption commands using `python scripts/fred.py resume` or
-   bounded checkpoint repair commands.
+   Validate partial outputs with `python3 <this-skill>/scripts/validate_output.py` and produce
+   bounded checkpoint resumption steps (emitting `python scripts/fred.py resume` only when `scripts/fred.py` exists in the workspace).
 6. **Export diagnostic bundle:** Generate a structured bundle validated against
    [bundle schema](assets/bundle.schema.json) and format a human-readable summary using
    [diagnostic report template](assets/diagnostic-report-template.md).
@@ -47,6 +47,6 @@ Consult [protocol](references/protocol.md) for multi-pass coordination invariant
 
 ## Deliverables
 
-Run `python <this-skill>/scripts/triage.py <transcript> --workspace <run-dir> --output-dir <bundle-dir>`.
+Run `python3 <this-skill>/scripts/triage.py <transcript> --workspace <run-dir> --output-dir <bundle-dir> --check-schema`.
 Use [prompt template](assets/prompt.md) to initialize operator diagnosis.
 Provide the scrubbed diagnostic bundle, failure root-cause analysis, and exact next resumption commands.

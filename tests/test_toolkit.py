@@ -803,7 +803,7 @@ class RunTests(unittest.TestCase):
         self.assertFalse(run_ro["authority"]["application_changes"])
         prompt_ro = (ws_ro / "prompt.md").read_text(encoding="utf-8")
         self.assertIn("assets/testing.schema.json", prompt_ro)
-        self.assertIn(
+        self.assertNotIn(
             "shared/automated-testing/resources/assets/testing.schema.json", prompt_ro
         )
         self.assertIn("--allow-fixes", prompt_ro)
@@ -2012,9 +2012,55 @@ class ReportTests(unittest.TestCase):
             self.assertEqual([], runs.validate_run(ws))
 
             prompt_text = (ws / "prompt.md").read_text(encoding="utf-8")
+            self.assertIn("assets/audit.schema.json", prompt_text)
+            self.assertNotIn(
+                "shared/repo-audit/resources/assets/audit.schema.json", prompt_text
+            )
             for companion_name, schema_rel in WORKFLOW_DELIVERABLE_SCHEMAS.items():
                 self.assertIn(companion_name, prompt_text)
-                self.assertIn(schema_rel, prompt_text)
+                self.assertIn(f"assets/{Path(schema_rel).name}", prompt_text)
+                self.assertNotIn(schema_rel, prompt_text)
+
+            # Verify fred.py packs, install --dry-run, validate-run, and report work under python3 -S
+            packs_proc = subprocess.run(
+                [sys.executable, "-S", str(ROOT / "scripts/fred.py"), "packs"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, packs_proc.returncode, packs_proc.stderr)
+
+            install_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "install",
+                    "--pack",
+                    "backend-consistency",
+                    "--destination",
+                    str(root / "dest-project"),
+                    "--dry-run",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, install_proc.returncode, install_proc.stderr)
+
+            validate_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "validate-run",
+                    str(ws),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, validate_proc.returncode, validate_proc.stderr)
 
             # Populate finding F-1 in audit.json so reconcile can record verified-fixed
             audit = read_json(ROOT / "tests/fixtures/audit-valid.json")

@@ -49,7 +49,7 @@ Draft each issue with [issue template](assets/issue-template.md), then provide a
 implementation-agent prompt with exact snapshot, scope, ordered tasks, acceptance criteria,
 tests to run, known safe controls, and completion evidence. Include [handoff](assets/handoff-template.md).
 
-Generate structured GitHub REST API issue payloads using `python scripts/fred.py issues <audit.json> --output <dir> --format json` (or Markdown drafts with `--format markdown`). Each generated JSON payload includes `title`, `body`, `labels`, and `assignees` conforming to GitHub REST API issue creation requirements.
+Generate structured GitHub REST API issue payloads using `python3 <this-skill>/scripts/generate_issues.py <audit.json> --output <dir> --format json` (or Markdown drafts with `--format markdown`; if `scripts/fred.py` exists in a toolkit checkout, `python scripts/fred.py issues <audit.json> --output <dir> --format json` wraps the same contract). Each generated JSON payload includes `title`, `body`, `labels`, and `assignees` conforming to GitHub REST API issue creation requirements. You may also export SARIF results via `python3 <this-skill>/scripts/audit_to_sarif.py <audit.json> -o <audit.sarif>`.
 
 Create/update actual issues only when the user's current or earlier applicable instruction
 authorizes those mutations. Authorization already given does not require reconfirmation.
@@ -61,7 +61,6 @@ security details or sensitive source payloads into public records. Verify return
 partial failures; distinguish drafted, created, and linked records. Translate this workflow
 to available capabilities; do not fabricate tool names or labels.
 
-Keep audit.json consistent with [schema](assets/audit.schema.json). Use the coordinator's
-validator if available or schema checks in the local environment. Report consolidation
+Keep audit.json consistent with [schema](assets/audit.schema.json) by running `python3 <this-skill>/scripts/validate_output.py <audit.json> --check-ledger`. Report consolidation
 decisions, retained uncertainty, issue mappings, dependency order, and actual publication
 state. Use [invocation prompt](assets/prompt.md) to run this skill independently.
