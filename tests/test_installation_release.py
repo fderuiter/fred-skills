@@ -1420,6 +1420,58 @@ class InstallationTests(unittest.TestCase):
             finally:
                 bad_file.unlink()
 
+    def test_corrupted_catalogs_raise_fred_cli_error_instead_of_directory_fallback(
+        self,
+    ):
+        synth = self.root / "synth-release-repo"
+        synth.mkdir(parents=True, exist_ok=True)
+        (synth / "VERSION").write_text("0.2.0\n", encoding="utf-8")
+        for skill_name in ("arch-boundary-specification", "repo-verify-finding"):
+            sdir = synth / "skills" / skill_name
+            sdir.mkdir(parents=True)
+            (sdir / "SKILL.md").write_text(f"# {skill_name}\n", encoding="utf-8")
+
+        # Absent optional catalogs still fall back cleanly to directory prefix inference
+        self.assertEqual(
+            ["repo-verify-finding"],
+            releases._get_suite_skills(synth, suite_name="repository-workflows"),
+        )
+        self.assertEqual(
+            ["arch-boundary-specification"],
+            releases._get_suite_skills(synth, suite_name="software-architecture"),
+        )
+
+        # Corrupted catalog/suites.json raises FredCliError instead of falling back to packs/directory
+        cat_dir = synth / "catalog"
+        cat_dir.mkdir()
+        suites_path = cat_dir / "suites.json"
+        suites_path.write_text('{"suites": [\n', encoding="utf-8")
+        with self.assertRaises(FredCliError) as suites_ctx:
+            releases._get_suite_skills(synth, suite_name="repository-workflows")
+        self.assertEqual("invalid_json", suites_ctx.exception.code)
+        self.assertIn("suites.json", suites_ctx.exception.message)
+        suites_path.unlink()
+
+        # Corrupted catalog/packs.json raises FredCliError instead of falling back to skills/ scan
+        packs_path = cat_dir / "packs.json"
+        packs_path.write_text('{"packs": {\n', encoding="utf-8")
+        with self.assertRaises(FredCliError) as packs_ctx:
+            releases._get_suite_skills(synth, suite_name="repository-workflows")
+        self.assertEqual("invalid_json", packs_ctx.exception.code)
+        self.assertIn("packs.json", packs_ctx.exception.message)
+
+        with self.assertRaises(FredCliError) as build_ctx:
+            releases.build(self.root / "bad-rel-out", all_packs=True, root=synth)
+        self.assertEqual("invalid_json", build_ctx.exception.code)
+
+        # Structurally invalid packs entry also raises FredCliError(code="invalid_catalog")
+        packs_path.write_text(
+            '{"packs": {"complete": {"skills": "not-a-list"}}}', encoding="utf-8"
+        )
+        with self.assertRaises(FredCliError) as struct_ctx:
+            releases._get_suite_skills(synth)
+        self.assertEqual("invalid_catalog", struct_ctx.exception.code)
+
 
 if __name__ == "__main__":
     unittest.main()

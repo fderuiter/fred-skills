@@ -120,6 +120,7 @@ class PackageSkillsTests(unittest.TestCase):
             for name in names:
                 self.assertTrue(name.startswith("repo-audit-concurrency/"))
                 self.assertNotIn("__pycache__", name)
+                self.assertNotIn(".cursor-plugin", name)
                 self.assertFalse(name.endswith(".pyc"))
                 self.assertFalse(name.endswith(".pyo"))
 
@@ -130,6 +131,8 @@ class PackageSkillsTests(unittest.TestCase):
             names = set(tar.getnames())
             for skill in get_suite_skills(ROOT):
                 self.assertIn(f"{skill}/SKILL.md", names)
+            for name in names:
+                self.assertNotIn(".cursor-plugin", name)
 
     def test_package_skills_raises_on_empty_suite(self):
         empty_root = self.output_dir / "empty_repo"
@@ -166,13 +169,19 @@ class PackageSkillsTests(unittest.TestCase):
 
     def test_collect_skill_files_excludes_pycache_and_bytecode(self):
         skill_dir = ROOT / "skills" / "repo-audit-concurrency"
+        self.assertTrue((skill_dir / ".cursor-plugin" / "plugin.json").is_file())
         files = collect_skill_files(skill_dir)
         paths = [rel for rel, _ in files]
         self.assertIn("SKILL.md", paths)
         for rel in paths:
             self.assertNotIn("__pycache__", rel)
+            self.assertNotIn(".cursor-plugin", rel)
             self.assertFalse(rel.endswith(".pyc"))
             self.assertFalse(rel.endswith(".pyo"))
+
+        pkg_map = package_files(skill_dir)
+        for rel in pkg_map:
+            self.assertNotIn(".cursor-plugin", rel)
 
     def test_get_suite_skills_fallback_to_packs(self):
         repo_root = self.output_dir / "repo_packs_fallback"
@@ -295,9 +304,16 @@ class PackageSkillsTests(unittest.TestCase):
     def test_release_archives_preserve_0755_script_modes_and_shebang_fallback(self):
         expected_scripts = {
             "repo-audit-diagnostics/scripts/triage.py",
+            "repo-audit-diagnostics/scripts/validate_audit.py",
             "repo-audit-program/scripts/validate_audit.py",
             "repo-audit-synthesis/scripts/audit_to_sarif.py",
+            "repo-audit-synthesis/scripts/validate_audit.py",
         }
+        expected_suite_scripts = {
+            p.relative_to(ROOT / "skills").as_posix()
+            for p in (ROOT / "skills").glob("*/scripts/*.py")
+        }
+        self.assertGreaterEqual(len(expected_suite_scripts), 53)
         rel_out = self.output_dir / "modes_bundle"
         manifest = releases.build(
             rel_out,
@@ -336,8 +352,12 @@ class PackageSkillsTests(unittest.TestCase):
         tgz_out = self.output_dir / "standalone_tgz"
         package_skills(tgz_out, root=ROOT)
         with tarfile.open(tgz_out / "fred-skills-suite.tar.gz", "r:gz") as suite_tf:
+            suite_names = {m.name for m in suite_tf.getmembers()}
+            self.assertTrue(expected_suite_scripts.issubset(suite_names))
             for member in suite_tf.getmembers():
-                expected_mode = 0o755 if member.name in expected_scripts else 0o644
+                expected_mode = (
+                    0o755 if member.name in expected_suite_scripts else 0o644
+                )
                 self.assertEqual(
                     expected_mode,
                     member.mode,
@@ -494,6 +514,23 @@ class PackageSkillsTests(unittest.TestCase):
         first_concurrency_idx = prefixes.index("repo-audit-concurrency")
         last_apply_fix_idx = len(prefixes) - 1 - prefixes[::-1].index("repo-apply-fix")
         self.assertLess(last_apply_fix_idx, first_concurrency_idx)
+
+    def test_release_pack_archives_exclude_cursor_plugin_manifests(self):
+        rel_out = self.output_dir / "release-pack"
+        manifest = releases.build(
+            output=rel_out,
+            pack="starter",
+            root=ROOT,
+        )
+        files = [item["file"] for item in manifest["archives"]]
+        tar_name = next(f for f in files if f.endswith(".tar"))
+        zip_name = next(f for f in files if f.endswith(".zip"))
+        with tarfile.open(rel_out / tar_name, "r:*") as tf:
+            for member_name in tf.getnames():
+                self.assertNotIn(".cursor-plugin", member_name)
+        with zipfile.ZipFile(rel_out / zip_name, "r") as zf:
+            for member_name in zf.namelist():
+                self.assertNotIn(".cursor-plugin", member_name)
 
     def test_release_packaging_rejects_binaries_clutter_and_non_python_executables(
         self,

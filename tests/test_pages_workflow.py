@@ -484,6 +484,8 @@ class PagesWorkflowTests(unittest.TestCase):
             self.assertEqual((site_dir / ".nojekyll").read_bytes(), b"")
             self.assertTrue((site_dir / "index.html").is_file())
             self.assertTrue((site_dir / "docs/explorer.html").is_file())
+            self.assertTrue((site_dir / ".cursor-plugin/plugin.json").is_file())
+            self.assertTrue((site_dir / ".cursor-plugin/marketplace.json").is_file())
 
             # Clean artifact boundary: exclude repo internals, tests, and scripts
             for forbidden in (".git", ".github", "tests", "scripts"):

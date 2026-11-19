@@ -10,6 +10,7 @@ Coordinate deep workflow-based audits and preserve evidence between passes.
 ## Establish the run
 
 Read [shared protocol](references/protocol.md), then [catalog](references/catalog.md).
+Load [worked examples](references/examples.md) when constructing or validating run envelopes.
 Resolve repository/revision, current changes, critical workflows, architecture/runtime,
 available source/tools, existing audit artifacts, and applicable project instructions.
 Keep application code unchanged unless the user's request authorizes corrections.

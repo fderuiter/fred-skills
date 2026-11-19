@@ -1,0 +1,12 @@
+{
+  "name": "terse-output-commit",
+  "description": "Use when enforcing terse low-token responses that keep code exact or drafting 50-character Conventional Commit messages.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

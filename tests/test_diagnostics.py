@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -11,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 from unittest.mock import patch
 
 pty: ModuleType | None
@@ -2306,6 +2308,140 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertNotIn(
             "def _fallback_suite_name(",
             (ROOT / "scripts/validate_skills.py").read_text(encoding="utf-8"),
+        )
+
+    def test_triage_surfaces_warnings_for_corrupted_workspace_json_and_unreadable_transcripts(
+        self,
+    ) -> None:
+        import io
+
+        # 1. Truncated run.json and audit.json emit scrubbed stderr warnings and schema-valid recovery note
+        crashed_ws = self.temp_path / "crashed_ws"
+        crashed_ws.mkdir()
+        (crashed_ws / "run.json").write_text(
+            '{\n  "run_id": "run-crash",\n  "api_key": "sk-secret1234567890abcdef12345"\n',
+            encoding="utf-8",
+        )
+        (crashed_ws / "audit.json").write_text(
+            '{\n  "schema_version": "1.0",\n  "findings": [\n',
+            encoding="utf-8",
+        )
+        transcript = crashed_ws / "transcript.txt"
+        transcript.write_text(
+            "Executing repo-audit-concurrency\nTimeoutError: query timed out\n",
+            encoding="utf-8",
+        )
+
+        err_buf = io.StringIO()
+        with contextlib.redirect_stderr(err_buf):
+            bundle = triage.generate_diagnostic_bundle(transcript, crashed_ws)
+        stderr_out = err_buf.getvalue()
+        self.assertIn("Warning: malformed JSON in workspace run.json", stderr_out)
+        self.assertIn("Warning: malformed JSON in workspace audit.json", stderr_out)
+        self.assertNotIn("sk-secret1234567890abcdef12345", stderr_out)
+        triage.validate_bundle(bundle)
+        instructions_blob = "\n".join(bundle["recovery"]["instructions"])
+        self.assertIn("Repair corrupted workspace metadata", instructions_blob)
+        self.assertIn("malformed JSON in workspace run.json", instructions_blob)
+
+        # 2. Unreadable candidate transcript logs stderr warning and records rejected_candidates reason
+        disc_ws = self.temp_path / "unreadable_disc_ws"
+        (disc_ws / "logs").mkdir(parents=True)
+        unreadable_cand = disc_ws / "transcript.jsonl"
+        unreadable_cand.write_text(
+            '{"role": "user", "content": "hi"}\n', encoding="utf-8"
+        )
+        readable_fallback = disc_ws / "logs" / "transcript.txt"
+        readable_fallback.write_text(
+            "TimeoutError: fallback transcript\n", encoding="utf-8"
+        )
+
+        orig_read_text = Path.read_text
+
+        def fake_read_text(p: Path, *args: Any, **kwargs: Any) -> str:
+            if p == unreadable_cand:
+                raise PermissionError("Permission denied")
+            return orig_read_text(p, *args, **kwargs)
+
+        fake_home = self.temp_path / "empty_home"
+        fake_home.mkdir()
+        disc_err = io.StringIO()
+        with (
+            patch.object(Path, "read_text", autospec=True, side_effect=fake_read_text),
+            contextlib.redirect_stderr(disc_err),
+        ):
+            details = triage.discover_transcript_details(
+                workspace_dir=disc_ws, home_dir=fake_home
+            )
+        self.assertEqual(readable_fallback, details["selected_transcript"])
+        self.assertIn(
+            "Warning: unable to read candidate transcript", disc_err.getvalue()
+        )
+        self.assertIn(str(unreadable_cand), disc_err.getvalue())
+        rejected_by_path = {
+            Path(item["path"]): item["reason"]
+            for item in details["rejected_candidates"]
+        }
+        self.assertIn(unreadable_cand, rejected_by_path)
+        self.assertIn("unreadable transcript", rejected_by_path[unreadable_cand])
+
+        # Also verify real chmod(0o000) behavior on non-root POSIX hosts
+        if sys.platform != "win32" and os.geteuid() != 0:
+            only_unreadable_ws = self.temp_path / "only_unreadable_ws"
+            only_unreadable_ws.mkdir()
+            locked_file = only_unreadable_ws / "transcript.jsonl"
+            locked_file.write_text("locked\n", encoding="utf-8")
+            locked_file.chmod(0o000)
+            try:
+                posix_err = io.StringIO()
+                with (
+                    contextlib.redirect_stderr(posix_err),
+                    self.assertRaises(triage.TranscriptNotFoundError) as nf_ctx,
+                ):
+                    triage.discover_transcript_details(
+                        workspace_dir=only_unreadable_ws, home_dir=fake_home
+                    )
+                self.assertIn(
+                    "Warning: unable to read candidate transcript",
+                    posix_err.getvalue(),
+                )
+                self.assertEqual(1, len(nf_ctx.exception.rejected_candidates))
+                self.assertIn(
+                    "unreadable transcript",
+                    nf_ctx.exception.rejected_candidates[0]["reason"],
+                )
+            finally:
+                locked_file.chmod(0o644)
+
+        # 3. Corrupted workspace run.json surfaces parse reason in host rejected_candidates
+        host_home = self.temp_path / "host_home_corrupt_run"
+        codex_sessions = host_home / ".codex" / "sessions"
+        codex_sessions.mkdir(parents=True)
+        unrelated_host = codex_sessions / "rollout-unrelated.jsonl"
+        unrelated_host.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "other-session"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        corrupt_run_ws = self.temp_path / "corrupt_run_host_ws"
+        corrupt_run_ws.mkdir()
+        (corrupt_run_ws / "run.json").write_text("{truncated", encoding="utf-8")
+
+        host_err = io.StringIO()
+        with (
+            contextlib.redirect_stderr(host_err),
+            self.assertRaises(triage.TranscriptNotFoundError) as host_nf,
+        ):
+            triage.discover_transcript_details(
+                workspace_dir=corrupt_run_ws, home_dir=host_home
+            )
+        self.assertIn(
+            "Warning: malformed JSON in workspace run.json", host_err.getvalue()
+        )
+        self.assertEqual(1, len(host_nf.exception.rejected_candidates))
+        self.assertIn(
+            "workspace run.json could not be parsed",
+            host_nf.exception.rejected_candidates[0]["reason"],
         )
 
 

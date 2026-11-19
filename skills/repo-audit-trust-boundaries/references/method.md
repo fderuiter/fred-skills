@@ -1,48 +1,139 @@
-# Investigation method: Trust and Authorization Boundaries
+# Trust and Authorization Boundaries: Specialist Method and Examples
 
-## Scope selection
+## Tracing Caller Identity Binding to Resource Ownership and Sinks
 
-Review one critical workflow end to end, then expand by resource/actor/data ownership.
-For each inventory class, record concrete instances, relevant source paths, existing
-enforcement, and coverage. Do not mark an entire class reviewed from one example.
+1. Enumerate every external ingress surface (HTTP routes, GraphQL resolvers, message consumers, webhook endpoints, archive/file importers) alongside its deployment trust model, distinguishing multi-tenant server APIs from purely local CLI utilities.
+2. Verify object-level and tenant-level binding on every read/mutation query: confirm that `org_id` / `owner_id` comes from the verified server principal and constrains the lookup (`WHERE id = $1 AND tenant_id = $2`), not merely route-level authentication.
+3. Check mass-assignment DTOs, admin role checks, webhook HMAC verification, and outbound SSRF/file sinks so untrusted fields cannot escalate role flags or pivot to internal network hosts.
 
-## Contract worksheet
+## Failure Trace vs. Safe Control: Authenticated Cross-Tenant Object Access (IDOR)
 
-Record the exact predicate or guarantee, independent requirement basis, scope/lifetime,
-establishing operation, invalidating operations, observers, enforcing authority, and
-existing tests. If intended semantics are unknown, record the question and keep the
-finding at needs-validation or hardening until a supported requirement exists.
+```typescript
+// Vulnerable handler: verifies JWT login, but fetches document by id without binding req.auth.tenantId
+router.patch("/v1/documents/:docId", requireAuth, async (req, res) => {
+  const doc = await db.documents.update({
+    where: { id: req.params.docId }, // Tenant A can mutate Tenant B's docId!
+    data: { title: req.body.title },
+  });
+  res.json(doc);
+});
 
-## Topic-specific discovery probes
+// Safe control: scope lookup and mutation atomically by authenticated principal's tenantId
+router.patch("/v1/documents/:docId", requireAuth, async (req, res) => {
+  const updated = await db.documents.updateMany({
+    where: { id: req.params.docId, tenantId: req.auth.tenantId },
+    data: { title: String(req.body.title) },
+  });
+  if (updated.count === 0) return res.status(404).json({ error: "not_found" });
+  return res.status(204).end();
+});
+```
 
-Apply the five topic-specific investigation steps in SKILL.md to each inventoried boundary. Record both passing safeguards and unresolved cases.
+## Trust-Boundary `audit.json` Deliverable Example
 
-## Adversarial case
+Validate this tenant-invoice ledger locally using `python3 <this-skill>/scripts/validate_audit.py trust-boundaries-audit.json` (`assets/audit.schema.json`):
 
-Tenant A supplies tenant B’s object ID to a handler that authenticates the caller but never binds the object to that tenant.
-
-Find matching reachable code, name the actors and boundaries, and write exact numbered
-steps. Inspect the strongest prevention mechanism. If no real path matches, report
-that this illustrative failure was not established; do not turn the example into evidence.
-
-## Safe control
-
-A client-only local file tool has a different trust model from a shared server; do not invent server-side tenants.
-
-Preserve the safe control while selecting a correction. Compare mechanisms, not syntax.
-
-## Independent validation
-
-Use an actor-resource-action matrix with denied controls, alternate entry points, malformed payloads, and context-switch tests.
-
-Derive expected results from the contract. Use a bounded deterministic local harness
-where practical, record actual commands/results, and retain limitations. An unavailable
-tool changes the validation plan, not the claimed certainty. Record the smallest missing
-piece of evidence that would resolve each open finding.
-
-## Cross-topic boundary
-
-Keep this topic's inventory complete but hand off a different root cause to the specialist
-named in SKILL.md. Preserve the same evidence IDs and avoid issuing duplicate defect
-reports for one underlying contract violation. Distinct independently fixable causes
-remain separate even when they produce the same observed symptom.
+```json
+{
+  "schema_version": "1.0",
+  "run_id": "trust-boundaries-sample",
+  "repository": {
+    "identity": "acme/docs-api",
+    "revision": "3e77a19",
+    "dirty": false,
+    "snapshot": "git-tree:3e77a19"
+  },
+  "scope": [
+    "src/routes/documents.ts"
+  ],
+  "coverage": [
+    {
+      "topic": "trust-boundaries",
+      "scope": "src/routes/documents.ts",
+      "status": "inspected",
+      "evidence_ids": [
+        "E-901",
+        "E-902"
+      ],
+      "notes": "Compared GET, PATCH, and DELETE handlers in documents.ts for tenant scoping.",
+      "next_action": "Inspect URL preview importer with repo-audit-canonicalization."
+    }
+  ],
+  "contracts": [
+    {
+      "id": "C-901",
+      "dimension": "trust-boundaries",
+      "scope": "PATCH /v1/documents/:docId",
+      "intended": "Authenticated principals may modify only documents belonging to req.auth.tenantId.",
+      "observed": "GET binds tenantId, whereas PATCH updates by primary key id alone.",
+      "enforcement": "missing tenant predicate in PATCH handler",
+      "evidence_ids": [
+        "E-901",
+        "E-902"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E-901",
+      "path": "src/routes/documents.ts",
+      "line_start": 18,
+      "line_end": 26,
+      "symbol": "GET /v1/documents/:docId",
+      "context": "Safe control: filters findFirst by { id: req.params.docId, tenantId: req.auth.tenantId }."
+    },
+    {
+      "id": "E-902",
+      "path": "src/routes/documents.ts",
+      "line_start": 31,
+      "line_end": 39,
+      "symbol": "PATCH /v1/documents/:docId",
+      "context": "Calls db.documents.update({ where: { id: req.params.docId } }) without tenantId."
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-901",
+      "topic": "trust-boundaries",
+      "tags": [
+        "api-consistency"
+      ],
+      "title": "PATCH /v1/documents/:docId omits tenantId filter, allowing cross-tenant document overwrite",
+      "status": "supported",
+      "severity": "critical",
+      "confidence": "high",
+      "contract_ids": [
+        "C-901"
+      ],
+      "evidence_ids": [
+        "E-901",
+        "E-902"
+      ],
+      "preconditions": "Attacker holds a valid low-privilege session in Tenant A and knows or guesses a document UUID in Tenant B.",
+      "sequence": [
+        "Caller authenticates as Tenant A user, passing requireAuth.",
+        "Caller sends PATCH /v1/documents/<tenant-b-doc-uuid> with {\"title\": \"overwritten\"}.",
+        "Handler updates row by primary key without checking tenantId and returns full updated record."
+      ],
+      "expected": "Request fails with HTTP 404 when docId does not belong to req.auth.tenantId.",
+      "actual": "Tenant B document is modified and returned in the JSON response body.",
+      "impact": "Cross-tenant unauthorized write and full document disclosure.",
+      "root_cause": "Object lookup relies on global primary key instead of composite (id, tenantId) ownership guard.",
+      "counterevidence": "GET /v1/documents/:docId enforces tenantId properly (E-901).",
+      "remedy": "Scope PATCH and DELETE queries by { id: req.params.docId, tenantId: req.auth.tenantId } and avoid returning unverified rows.",
+      "acceptance": [
+        "Authenticated Tenant A caller receives HTTP 404 on PATCH /v1/documents/<tenant-b-id> and target row stays unchanged."
+      ],
+      "validation": {
+        "state": "not-run",
+        "commands": [],
+        "result": "Verified directly in route handler and Prisma query call."
+      },
+      "related_findings": []
+    }
+  ],
+  "issues": [],
+  "limitations": [],
+  "checks": []
+}
+```

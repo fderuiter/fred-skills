@@ -28,5 +28,5 @@ Read the actual working tree diff, run workspace state, and executed command his
 Use the [handoff](assets/handoff.md) and [starting prompt](assets/prompt.md). Report
 verified repository state, settled decisions, refuted dead ends, remaining assumptions, and
 the exact next action for a cold-start window. Resolve related workflow skills by name, without assuming a host API.
-Validate structured exit artifacts using [session handoff schema](assets/session-handoff.schema.json).
+Validate structured exit artifacts using [session handoff schema](assets/session-handoff.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_workflow.py <artifact.json>`.
 Do not modify application source files, stage or create git commits, or publish remote issues without explicit user authorization.

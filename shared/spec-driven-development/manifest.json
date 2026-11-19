@@ -4,5 +4,8 @@
     "references/spec-protocol.md",
     "assets/spec-template.md",
     "assets/spec.schema.json"
+  ],
+  "scripts": [
+    "scripts/validate_spec.py"
   ]
 }

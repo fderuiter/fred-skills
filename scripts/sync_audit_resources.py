@@ -4,9 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path, PureWindowsPath
 
 from skill_tools import ROOT, suite_members
+
+
+def _resolve_script_source(shared: Path, root: Path, rel: Path) -> Path:
+    source = shared / "resources" / rel
+    if source.is_file():
+        return source
+    root_candidate = root / rel
+    if root_candidate.is_file():
+        return root_candidate
+    if (ROOT / rel).is_file():
+        return ROOT / rel
+    return root_candidate
 
 
 def _safe_relative_path(raw_path: str) -> Path:
@@ -47,9 +60,7 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                 for s_path, s_targets in scripts.items():
                     if name in s_targets:
                         rel = _safe_relative_path(s_path)
-                        source = shared / "resources" / rel
-                        if not source.is_file():
-                            source = root / rel
+                        source = _resolve_script_source(shared, root, rel)
                         file_targets.append((s_path, source))
             elif isinstance(scripts, list):
                 for s_item in scripts:
@@ -57,9 +68,7 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                         rel = _safe_relative_path(s_item)
                         if s_item == "scripts/audit_to_sarif.py":
                             if name == "repo-audit-synthesis":
-                                source = shared / "resources" / rel
-                                if not source.is_file():
-                                    source = root / rel
+                                source = _resolve_script_source(shared, root, rel)
                                 file_targets.append((s_item, source))
                             elif (package / s_item).is_file():
                                 if check:
@@ -69,18 +78,14 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                                 else:
                                     (package / s_item).unlink()
                         else:
-                            source = shared / "resources" / rel
-                            if not source.is_file():
-                                source = root / rel
+                            source = _resolve_script_source(shared, root, rel)
                             file_targets.append((s_item, source))
                     elif isinstance(s_item, dict):
                         rel_path = s_item.get("path") or s_item.get("file")
                         targets = s_item.get("targets") or s_item.get("skills", [])
                         if rel_path and name in targets:
                             rel = _safe_relative_path(rel_path)
-                            source = shared / "resources" / rel
-                            if not source.is_file():
-                                source = root / rel
+                            source = _resolve_script_source(shared, root, rel)
                             file_targets.append((rel_path, source))
 
             for relative, source in file_targets:
@@ -89,13 +94,26 @@ def sync(root: Path = ROOT, check: bool = False) -> list[str]:
                 if not target.resolve().is_relative_to(package.resolve()):
                     raise ValueError(f"Shared destination escapes package: {target}")
                 expected = source.read_bytes()
+                is_script = bool(rel.parts and rel.parts[0] == "scripts")
+                needs_exec = (
+                    is_script and expected.startswith(b"#!") and os.name != "nt"
+                )
                 if target.is_file() and target.read_bytes() == expected:
+                    if needs_exec and not os.access(target, os.X_OK):
+                        if check:
+                            problems.append(
+                                f"Shared script lacks executable mode: {name}/{relative}"
+                            )
+                        else:
+                            target.chmod(0o755)
                     continue
                 if check:
                     problems.append(f"Shared resource drift: {name}/{relative}")
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(expected)
+                    if is_script:
+                        target.chmod(0o755)
     return problems
 
 

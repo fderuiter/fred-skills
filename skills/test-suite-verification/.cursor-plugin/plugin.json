@@ -1,0 +1,12 @@
+{
+  "name": "test-suite-verification",
+  "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

@@ -2907,7 +2907,9 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             runs.advance(ws)
         self.assertEqual("loop_completed", done_ctx.exception.code)
 
-    def test_validate_run_and_memory_across_all_suites_and_legacy_workspaces(self):
+    def test_validate_run_and_memory_across_all_suites_and_legacy_workspaces(
+        self,
+    ) -> None:
         git_repo = self.root / "suites-repo"
         git_repo.mkdir()
         (git_repo / "source.py").write_text("limit = 10\n", encoding="utf-8")
@@ -3200,6 +3202,110 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
         self.assertEqual(
             ["session-handoff", "terse-output-commit"], sorted(res["skills"])
         )
+
+    def test_corrupted_run_json_and_catalogs_surface_fred_cli_error(self):
+        from fredlib import common as fred_common
+
+        # 1. Truncated run.json in resolve_audit_path and _require_audit_directory
+        trunc_ws = self.root / "truncated-run-ws"
+        trunc_ws.mkdir()
+        (trunc_ws / "run.json").write_text(
+            '{\n  "run_id": "run-truncated",\n', encoding="utf-8"
+        )
+        with self.assertRaises(FredCliError) as res_ctx:
+            resolve_audit_path(trunc_ws)
+        self.assertEqual("invalid_json", res_ctx.exception.code)
+        self.assertIn(
+            "Malformed JSON in run metadata 'run.json'", res_ctx.exception.message
+        )
+        self.assertIn("line 3", res_ctx.exception.message)
+
+        with self.assertRaises(FredCliError) as req_ctx:
+            runs._require_audit_directory(trunc_ws, "reconcile")
+        self.assertEqual("invalid_json", req_ctx.exception.code)
+        self.assertIn(
+            "Malformed JSON in run metadata 'run.json'", req_ctx.exception.message
+        )
+
+        # Non-object run.json raises invalid_json_root
+        arr_ws = self.root / "array-run-ws"
+        arr_ws.mkdir()
+        (arr_ws / "run.json").write_text("[]\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as arr_res_ctx:
+            resolve_audit_path(arr_ws)
+        self.assertEqual("invalid_json_root", arr_res_ctx.exception.code)
+        with self.assertRaises(FredCliError) as arr_req_ctx:
+            runs._require_audit_directory(arr_ws, "memory")
+        self.assertEqual("invalid_json_root", arr_req_ctx.exception.code)
+
+        # CLI report / export-sarif surfaces Malformed JSON in run metadata 'run.json'
+        for subcmd in ("report", "export-sarif"):
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/fred.py"),
+                    subcmd,
+                    str(trunc_ws),
+                    "--output",
+                    str(self.root / f"cli-{subcmd}-out"),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(0, proc.returncode)
+            self.assertIn("Malformed JSON in run metadata 'run.json'", proc.stderr)
+            self.assertNotIn("Audit ledger 'audit.json' not found", proc.stderr)
+
+        # 2. Absent optional catalogs take fallbacks cleanly
+        empty_root = self.root / "absent-catalogs"
+        empty_root.mkdir()
+        self.assertIn(
+            "repository-audits", fred_common._load_suite_contracts(empty_root)
+        )
+        self.assertIn("plan.json", fred_common._load_workflow_companions(empty_root))
+        self.assertEqual(
+            "repository-audits",
+            fred_common._suite_for_skills(["arch-decision-record"], root=empty_root),
+        )
+        self.assertEqual({}, fred_common._task_to_suite_map(empty_root))
+        self.assertEqual(
+            [], fred_common._suite_shared_assets("code-review", root=empty_root)
+        )
+
+        # 3. Corrupted existing catalogs and shared manifests raise FredCliError
+        bad_catalog_dir = empty_root / "catalog"
+        bad_catalog_dir.mkdir()
+        suites_file = bad_catalog_dir / "suites.json"
+        suites_file.write_text("{corrupted\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as suites_err:
+            fred_common._load_suite_contracts(empty_root)
+        self.assertEqual("invalid_json", suites_err.exception.code)
+        with self.assertRaises(FredCliError) as comp_err:
+            fred_common._load_workflow_companions(empty_root)
+        self.assertEqual("invalid_json", comp_err.exception.code)
+        suites_file.unlink()
+
+        skills_file = bad_catalog_dir / "skills.json"
+        skills_file.write_text("{corrupted\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as skills_err:
+            fred_common._suite_for_skills(["sample"], root=empty_root)
+        self.assertEqual("invalid_json", skills_err.exception.code)
+        skills_file.unlink()
+
+        recipes_file = bad_catalog_dir / "recipes.json"
+        recipes_file.write_text("{corrupted\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as recipes_err:
+            fred_common._task_to_suite_map(empty_root)
+        self.assertEqual("invalid_json", recipes_err.exception.code)
+        recipes_file.unlink()
+
+        shared_manifest = empty_root / "shared/code-review/manifest.json"
+        shared_manifest.parent.mkdir(parents=True)
+        shared_manifest.write_text("{corrupted\n", encoding="utf-8")
+        with self.assertRaises(FredCliError) as shared_err:
+            fred_common._suite_shared_assets("code-review", root=empty_root)
+        self.assertEqual("invalid_json", shared_err.exception.code)
 
 
 if __name__ == "__main__":

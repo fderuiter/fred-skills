@@ -1,0 +1,12 @@
+{
+  "name": "arch-decision-record",
+  "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

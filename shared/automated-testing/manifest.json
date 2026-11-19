@@ -5,5 +5,8 @@
     "references/testing-protocol.md",
     "assets/testing-template.md",
     "assets/testing.schema.json"
+  ],
+  "scripts": [
+    "scripts/validate_testing.py"
   ]
 }

@@ -1,0 +1,12 @@
+{
+  "name": "test-gap-analysis",
+  "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

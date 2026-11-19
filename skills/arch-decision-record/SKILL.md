@@ -19,6 +19,6 @@ Ground decisions in observed codebase constraints and explicit requirements.
 ## Deliver
 
 Use the [architecture template](assets/architecture-template.md) to format records.
-Verify conformance against the [architecture schema](assets/architecture.schema.json).
+Verify conformance against the [architecture schema](assets/architecture.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_architecture.py <artifact.json>`.
 Report findings with concrete source locations and rationale.
 Do not modify application code or publish external records without explicit user authorization; never claim evaluations or tests ran unless actually executed.

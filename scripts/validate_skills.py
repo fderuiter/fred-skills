@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -19,6 +20,7 @@ from typing import Any
 import jsonschema
 import yaml
 from fredlib import vetting
+from fredlib.common import FredCliError, atomic_json, read_json_object
 from skill_tools import (
     ROOT,
     estimate_tokens,
@@ -36,6 +38,9 @@ MAX_PROMPT_LINES = 20
 MAX_METADATA_TOKENS = 100
 MAX_BODY_TOKENS = 5000
 MAX_REFERENCE_TOKENS = 5000
+MIN_WORKED_EXAMPLE_BLOCKS = 2
+FENCE_OPEN_PATTERN = re.compile(r"^\s*```([A-Za-z0-9_+-]*)\s*$")
+FENCE_CLOSE_PATTERN = re.compile(r"^\s*```\s*$")
 PLACEHOLDER_PATTERN = re.compile(r"<[^>]+>")
 ALLOWED_PROMPT_PLACEHOLDERS = frozenset(
     {
@@ -94,6 +99,38 @@ WORKFLOW_MISPLACED_AUDIT_NOTE_PATTERN = re.compile(
 EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
     r"\bexpected\s+findings\b",
     re.IGNORECASE,
+)
+CURSOR_PLUGIN_NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
+CURSOR_PLUGIN_SEMVER_PATTERN = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\Z")
+CURSOR_PLUGIN_ALLOWED_FIELDS = frozenset(
+    {
+        "name",
+        "displayName",
+        "description",
+        "version",
+        "author",
+        "homepage",
+        "repository",
+        "license",
+        "keywords",
+        "logo",
+        "rules",
+        "agents",
+        "skills",
+        "commands",
+        "hooks",
+        "mcpServers",
+        "variables",
+    }
+)
+CURSOR_PLUGIN_PATH_FIELDS = (
+    "logo",
+    "rules",
+    "agents",
+    "skills",
+    "commands",
+    "hooks",
+    "mcpServers",
 )
 
 
@@ -229,6 +266,11 @@ def _is_package_script_rel(rel_posix: str, suffix: str) -> bool:
 
 
 def _check_package_file_allowlist(rel_posix: str, name: str, suffix: str) -> str | None:
+    if (
+        rel_posix.startswith(".cursor-plugin/")
+        and rel_posix != ".cursor-plugin/plugin.json"
+    ):
+        return f"Unexpected file in .cursor-plugin directory: {rel_posix}"
     if name.lower() in _DISALLOWED_DOC_FILENAMES:
         return f"Disallowed documentation clutter in skill package: {rel_posix}"
     if _is_package_script_rel(rel_posix, suffix):
@@ -665,6 +707,375 @@ def _discover_output_schemas(package: Path) -> tuple[list[Path], list[Path]]:
     return assets_schemas, fallback_schemas
 
 
+def _extract_fenced_blocks(markdown_text: str) -> tuple[list[tuple[str, str]], bool]:
+    """Return ([(lang, code_body), ...], has_unclosed_fence) from Markdown text."""
+    blocks: list[tuple[str, str]] = []
+    in_fence = False
+    fence_lang = ""
+    current_lines: list[str] = []
+    for raw_line in markdown_text.splitlines():
+        if not in_fence:
+            open_match = FENCE_OPEN_PATTERN.match(raw_line)
+            if open_match:
+                in_fence = True
+                fence_lang = open_match.group(1).strip().lower()
+                current_lines = []
+        elif FENCE_CLOSE_PATTERN.match(raw_line):
+            blocks.append((fence_lang, "\n".join(current_lines)))
+            in_fence = False
+            fence_lang = ""
+            current_lines = []
+        else:
+            current_lines.append(raw_line)
+    return blocks, in_fence
+
+
+def _extract_noncode_lines(markdown_text: str) -> list[str]:
+    """Return non-empty stripped prose/heading lines outside fenced code blocks."""
+    noncode: list[str] = []
+    in_fence = False
+    for raw_line in markdown_text.splitlines():
+        if not in_fence:
+            if FENCE_OPEN_PATTERN.match(raw_line):
+                in_fence = True
+                continue
+            stripped = raw_line.strip()
+            if stripped:
+                noncode.append(stripped)
+        elif FENCE_CLOSE_PATTERN.match(raw_line):
+            in_fence = False
+    return noncode
+
+
+def _build_output_validators(
+    package: Path,
+    output_schemas: Sequence[Path],
+    valid_closed_schemas: Mapping[Path, dict[str, Any]],
+) -> list[tuple[str, jsonschema.Draft202012Validator]]:
+    validators: list[tuple[str, jsonschema.Draft202012Validator]] = []
+    for schema_path in output_schemas:
+        schema_data = valid_closed_schemas.get(schema_path)
+        if schema_data is None:
+            continue
+        rel_posix = schema_path.relative_to(package).as_posix()
+        validators.append(
+            (
+                rel_posix,
+                jsonschema.Draft202012Validator(
+                    schema_data,
+                    format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
+                ),
+            )
+        )
+    return validators
+
+
+def _format_first_schema_error(
+    schema_rel: str,
+    validator: jsonschema.Draft202012Validator,
+    parsed_json: object,
+) -> str | None:
+    block_errs = sorted(
+        validator.iter_errors(parsed_json),
+        key=lambda e: str(list(e.absolute_path)),
+    )
+    if not block_errs:
+        return None
+    first = block_errs[0]
+    loc = "/".join(map(str, first.absolute_path)) or "root"
+    return f"{schema_rel} -> {loc}: {first.message}"
+
+
+def _validate_json_example_block(
+    rel_posix: str,
+    block_idx: int,
+    raw_json_block: str,
+    schema_validators: Sequence[tuple[str, jsonschema.Draft202012Validator]],
+) -> list[str]:
+    try:
+        parsed_json = json.loads(raw_json_block)
+    except ValueError as exc:
+        return [
+            f"{rel_posix}: invalid JSON in worked example block #{block_idx}: {exc}"
+        ]
+    if not schema_validators:
+        return []
+    failures: list[str] = []
+    for schema_rel, validator in schema_validators:
+        failure = _format_first_schema_error(schema_rel, validator, parsed_json)
+        if failure is None:
+            return []
+        failures.append(failure)
+    msg = (
+        f"{rel_posix}: worked example json block #{block_idx} fails output schema validation "
+        f"({failures[0]})"
+    )
+    return [msg]
+
+
+def _read_cached_markdown(path: Path, cached_texts: Mapping[Path, str]) -> str:
+    if path in cached_texts:
+        return cached_texts[path]
+    return path.read_text(encoding="utf-8")
+
+
+def _inspect_example_reference_file(
+    ref_file: Path,
+    package: Path,
+    *,
+    resolved_skill_links: set[Path],
+    skill_noncode_set: set[str],
+    cached_texts: Mapping[Path, str],
+) -> tuple[list[str], int, list[tuple[str, int, str]], list[str] | None]:
+    errors: list[str] = []
+    rel_posix = ref_file.relative_to(package).as_posix()
+    if ref_file.resolve() not in resolved_skill_links:
+        errors.append(f"SKILL.md: missing markdown link to worked examples {rel_posix}")
+    try:
+        text = _read_cached_markdown(ref_file, cached_texts)
+    except OSError as exc:
+        return [*errors, f"{rel_posix}: {exc}"], 0, [], None
+
+    blocks, unclosed = _extract_fenced_blocks(text)
+    if unclosed:
+        errors.append(
+            f"{rel_posix}: unclosed triple-backtick code fence in worked examples"
+        )
+    json_blocks = [
+        (rel_posix, idx, code_body)
+        for idx, (lang, code_body) in enumerate(blocks, start=1)
+        if lang == "json"
+    ]
+    method_noncode: list[str] | None = None
+    if ref_file.name == "method.md":
+        method_noncode = _extract_noncode_lines(text)
+        duplicated = [ln for ln in method_noncode if ln in skill_noncode_set]
+        if duplicated:
+            errors.append(
+                f"{rel_posix}: method.md repeats SKILL.md prose verbatim "
+                f"(e.g. {duplicated[0]!r})"
+            )
+    return errors, len(blocks), json_blocks, method_noncode
+
+
+def _validate_worked_examples(
+    package: Path,
+    *,
+    resolved_skill_links: set[Path],
+    output_schemas: Sequence[Path],
+    valid_closed_schemas: Mapping[Path, dict[str, Any]],
+    skill_noncode_set: set[str],
+    cached_texts: Mapping[Path, str],
+) -> tuple[list[str], int, bool, list[str] | None]:
+    """Validate worked-example presence, link reachability, fenced block count, and JSON schema conformance."""
+    candidates = (package / "references/method.md", package / "references/examples.md")
+    present_files = [
+        p for p in candidates if p.exists() and not p.is_symlink() and p.is_file()
+    ]
+    if not present_files:
+        missing_msg = (
+            "Missing worked examples: require references/examples.md or references/method.md "
+            f"with >= {MIN_WORKED_EXAMPLE_BLOCKS} fenced code blocks"
+        )
+        return [missing_msg], 0, False, None
+
+    errors: list[str] = []
+    total_blocks = 0
+    json_blocks: list[tuple[str, int, str]] = []
+    method_noncode: list[str] | None = None
+    for ref_file in present_files:
+        f_errs, count, f_json, f_method = _inspect_example_reference_file(
+            ref_file,
+            package,
+            resolved_skill_links=resolved_skill_links,
+            skill_noncode_set=skill_noncode_set,
+            cached_texts=cached_texts,
+        )
+        errors.extend(f_errs)
+        total_blocks += count
+        json_blocks.extend(f_json)
+        if f_method is not None:
+            method_noncode = f_method
+
+    errors.extend(
+        _check_worked_example_totals(
+            package,
+            present_files,
+            total_blocks,
+            json_blocks,
+            output_schemas,
+            valid_closed_schemas,
+        )
+    )
+    has_valid_examples = (
+        len(errors) == 0
+        and total_blocks >= MIN_WORKED_EXAMPLE_BLOCKS
+        and len(json_blocks) >= 1
+    )
+    return errors, total_blocks, has_valid_examples, method_noncode
+
+
+def _check_worked_example_totals(
+    package: Path,
+    present_files: Sequence[Path],
+    total_blocks: int,
+    json_blocks: Sequence[tuple[str, int, str]],
+    output_schemas: Sequence[Path],
+    valid_closed_schemas: Mapping[Path, dict[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    present_rels = ", ".join(p.relative_to(package).as_posix() for p in present_files)
+    if total_blocks < MIN_WORKED_EXAMPLE_BLOCKS:
+        errors.append(
+            f"Worked examples require at least {MIN_WORKED_EXAMPLE_BLOCKS} fenced code blocks "
+            f"across {present_rels} (found {total_blocks})"
+        )
+    if not json_blocks:
+        errors.append(
+            f"Worked examples require at least 1 fenced json output example in {present_rels}"
+        )
+        return errors
+    schema_validators = _build_output_validators(
+        package, output_schemas, valid_closed_schemas
+    )
+    for rel_posix, block_idx, raw_json_block in json_blocks:
+        errors.extend(
+            _validate_json_example_block(
+                rel_posix, block_idx, raw_json_block, schema_validators
+            )
+        )
+    return errors
+
+
+def _estimate_skill_dimensions(
+    metadata: Mapping[str, Any], body: str
+) -> tuple[int, int]:
+    fm_lines = 2 + len(metadata)
+    fm_chars = 8 + sum(len(f"{k}: {v}\n") for k, v in metadata.items())
+    return fm_lines + len(body.splitlines()), fm_chars + len(body)
+
+
+def _skill_noncode_lines(metadata: Mapping[str, Any], body: str) -> set[str]:
+    lines = {ln.strip() for ln in body.splitlines() if ln.strip()}
+    for key, val in metadata.items():
+        if isinstance(val, str) and val.strip():
+            lines.add(f"{key}: {val.strip()}")
+            lines.add(f'{key}: "{val.strip()}"')
+    return lines
+
+
+def _validate_protocol_depth(
+    package: Path,
+    skill_lines: int,
+    skill_chars: int,
+    cached_texts: Mapping[Path, str],
+) -> list[str]:
+    """Require protocol reference files (references/*protocol.md) to exceed SKILL.md depth."""
+    refs_dir = package / "references"
+    if not refs_dir.is_dir():
+        return []
+    errors: list[str] = []
+    for proto_path in sorted(refs_dir.glob("*protocol.md")):
+        if proto_path.is_symlink() or not proto_path.is_file():
+            continue
+        rel_posix = proto_path.relative_to(package).as_posix()
+        try:
+            proto_text = _read_cached_markdown(proto_path, cached_texts)
+        except OSError as exc:
+            errors.append(f"{rel_posix}: {exc}")
+            continue
+        proto_lines = len(proto_text.splitlines())
+        proto_chars = len(proto_text)
+        if proto_lines <= skill_lines or proto_chars <= skill_chars:
+            errors.append(
+                f"{rel_posix}: reference inversion detected "
+                f"({proto_lines} lines / {proto_chars} chars <= SKILL.md {skill_lines} lines / {skill_chars} chars); "
+                "protocol reference must exceed SKILL.md depth"
+            )
+    return errors
+
+
+def _check_single_bundled_script(
+    package: Path,
+    script_path: Path,
+    cached_texts: dict[Path, str] | None = None,
+) -> list[str]:
+    rel_posix = script_path.relative_to(package).as_posix()
+    try:
+        script_text = _read_cached_utf8(script_path, cached_texts)
+    except OSError as exc:
+        return [f"{rel_posix}: {exc}"]
+    errors: list[str] = []
+    first_line = script_text.splitlines()[0] if script_text else ""
+    if not (first_line.startswith("#!") and "python" in first_line):
+        errors.append(
+            f"{rel_posix}: bundled script must start with a Python shebang (#!/usr/bin/env python3)"
+        )
+    if os.name != "nt" and not os.access(script_path, os.X_OK):
+        errors.append(
+            f"{rel_posix}: bundled script must have executable permissions (chmod 0755)"
+        )
+    return errors
+
+
+def _validate_bundled_scripts(
+    package: Path, cached_texts: dict[Path, str] | None = None
+) -> tuple[list[str], bool]:
+    """Require at least one executable scripts/validate_*.py validator with valid shebang and mode."""
+    scripts_dir = package / "scripts"
+    py_scripts = (
+        sorted(
+            p for p in scripts_dir.glob("*.py") if not p.is_symlink() and p.is_file()
+        )
+        if scripts_dir.is_dir() and not scripts_dir.is_symlink()
+        else []
+    )
+    validator_scripts = [p for p in py_scripts if p.name.startswith("validate_")]
+    errors: list[str] = []
+    if not validator_scripts:
+        errors.append(
+            "Missing bundled validator script: expected executable scripts/validate_*.py"
+        )
+    for script_path in validator_scripts:
+        errors.extend(_check_single_bundled_script(package, script_path, cached_texts))
+    return errors, (len(validator_scripts) > 0 and len(errors) == 0)
+
+
+def _collect_duplicated_method_lines(
+    per_pkg_lines: Mapping[str, Sequence[str]],
+) -> dict[str, list[str]]:
+    line_to_pkgs: dict[str, list[str]] = {}
+    for pkg_name, noncode_lines in per_pkg_lines.items():
+        for ln in set(noncode_lines):
+            line_to_pkgs.setdefault(ln, []).append(pkg_name)
+    return {ln: pkgs for ln, pkgs in line_to_pkgs.items() if len(pkgs) > 1}
+
+
+def _evaluate_method_boilerplate_duplication(
+    per_pkg_lines: Mapping[str, Sequence[str]],
+) -> tuple[list[str], float, float]:
+    """Compute cross-package non-code line duplication across specialist references/method.md files."""
+    if len(per_pkg_lines) <= 1:
+        return [], 0.0, 0.0
+    duplicated_lines = _collect_duplicated_method_lines(per_pkg_lines)
+    total_instances = sum(len(lines) for lines in per_pkg_lines.values())
+    duplicated_instances = sum(
+        1 for lines in per_pkg_lines.values() for ln in lines if ln in duplicated_lines
+    )
+    dup_rate, dup_pct = _rate_pair(duplicated_instances, total_instances)
+    if not duplicated_lines:
+        return [], dup_rate, dup_pct
+    sample_line, sample_pkgs = min(
+        duplicated_lines.items(), key=lambda item: (-len(item[1]), item[0])
+    )
+    preview = ", ".join(sorted(sample_pkgs)[:4])
+    dup_msg = (
+        f"Specialist references/method.md boilerplate duplication detected ({dup_pct}% across "
+        f"{len(per_pkg_lines)} files; e.g. {sample_line!r} in {preview})"
+    )
+    return [dup_msg], dup_rate, dup_pct
+
+
 class _ParsedSkillPackage:
     """Single-pass validation errors and parsed metadata for one skill package."""
 
@@ -675,9 +1086,13 @@ class _ParsedSkillPackage:
         "has_boundary_sections",
         "has_output_schema",
         "has_prompt_constraints",
+        "has_validator_script",
+        "has_worked_examples",
+        "method_noncode_lines",
         "output_schemas",
         "prompt_body",
         "short_description",
+        "worked_example_blocks",
     )
 
     def __init__(
@@ -686,15 +1101,22 @@ class _ParsedSkillPackage:
         errors: list[str],
         output_schemas: list[str] | None = None,
         has_output_schema: bool = False,
+        worked_example_blocks: int = 0,
+        has_worked_examples: bool = False,
+        has_validator_script: bool = False,
         has_prompt_constraints: bool = False,
         has_boundary_sections: bool = False,
         description: str | None = None,
         short_description: str | None = None,
         prompt_body: str | None = None,
+        method_noncode_lines: list[str] | None = None,
     ) -> None:
         self.errors = errors
         self.output_schemas = output_schemas if output_schemas is not None else []
         self.has_output_schema = has_output_schema
+        self.worked_example_blocks = worked_example_blocks
+        self.has_worked_examples = has_worked_examples
+        self.has_validator_script = has_validator_script
         self.has_prompt_constraints = has_prompt_constraints
         self.has_boundary_sections = has_boundary_sections
         self.deterministic_constraint_coverage = (
@@ -703,6 +1125,7 @@ class _ParsedSkillPackage:
         self.description = description
         self.short_description = short_description
         self.prompt_body = prompt_body
+        self.method_noncode_lines = method_noncode_lines
 
 
 def _is_valid_skill_name(name: object, package_name: str) -> bool:
@@ -763,9 +1186,17 @@ def _validate_skill_body(body: str) -> tuple[list[str], bool]:
     return errors, has_boundary_sections
 
 
+def _resolve_skill_links(package: Path, body: str) -> set[Path]:
+    return {
+        resolved
+        for target in extract_relative_links(body)
+        if (resolved := resolve_relative_link_target(target, package)) is not None
+    }
+
+
 def _validate_schema_links(
     package: Path,
-    body: str,
+    resolved_skill_links: set[Path],
     assets_schemas: Sequence[Path],
     output_schemas: Sequence[Path],
 ) -> list[str]:
@@ -773,11 +1204,6 @@ def _validate_schema_links(
         return [
             f"Missing output schema: {package.name} must define an output schema (*.schema.json in assets/)"
         ]
-    resolved_skill_links = {
-        resolved
-        for target in extract_relative_links(body)
-        if (resolved := resolve_relative_link_target(target, package)) is not None
-    }
     errors: list[str] = []
     for schema_file in assets_schemas:
         if schema_file.resolve() not in resolved_skill_links:
@@ -940,21 +1366,148 @@ def _validate_evaluation_scenarios(
     return errors
 
 
+def _extract_cursor_path_strings(value: object) -> tuple[list[str], bool]:
+    if isinstance(value, str):
+        return [value], bool(value.strip())
+    if isinstance(value, list) and value:
+        valid = all(isinstance(item, str) and bool(item.strip()) for item in value)
+        return ([str(item) for item in value] if valid else []), valid
+    return [], False
+
+
+def _is_safe_cursor_rel_path(raw_path: str) -> bool:
+    if not raw_path.strip() or "\\" in raw_path or raw_path.startswith("/"):
+        return False
+    if PureWindowsPath(raw_path).is_absolute():
+        return False
+    return ".." not in Path(raw_path).parts
+
+
+def _check_resolved_cursor_path(
+    plugin_dir: Path, field: str, raw_path: str, label: str
+) -> list[str]:
+    candidate = plugin_dir / raw_path
+    if candidate.is_symlink():
+        return [f"{label}: '{field}' path '{raw_path}' must not be a symlink"]
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(plugin_dir.resolve()) or not resolved.exists():
+        return [
+            f"{label}: '{field}' path '{raw_path}' does not exist inside plugin directory"
+        ]
+    if field == "skills" and not (resolved / "SKILL.md").is_file():
+        return [f"{label}: 'skills' path '{raw_path}' missing SKILL.md"]
+    return []
+
+
+def _validate_cursor_plugin_path(
+    plugin_dir: Path, field: str, raw_path: str, label: str
+) -> list[str]:
+    if field == "logo" and raw_path.startswith(("http://", "https://")):
+        return []
+    if not _is_safe_cursor_rel_path(raw_path):
+        return [
+            f"{label}: '{field}' path '{raw_path}' must be a relative path without '..' or absolute prefixes"
+        ]
+    return _check_resolved_cursor_path(plugin_dir, field, raw_path, label)
+
+
+def _validate_cursor_author_and_license(
+    data: Mapping[str, Any], label: str
+) -> list[str]:
+    errors: list[str] = []
+    author = data.get("author")
+    author_name = author.get("name") if isinstance(author, dict) else None
+    if not isinstance(author_name, str) or not author_name.strip():
+        errors.append(f"{label}: 'author.name' must be a non-empty string")
+    lic = data.get("license")
+    if "license" in data and (not isinstance(lic, str) or not lic.strip()):
+        errors.append(f"{label}: 'license' must be a non-empty string")
+    return errors
+
+
+def _validate_cursor_metadata_fields(
+    data: Mapping[str, Any], expected_name: str, label: str
+) -> list[str]:
+    errors: list[str] = []
+    unknown = sorted(set(data.keys()) - CURSOR_PLUGIN_ALLOWED_FIELDS)
+    if unknown:
+        errors.append(
+            f"{label}: unsupported plugin manifest field(s): {', '.join(unknown)}"
+        )
+    raw_name = data.get("name")
+    if not isinstance(raw_name, str) or not CURSOR_PLUGIN_NAME_PATTERN.match(raw_name):
+        errors.append(f"{label}: 'name' must be lowercase kebab-case")
+    elif raw_name != expected_name:
+        errors.append(f"{label}: 'name' must equal '{expected_name}'")
+    desc = data.get("description")
+    if not isinstance(desc, str) or not desc.strip():
+        errors.append(f"{label}: 'description' must be a non-empty string")
+    ver = data.get("version")
+    if not isinstance(ver, str) or not CURSOR_PLUGIN_SEMVER_PATTERN.match(ver):
+        errors.append(f"{label}: 'version' must be a semantic version")
+    errors.extend(_validate_cursor_author_and_license(data, label))
+    return errors
+
+
+def _validate_cursor_field_paths(
+    plugin_dir: Path, field: str, values: Sequence[str], label: str
+) -> list[str]:
+    errors: list[str] = []
+    for raw_val in values:
+        errors.extend(_validate_cursor_plugin_path(plugin_dir, field, raw_val, label))
+    return errors
+
+
+def _validate_cursor_paths_section(
+    plugin_dir: Path, data: Mapping[str, Any], label: str
+) -> list[str]:
+    errors: list[str] = []
+    _, skills_ok = _extract_cursor_path_strings(data.get("skills"))
+    if not skills_ok:
+        errors.append(
+            f"{label}: 'skills' must be a non-empty relative path string or list of strings"
+        )
+    for field in CURSOR_PLUGIN_PATH_FIELDS:
+        if field not in data:
+            continue
+        vals, ok = _extract_cursor_path_strings(data[field])
+        if not ok and field != "skills" and not isinstance(data[field], dict):
+            errors.append(f"{label}: invalid '{field}' path specification")
+        errors.extend(_validate_cursor_field_paths(plugin_dir, field, vals, label))
+    return errors
+
+
+def _validate_cursor_plugin_manifest(
+    plugin_dir: Path,
+    expected_name: str,
+    data: object,
+    label: str = ".cursor-plugin/plugin.json",
+) -> list[str]:
+    if not isinstance(data, dict):
+        return [f"{label}: plugin manifest must be a JSON object"]
+    errors = _validate_cursor_metadata_fields(data, expected_name, label)
+    errors.extend(_validate_cursor_paths_section(plugin_dir, data, label))
+    return errors
+
+
 def _inspect_json_text(
     path: Path,
+    package: Path,
     rel_posix: str,
     raw_json: str,
-    valid_closed_schemas: set[Path],
+    valid_closed_schemas: dict[Path, dict[str, Any]],
 ) -> list[str]:
     data = json.loads(raw_json)
+    if rel_posix == ".cursor-plugin/plugin.json":
+        return _validate_cursor_plugin_manifest(package, package.name, data, rel_posix)
     if not path.name.endswith(".schema.json"):
         return []
     _check_draft202012_schema(raw_json, data)
     if path.name.startswith("evaluation-scenarios"):
         return []
     closed_errors = _validate_closed_schema(data, rel_posix)
-    if not closed_errors:
-        valid_closed_schemas.add(path)
+    if not closed_errors and isinstance(data, dict):
+        valid_closed_schemas[path] = data
     return closed_errors
 
 
@@ -996,15 +1549,18 @@ def _inspect_markdown_text(
 
 def _inspect_typed_file_content(
     path: Path,
+    package: Path,
     rel_posix: str,
     raw_text: str,
     *,
     package_resolved: Path,
     references_dir: Path,
-    valid_closed_schemas: set[Path],
+    valid_closed_schemas: dict[Path, dict[str, Any]],
 ) -> list[str]:
     if path.suffix == ".json":
-        return _inspect_json_text(path, rel_posix, raw_text, valid_closed_schemas)
+        return _inspect_json_text(
+            path, package, rel_posix, raw_text, valid_closed_schemas
+        )
     if path.suffix == ".md":
         return _inspect_markdown_text(
             path,
@@ -1046,7 +1602,7 @@ def _inspect_package_entry(
     package_resolved: Path,
     references_dir: Path,
     cached_texts: dict[Path, str],
-    valid_closed_schemas: set[Path],
+    valid_closed_schemas: dict[Path, dict[str, Any]],
 ) -> list[str]:
     if path.is_symlink():
         return [
@@ -1067,6 +1623,7 @@ def _inspect_package_entry(
         errors.extend(
             _inspect_typed_file_content(
                 path,
+                package,
                 rel_posix,
                 raw_text,
                 package_resolved=package_resolved,
@@ -1081,9 +1638,9 @@ def _inspect_package_entry(
 
 def _scan_package_files(
     package: Path, cached_texts: dict[Path, str]
-) -> tuple[list[str], set[Path]]:
+) -> tuple[list[str], dict[Path, dict[str, Any]]]:
     errors: list[str] = []
-    valid_closed_schemas: set[Path] = set()
+    valid_closed_schemas: dict[Path, dict[str, Any]] = {}
     package_resolved = package.resolve()
     references_dir = (package / "references").resolve()
     for path in sorted(package.rglob("*")):
@@ -1219,9 +1776,10 @@ def _inspect_skill_package(
     body_errors, has_boundary_sections = _validate_skill_body(body)
     errors.extend(body_errors)
 
+    resolved_skill_links = _resolve_skill_links(package, body)
     assets_schemas, output_schemas = _discover_output_schemas(package)
     schema_link_errors = _validate_schema_links(
-        package, body, assets_schemas, output_schemas
+        package, resolved_skill_links, assets_schemas, output_schemas
     )
     errors.extend(schema_link_errors)
 
@@ -1244,6 +1802,25 @@ def _inspect_skill_package(
     scan_errors, valid_closed_schemas = _scan_package_files(package, cached_texts)
     errors.extend(scan_errors)
 
+    worked_errors, worked_blocks, has_worked_examples, method_noncode = (
+        _validate_worked_examples(
+            package,
+            resolved_skill_links=resolved_skill_links,
+            output_schemas=output_schemas,
+            valid_closed_schemas=valid_closed_schemas,
+            skill_noncode_set=_skill_noncode_lines(metadata, body),
+            cached_texts=cached_texts,
+        )
+    )
+    errors.extend(worked_errors)
+    skill_lines, skill_chars = _estimate_skill_dimensions(metadata, body)
+    errors.extend(
+        _validate_protocol_depth(package, skill_lines, skill_chars, cached_texts)
+    )
+    script_errors, has_validator_script = _validate_bundled_scripts(
+        package, cached_texts
+    )
+    errors.extend(script_errors)
     has_output_schema = (
         bool(output_schemas)
         and not schema_link_errors
@@ -1254,11 +1831,15 @@ def _inspect_skill_package(
         errors=errors,
         output_schemas=[p.relative_to(package).as_posix() for p in output_schemas],
         has_output_schema=has_output_schema,
+        worked_example_blocks=worked_blocks,
+        has_worked_examples=has_worked_examples,
+        has_validator_script=has_validator_script,
         has_prompt_constraints=has_prompt_constraints,
         has_boundary_sections=has_boundary_sections,
         description=raw_description if isinstance(raw_description, str) else None,
         short_description=short_description,
         prompt_body=prompt_body,
+        method_noncode_lines=method_noncode,
     )
 
 
@@ -1419,37 +2000,43 @@ def resolve_new_skills(
 
 
 def _load_attempt_ledger(ledger_path: Path) -> dict[str, dict[str, Any]]:
-    if not ledger_path.is_file():
-        return {}
     try:
-        payload = json.loads(ledger_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
+        payload = read_json_object(
+            ledger_path,
+            label="Validation attempt ledger",
+            hint=f"Fix or delete corrupted '{ledger_path}', or pass --no-ledger.",
+        )
+    except FredCliError as exc:
+        if exc.code == "missing_file":
+            return {}
+        raise
     skills_obj = payload.get("skills")
     if not isinstance(skills_obj, dict):
-        return {}
-    return {
-        str(k): dict(v)
-        for k, v in skills_obj.items()
-        if isinstance(k, str) and isinstance(v, dict)
-    }
+        raise FredCliError(
+            f"Malformed validation attempt ledger '{ledger_path}': expected 'skills' object",
+            code="invalid_ledger",
+            hint=f"Ensure '{ledger_path}' contains a JSON object under 'skills', or delete it to reset.",
+        )
+    result: dict[str, dict[str, Any]] = {}
+    for k, v in skills_obj.items():
+        if not isinstance(k, str) or not isinstance(v, dict):
+            raise FredCliError(
+                f"Malformed validation attempt ledger '{ledger_path}': entry '{k}' must be an object",
+                code="invalid_ledger",
+                hint=f"Fix or delete corrupted '{ledger_path}', or pass --no-ledger.",
+            )
+        result[k] = dict(v)
+    return result
 
 
 def _save_attempt_ledger(
     ledger_path: Path, entries: Mapping[str, dict[str, Any]]
 ) -> None:
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": "1.0",
         "skills": {k: entries[k] for k in sorted(entries)},
     }
-    ledger_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic_json(ledger_path, payload)
 
 
 def format_telemetry_markdown(telemetry: Mapping[str, Any]) -> str:
@@ -1476,6 +2063,9 @@ def format_telemetry_markdown(telemetry: Mapping[str, Any]) -> str:
         f"| Whole-Repository Packages | {telemetry.get('passed_packages', 0)} / {telemetry.get('total_packages', 0)} ({telemetry.get('repository_guardrail_pass_rate_percentage', 0.0)}%) |",
         f"| Deterministic Constraint Coverage | {telemetry.get('deterministic_constraint_coverage_percentage', 0.0)}% |",
         f"| Output Schema Coverage | {telemetry.get('output_schema_coverage_percentage', 0.0)}% |",
+        f"| Skill Worked-Example Coverage | {telemetry.get('skill_worked_example_coverage_percentage', 0.0)}% |",
+        f"| Bundled Validator Script Coverage | {telemetry.get('validator_script_coverage_percentage', 0.0)}% |",
+        f"| Specialist Method Boilerplate Duplication | {telemetry.get('method_boilerplate_duplication_percentage', 0.0)}% |",
         f"| Execution Time | {telemetry.get('execution_time_seconds', 0.0)}s |",
     ]
 
@@ -1620,11 +2210,29 @@ def _build_package_telemetry_entry(
         "validation_attempts": attempts_count,
         "has_output_schema": parsed.has_output_schema,
         "output_schemas": parsed.output_schemas,
+        "worked_example_blocks": parsed.worked_example_blocks,
+        "has_worked_examples": parsed.has_worked_examples,
+        "has_validator_script": parsed.has_validator_script,
         "has_prompt_constraints": parsed.has_prompt_constraints,
         "has_boundary_sections": parsed.has_boundary_sections,
         "deterministic_constraint_coverage": parsed.deterministic_constraint_coverage,
         "errors": parsed.errors,
     }
+
+
+def _validate_root_cursor_manifest(root: Path) -> list[str]:
+    root_manifest = root / ".cursor-plugin/plugin.json"
+    if root_manifest.is_symlink():
+        return ["Root .cursor-plugin/plugin.json must not be a symlink"]
+    if not root_manifest.exists():
+        return []
+    try:
+        data = json.loads(root_manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [f".cursor-plugin/plugin.json: {exc}"]
+    return _validate_cursor_plugin_manifest(
+        root, "fred-skills", data, ".cursor-plugin/plugin.json"
+    )
 
 
 def _validate_suite_manifest(root: Path) -> list[str]:
@@ -1643,6 +2251,7 @@ def _validate_suite_manifest(root: Path) -> list[str]:
                 )
     except (OSError, ValueError, KeyError) as exc:
         problems.append(f"Invalid suite manifest: {exc}")
+    problems.extend(_validate_root_cursor_manifest(root))
     return problems
 
 
@@ -1689,6 +2298,8 @@ def _build_telemetry_summary(
     diff_scope: str,
     diff_base: str | None,
     package_telemetry: list[dict[str, Any]],
+    method_dup_rate: float,
+    method_dup_pct: float,
     duration: float,
 ) -> dict[str, Any]:
     total_pkgs = len(package_telemetry)
@@ -1697,10 +2308,14 @@ def _build_telemetry_summary(
         1 for p in package_telemetry if p["deterministic_constraint_coverage"]
     )
     schema_pkgs = sum(1 for p in package_telemetry if p["has_output_schema"])
+    example_pkgs = sum(1 for p in package_telemetry if p["has_worked_examples"])
+    validator_pkgs = sum(1 for p in package_telemetry if p["has_validator_script"])
 
     repo_rate, repo_pct = _rate_pair(passed_pkgs, total_pkgs)
     constraint_rate, constraint_pct = _rate_pair(covered_pkgs, total_pkgs)
     schema_rate, schema_pct = _rate_pair(schema_pkgs, total_pkgs)
+    worked_example_rate, worked_example_pct = _rate_pair(example_pkgs, total_pkgs)
+    validator_script_rate, validator_script_pct = _rate_pair(validator_pkgs, total_pkgs)
 
     new_pkgs_telemetry = [p for p in package_telemetry if p["is_new"]]
     (
@@ -1733,6 +2348,12 @@ def _build_telemetry_summary(
         "deterministic_constraint_coverage_percentage": constraint_pct,
         "output_schema_coverage": schema_rate,
         "output_schema_coverage_percentage": schema_pct,
+        "skill_worked_example_coverage": worked_example_rate,
+        "skill_worked_example_coverage_percentage": worked_example_pct,
+        "validator_script_coverage": validator_script_rate,
+        "validator_script_coverage_percentage": validator_script_pct,
+        "method_boilerplate_duplication_rate": method_dup_rate,
+        "method_boilerplate_duplication_percentage": method_dup_pct,
         "execution_time_seconds": duration,
         "packages": package_telemetry,
     }
@@ -1772,11 +2393,14 @@ def validate_with_telemetry(
     descriptions: dict[str, str] = {}
     short_descriptions: dict[str, str] = {}
     prompt_bodies: dict[str, str] = {}
+    method_lines_by_pkg: dict[str, list[str]] = {}
     package_telemetry: list[dict[str, Any]] = []
     ledger_dirty = False
 
     for package in packages:
         parsed = _inspect_skill_package(package, scenario_schema=scenario_schema)
+        if parsed.method_noncode_lines is not None:
+            method_lines_by_pkg[package.name] = parsed.method_noncode_lines
         problems.extend(f"{package.name}: {error}" for error in parsed.errors)
         is_new = package.name in new_skill_names
         first_pass_valid, attempts_count, updated = _record_package_attempt(
@@ -1809,12 +2433,18 @@ def validate_with_telemetry(
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
 
     problems.extend(_validate_suite_manifest(root))
+    method_dup_errors, method_dup_rate, method_dup_pct = (
+        _evaluate_method_boilerplate_duplication(method_lines_by_pkg)
+    )
+    problems.extend(method_dup_errors)
     duration = round(time.perf_counter() - start_time, 4)
     telemetry = _build_telemetry_summary(
         now_iso=now_iso,
         diff_scope=diff_scope,
         diff_base=diff_base,
         package_telemetry=package_telemetry,
+        method_dup_rate=method_dup_rate,
+        method_dup_pct=method_dup_pct,
         duration=duration,
     )
     return problems, telemetry
@@ -1923,6 +2553,15 @@ def _print_telemetry_report(
     print(
         f"  Deterministic Constraint Coverage: {telemetry['deterministic_constraint_coverage_percentage']}%"
     )
+    print(
+        f"  Skill Worked-Example Coverage: {telemetry['skill_worked_example_coverage_percentage']}%"
+    )
+    print(
+        f"  Bundled Validator Script Coverage: {telemetry['validator_script_coverage_percentage']}%"
+    )
+    print(
+        f"  Method Boilerplate Duplication: {telemetry['method_boilerplate_duplication_percentage']}%"
+    )
     print(f"  Execution Time: {telemetry['execution_time_seconds']}s")
     print("=" * 60)
     if not errors:
@@ -1931,12 +2570,18 @@ def _print_telemetry_report(
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
-    errors, telemetry = validate_with_telemetry(
-        root=args.root,
-        base_ref=args.base_ref,
-        ledger_path=args.ledger,
-        record_attempts=not args.no_ledger,
-    )
+    try:
+        errors, telemetry = validate_with_telemetry(
+            root=args.root,
+            base_ref=args.base_ref,
+            ledger_path=args.ledger,
+            record_attempts=not args.no_ledger,
+        )
+    except FredCliError as exc:
+        print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
+        if exc.hint:
+            print(f"Hint: {exc.hint}", file=sys.stderr)
+        return 2
     for error in errors:
         print(error)
 

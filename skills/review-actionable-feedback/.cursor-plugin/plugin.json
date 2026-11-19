@@ -1,0 +1,12 @@
+{
+  "name": "review-actionable-feedback",
+  "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+  "version": "0.2.0",
+  "author": {
+    "name": "fderuiter"
+  },
+  "license": "MIT",
+  "skills": [
+    "."
+  ]
+}

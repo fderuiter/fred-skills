@@ -386,7 +386,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover all 42 Python blocks in docs/api.md",
         )
 
-        # Full-file discovery coverage for runbooks (65 blocks) and integration (32 blocks)
+        # Full-file discovery coverage for runbooks (65 blocks) and integration (37 blocks)
         self.assertEqual(
             len(discovered["docs/runbooks.md"]),
             65,
@@ -394,8 +394,8 @@ class DocSnippetVerificationTests(unittest.TestCase):
         )
         self.assertEqual(
             len(discovered["docs/integration.md"]),
-            32,
-            "Must discover all 32 code blocks in docs/integration.md",
+            37,
+            "Must discover all 37 code blocks in docs/integration.md",
         )
 
     def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self) -> None:
@@ -734,10 +734,10 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertTrue(ok, f"Runbooks snippet failed: {msg}")
 
     def test_multiline_commands_in_integration(self):
-        """Multiline commands with continuation backslashes in docs/integration.md (L309-L340) must parse and execute without ValueError."""
+        """Multiline commands with continuation backslashes in docs/integration.md (L356-L388) must parse and execute without ValueError."""
         integration = ROOT / "docs/integration.md"
         blocks = extract_blocks_from_file(
-            integration, start_line=309, end_line=340, root=ROOT
+            integration, start_line=356, end_line=388, root=ROOT
         )
         self.assertGreaterEqual(len(blocks), 1)
         block = blocks[0]
@@ -824,7 +824,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_full_file_runbooks_and_integration_snippets_pass(self):
-        """Full-file snippet verification across docs/runbooks.md (65 blocks) and docs/integration.md (32 blocks) passes with zero errors."""
+        """Full-file snippet verification across docs/runbooks.md (65 blocks) and docs/integration.md (37 blocks) passes with zero errors."""
         errors = verify_all_snippets(
             root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
         )
@@ -1241,17 +1241,17 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L139:" in err and "v0.3.0" in err
+                    "docs/usage.md:L147:" in err and "v0.3.0" in err
                     for err in ver_errors
                 ),
-                f"Expected docs/usage.md:L139 version drift failure, got: {ver_errors}",
+                f"Expected docs/usage.md:L147 version drift failure, got: {ver_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L167:" in err and "0.3.0" in err
+                    "docs/usage.md:L175:" in err and "0.3.0" in err
                     for err in ver_errors
                 ),
-                f"Expected docs/usage.md:L167 tar version drift failure, got: {ver_errors}",
+                f"Expected docs/usage.md:L175 tar version drift failure, got: {ver_errors}",
             )
 
             # Restore VERSION and mutate catalog/packs.json skill count without updating docs
@@ -1431,6 +1431,70 @@ class DocSnippetVerificationTests(unittest.TestCase):
                     for e in errs
                 ),
                 f"Expected Audit schema error at L14, got: {errs}",
+            )
+
+    def test_cursor_heading_sections_reject_claude_plugin_slash_commands(self) -> None:
+        """Fenced blocks inside Cursor headings must reject /plugin commands while sibling Claude Code sections allow them."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            for rel in (
+                ".claude-plugin/marketplace.json",
+                ".cursor-plugin/marketplace.json",
+                ".cursor-plugin/plugin.json",
+            ):
+                dst = tmp_root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((ROOT / rel).read_bytes())
+
+            doc_path = tmp_root / "docs/cursor_heading_check.md"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text(
+                "## Installation\n\n"
+                "### Claude Code\n\n"
+                "```sh\n"
+                "/plugin marketplace add fderuiter/fred-skills\n"
+                "/plugin install fred-skills@fred-skills\n"
+                "```\n\n"
+                "### Cursor\n\n"
+                "#### Marketplace Import\n\n"
+                "```sh\n"
+                "/plugin install fred-skills@fred-skills\n"
+                "```\n\n"
+                "### Claude Code and Cursor\n\n"
+                "```text\n"
+                "/plugin marketplace add fderuiter/fred-skills\n"
+                "```\n\n"
+                "### Codex\n\n"
+                "```text\n"
+                "$skill-installer install https://github.com/fderuiter/fred-skills/tree/main/skills/repo-audit-concurrency\n"
+                "```\n",
+                encoding="utf-8",
+            )
+
+            blocks = extract_blocks_from_file(doc_path, root=tmp_root)
+            self.assertEqual(4, len(blocks))
+            self.assertEqual(("Installation", "Claude Code"), blocks[0].headings)
+            self.assertEqual(
+                ("Installation", "Cursor", "Marketplace Import"),
+                blocks[1].headings,
+            )
+            self.assertEqual(
+                ("Installation", "Claude Code and Cursor"),
+                blocks[2].headings,
+            )
+            self.assertEqual(("Installation", "Codex"), blocks[3].headings)
+
+            errs = verify_all_snippets(
+                root=tmp_root, files=["docs/cursor_heading_check.md"]
+            )
+            self.assertEqual(2, len(errs), f"Expected 2 Cursor heading errors: {errs}")
+            self.assertTrue(
+                any("L15:" in e and "'Cursor'" in e for e in errs),
+                errs,
+            )
+            self.assertTrue(
+                any("L21:" in e and "'Claude Code and Cursor'" in e for e in errs),
+                errs,
             )
 
 
