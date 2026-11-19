@@ -1,6 +1,6 @@
 ---
 name: arch-boundary-specification
-description: "Use when defining, documenting, or verifying system, service, module, and trust boundaries."
+description: "Specify service encapsulation contracts, module interfaces, and failure-domain isolation rules in architecture artifacts. Use when designing new subsystem perimeters, authoring API gateway specs, or documenting inter-service communication protocols."
 ---
 
 # Boundary Specification

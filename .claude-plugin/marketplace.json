@@ -382,7 +382,7 @@
     },
     {
       "name": "arch-boundary-specification",
-      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "description": "Specify service encapsulation contracts, module interfaces, and failure-domain isolation rules in architecture artifacts. Use when designing new subsystem perimeters, authoring API gateway specs, or documenting inter-service communication protocols.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -394,7 +394,7 @@
     },
     {
       "name": "arch-component-decomposition",
-      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "description": "Partition software systems into cohesive modules, narrow collaboration interfaces, and staged monolith-splitting plans. Use when breaking apart tightly coupled packages, assigning component ownership, or planning modular restructuring.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -454,7 +454,7 @@
     },
     {
       "name": "repo-audit-api-consistency",
-      "description": "Audit api design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
+      "description": "Audit API design consistency with code evidence and counterexamples. Use when auditing inconsistent API semantics, cancellation behavior, result types, pagination, or lifecycle conventions.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -466,7 +466,7 @@
     },
     {
       "name": "repo-audit-architecture",
-      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when auditing dependency cycles, layer violations, module boundary erosion, forbidden imports, or dependency direction.",
+      "description": "Audit architectural boundaries and dependency direction with code evidence and counterexamples. Use when investigating import cycles, layering inversions, forbidden package coupling, or leaky subsystem seams.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -478,7 +478,7 @@
     },
     {
       "name": "repo-audit-behavioral-contracts",
-      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when reconstructing subsystem behavioral contracts across state, time, ownership, correctness, resilience, and trust.",
+      "description": "Audit behavioral contract reconstruction with code evidence and counterexamples. Use when mapping undocumented guarantees, preconditions, postconditions, caller obligations, or cross-subsystem expectations from source.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -622,7 +622,7 @@
     },
     {
       "name": "repo-audit-dead-code",
-      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when auditing unreachable code, abandoned flags, unused exports, obsolete migrations, or removable compatibility paths.",
+      "description": "Audit dead code and obsolete compatibility paths with code evidence and counterexamples. Use when investigating unreachable branches, stale feature toggles, unreferenced exports, retired shims, or orphaned fallbacks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -634,7 +634,7 @@
     },
     {
       "name": "repo-audit-diagnostics",
-      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles.",
+      "description": "Diagnose stalled repository audits, parse session transcripts for timeouts and schema errors, scrub credentials, and generate recovery bundles. Use when triaging interrupted audit runs, inspecting failed session logs, redacting transcript secrets, or producing checkpoint resume instructions.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -646,7 +646,7 @@
     },
     {
       "name": "repo-audit-domain-models",
-      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, ambiguous identifiers or units, invalid domain combinations, or missing domain concepts.",
+      "description": "Audit implicit domain models with code evidence and counterexamples. Use when auditing primitive obsession, conflated identifiers or units, unmodeled value objects, or scattered entity rules.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -694,7 +694,7 @@
     },
     {
       "name": "repo-audit-invariants",
-      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced domain rules, invariant violations, or invalid combinations of domain values.",
+      "description": "Audit implicit invariants with code evidence and counterexamples. Use when investigating unenforced aggregate rules, bypassed constructor guards, or illegal combinations of persisted fields.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -790,7 +790,7 @@
     },
     {
       "name": "repo-audit-state-machines",
-      "description": "Audit implicit state machines with code evidence and counterexamples. Use when finding implicit state machines, invalid state combinations, missing transitions, or state-dependent behavior.",
+      "description": "Audit implicit state machines with code evidence and counterexamples. Use when investigating ad-hoc status flags, unreachable or missing transitions, unguarded mode switches, or illegal lifecycle combinations.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -802,7 +802,7 @@
     },
     {
       "name": "repo-audit-synthesis",
-      "description": "Consolidate repository audit findings into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use after one or more audits or when converting audit reports into an issue plan.",
+      "description": "Consolidate specialist audit outputs into deduplicated root causes, issue drafts, and ordered implementation handoffs. Use when synthesizing completed audit passes or turning topic reports into a prioritized issue backlog.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -826,7 +826,7 @@
     },
     {
       "name": "repo-audit-test-contracts",
-      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping missing behavioral tests, contract coverage gaps, or inadequate negative and recovery path coverage.",
+      "description": "Audit untested behavioral contracts with code evidence and counterexamples. Use when mapping unverified requirement guarantees, missing negative-path checks, or unasserted recovery obligations.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -862,7 +862,7 @@
     },
     {
       "name": "repo-audit-trust-boundaries",
-      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping untrusted inputs, authorization bypasses, tenant isolation, or security boundary enforcement.",
+      "description": "Audit trust and authorization boundaries with code evidence and counterexamples. Use when mapping unvalidated external inputs, privilege escalation paths, cross-tenant data leaks, or unguarded sinks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -958,7 +958,7 @@
     },
     {
       "name": "review-invariant-violations",
-      "description": "Use when reviewing code changes for broken data invariants, unsafe state transitions, and concurrency hazards.",
+      "description": "Verify pull request patches for broken safety assumptions, rollback regressions, and unbalanced resource lifecycles. Use when inspecting proposed diff hunks for broken preconditions, race hazards, or corrupted state transitions before merge.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1030,7 +1030,7 @@
     },
     {
       "name": "test-case-generation",
-      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "description": "Author deterministic unit, integration, and regression tests with isolated fixtures and independent assertion oracles. Use when writing executable test suites from gap backlogs or turning reproduced bug specs into automated checks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1042,7 +1042,7 @@
     },
     {
       "name": "test-gap-analysis",
-      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "description": "Prioritize unexercised code branches, exception handlers, and edge-value ranges into a structured test backlog. Use when planning automated test expansion, ranking untested failure branches, or scoping regression scenarios for a module.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"

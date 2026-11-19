@@ -40,7 +40,7 @@ class PackageTests(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\nInspect the supplied contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
             "Deliver the audit output conforming to [audit schema](assets/audit.schema.json), "
             "verify with [audit validator](scripts/validate_audit.py), and run standalone via [prompt](assets/prompt.md).\n"
@@ -586,7 +586,7 @@ class PackageTests(unittest.TestCase):
                 },
                 {
                     "name": "sample-audit",
-                    "description": "Audit synthetic contracts when explicitly requested.",
+                    "description": "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance.",
                     "version": root_version,
                     "author": {"name": "fderuiter"},
                     "source": "./skills/sample-audit",
@@ -611,7 +611,7 @@ class PackageTests(unittest.TestCase):
                 {
                     "name": "sample-audit",
                     "source": "./skills/sample-audit",
-                    "description": "Audit synthetic contracts when explicitly requested.",
+                    "description": "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance.",
                     "version": root_version,
                     "author": {"name": "fderuiter"},
                     "license": "MIT",
@@ -1848,7 +1848,7 @@ class PackageTests(unittest.TestCase):
         second_skill = self.root / "skills/second-audit"
         shutil.copytree(self.skill, second_skill)
         (second_skill / "SKILL.md").write_text(
-            '---\nname: second-audit\ndescription: "Audit secondary contracts when explicitly requested."\n---\n\n'
+            '---\nname: second-audit\ndescription: "Audit secondary contracts with deterministic checks. Use when verifying secondary contract invariants, caller obligations, or boundary rules."\n---\n\n'
             "# Second\n\nInspect the secondary contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
             "Deliver the audit output conforming to [audit schema](assets/audit.schema.json), "
             "[audit validator](scripts/validate_audit.py), and [prompt](assets/prompt.md).\n"
@@ -2066,7 +2066,7 @@ class PackageTests(unittest.TestCase):
 
     def test_skill_markdown_lacking_boundary_sections_is_rejected(self):
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\nInspect [audit schema](assets/audit.schema.json); do not mutate files.\n",
             encoding="utf-8",
         )
@@ -2079,7 +2079,7 @@ class PackageTests(unittest.TestCase):
     def test_skill_markdown_prohibition_and_delivery_or_guardrail_rules(self):
         # Noun-only SKILL.md without explicit prohibitions is rejected
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\n## Workflow\n\nMap trust boundaries and isolation barriers.\n\n"
             "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) invariant summaries.\n",
             encoding="utf-8",
@@ -2092,7 +2092,7 @@ class PackageTests(unittest.TestCase):
 
         # Prohibition only in ## Workflow without ## Guardrails or ## Deliver prohibition is rejected
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\n## Workflow\n\nDo not trust unvalidated inputs.\n\n"
             "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
             encoding="utf-8",
@@ -2108,7 +2108,7 @@ class PackageTests(unittest.TestCase):
 
         # Dedicated ## Guardrails section with explicit prohibition and linked companions is accepted
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\nSee [worked examples](references/examples.md).\n\n"
             "## Guardrails\n\n- Never modify application code without authorization.\n\n"
             "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries with "
@@ -2214,7 +2214,7 @@ class PackageTests(unittest.TestCase):
 
     def test_skill_markdown_missing_schema_link_is_rejected(self):
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\n## Deliver\n\nDeliver the audit output. Do not modify application code.\n",
             encoding="utf-8",
         )
@@ -2350,7 +2350,7 @@ class PackageTests(unittest.TestCase):
         # 2. SKILL.md 5,000-token body (< 500 lines)
         five_k_body = "\n".join([" ".join(["word"] * 50) for _ in range(100)])
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             f"# Sample\n\n{five_k_body}\n\n## Deliver\n\n"
             "Deliver [audit schema](assets/audit.schema.json). Do not modify code.\n",
             encoding="utf-8",
@@ -2427,6 +2427,8 @@ class PackageTests(unittest.TestCase):
         )
         self.assertEqual(1.0, telemetry["output_schema_coverage"])
         self.assertEqual(100.0, telemetry["output_schema_coverage_percentage"])
+        self.assertEqual(1.0, telemetry["routing_trigger_coverage"])
+        self.assertEqual(100.0, telemetry["routing_trigger_coverage_percentage"])
         self.assertLess(telemetry["execution_time_seconds"], 5.0)
 
         telemetry_file = self.root / "telemetry.json"
@@ -2444,6 +2446,8 @@ class PackageTests(unittest.TestCase):
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
         self.assertEqual(57, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
+        self.assertEqual(1.0, exported["routing_trigger_coverage"])
+        self.assertEqual(100.0, exported["routing_trigger_coverage_percentage"])
 
     def test_all_skills_have_output_format_schemas(self):
         skills_dir = ROOT / "skills"
@@ -3029,6 +3033,213 @@ class PackageTests(unittest.TestCase):
             dup_errors,
         )
 
+    def test_description_triggers_vague_phrases_acronyms_collisions_and_telemetry(
+        self,
+    ) -> None:
+        import re
+
+        from skill_tools import read_frontmatter
+
+        # 1. All 57 repository skills include an explicit 'Use when' trigger clause.
+        repo_skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
+        self.assertEqual(57, len(repo_skills))
+        for skill_md in repo_skills:
+            meta, _ = read_frontmatter(skill_md)
+            self.assertRegex(
+                meta["description"],
+                re.compile(r"\buse when\s+\S+", re.IGNORECASE),
+                f"{skill_md.parent.name} missing 'Use when' trigger",
+            )
+
+        body_tail = (
+            "# API Sample Design\n\nInspect the supplied contract using [worked examples](references/examples.md) and the [prompt](assets/prompt.md).\n\n## Deliver\n\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json) and verified with [audit validator](scripts/validate_audit.py).\n"
+            "Do not modify application code without explicit user authorization.\n"
+        )
+
+        def write_sample(desc: str, heading_body: str = body_tail) -> None:
+            self.entry.write_text(
+                f'---\nname: sample-audit\ndescription: "{desc}"\n---\n\n'
+                + heading_body,
+                encoding="utf-8",
+            )
+
+        # 2. Reject "x", missing triggers, 'Use after', and <4 content-word triggers.
+        for missing_or_short in (
+            "x",
+            "Diagnose stalled repository audits and generate recovery bundles.",
+            "Consolidate reports. Use after one or more repository audits finish.",
+            "Audit synthetic contracts. Use when requested.",
+        ):
+            with self.subTest(missing_or_short=missing_or_short):
+                write_sample(missing_or_short)
+                errs = validate_skill(self.skill)
+                self.assertTrue(
+                    any("'Use when' trigger clause" in e for e in errs),
+                    f"Expected 'Use when' error for {missing_or_short!r}, got: {errs}",
+                )
+
+        # 3. Reject vague catch-all phrases both alone and inside 'Use when' clauses.
+        for vague_desc in (
+            "Use for productivity tasks",
+            "Use when handling general tasks or productivity tasks across repositories.",
+            "Helps with code reviews. Use when reviewing pull request changes as needed.",
+        ):
+            with self.subTest(vague_desc=vague_desc):
+                write_sample(vague_desc)
+                errs = validate_skill(self.skill)
+                self.assertTrue(
+                    any("vague catch-all phrasing" in e for e in errs),
+                    f"Expected vague-phrase rejection for {vague_desc!r}, got: {errs}",
+                )
+
+        # 4. Reject lowercased heading acronyms while allowing uppercase acronyms & normal title words.
+        write_sample(
+            "Audit api design consistency. Use when inspecting API endpoint signatures, pagination cursors, or error shapes."
+        )
+        acronym_errs = validate_skill(self.skill)
+        self.assertTrue(
+            any("lowercases heading acronym 'API'" in e for e in acronym_errs),
+            f"Expected lowercase acronym error, got: {acronym_errs}",
+        )
+
+        write_sample(
+            "Audit API design consistency. Use when inspecting sample design signatures, pagination cursors, or error shapes."
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Valid single-clause 'Use when' workflow description passes without false acronym errors.
+        write_sample(
+            "Use when verifying, reproducing, refuting, or narrowing an existing repository finding."
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # 5. Cross-suite bigram collisions, intra-suite exemption, missing suites.json, and telemetry.
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Inspect synthetic behavioral contracts safely",
+        )
+
+        # Missing trigger yields 0.0 / 0.0% routing_trigger_coverage.
+        write_sample("x")
+        errs_x, tel_x = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertTrue(errs_x)
+        self.assertEqual(0.0, tel_x["routing_trigger_coverage"])
+        self.assertEqual(0.0, tel_x["routing_trigger_coverage_percentage"])
+
+        # Restore valid sample-audit and add a second skill sharing bigram 'behavioral contracts'.
+        write_sample(
+            "Audit behavioral contracts with deterministic checks. Use when mapping undocumented preconditions, postconditions, or caller obligations."
+        )
+        peer_skill = self.root / "skills/peer-skill"
+        shutil.copytree(self.skill, peer_skill)
+        (peer_skill / "SKILL.md").write_text(
+            '---\nname: peer-skill\ndescription: "Generate automated checks. Use when testing behavioral contracts, isolated fixtures, or regression oracles."\n---\n\n'
+            "# Peer Skill\n\nSee [worked examples](references/examples.md) and [prompt](assets/prompt.md).\n\n## Deliver\n\n"
+            "Deliver [audit schema](assets/audit.schema.json) verified with [audit validator](scripts/validate_audit.py). Do not modify code.\n",
+            encoding="utf-8",
+        )
+        (peer_skill / "assets/prompt.md").write_text(
+            "Use peer-skill on <repository> at <revision> conforming to assets/audit.schema.json. "
+            "Never mutate production files.\n",
+            encoding="utf-8",
+        )
+        self.scenarios_file.write_text(
+            self.scenarios_file.read_text(encoding="utf-8").replace(
+                "sample-sibling-audit", "peer-skill"
+            ),
+            encoding="utf-8",
+        )
+        scenarios_path = peer_skill / "references/evaluation-scenarios.json"
+        scenarios_path.write_text(
+            scenarios_path.read_text(encoding="utf-8")
+            .replace("sample-audit", "peer-skill")
+            .replace("sample-sibling-audit", "sample-audit")
+            .replace("expected findings", "expected outputs"),
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            peer_skill,
+            skill_name="peer-skill",
+            short_description="Generate automated checks for peer skill",
+        )
+
+        # Without catalog/suites.json, cross-suite check is skipped cleanly.
+        no_suites_errs, no_suites_tel = validate_with_telemetry(
+            self.root, record_attempts=False
+        )
+        self.assertEqual([], no_suites_errs)
+        self.assertEqual(1.0, no_suites_tel["routing_trigger_coverage"])
+        self.assertEqual(100.0, no_suites_tel["routing_trigger_coverage_percentage"])
+
+        # Intra-suite specialist pair in the same suite is exempt.
+        (self.root / "catalog").mkdir(exist_ok=True)
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "repository-audits",
+                            "phases": [
+                                {
+                                    "id": 1,
+                                    "title": "Discovery",
+                                    "skills": ["sample-audit", "peer-skill"],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        intra_errs, _ = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertEqual([], intra_errs)
+
+        # Cross-suite pair sharing 'behavioral contracts' bigram is rejected.
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "repository-audits",
+                            "phases": [
+                                {
+                                    "id": 1,
+                                    "title": "Discovery",
+                                    "skills": ["sample-audit"],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "repository-workflows",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Workflows",
+                                    "skills": ["peer-skill"],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cross_errs, _ = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertEqual(1, len(cross_errs), f"Unexpected errors: {cross_errs}")
+        self.assertIn("Cross-suite description bigram collision", cross_errs[0])
+        self.assertIn("behavioral contracts", cross_errs[0])
+
     def test_worked_examples_count_link_and_json_schema_validation(self) -> None:
         # 1. Missing worked examples file is rejected
         self.examples_file.unlink()
@@ -3077,7 +3288,7 @@ class PackageTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts with deterministic checks. Use when inspecting synthetic contract fixtures, boundary rules, or schema compliance."\n---\n\n'
             "# Sample\n\n## Deliver\n\nDeliver [audit schema](assets/audit.schema.json). "
             "Do not modify application code.\n",
             encoding="utf-8",
@@ -3156,7 +3367,7 @@ class PackageTests(unittest.TestCase):
         second = self.root / "skills/second-specialist"
         shutil.copytree(self.skill, second)
         (second / "SKILL.md").write_text(
-            '---\nname: second-specialist\ndescription: "Audit second specialist domain."\n---\n\n'
+            '---\nname: second-specialist\ndescription: "Audit second specialist domain. Use when checking secondary specialist preconditions, invariants, or caller obligations."\n---\n\n'
             "# Second Specialist\n\nRead [method](references/method.md).\n\n## Deliver\n\n"
             "Emit [audit schema](assets/audit.schema.json). Do not modify application code.\n",
             encoding="utf-8",
