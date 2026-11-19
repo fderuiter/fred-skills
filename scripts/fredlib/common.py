@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "software-architecture": {
         "filename": "architecture.json",
-        "schema": "skills/arch-decision-record/assets/architecture.schema.json",
+        "schema": "shared/software-architecture/resources/assets/architecture.schema.json",
         "starter": {
             "schema_version": "1.0",
             "title": "Architecture specification",
@@ -55,7 +56,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "code-review": {
         "filename": "review.json",
-        "schema": "skills/review-diff-analysis/assets/review.schema.json",
+        "schema": "shared/code-review/resources/assets/review.schema.json",
         "starter": {
             "schema_version": "1.0",
             "verdict": "comment",
@@ -65,7 +66,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "automated-testing": {
         "filename": "testing.json",
-        "schema": "skills/test-case-generation/assets/testing.schema.json",
+        "schema": "shared/automated-testing/resources/assets/testing.schema.json",
         "starter": {
             "schema_version": "1.0",
             "component": "repository",
@@ -263,6 +264,31 @@ def _deliverable_for_run(run: dict, root: Path = ROOT) -> str:
     return str(_artifact_contract_for_run(run, root=root)["filename"])
 
 
+def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path, Path]]:
+    shared_dir = root / "shared"
+    if not shared_dir.is_dir():
+        return []
+    assets: list[tuple[Path, Path]] = []
+    for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
+        try:
+            manifest = read_json(manifest_path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        if manifest.get("suite", "repository-audits") != suite_name:
+            continue
+        for raw_entry in manifest.get("files", []):
+            if not isinstance(raw_entry, str):
+                continue
+            rel = relative_path(raw_entry)
+            if rel.parts and rel.parts[0] == "assets":
+                source = manifest_path.parent / "resources" / rel
+                if source.is_file() and not source.is_symlink():
+                    assets.append((rel, source))
+    return assets
+
+
 def _detect_domain_kind(data: object) -> str | None:
     if not isinstance(data, dict) or "run_id" in data:
         return None
@@ -374,8 +400,21 @@ def resolve_run_directory(path: Path | str, *, require_run_json: bool = True) ->
     return p
 
 
+def _target_file_mode(path: Path) -> int:
+    try:
+        st = path.lstat()
+        if not stat.S_ISLNK(st.st_mode):
+            return stat.S_IMODE(st.st_mode)
+    except OSError:
+        pass
+    umask = os.umask(0o077)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
 def atomic_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode = _target_file_mode(path)
     fd, name = tempfile.mkstemp(prefix=".fred-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
@@ -383,9 +422,12 @@ def atomic_json(path: Path, data) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(name, mode)
         os.replace(name, path)
     finally:
         if os.path.exists(name):
+            if os.name == "nt":
+                os.chmod(name, stat.S_IWRITE)
             os.unlink(name)
 
 
@@ -429,7 +471,10 @@ def package_files(package: Path) -> dict[str, str]:
             hint="Ensure the skill package path exists as a regular directory and is not a symlink.",
         )
     result = {}
-    for path in sorted(package.rglob("*")):
+    for path in sorted(
+        package.rglob("*"),
+        key=lambda p: p.relative_to(package).as_posix(),
+    ):
         if path.is_symlink():
             raise FredCliError(
                 f"Symlinks are not supported in packages: {path}",

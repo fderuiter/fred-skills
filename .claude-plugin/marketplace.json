@@ -1,10 +1,13 @@
 {
   "name": "fred-skills",
+  "version": "0.2.0",
+  "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
   "owner": {
     "name": "fderuiter"
   },
   "metadata": {
-    "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work."
+    "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
+    "version": "0.2.0"
   },
   "plugins": [
     {
@@ -163,17 +166,6 @@
       ]
     },
     {
-      "name": "architecture",
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/arch-decision-record",
-        "./skills/arch-boundary-specification",
-        "./skills/arch-component-decomposition"
-      ]
-    },
-    {
       "name": "code-review",
       "description": "Pull request diff review, invariant verification, and actionable feedback.",
       "source": "./",
@@ -197,7 +189,7 @@
     },
     {
       "name": "full-audit",
-      "description": "All 33 specialist audits plus coordinator and synthesis.",
+      "description": "All 33 specialist audits plus coordinator, diagnostics, and synthesis.",
       "source": "./",
       "strict": false,
       "skills": [
@@ -217,6 +209,7 @@
         "./skills/repo-audit-configuration",
         "./skills/repo-audit-data-integrity",
         "./skills/repo-audit-dead-code",
+        "./skills/repo-audit-diagnostics",
         "./skills/repo-audit-domain-models",
         "./skills/repo-audit-error-semantics",
         "./skills/repo-audit-failure-modes",

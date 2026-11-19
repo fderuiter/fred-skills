@@ -29,3 +29,4 @@ Use the [handoff](assets/handoff.md) and [starting prompt](assets/prompt.md). Re
 observed versus inferred behavior, actual validation state, compatibility limits, and
 next action. Resolve related workflow skills by name, without assuming a host API.
 Validate structured reconciliation artifacts using [reconciliation schema](assets/reconciliation.schema.json).
+Do not modify application code or mutate remote issue state without explicit user authorization.

@@ -20,4 +20,4 @@ Generate deterministic tests with independent oracles and clean boundary conditi
 
 Use the [testing template](assets/testing-template.md) to record generated test cases.
 Validate test structures against the [testing schema](assets/testing.schema.json).
-Produce runnable test files integrated cleanly into repository test frameworks.
+Produce runnable test files integrated cleanly into repository test frameworks when authorized; do not modify production code or write repository test files without explicit user authorization.

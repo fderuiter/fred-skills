@@ -321,10 +321,137 @@ class InstallationTests(unittest.TestCase):
         second = releases.build(two, pack="starter", root=self.source)
         self.assertEqual(first, second)
         self.assertEqual(2, releases.verify(one / "manifest.json")["verified_archives"])
+        for entry in first["archives"]:
+            self.assertEqual(["sample", "other"], entry["skills"])
+            self.assertEqual(first["skills"], entry["skills"])
         archive = one / first["archives"][0]["file"]
         archive.write_bytes(archive.read_bytes() + b"corrupt")
         with self.assertRaises(ValueError):
             releases.verify(one / "manifest.json")
+
+    def test_atomic_json_and_manifest_permissions_respect_umask_and_existing_mode(self):
+        import os
+        import stat
+
+        if os.name == "nt":
+            self.skipTest("POSIX file permission bits are not enforced on Windows")
+
+        old_umask = os.umask(0o022)
+        try:
+            rel_dir = self.root / "perm_release"
+            releases.build(rel_dir, pack="starter", root=self.source)
+            manifest_mode = stat.S_IMODE((rel_dir / "manifest.json").stat().st_mode)
+            sums_mode = stat.S_IMODE((rel_dir / "SHA256SUMS").stat().st_mode)
+            self.assertEqual(0o644, manifest_mode)
+            self.assertEqual(0o644, sums_mode)
+
+            # Restrictive umask 0077 masks 0o666 so new state files stay private (0600)
+            os.umask(0o077)
+            private_json = self.root / "private_state" / "receipt.json"
+            atomic_json(private_json, {"private": True})
+            self.assertEqual(0o600, stat.S_IMODE(private_json.stat().st_mode))
+
+            # Overwriting an existing private file under umask 0022 preserves 0600
+            os.umask(0o022)
+            atomic_json(private_json, {"private": True, "updated": 2})
+            self.assertEqual(0o600, stat.S_IMODE(private_json.stat().st_mode))
+        finally:
+            os.umask(old_umask)
+
+    def test_verify_enforces_archive_bytes_checksum_files_and_standalone_manifest(self):
+        import hashlib as hashlib_mod
+
+        out = self.root / "verify_contracts"
+        manifest = releases.build(out, pack="starter", root=self.source)
+        manifest_path = out / "manifest.json"
+        self.assertEqual(2, releases.verify(manifest_path)["verified_archives"])
+
+        # 1. Tampered entry["bytes"] fails before SHA-256 computation
+        tampered_bytes_manifest = read_json(manifest_path)
+        tampered_bytes_manifest["archives"][0]["bytes"] += 1
+        atomic_json(manifest_path, tampered_bytes_manifest)
+        with (
+            patch.object(
+                releases.hashlib,
+                "sha256",
+                side_effect=AssertionError("sha256 called before byte size check"),
+            ),
+            self.assertRaises(ValueError) as bytes_ctx,
+        ):
+            releases.verify(manifest_path)
+        self.assertIn("Byte size mismatch", str(bytes_ctx.exception))
+        atomic_json(manifest_path, manifest)
+
+        # 2. Missing archive raises ValueError
+        first_archive = out / manifest["archives"][0]["file"]
+        saved_archive = first_archive.read_bytes()
+        first_archive.unlink()
+        with self.assertRaises(ValueError) as missing_ctx:
+            releases.verify(manifest_path)
+        self.assertIn("Missing release archive", str(missing_ctx.exception))
+        first_archive.write_bytes(saved_archive)
+        self.assertEqual(2, releases.verify(manifest_path)["verified_archives"])
+
+        # 3. Corrupted digest and malformed lines in SHA256SUMS and checksums.sha256
+        orig_sums = (out / "SHA256SUMS").read_text(encoding="utf-8")
+        for checksum_name in ("SHA256SUMS", "checksums.sha256"):
+            cpath = out / checksum_name
+            bad_digest = "0" * 64 + f"  {manifest['archives'][0]['file']}\n"
+            cpath.write_text(
+                bad_digest
+                + f"{manifest['archives'][1]['sha256']}  {manifest['archives'][1]['file']}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                releases.verify(manifest_path)
+
+            cpath.write_text("malformed-checksum-line\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                releases.verify(manifest_path)
+
+            # Truncated checksum file missing second archive
+            cpath.write_text(orig_sums.splitlines(keepends=True)[0], encoding="utf-8")
+            with self.assertRaises(ValueError):
+                releases.verify(manifest_path)
+
+            cpath.write_text(orig_sums, encoding="utf-8")
+
+        # 4. Symlinked checksum files are rejected
+        outside_sums = self.root / "outside_sums.txt"
+        outside_sums.write_text(orig_sums, encoding="utf-8")
+        symlink_supported = True
+        try:
+            (out / "SHA256SUMS").unlink()
+            (out / "SHA256SUMS").symlink_to(outside_sums)
+        except OSError:
+            symlink_supported = False
+            (out / "SHA256SUMS").write_text(orig_sums, encoding="utf-8")
+        if symlink_supported:
+            with self.assertRaises(ValueError) as sym_ctx:
+                releases.verify(manifest_path)
+            self.assertIn("Symlink", str(sym_ctx.exception))
+            (out / "SHA256SUMS").unlink()
+
+        # 5. Standalone manifest.json verification (when SHA256SUMS / checksums.sha256 are absent)
+        if (out / "SHA256SUMS").exists():
+            (out / "SHA256SUMS").unlink()
+        (out / "checksums.sha256").unlink()
+        res_standalone = releases.verify(manifest_path)
+        self.assertEqual(2, res_standalone["verified_archives"])
+
+        # Standalone verification still catches same-length byte corruption via sha256
+        flipped = bytearray(saved_archive)
+        flipped[-1] ^= 0xFF
+        first_archive.write_bytes(bytes(flipped))
+        self.assertEqual(len(saved_archive), first_archive.stat().st_size)
+        self.assertNotEqual(
+            hashlib_mod.sha256(bytes(flipped)).hexdigest(),
+            manifest["archives"][0]["sha256"],
+        )
+        with self.assertRaises(ValueError) as standalone_sha_ctx:
+            releases.verify(manifest_path)
+        self.assertIn("Checksum mismatch", str(standalone_sha_ctx.exception))
+        first_archive.write_bytes(saved_archive)
 
     def test_unified_release_builds_all_documented_packs_and_standalone_skills(self):
         one = self.root / "unified_one"
@@ -339,25 +466,48 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((one / "checksums.sha256").is_file())
 
         ver_result = releases.verify(manifest_path)
+        self.assertEqual(74, ver_result["verified_archives"])
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
-        # Check all 12 documented catalog packs (tar and zip)
-        catalog_packs = list(read_json(ROOT / "catalog/packs.json")["packs"].keys())
-        self.assertEqual(12, len(catalog_packs))
+        # Check all 11 canonical catalog packs (tar and zip) and archive skills lists
+        packs_data = read_json(ROOT / "catalog/packs.json")["packs"]
+        catalog_packs = list(packs_data.keys())
+        self.assertEqual(11, len(catalog_packs))
+        self.assertNotIn("architecture", catalog_packs)
+        self.assertEqual(36, len(packs_data["full-audit"]["skills"]))
+        self.assertIn("repo-audit-diagnostics", packs_data["full-audit"]["skills"])
         self.assertEqual(tuple(catalog_packs), releases.DOCUMENTED_PACKS)
         self.assertEqual(catalog_packs, list(first["packs"].keys()))
-        archive_files = {item["file"] for item in first["archives"]}
+        archives_by_file = {item["file"]: item for item in first["archives"]}
+        for item in first["archives"]:
+            self.assertIn("skills", item)
+            self.assertTrue(len(item["skills"]) > 0, f"Empty skills for {item['file']}")
         for pack in catalog_packs:
             tar_name = f"fred-skills-{first['version']}-{pack}.tar"
             zip_name = f"fred-skills-{first['version']}-{pack}.zip"
             self.assertTrue((one / tar_name).is_file(), f"Missing {tar_name}")
             self.assertTrue((one / zip_name).is_file(), f"Missing {zip_name}")
-            self.assertIn(tar_name, archive_files)
-            self.assertIn(zip_name, archive_files)
+            self.assertIn(tar_name, archives_by_file)
+            self.assertIn(zip_name, archives_by_file)
+            self.assertEqual(
+                packs_data[pack]["skills"],
+                archives_by_file[tar_name]["skills"],
+            )
+            self.assertEqual(
+                packs_data[pack]["skills"],
+                archives_by_file[zip_name]["skills"],
+            )
 
         # Check consolidated suite and standalone skills
         self.assertTrue((one / "fred-skills-suite.tar.gz").is_file())
+        self.assertEqual(
+            51, len(archives_by_file["fred-skills-suite.tar.gz"]["skills"])
+        )
         self.assertTrue((one / "repo-audit-concurrency.tar.gz").is_file())
+        self.assertEqual(
+            ["repo-audit-concurrency"],
+            archives_by_file["repo-audit-concurrency.tar.gz"]["skills"],
+        )
 
         # Verify tampering is detected
         corrupt_target = one / first["archives"][0]["file"]

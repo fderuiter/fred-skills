@@ -40,7 +40,7 @@ repos:
         always_run: true
       - id: validate-skills
         name: Validate standalone packages
-        entry: python scripts/validate_skills.py
+        entry: python scripts/validate_skills.py --telemetry validation-telemetry.json
         language: system
         pass_filenames: false
         always_run: true

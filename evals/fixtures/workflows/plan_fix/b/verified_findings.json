@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "F-301",
+    "status": "refuted",
+    "task_id": "T-1",
+    "file": "token_store.py",
+    "blocked_by": []
+  }
+]
