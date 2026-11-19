@@ -19,6 +19,8 @@ SITE_ROOT_FILES: tuple[str, ...] = (
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
     "SECURITY.md",
     "LICENSE",
     "VERSION",

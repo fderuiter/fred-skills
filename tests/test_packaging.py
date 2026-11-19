@@ -758,10 +758,15 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(gemini_data["name"], "fred-skills")
         self.assertTrue(gemini_data["description"])
         self.assertEqual(gemini_data["contextFileName"], "AGENTS.md")
+        self.assertTrue((ROOT / gemini_data["contextFileName"]).is_file())
         self.assertEqual(
             gemini_data["version"],
             (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
         )
+        for shim_name in ("CLAUDE.md", "GEMINI.md"):
+            shim_path = ROOT / shim_name
+            self.assertTrue(shim_path.is_file(), f"Missing host shim {shim_name}")
+            self.assertEqual("@AGENTS.md\n", shim_path.read_text(encoding="utf-8"))
 
     def test_shared_resource_check_detects_and_repairs_drift(self):
         self.manifest()
@@ -1339,7 +1344,7 @@ class PackageTests(unittest.TestCase):
             for output_rel in build_catalog_outputs:
                 self.assertIn(output_rel, doc_text)
             self.assertIn(".github/action-pins.json", doc_text)
-        self.assertIn("--phase format", agents_text)
+        self.assertIn("--phase format", contrib_text)
         self.assertIn("repo-audit-diagnostics", readme_text)
         self.assertIn(f"{expected_hosts} host layouts", val_text)
         self.assertIn(f"{expected_hosts} host layouts", impl_text)
@@ -1483,10 +1488,16 @@ class PackageTests(unittest.TestCase):
                 ".github/action-pins.json",
             ),
             (
-                "AGENTS.md",
+                "CONTRIBUTING.md",
                 "python scripts/run_checks.py --phase format\n",
                 "",
                 "--phase format",
+            ),
+            (
+                "AGENTS.md",
+                "`.github/action-pins.json`",
+                "`.github/pins.lock`",
+                ".github/action-pins.json",
             ),
             (
                 "docs/validation.md",
