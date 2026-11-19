@@ -1500,7 +1500,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
         )["skills"]
         expected_names = {item["name"] for item in catalog_skills}
-        self.assertEqual(52, len(expected_names))
+        self.assertEqual(55, len(expected_names))
         self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
 
         # Every single catalog skill correlates cleanly before any keyword fallback
@@ -1676,6 +1676,41 @@ Bearer sk-proj-1234567890abcdef1234567890
                 "Generating TC-1 in testing.json\n'oracle_type' is a required property\n",
                 ["test_cases:TC-1"],
             ),
+            (
+                "specify-feature",
+                None,
+                "spec-authoring",
+                "spec.json",
+                "shared/spec-driven-development/resources/assets/spec.schema.json",
+                {
+                    "schema_version": "1.0",
+                    "title": "Streaming Export Spec",
+                    "status": "draft",
+                    "summary": "Spec summary",
+                    "interview_decisions": [
+                        {
+                            "id": "DEC-1",
+                            "category": "architecture",
+                            "question": "Pagination?",
+                            "decision": "Cursor",
+                            "rationale": "Bounded memory",
+                        }
+                    ],
+                    "requirements": [
+                        {
+                            "id": "REQ-1",
+                            "description": "Stream batches",
+                            "priority": "must",
+                        }
+                    ],
+                    "new_file_scopes": [],
+                    "out_of_scope": [],
+                    "verification_commands": [],
+                    "convergence_checks": [],
+                },
+                "Authoring REQ-1 in spec.json after DEC-1\n'description' is a required property\n",
+                ["interview_decisions:DEC-1", "requirements:REQ-1"],
+            ),
         ]
 
         fred_cli = ROOT / "scripts/fred.py"
@@ -1765,7 +1800,7 @@ Bearer sk-proj-1234567890abcdef1234567890
                 )
                 self.assertEqual("schema_validation_error", failure["failure_type"])
 
-        # 2. Suite-prefix stripping for topic across all 5 suites
+        # 2. Suite-prefix stripping for topic across all 6 suites
         expected_topics = {
             "repo-audit-concurrency": "concurrency",
             "repo-verify-finding": "verify-finding",
@@ -1775,6 +1810,8 @@ Bearer sk-proj-1234567890abcdef1234567890
             "review-actionable-feedback": "actionable-feedback",
             "test-gap-analysis": "gap-analysis",
             "test-suite-verification": "suite-verification",
+            "spec-authoring": "authoring",
+            "spec-convergence": "convergence",
         }
         for skill_name, expected_topic in expected_topics.items():
             with self.subTest(skill=skill_name):
@@ -1797,6 +1834,10 @@ Bearer sk-proj-1234567890abcdef1234567890
             (
                 "Checking test-oracles and nondeterminism in testing.json\n",
                 "automated-testing",
+            ),
+            (
+                "Authoring requirements and interview decisions in spec.json\n",
+                "spec",
             ),
         ]:
             corr_domain = triage.correlate_audit_domain(domain_transcript)
@@ -1848,7 +1889,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         self.assertNotIn("architecture.json", audit_ws_blob)
 
         # 6. Workspace-file-only resolution (no run.json) resolves active domain deliverable
-        for fname in ("architecture.json", "review.json", "testing.json"):
+        for fname in ("architecture.json", "review.json", "testing.json", "spec.json"):
             file_only_ws = self.temp_path / f"ws_file_only_{fname}"
             file_only_ws.mkdir()
             (file_only_ws / fname).write_text("{}\n", encoding="utf-8")
@@ -1862,6 +1903,104 @@ Bearer sk-proj-1234567890abcdef1234567890
             self.assertIn(f"python scripts/fred.py validate-run {file_only_ws}", blob)
             self.assertIn(fname, blob)
             self.assertNotIn("validate_audit.py", blob)
+
+    def test_recovery_shell_quotes_workspace_paths_and_report_expands_fences(self):
+        import shlex
+
+        spaced_ws = self.temp_path / "workspace with spaces & $vars"
+        spaced_ws.mkdir()
+        (spaced_ws / "audit.json").write_text('{"findings": []}\n', encoding="utf-8")
+
+        breakout_line = (
+            "ValidationError: bad payload ```\n# Injected Heading\n``` trailing"
+        )
+        failure = {
+            "failure_type": "schema_validation_error",
+            "summary": "Unclassified execution failure: ```\n# Injected Summary",
+            "line_number": 9,
+            "matched_line": breakout_line,
+            "details": {},
+        }
+        rec = triage.formulate_recovery_instructions(
+            failure, run_data=None, workspace_dir=spaced_ws
+        )
+        expected_ws_quoted = shlex.quote(str(spaced_ws))
+        expected_audit_quoted = shlex.quote(f"{spaced_ws}/audit.json")
+        joined_steps = "\n".join(rec["instructions"])
+        self.assertIn(f"validate_audit.py {expected_audit_quoted}", joined_steps)
+        self.assertIn(
+            f"python scripts/fred.py resume {expected_ws_quoted}", joined_steps
+        )
+        # Step 1 wraps matched_line containing ``` inside a 4-backtick single-line code span
+        self.assertIn(
+            r"````ValidationError: bad payload ```\n# Injected Heading\n``` trailing````",
+            rec["instructions"][0],
+        )
+
+        bundle = {
+            "schema_version": "1.0",
+            "session_id": "sess-fence",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "failure_classification": failure,
+            "correlated_domain": {
+                "specialist_skill": "repo-audit-concurrency",
+                "topic": "concurrency",
+                "ledger_references": [],
+            },
+            "recovery": rec,
+            "redaction": {
+                "tier": "full",
+                "credentials_redacted": 0,
+                "tool_outputs_omitted": 0,
+                "total_redactions": 0,
+            },
+            "transcript_discovery": {
+                "source": "explicit",
+                "selected_transcript": "/tmp/log`tick`/session.jsonl",
+                "selection_reason": "explicit path",
+                "rejected_candidates": [],
+            },
+        }
+        report_md = triage.render_report(bundle)
+        self.assertIn(f"````\n{breakout_line}\n````", report_md)
+        self.assertIn("``/tmp/log`tick`/session.jsonl``", report_md)
+        self.assertNotIn("\n# Injected Summary", report_md)
+
+        # Benign Windows runner temp paths (drive colon, backslashes, 8.3 '~') stay unquoted,
+        # while Windows paths containing spaces or shell metacharacters are quoted via shlex.quote.
+        from pathlib import PurePosixPath, PureWindowsPath
+
+        win_clean_ws = PureWindowsPath(
+            r"C:\Users\RUNNER~1\AppData\Local\Temp\tmp1234\ws_has_audit_json"
+        )
+        self.assertEqual(
+            f"{win_clean_ws}/audit.json",
+            triage._format_workspace_arg(win_clean_ws, "<audit-run-dir>", "audit.json"),
+        )
+        win_spaced_ws = PureWindowsPath(
+            r"C:\Users\RUNNER~1\AppData\Local\Temp\workspace with spaces & $vars"
+        )
+        self.assertEqual(
+            shlex.quote(f"{win_spaced_ws}/audit.json"),
+            triage._format_workspace_arg(
+                win_spaced_ws, "<audit-run-dir>", "audit.json"
+            ),
+        )
+        posix_backslash_ws = PurePosixPath("/tmp/dir\\with\\backslash")
+        self.assertEqual(
+            shlex.quote(f"{posix_backslash_ws}/audit.json"),
+            triage._format_workspace_arg(
+                posix_backslash_ws, "<audit-run-dir>", "audit.json"
+            ),
+        )
+        win_rec = triage.formulate_recovery_instructions(
+            failure,
+            run_data=None,
+            workspace_dir=win_clean_ws,
+        )
+        win_steps = "\n".join(win_rec["instructions"])
+        self.assertIn(f"validate_audit.py {win_clean_ws}/audit.json", win_steps)
+        self.assertIn(f"python scripts/fred.py resume {win_clean_ws}", win_steps)
 
     def test_triage_catalog_and_payload_parity_with_common_and_standalone_fallback(
         self,
@@ -1890,7 +2029,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         expected_suite_skills = skill_tools.suite_skills_by_suite(ROOT)
         self.assertIsNotNone(expected_suite_skills)
         assert expected_suite_skills is not None
-        self.assertEqual(5, len(expected_suite_skills))
+        self.assertEqual(6, len(expected_suite_skills))
         self.assertEqual(expected_suite_skills, triage._DEFAULT_SUITE_SKILLS)
         self.assertEqual(expected_suite_skills, triage._SUITE_SKILLS)
         self.assertEqual(common._skill_to_suite_map(ROOT), triage._SKILL_TO_SUITE)
@@ -1902,7 +2041,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             s["name"]: (s["artifact"]["filename"], s["artifact"]["schema"])
             for s in suites_doc["suites"]
         }
-        self.assertEqual(5, len(expected_suite_artifacts))
+        self.assertEqual(6, len(expected_suite_artifacts))
         self.assertEqual(expected_suite_artifacts, common.SUITE_DELIVERABLES)
         self.assertEqual(expected_suite_artifacts, triage._DEFAULT_SUITE_ARTIFACTS)
         self.assertEqual(expected_suite_artifacts, triage._SUITE_ARTIFACTS)
@@ -1915,7 +2054,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         )
 
         expected_tasks = common._task_to_suite_map(ROOT)
-        self.assertEqual(17, len(expected_tasks))
+        self.assertEqual(18, len(expected_tasks))
         self.assertEqual(expected_tasks, triage._DEFAULT_TASK_TO_SUITE)
         self.assertEqual(expected_tasks, triage._TASK_TO_SUITE)
 
@@ -1985,6 +2124,16 @@ Bearer sk-proj-1234567890abcdef1234567890
                 "testing_minimal",
                 {"component": "auth", "framework": "unittest"},
                 "automated-testing",
+            ),
+            (
+                "spec_starter",
+                suites_doc["suites"][5]["artifact"]["starter"],
+                "spec-driven-development",
+            ),
+            (
+                "spec_minimal",
+                {"interview_decisions": [], "new_file_scopes": []},
+                "spec-driven-development",
             ),
             (
                 "finding_verification",

@@ -295,12 +295,13 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], build_experience.build(self.root, check=True))
         errors, telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], errors)
-        self.assertEqual(53, telemetry["total_packages"])
+        self.assertEqual(56, telemetry["total_packages"])
 
         for extra_name, extra_suite in (
             ("arch-service-contracts", "software-architecture"),
             ("review-api-changes", "code-review"),
             ("test-mutation-bounds", "automated-testing"),
+            ("spec-acceptance-matrix", "spec-driven-development"),
             ("repo-triage-regressions", "repository-workflows"),
         ):
             scaffold_skill.scaffold_skill(
@@ -314,7 +315,7 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], build_experience.build(self.root, check=True))
         all_errors, all_telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], all_errors)
-        self.assertEqual(57, all_telemetry["total_packages"])
+        self.assertEqual(61, all_telemetry["total_packages"])
 
     def test_scaffolder_catalog_sync_in_minimal_root(self) -> None:
         scaffold_skill.scaffold_skill(

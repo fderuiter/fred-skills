@@ -1,4 +1,4 @@
-"""Unit and CLI tests for all five standalone suite artifact validators."""
+"""Unit and CLI tests for all six standalone suite artifact validators."""
 
 from __future__ import annotations
 
@@ -19,12 +19,13 @@ import validate_architecture
 import validate_audit
 import validate_review
 import validate_skills
+import validate_spec
 import validate_testing
 import validate_workflow
 
 
 class SuiteValidatorsTests(unittest.TestCase):
-    """Verify schema and cross-record checks across all 5 suite validators."""
+    """Verify schema and cross-record checks across all 6 suite validators."""
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -54,7 +55,7 @@ class SuiteValidatorsTests(unittest.TestCase):
             check=False,
         )
 
-    def test_all_52_skill_worked_example_json_blocks_pass_suite_semantic_validators(
+    def test_all_55_skill_worked_example_json_blocks_pass_suite_semantic_validators(
         self,
     ) -> None:
         suites = json.loads((ROOT / "catalog/suites.json").read_text(encoding="utf-8"))[
@@ -66,12 +67,13 @@ class SuiteValidatorsTests(unittest.TestCase):
             for phase in s["phases"]
             for sk in phase["skills"]
         }
-        suite_validators = {
+        suite_validators: dict[str, Any] = {
             "repository-audits": validate_audit,
             "repository-workflows": validate_workflow,
             "software-architecture": validate_architecture,
             "code-review": validate_review,
             "automated-testing": validate_testing,
+            "spec-driven-development": validate_spec,
         }
 
         for skill_dir in sorted((ROOT / "skills").iterdir()):
@@ -318,6 +320,55 @@ class SuiteValidatorsTests(unittest.TestCase):
             1, self._run_cli("validate_testing.py", invalid, schema_path).returncode
         )
 
+    def test_validate_spec_enforces_unique_ids_relative_scopes_and_convergence_status(
+        self,
+    ) -> None:
+        schema_path = (
+            ROOT / "shared/spec-driven-development/resources/assets/spec.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        dec: dict[str, Any] = {
+            "id": "DEC-1",
+            "category": "architecture",
+            "question": "Which cursor format?",
+            "decision": "Opaque KeysetCursor.",
+        }
+        valid: dict[str, Any] = {
+            "schema_version": "1.0",
+            "title": "Streaming NDJSON Exporter",
+            "status": "converged",
+            "interview_decisions": [dec],
+            "requirements": [{"id": "REQ-1", "description": "Stream <= 500 rows."}],
+            "new_file_scopes": ["src/exporter/ndjson.py"],
+            "out_of_scope": ["src/exporter/legacy_csv.py"],
+            "verification_commands": ["python -m unittest tests/test_exporter.py"],
+            "convergence_checks": [
+                {"id": "CHK-1", "target": "REQ-1", "status": "aligned"}
+            ],
+        }
+        self.assertEqual([], validate_spec.validate(valid, schema))
+        self.assertEqual(
+            0, self._run_cli("validate_spec.py", valid, schema_path).returncode
+        )
+
+        invalid: dict[str, Any] = {
+            **valid,
+            "interview_decisions": [dec, dict(dec)],
+            "new_file_scopes": ["../outside/ndjson.py"],
+            "convergence_checks": [
+                {"id": "CHK-1", "target": "REQ-1", "status": "out-of-scope"}
+            ],
+        }
+        errs = validate_spec.validate(invalid, schema)
+        self.assertTrue(
+            any("Duplicate IDs in interview_decisions" in e for e in errs), errs
+        )
+        self.assertTrue(any("repository-relative" in e for e in errs), errs)
+        self.assertTrue(any("Status 'converged' conflicts" in e for e in errs), errs)
+        self.assertEqual(
+            1, self._run_cli("validate_spec.py", invalid, schema_path).returncode
+        )
+
     def test_malformed_json_and_missing_jsonschema_exit_with_code_2(self) -> None:
         schema_path = ROOT / "shared/code-review/resources/assets/review.schema.json"
         for script_name in (
@@ -326,6 +377,7 @@ class SuiteValidatorsTests(unittest.TestCase):
             "validate_architecture.py",
             "validate_review.py",
             "validate_testing.py",
+            "validate_spec.py",
         ):
             bad_proc = self._run_cli(script_name, "{not-valid-json", schema_path)
             self.assertEqual(2, bad_proc.returncode, script_name)
@@ -343,6 +395,7 @@ class SuiteValidatorsTests(unittest.TestCase):
             validate_architecture,
             validate_review,
             validate_testing,
+            validate_spec,
         ):
             with (
                 patch.object(builtins, "__import__", side_effect=block_jsonschema),

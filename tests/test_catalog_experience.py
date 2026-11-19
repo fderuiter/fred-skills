@@ -77,7 +77,7 @@ class ExperienceTests(unittest.TestCase):
         for suite in suites:
             self.assertIn(f'<option value="{suite["name"]}">', select_html)
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
-        self.assertEqual(len(packs), 11)
+        self.assertEqual(len(packs), 12)
         for pack_name in packs:
             self.assertIn(f'id="pack-{pack_name}"', page)
             self.assertIn(f"--pack {pack_name}", page)
@@ -189,6 +189,15 @@ class ExperienceTests(unittest.TestCase):
                 "requires_base": False,
                 "deliverable": "testing.json",
             },
+            "specify-feature": {
+                "skills": [
+                    "spec-interview",
+                    "spec-authoring",
+                    "spec-convergence",
+                ],
+                "requires_base": False,
+                "deliverable": "spec.json",
+            },
         }
         for name, expected in expected_recipes.items():
             self.assertIn(name, recipes)
@@ -230,6 +239,10 @@ class ExperienceTests(unittest.TestCase):
                 "testing.json",
                 "shared/automated-testing/resources/assets/testing.schema.json",
             ),
+            "spec-driven-development": (
+                "spec.json",
+                "shared/spec-driven-development/resources/assets/spec.schema.json",
+            ),
         }
         self.assertEqual(set(expected_artifacts), set(suites))
         for suite_name, (filename, schema_rel) in expected_artifacts.items():
@@ -254,6 +267,7 @@ class ExperienceTests(unittest.TestCase):
         quickstart_header = "\n".join(readme_lines[:28])
         for recipe_name in (
             "design-architecture",
+            "specify-feature",
             "review-code-changes",
             "expand-automated-tests",
         ):

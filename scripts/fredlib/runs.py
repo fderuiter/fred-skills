@@ -23,7 +23,9 @@ from .common import (
     _artifact_contract_for_run,
     _deliverable_for_run,
     _detect_domain_kind,
+    _is_single_line_text,
     _load_suite_contracts,
+    _markdown_code_span,
     _suite_for_run,
     _suite_for_skills,
     _suite_shared_assets,
@@ -215,16 +217,24 @@ def plan(
                 hint="Provide a YAML mapping containing only 'profile', 'exclude', and/or 'critical_workflows'.",
             )
         settings = loaded
-        for key in ["exclude", "critical_workflows"]:
-            if key in settings and (
-                not isinstance(settings[key], list)
-                or any(not isinstance(s, str) or not s.strip() for s in settings[key])
-            ):
-                raise FredCliError(
-                    f"Project config {key} must be a list of nonempty strings",
-                    code="invalid_config",
-                    hint=f"Set '{key}' to a YAML list of nonempty strings in '{config_path}'.",
-                )
+        if "exclude" in settings and (
+            not isinstance(settings["exclude"], list)
+            or any(not isinstance(s, str) or not s.strip() for s in settings["exclude"])
+        ):
+            raise FredCliError(
+                "Project config exclude must be a list of nonempty strings",
+                code="invalid_config",
+                hint=f"Set 'exclude' to a YAML list of nonempty strings in '{config_path}'.",
+            )
+        if "critical_workflows" in settings and (
+            not isinstance(settings["critical_workflows"], list)
+            or any(not _is_single_line_text(s) for s in settings["critical_workflows"])
+        ):
+            raise FredCliError(
+                "Project config critical_workflows must be a list of single-line nonempty strings",
+                code="invalid_config",
+                hint=f"Set 'critical_workflows' to a YAML list of single-line nonempty strings in '{config_path}'.",
+            )
         if "profile" in settings and not isinstance(settings["profile"], str):
             raise FredCliError(
                 f"Project profile must be a string (available profiles: {profile_list})",
@@ -411,6 +421,12 @@ def _empty_deliverable(
         if seeded.get("component") in {None, "", "repository"}:
             seeded["component"] = repo_name
         return seeded
+    if deliverable == "spec.json":
+        task_name = run.get("plan", {}).get("task", "repository")
+        base_title = seeded.get("title", "Feature specification")
+        if base_title == "Feature specification" and task_name:
+            seeded["title"] = f"Feature specification for {task_name}"
+        return seeded
     return empty_audit(run)
 
 
@@ -487,6 +503,15 @@ uncovered gaps and ensure test gap specifications conform to {domain_schema_ref}
 Provide prioritized test scenarios with deterministic, independent assertion oracles
 (state, exception, output, or boundary). Stop with a precise checkpoint when the
 selected work cannot be completed. An empty test_cases list is valid.{fixes_guidance}"""
+    if deliverable == "spec.json":
+        return f"""Work in bounded slices. Pause application code generation during spec-interview and
+spec-authoring runs; do not create symlinks, make network calls, or modify application source
+files unless explicitly authorized. Author SPEC.md using assets/spec-template.md and update
+spec.json conforming to {domain_schema_ref} (schema_version, title, status,
+interview_decisions, new_file_scopes, out_of_scope, and verification_commands;
+additionalProperties is false). During spec-convergence, verify planned tasks and modified
+files against SPEC.md boundaries and record convergence_checks. Stop with a precise checkpoint
+when the selected work cannot be completed. Empty starter arrays are valid."""
     companions = _workflow_companions_for_run(run)
     companion_guidance = ""
     if companions:
@@ -877,6 +902,17 @@ def prompt(run: dict) -> str:
     facts_and_guards_section = _render_facts_and_guards_section(run)
     gh_queries_section = _render_gh_queries_section(run)
 
+    repo_span = _markdown_code_span(run["repository"]["path"])
+    workflows_rendered = ", ".join(
+        _markdown_code_span(wf) for wf in plan_data["critical_workflows"]
+    )
+    changed_rendered = (
+        ", ".join(
+            _markdown_code_span(p) for p in (plan_data.get("changed_files") or [])
+        )
+        or "No diff restriction supplied"
+    )
+
     tactical_directory = plan_data.get("directory") or ". (entire repository)"
     tactical_symbol = plan_data.get("symbol") or "all in-scope symbols"
     tactical_issue = (
@@ -887,7 +923,7 @@ def prompt(run: dict) -> str:
 
     return f"""# Engineering task: {plan_data["task"]}
 
-Repository: {run["repository"]["path"]}
+Repository: {repo_span}
 Revision: {run["repository"]["revision"]}; content identity: {run["snapshot"]["digest"]}
 Mode: {plan_data["mode"]}; work budget: {plan_data["budget"]}
 Tactical scope — directory: {tactical_directory}; symbol: {tactical_symbol}; issue: {tactical_issue}
@@ -899,8 +935,8 @@ Check actual source freshness before reusing evidence. Inspect callers, dependen
 guards, and synchronous callback boundaries as well as await points. Preserve intended
 requirements separately from observed behavior and record healthy/refuted controls.
 
-Critical workflows: {", ".join(plan_data["critical_workflows"])}.
-Changed paths: {", ".join(plan_data.get("changed_files") or []) or "No diff restriction supplied"}.
+Critical workflows: {workflows_rendered}.
+Changed paths: {changed_rendered}.
 Deferred skills: {", ".join(plan_data["deferred_skills"]) or "None in selected recipe"}.
 Expected outputs: {", ".join(plan_data["expected_outputs"])}.
 
@@ -1056,7 +1092,14 @@ def _validate_present_workflow_companions(directory: Path) -> list[str]:
 
 def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    for field in ("decisions", "findings", "test_cases"):
+    for field in (
+        "decisions",
+        "findings",
+        "test_cases",
+        "interview_decisions",
+        "requirements",
+        "convergence_checks",
+    ):
         items = deliverable.get(field)
         if not isinstance(items, list):
             continue
@@ -1087,6 +1130,19 @@ def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
             except ValueError as exc:
                 errors.append(
                     f"Finding file path must be repository-relative ({fid}): {exc}"
+                )
+    new_file_scopes = deliverable.get("new_file_scopes")
+    if isinstance(new_file_scopes, list):
+        for scope_path in new_file_scopes:
+            if not isinstance(scope_path, str):
+                continue
+            try:
+                checked = relative_path(scope_path)
+                if not checked.parts:
+                    raise ValueError(f"Unsafe relative path: {scope_path!r}")
+            except ValueError as exc:
+                errors.append(
+                    f"Specification file scope must be repository-relative ({scope_path!r}): {exc}"
                 )
     return errors
 
@@ -1202,6 +1258,18 @@ def _revalidate_domain_records(
     if expected_name == "testing.json":
         cases = deliverable.get("test_cases", [])
         ids = [tc["id"] for tc in cases if isinstance(tc, dict) and "id" in tc]
+        return (list(ids) if not complete else []), (list(ids) if changed else [])
+    if expected_name == "spec.json":
+        decisions = deliverable.get("interview_decisions", [])
+        reqs = deliverable.get("requirements", [])
+        checks = deliverable.get("convergence_checks", [])
+        ids = [
+            item["id"]
+            for group in (decisions, reqs, checks)
+            if isinstance(group, list)
+            for item in group
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
         return (list(ids) if not complete else []), (list(ids) if changed else [])
     return [], []
 

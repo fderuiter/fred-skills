@@ -1,10 +1,11 @@
 # Executable evaluation harness
 
-`cases.json` selects 60 raw cases across 20 skills spanning all five suites
-(`repository-audits`, `software-architecture`, `code-review`, `automated-testing`, and
-`repository-workflows`): relevant failure, safe control, and routing tasks per skill.
-The 153 skill scenario specifications in `references/evaluation-scenarios.json` remain
-separate authoring inputs, not 153 completed model evaluations.
+`cases.json` selects 69 raw cases across 23 skills spanning all six suites
+(`repository-audits`, `software-architecture`, `code-review`, `automated-testing`,
+`spec-driven-development`, and `repository-workflows`): relevant failure, safe control,
+and routing tasks per skill. The 162 skill scenario specifications in
+`references/evaluation-scenarios.json` remain separate authoring inputs, not 162
+completed model evaluations.
 
 The harness creates a fresh case directory for each configuration/repeat, copies only
 raw `source/` and (for `with_skill`) one standalone `skill/` (excluding `__pycache__`),

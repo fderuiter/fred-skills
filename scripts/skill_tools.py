@@ -206,7 +206,7 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
             depth = len(path_chain) - 1
             try:
                 content = current.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             for raw_target in extract_relative_links(content):
                 resolved = resolve_relative_link_target(raw_target, current.parent)
@@ -248,7 +248,7 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
             )
             try:
                 ref_content = ref_md.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             for raw_target in extract_relative_links(ref_content):
                 resolved = resolve_relative_link_target(raw_target, ref_md.parent)
@@ -316,6 +316,7 @@ SKILL_SUITE_PREFIXES: tuple[tuple[str, str], ...] = (
     ("arch-", "software-architecture"),
     ("review-", "code-review"),
     ("test-", "automated-testing"),
+    ("spec-", "spec-driven-development"),
     ("repo-", "repository-workflows"),
 )
 
@@ -391,6 +392,17 @@ DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
     ),
     ("review", frozenset({"verdict"})),
     ("testing", frozenset({"test_cases"})),
+    (
+        "spec",
+        frozenset(
+            {
+                "interview_decisions",
+                "new_file_scopes",
+                "out_of_scope",
+                "verification_commands",
+            }
+        ),
+    ),
     ("architecture", frozenset({"boundaries", "decisions"})),
     ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
 )
@@ -399,6 +411,7 @@ DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "architecture": "software-architecture",
     "review": "code-review",
     "testing": "automated-testing",
+    "spec": "spec-driven-development",
     "remediation": "repository-workflows",
     "reconciliation": "repository-workflows",
     "finding-verification": "repository-workflows",

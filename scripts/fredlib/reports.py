@@ -171,6 +171,81 @@ def _render_architecture_html(doc: dict) -> str:
     return _page_shell(f"Software architecture — {text(doc['title'])}", body)
 
 
+def _render_spec_html(doc: dict) -> str:
+    status_badges = {
+        "converged": "low",
+        "approved": "low",
+        "interviewing": "info",
+        "draft": "info",
+        "diverged": "high",
+    }
+    status_tone = status_badges.get(doc["status"], "info")
+    decisions = doc.get("interview_decisions", [])
+    scopes = doc.get("new_file_scopes", [])
+    non_goals = doc.get("out_of_scope", [])
+    commands = doc.get("verification_commands", [])
+    checks = doc.get("convergence_checks", [])
+    scope_list = (
+        "<ul>" + "".join(f"<li><code>{text(s)}</code></li>" for s in scopes) + "</ul>"
+        if scopes
+        else '<p class="muted">No approved file scopes recorded.</p>'
+    )
+    non_goal_list = (
+        "<ul>" + "".join(f"<li>{text(ng)}</li>" for ng in non_goals) + "</ul>"
+        if non_goals
+        else '<p class="muted">No out-of-scope exclusions recorded.</p>'
+    )
+    cmd_list = (
+        "<ul>"
+        + "".join(f"<li><code>{text(cmd)}</code></li>" for cmd in commands)
+        + "</ul>"
+        if commands
+        else '<p class="muted">No verification commands recorded.</p>'
+    )
+    if decisions:
+        cards = [
+            f'<article class="finding" data-status="{text(doc["status"])}" id="{text(d["id"])}">'
+            f"<h3>{text(d['id'])} ({text(d['category'])}): {text(d['question'])}</h3>"
+            f"<p><b>Decision:</b> {text(d['decision'])}</p>"
+            + (
+                f"<details><summary>Rationale</summary><p>{text(d['rationale'])}</p></details>"
+                if d.get("rationale")
+                else ""
+            )
+            + "</article>"
+            for d in decisions
+        ]
+        decisions_body = (
+            '<label for="query">Search decisions <input id="query" type="search"></label>'
+            '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>'
+            '<p id="count" data-noun="decisions" role="status" aria-live="polite"></p>'
+            '<div id="empty-state" class="empty-state" hidden><p>No decisions match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
+            + "".join(cards)
+        )
+    else:
+        decisions_body = "<p>No interview decisions recorded.</p>"
+    check_rows = (
+        "".join(
+            f"<tr><td>{text(chk['id'])}</td><td><code>{text(chk['target'])}</code></td>"
+            f'<td><span class="badge badge-info info">{text(chk["status"])}</span></td>'
+            f"<td>{text(chk.get('evidence', ''))}</td></tr>"
+            for chk in checks
+        )
+        or '<tr><td colspan="4" class="empty-state">No convergence checks recorded.</td></tr>'
+    )
+    body = (
+        f'<header><p class="muted">fred-skills · spec-driven development report</p>'
+        f"<h1>{text(doc['title'])}</h1>"
+        f'<p><span class="badge badge-{status_tone} {status_tone}">{text(doc["status"])}</span> · schema {text(doc["schema_version"])}</p>'
+        f'<nav aria-label="Report views"><a href="#executive">Overview</a><a href="#decisions">Decisions</a><a href="#scopes">Scopes</a><a href="#convergence">Convergence</a></nav></header>\n'
+        f'<section id="executive"><h2>Specification overview</h2><p>{len(decisions)} interview decisions; {len(scopes)} file scopes; {len(commands)} verification commands; status: <code>{text(doc["status"])}</code>.</p></section>\n'
+        f'<section id="decisions"><h2>Interview decisions</h2>{decisions_body}</section>\n'
+        f'<section id="scopes"><h2>Scopes and verification</h2><h3>Approved file scopes</h3>{scope_list}<h3>Out of scope</h3>{non_goal_list}<h3>Verification commands</h3>{cmd_list}</section>\n'
+        f'<section id="convergence"><h2>Convergence checks</h2><div class="table-container"><table><thead><tr><th>ID</th><th>Target</th><th>Status</th><th>Evidence</th></tr></thead><tbody>{check_rows}</tbody></table></div></section>'
+    )
+    return _page_shell(f"Specification — {text(doc['title'])}", body)
+
+
 def _render_review_html(doc: dict) -> str:
     verdict_badges = {
         "approve": "low",
@@ -658,6 +733,7 @@ def render(
             "architecture": _render_architecture_html,
             "review": _render_review_html,
             "testing": _render_testing_html,
+            "spec": _render_spec_html,
         }
         if domain_kind not in renderers:
             raise FredCliError(
@@ -678,6 +754,72 @@ def render(
         target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(html, encoding="utf-8")
     return target
+
+
+_INLINE_CODE_SPAN_RE = re.compile(r"(`+)(?!`)([^\r\n]+?)(?<!`)\1(?!`)")
+_GITHUB_MENTION_RE = re.compile(
+    r"(^|(?<![A-Za-z0-9_]))@([A-Za-z0-9_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_][A-Za-z0-9_-]*)?)"
+)
+
+
+def _escape_plain_markdown_segment(segment: str) -> str:
+    escaped = segment.replace("<", "&lt;").replace(">", "&gt;")
+    escaped = escaped.replace("`", r"\`")
+    escaped = escaped.replace("~~~", r"\~~~")
+    return _GITHUB_MENTION_RE.sub(r"\1`@\2`", escaped)
+
+
+def _escape_inline_markdown_line(line: str) -> str:
+    parts: list[str] = []
+    last = 0
+    for match in _INLINE_CODE_SPAN_RE.finditer(line):
+        parts.append(_escape_plain_markdown_segment(line[last : match.start()]))
+        parts.append(match.group(0))
+        last = match.end()
+    parts.append(_escape_plain_markdown_segment(line[last:]))
+    return "".join(parts)
+
+
+def _sanitize_markdown_line_structure(line: str) -> str:
+    sanitized = re.sub(r"^(\s*)(#+)", r"\1\\\2", line)
+    return re.sub(
+        r"^(\s*)([=-]{2,}|\*{3,}|_{3,})(\s*)$",
+        lambda m: f"{m.group(1)}\\{m.group(2)}{m.group(3)}",
+        sanitized,
+    )
+
+
+def _sanitize_issue_inline(value: object) -> str:
+    collapsed = " ".join(str(value).replace("\x00", "").splitlines())
+    escaped = _escape_inline_markdown_line(collapsed)
+    return _sanitize_markdown_line_structure(escaped)
+
+
+def _sanitize_issue_block(value: object) -> str:
+    normalized = (
+        str(value).replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    )
+    lines = [
+        _sanitize_markdown_line_structure(_escape_inline_markdown_line(ln))
+        for ln in normalized.split("\n")
+    ]
+    return "\n".join(lines)
+
+
+def _fence_issue_commands(commands: list[str]) -> str:
+    if not commands:
+        return ""
+    cleaned = [
+        str(cmd).replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+        for cmd in commands
+    ]
+    joined = "\n".join(cleaned)
+    max_ticks = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", joined)),
+        default=0,
+    )
+    fence = "`" * max(3, max_ticks + 1)
+    return f"{fence}\n{joined}\n{fence}"
 
 
 def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
@@ -722,52 +864,72 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
             continue
         if not re.fullmatch(r"[A-Za-z0-9_-]+", issue["id"]):
             raise ValueError("Issue IDs must be filename-safe")
+        safe_issue_title = _sanitize_issue_inline(issue["title"])
         sections = [
-            f"# {issue['title']}",
+            f"# {safe_issue_title}",
             "Publication state: local draft; no external write performed.",
         ]
         for fid in issue["finding_ids"]:
             f = findings[fid]
-            sections.extend(
-                [
-                    f"## {fid}: {f['title']}",
-                    f"Evidence: {f['status']}; severity: {f['severity']}; confidence: {f['confidence']}",
-                    f["impact"],
-                    "### Preconditions",
-                    f["preconditions"],
-                    "### Expected and actual behavior",
-                    "Expected: " + f["expected"],
-                    "Actual: " + f["actual"],
-                    "### Source evidence",
-                    "\n".join(
-                        f"- {evidence[eid]['path']}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({evidence[eid]['symbol']}): {evidence[eid]['context']}"
-                        for eid in f["evidence_ids"]
-                    ),
-                    "### Contract and cause",
-                    "Contract IDs: " + ", ".join(f["contract_ids"]),
-                    f["root_cause"],
-                    "### Failure sequence",
-                    "\n".join(
-                        f"{i}. {step}" for i, step in enumerate(f["sequence"], 1)
-                    ),
-                    "### Counterevidence",
-                    f["counterevidence"],
-                    "### Proposed correction",
-                    f["remedy"],
-                    "### Acceptance",
-                    "\n".join("- " + a for a in f["acceptance"]),
-                    "### Validation",
-                    f["validation"]["state"] + ": " + f["validation"]["result"],
-                    "\n".join(
-                        "    " + command for command in f["validation"]["commands"]
-                    ),
-                ]
+            safe_fid = _sanitize_issue_inline(fid)
+            safe_ftitle = _sanitize_issue_inline(f["title"])
+            safe_status = _sanitize_issue_inline(f["status"])
+            safe_severity = _sanitize_issue_inline(f["severity"])
+            safe_confidence = _sanitize_issue_inline(f["confidence"])
+            evidence_lines = "\n".join(
+                f"- {_sanitize_issue_inline(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({_sanitize_issue_inline(evidence[eid]['symbol'])}): {_sanitize_issue_inline(evidence[eid]['context'])}"
+                for eid in f["evidence_ids"]
             )
-        sections.append("Dependencies: " + ", ".join(issue["depends_on"]))
+            contract_ids_str = ", ".join(
+                _sanitize_issue_inline(cid) for cid in f["contract_ids"]
+            )
+            sequence_lines = "\n".join(
+                f"{i}. {_sanitize_issue_inline(step)}"
+                for i, step in enumerate(f["sequence"], 1)
+            )
+            acceptance_lines = "\n".join(
+                "- " + _sanitize_issue_inline(a) for a in f["acceptance"]
+            )
+            val_summary = (
+                _sanitize_issue_inline(f["validation"]["state"])
+                + ": "
+                + _sanitize_issue_inline(f["validation"]["result"])
+            )
+            commands_block = _fence_issue_commands(f["validation"]["commands"])
+            finding_sections = [
+                f"## {safe_fid}: {safe_ftitle}",
+                f"Evidence: {safe_status}; severity: {safe_severity}; confidence: {safe_confidence}",
+                _sanitize_issue_block(f["impact"]),
+                "### Preconditions",
+                _sanitize_issue_block(f["preconditions"]),
+                "### Expected and actual behavior",
+                "Expected: " + _sanitize_issue_inline(f["expected"]),
+                "Actual: " + _sanitize_issue_inline(f["actual"]),
+                "### Source evidence",
+                evidence_lines,
+                "### Contract and cause",
+                "Contract IDs: " + contract_ids_str,
+                _sanitize_issue_block(f["root_cause"]),
+                "### Failure sequence",
+                sequence_lines,
+                "### Counterevidence",
+                _sanitize_issue_block(f["counterevidence"]),
+                "### Proposed correction",
+                _sanitize_issue_block(f["remedy"]),
+                "### Acceptance",
+                acceptance_lines,
+                "### Validation",
+                val_summary,
+            ]
+            if commands_block:
+                finding_sections.append(commands_block)
+            sections.extend(finding_sections)
+        deps_str = ", ".join(_sanitize_issue_inline(d) for d in issue["depends_on"])
+        sections.append("Dependencies: " + deps_str)
         body_text = "\n\n".join(sections)
         if format == "json":
             payload = {
-                "title": issue["title"],
+                "title": safe_issue_title,
                 "body": body_text,
                 "labels": list(issue.get("labels", [])),
                 "assignees": list(issue.get("assignees", [])),

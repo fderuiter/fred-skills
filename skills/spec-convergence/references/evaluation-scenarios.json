@@ -1,0 +1,38 @@
+{
+  "topic": "spec-convergence",
+  "scenarios": [
+    {
+      "id": "spec-convergence-failure",
+      "prompt": "Verify whether the planned tasks and modified files converge with SPEC.md boundaries and verification commands.",
+      "fixture_shape": "An implementation diff modifies an out-of-scope CLI entrypoint excluded by SPEC.md, omits a required rate-limit requirement, and leaves verification_commands unexecuted.",
+      "expected_behavior": [
+        "Flag modified paths outside new_file_scopes or matching out_of_scope as out-of-scope in convergence_checks.",
+        "Identify missing requirements and unverified verification_commands with concrete citations.",
+        "Set spec.json status to diverged without silently rewriting SPEC.md."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source, SPEC.md, and diff context without revealing expected divergence outcomes."
+    },
+    {
+      "id": "spec-convergence-safe",
+      "prompt": "Verify whether the planned tasks and modified files converge with SPEC.md boundaries and verification commands.",
+      "fixture_shape": "All planned tasks and modified files stay strictly within new_file_scopes, satisfy every REQ-* requirement, respect out_of_scope exclusions, and include passing verification_commands evidence.",
+      "expected_behavior": [
+        "Confirm every requirement, file scope, and verification command check is aligned.",
+        "Record aligned convergence_checks entries in spec.json with concrete file and command evidence.",
+        "Set spec.json status to converged under strict spec.schema.json validation."
+      ],
+      "evaluation_note": "Construct a clean specification convergence control; keep expected status and check statuses out of the execution prompt."
+    },
+    {
+      "id": "spec-convergence-routing",
+      "prompt": "Pause implementation and interview me on non-obvious UX, architectural trade-offs, and edge cases before drafting a feature specification.",
+      "expected_behavior": [
+        "Recognize that pre-code Socratic discovery belongs to spec-interview rather than spec-convergence.",
+        "Defer or route to spec-interview instead of running a post-specification convergence check."
+      ],
+      "evaluation_note": "Near-neighbor sibling routing check within spec-driven-development; verify routing to spec-interview instead of spec-convergence.",
+      "sibling_skill": "spec-interview"
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

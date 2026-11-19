@@ -7,7 +7,7 @@ namespace_packages = true
 show_error_codes = true
 exclude = [
     "^skills[\\\\/]repo-audit-synthesis[\\\\/]scripts[\\\\/]audit_to_sarif\\.py$",
-    "^skills[\\\\/][^\\\\/]+[\\\\/]scripts[\\\\/]validate_(?:audit|workflow|architecture|review|testing|output)\\.py$",
+    "^skills[\\\\/][^\\\\/]+[\\\\/]scripts[\\\\/]validate_(?:audit|workflow|architecture|review|testing|spec|output)\\.py$",
 ]
 
 [[tool.mypy.overrides]]

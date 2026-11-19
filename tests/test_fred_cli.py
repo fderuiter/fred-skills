@@ -484,7 +484,7 @@ class FredCLITests(unittest.TestCase):
         recipes = json.loads((ROOT / "catalog/recipes.json").read_text("utf-8"))[
             "recipes"
         ]
-        self.assertEqual(17, len(recipes))
+        self.assertEqual(18, len(recipes))
         for task_name, recipe in recipes.items():
             with self.subTest(task=task_name):
                 results = fred._search_skills(task_name)
@@ -1754,6 +1754,7 @@ class FredCLITests(unittest.TestCase):
                 ("design-architecture", [], "architecture.json"),
                 ("review-code-changes", ["--base", base_rev], "review.json"),
                 ("expand-automated-tests", [], "testing.json"),
+                ("specify-feature", [], "spec.json"),
             ]
             for task, extra_args, deliverable in cases:
                 with self.subTest(task=task):

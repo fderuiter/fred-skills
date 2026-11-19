@@ -1,0 +1,6 @@
+{
+  "ready": true,
+  "title": "Streaming CSV export specification",
+  "scope": "exporter.py",
+  "out_of_scope": "CLI flags"
+}
