@@ -40,20 +40,6 @@ def _load_documented_packs(root: Path = ROOT) -> tuple[str, ...]:
 
 DOCUMENTED_PACKS: tuple[str, ...] = _load_documented_packs()
 
-_EXCLUDED_DIR_NAMES = {
-    "__pycache__",
-    ".git",
-    ".github",
-    ".venv",
-    "venv",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    "node_modules",
-}
-_EXCLUDED_FILE_SUFFIXES = {".pyc", ".pyo", ".pyd"}
-_EXCLUDED_FILE_NAMES = {".DS_Store", ".gitignore", ".gitattributes"}
-
 
 def _is_executable_file(path: Path, data: bytes) -> bool:
     return (os.name != "nt" and bool(path.stat().st_mode & 0o111)) or data.startswith(
