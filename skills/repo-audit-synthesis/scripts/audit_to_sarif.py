@@ -542,8 +542,10 @@ _NON_AUDIT_ARTIFACT_NAMES: tuple[str, ...] = (
 )
 
 
-def _detect_domain_artifact(data: dict[str, Any]) -> str | None:
+def _detect_domain_artifact(data: object) -> str | None:
     """Identify non-audit domain or workflow payloads so SARIF export fails with clear guidance."""
+    if not isinstance(data, dict):
+        return None
     if "findings" in data and any(
         key in data for key in ("evidence", "coverage", "contracts", "run_id")
     ):
@@ -558,7 +560,7 @@ def _detect_domain_artifact(data: dict[str, Any]) -> str | None:
         return "testing.json"
     if "title" in data and "status" in data and "findings" not in data:
         return "architecture.json"
-    if "run_id" in data and "findings" not in data:
+    if "run_id" in data:
         return "run.json"
     return None
 

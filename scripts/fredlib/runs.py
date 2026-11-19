@@ -26,6 +26,7 @@ from .common import (
     _suite_for_run,
     _suite_for_skills,
     _suite_shared_assets,
+    _suite_skills_by_suite,
     atomic_json,
     digest,
     read_json,
@@ -167,16 +168,7 @@ def plan(
         "Selected by task; installation and execution are separate actions.",
     ]
     if mode == "comprehensive":
-        suite = next(
-            item
-            for item in read_json(ROOT / "catalog/suites.json")["suites"]
-            if item["name"] == suite_name
-        )
-        selected = [
-            name
-            for phase in sorted(suite["phases"], key=lambda p: p["id"])
-            for name in phase["skills"]
-        ]
+        selected = list((_suite_skills_by_suite(ROOT) or {})[suite_name])
         if suite_name == "repository-audits":
             # The coordinator is an entry point, not a second pass over every specialist.
             # Standard comprehensive plans exclude diagnostics, but recovery planning allows explicit selection.
