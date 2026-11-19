@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
+from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TypeVar
@@ -14,7 +16,9 @@ import yaml
 __all__ = [
     "ROOT",
     "build_outputs",
+    "estimate_tokens",
     "extract_relative_links",
+    "find_deep_reference_chains",
     "read_frontmatter",
     "resolve_relative_link_target",
     "suite_members",
@@ -28,6 +32,14 @@ MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
 # Matches reference-style link definitions [label]: target
 MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count offline using character and whitespace-word bounds."""
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    return max(math.ceil(len(stripped) / 4), len(stripped.split()))
 
 
 def extract_relative_links(content: str) -> list[str]:
@@ -59,6 +71,90 @@ def resolve_relative_link_target(target: str, base_dir: Path) -> Path | None:
     if not clean_path:
         return None
     return (base_dir / clean_path).resolve()
+
+
+def _format_package_rel(path: Path, package_root: Path, fallback: str) -> str:
+    if path.is_relative_to(package_root):
+        return path.relative_to(package_root).as_posix()
+    return fallback
+
+
+def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
+    """Return markdown reference chains exceeding max_hops from SKILL.md."""
+    if max_hops < 1:
+        raise ValueError("max_hops must be at least 1")
+    package_root = package.resolve()
+    entry_path = package / "SKILL.md"
+    violations: list[str] = []
+    seen_violations: set[str] = set()
+    visited_markdown: set[Path] = set()
+
+    if entry_path.is_file() and not entry_path.is_symlink():
+        entry_resolved = entry_path.resolve()
+        queue: deque[tuple[Path, tuple[Path, ...], tuple[str, ...]]] = deque(
+            [(entry_resolved, (entry_resolved,), ("SKILL.md",))]
+        )
+        while queue:
+            current, path_chain, label_chain = queue.popleft()
+            visited_markdown.add(current)
+            depth = len(path_chain) - 1
+            try:
+                content = current.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for raw_target in extract_relative_links(content):
+                resolved = resolve_relative_link_target(raw_target, current.parent)
+                if resolved is None:
+                    continue
+                next_depth = depth + 1
+                next_label = _format_package_rel(resolved, package_root, raw_target)
+                if next_depth > max_hops:
+                    chain_str = " -> ".join((*label_chain, next_label))
+                    if chain_str not in seen_violations:
+                        seen_violations.add(chain_str)
+                        violations.append(chain_str)
+                    continue
+                if (
+                    resolved.suffix.lower() == ".md"
+                    and resolved.is_relative_to(package_root)
+                    and resolved.is_file()
+                    and not resolved.is_symlink()
+                    and resolved not in path_chain
+                ):
+                    queue.append(
+                        (
+                            resolved,
+                            (*path_chain, resolved),
+                            (*label_chain, next_label),
+                        )
+                    )
+
+    references_dir = package / "references"
+    if references_dir.is_dir() and not references_dir.is_symlink():
+        for ref_md in sorted(references_dir.rglob("*.md")):
+            if ref_md.is_symlink() or not ref_md.is_file():
+                continue
+            ref_resolved = ref_md.resolve()
+            if ref_resolved in visited_markdown:
+                continue
+            ref_label = _format_package_rel(
+                ref_resolved, package_root, ref_md.as_posix()
+            )
+            try:
+                ref_content = ref_md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for raw_target in extract_relative_links(ref_content):
+                resolved = resolve_relative_link_target(raw_target, ref_md.parent)
+                if resolved is None:
+                    continue
+                target_label = _format_package_rel(resolved, package_root, raw_target)
+                chain_str = f"SKILL.md -> {ref_label} -> {target_label}"
+                if chain_str not in seen_violations:
+                    seen_violations.add(chain_str)
+                    violations.append(chain_str)
+
+    return violations
 
 
 def read_frontmatter(path: Path) -> tuple[dict, str]:

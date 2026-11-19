@@ -79,13 +79,100 @@ def _infer_suite_name(name: str, available_suites: Sequence[str]) -> str:
         ("repo-", "repository-workflows"),
     )
     for prefix, suite_name in prefix_map:
-        if name.startswith(prefix) and suite_name in available:
+        if name.startswith(prefix) and (not available or suite_name in available):
             return suite_name
     if "repository-workflows" in available:
         return "repository-workflows"
     if available_suites:
         return available_suites[0]
-    return "repository-workflows"
+    return "repository-audits"
+
+
+def _resolve_suite_and_sibling(
+    root: Path,
+    name: str,
+    explicit_suite: str | None,
+) -> tuple[str, str]:
+    """Resolve the target suite name and a valid near-neighbor sibling_skill."""
+    suites_path = root / "catalog/suites.json"
+    available_names: list[str] = []
+    suite_skills: dict[str, list[str]] = {}
+    if suites_path.is_file():
+        try:
+            doc = json.loads(suites_path.read_text(encoding="utf-8"))
+            for s_obj in doc.get("suites", []):
+                s_name = s_obj.get("name")
+                if not isinstance(s_name, str):
+                    continue
+                available_names.append(s_name)
+                members: list[str] = []
+                for p_obj in s_obj.get("phases", []):
+                    for sk in p_obj.get("skills", []):
+                        if isinstance(sk, str):
+                            members.append(sk)
+                suite_skills[s_name] = members
+        except (OSError, ValueError, TypeError):
+            pass
+
+    target_suite = explicit_suite or _infer_suite_name(name, available_names)
+    for candidate in suite_skills.get(target_suite, []):
+        if candidate != name:
+            return target_suite, candidate
+
+    fallback_pairs: dict[str, tuple[str, str]] = {
+        "software-architecture": (
+            "arch-decision-record",
+            "arch-boundary-specification",
+        ),
+        "code-review": (
+            "review-diff-analysis",
+            "review-invariant-violations",
+        ),
+        "automated-testing": (
+            "test-gap-analysis",
+            "test-case-generation",
+        ),
+        "repository-workflows": (
+            "repo-verify-finding",
+            "repo-plan-fix",
+        ),
+        "repository-audits": (
+            "repo-audit-concurrency",
+            "repo-audit-invariants",
+        ),
+    }
+    primary, secondary = fallback_pairs.get(
+        target_suite, ("repo-audit-concurrency", "repo-audit-invariants")
+    )
+    return target_suite, (secondary if name == primary else primary)
+
+
+def _discover_suite_synced_schemas(
+    root: Path,
+    suite_name: str,
+    own_schema_filename: str,
+) -> list[str]:
+    """Return relative assets/*.schema.json paths synced into suite_name by shared manifests."""
+    shared_dir = root / "shared"
+    if not shared_dir.is_dir():
+        return []
+    synced: list[str] = []
+    for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("suite", "repository-audits") != suite_name:
+            continue
+        for rel in manifest.get("files", []):
+            if (
+                isinstance(rel, str)
+                and rel.startswith("assets/")
+                and rel.endswith(".schema.json")
+                and Path(rel).name != own_schema_filename
+            ):
+                synced.append(rel)
+    return sorted(set(synced))
 
 
 def _yaml_double_quoted(value: str) -> str:
@@ -104,7 +191,12 @@ def _render_skill_markdown(
     title: str,
     description: str,
     schema_filename: str,
+    extra_schema_links: Sequence[str] = (),
 ) -> str:
+    extra_clause = ""
+    if extra_schema_links:
+        formatted = ", ".join(f"[suite schema]({rel})" for rel in extra_schema_links)
+        extra_clause = f" and {formatted}"
     return (
         "---\n"
         f"name: {name}\n"
@@ -124,7 +216,7 @@ def _render_skill_markdown(
         "- Keep unrelated modules, public interfaces, and unverified claims unchanged.\n"
         "- Distinguish observed execution evidence from static inference.\n\n"
         "## Deliver\n\n"
-        f"Format structured results conforming to the [output schema](assets/{schema_filename}).\n"
+        f"Format structured results conforming to the [output schema](assets/{schema_filename}){extra_clause}.\n"
         "Cite exact relative file paths, Concrete evidence, and remaining verification limits.\n"
     )
 
@@ -201,8 +293,27 @@ def _render_openai_yaml(name: str, title: str, short_description: str) -> str:
     )
 
 
-def _render_evaluation_scenarios(name: str, title: str) -> str:
+def _render_evaluation_scenarios(
+    name: str,
+    title: str,
+    suite_name: str,
+    sibling_skill: str,
+) -> str:
     lower_title = title.lower()
+    disallow_audit_word = suite_name in {
+        "software-architecture",
+        "code-review",
+        "automated-testing",
+    }
+    routing_note = (
+        "Near-neighbor sibling routing check; verify routing to the designated "
+        "neighboring skill rather than out-of-scope execution."
+        if disallow_audit_word and "audit" in sibling_skill.lower()
+        else (
+            f"Near-neighbor sibling routing check; verify routing to {sibling_skill} "
+            "rather than out-of-scope execution."
+        )
+    )
     payload: dict[str, Any] = {
         "topic": name,
         "scenarios": [
@@ -238,13 +349,16 @@ def _render_evaluation_scenarios(name: str, title: str) -> str:
             },
             {
                 "id": f"{name}-routing",
-                "prompt": "Fix a typographical error in the top-level changelog.",
-                "expected_behavior": [
-                    "Do not activate this specialist skill solely because the task references a repository."
-                ],
-                "evaluation_note": (
-                    "This scenario verifies activation routing discipline rather than domain execution."
+                "prompt": (
+                    f"Execute the neighboring {sibling_skill} workflow contract on the supplied "
+                    "module boundaries instead of this specialist scope."
                 ),
+                "sibling_skill": sibling_skill,
+                "expected_behavior": [
+                    f"Recognize that this request targets {sibling_skill} rather than {name}.",
+                    f"Defer or route to {sibling_skill} instead of forcing an out-of-scope pass.",
+                ],
+                "evaluation_note": routing_note,
             },
         ],
         "execution_state": "specified-not-executed; see docs/validation.md for executed evaluations",
@@ -504,12 +618,23 @@ def scaffold_skill(
         )
 
     schema_filename = f"{name}.schema.json"
+    effective_suite, sibling_skill = _resolve_suite_and_sibling(
+        root=resolved_root,
+        name=name,
+        explicit_suite=suite,
+    )
+    extra_schema_links = (
+        _discover_suite_synced_schemas(resolved_root, effective_suite, schema_filename)
+        if sync_catalog
+        else []
+    )
     package_files: dict[str, str] = {
         "SKILL.md": _render_skill_markdown(
             name=name,
             title=effective_title,
             description=effective_description,
             schema_filename=schema_filename,
+            extra_schema_links=extra_schema_links,
         ),
         "assets/prompt.md": _render_prompt_markdown(
             name=name,
@@ -527,6 +652,8 @@ def scaffold_skill(
         "references/evaluation-scenarios.json": _render_evaluation_scenarios(
             name=name,
             title=effective_title,
+            suite_name=effective_suite,
+            sibling_skill=sibling_skill,
         ),
     }
 

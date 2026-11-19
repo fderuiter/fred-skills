@@ -99,18 +99,24 @@ class EvaluationScenarioSchemaTests(unittest.TestCase):
             "scenarios": [
                 {
                     "id": "sample-check-failure",
-                    "prompt": "Inspect sample module.",
+                    "prompt": "Inspect sample module boundaries and report issues.",
                     "expected_behavior": ["Report defect with evidence."],
+                    "evaluation_note": "Author fixture note; keep expected outcomes out of the prompt.",
                 },
                 {
                     "id": "sample-check-safe",
-                    "prompt": "Inspect sample module.",
+                    "prompt": "Inspect sample module boundaries and report issues.",
                     "expected_behavior": ["Confirm safeguards hold."],
+                    "evaluation_note": "Safe control note; keep expected outcomes out of the prompt.",
                 },
                 {
                     "id": "sample-check-routing",
-                    "prompt": "Update changelog typo.",
-                    "expected_behavior": ["Do not activate specialist."],
+                    "prompt": "Inspect neighboring boundary contracts across module interfaces.",
+                    "sibling_skill": "repo-audit-invariants",
+                    "expected_behavior": [
+                        "Route to repo-audit-invariants instead of sample-check."
+                    ],
+                    "evaluation_note": "Verify sibling routing to repo-audit-invariants.",
                 },
             ],
         }
@@ -129,10 +135,13 @@ class EvaluationScenarioSchemaTests(unittest.TestCase):
             with self.subTest(omitted_idx=omitted_idx, replacement_id=replacement_id):
                 payload = self._valid_payload()
                 scenarios = list(payload["scenarios"])
-                scenarios[omitted_idx] = {
+                updated = {
                     **scenarios[omitted_idx],
                     "id": replacement_id,
                 }
+                if replacement_id.endswith("-routing"):
+                    updated["sibling_skill"] = "repo-audit-invariants"
+                scenarios[omitted_idx] = updated
                 payload["scenarios"] = scenarios
                 errors = list(self.validator.iter_errors(payload))
                 self.assertTrue(
@@ -286,6 +295,25 @@ class ScaffolderTests(unittest.TestCase):
         errors, telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], errors)
         self.assertEqual(52, telemetry["total_packages"])
+
+        for extra_name, extra_suite in (
+            ("arch-service-contracts", "software-architecture"),
+            ("review-api-changes", "code-review"),
+            ("test-mutation-bounds", "automated-testing"),
+            ("repo-triage-regressions", "repository-workflows"),
+        ):
+            scaffold_skill.scaffold_skill(
+                extra_name,
+                root=self.root,
+                sync_catalog=True,
+                suite=extra_suite,
+            )
+        self.assertEqual([], sync_audit_resources.sync(self.root, check=True))
+        self.assertEqual([], build_catalog.build(self.root, check=True))
+        self.assertEqual([], build_experience.build(self.root, check=True))
+        all_errors, all_telemetry = validate_skills.validate_with_telemetry(self.root)
+        self.assertEqual([], all_errors)
+        self.assertEqual(56, all_telemetry["total_packages"])
 
     def test_scaffolder_catalog_sync_in_minimal_root(self) -> None:
         scaffold_skill.scaffold_skill(
@@ -469,7 +497,7 @@ class WorkflowAndContributingGuardrailTests(unittest.TestCase):
             if "scripts/run_checks.py --phase packages" in s.get("run", "")
         )
         self.assertIn("--base-ref", pkg_step["run"])
-        self.assertIn("${{ runner.temp }}/validation-telemetry.json", pkg_step["run"])
+        self.assertIn("--telemetry validation-telemetry.json", pkg_step["run"])
         self.assertIn("--step-summary", pkg_step["run"])
 
         upload_steps = [
@@ -480,7 +508,7 @@ class WorkflowAndContributingGuardrailTests(unittest.TestCase):
         self.assertEqual(1, len(upload_steps))
         self.assertEqual("always()", upload_steps[0].get("if"))
         self.assertEqual(
-            "${{ runner.temp }}/validation-telemetry.json",
+            "validation-telemetry.json",
             upload_steps[0]["with"]["path"],
         )
 

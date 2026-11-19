@@ -1,0 +1,6 @@
+--- a/formatter.py
++++ b/formatter.py
+@@ -1,2 +1,2 @@
+-def format_invoice(total: int, currency: str = "USD") -> str:
++def format_invoice(total: int, currency: str) -> str:
+     return f"{currency} {total}"

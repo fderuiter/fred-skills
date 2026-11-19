@@ -402,11 +402,11 @@ jobs:
             --task review-pr \
             --mode changes \
             --base origin/main \
-            --output-plan audit-plan.json
+            --json > audit-plan.json
 
       - name: Validate audit plan schema
         run: |
-          python -c "import json, sys; data=json.load(open('audit-plan.json')); assert 'skills' in data"
+          python -c "import json, sys; data=json.load(open('audit-plan.json')); assert 'skills' in data['plan']"
 
       - name: Generate local draft issues
         run: |

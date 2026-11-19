@@ -116,10 +116,23 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         if version_path.is_file()
         else "0.0.0"
     )
+    marketplace_version_path = (
+        version_path if version_path.is_file() else ROOT / "VERSION"
+    )
+    marketplace_version = (
+        marketplace_version_path.read_text(encoding="utf-8").strip() or "0.0.0"
+        if marketplace_version_path.is_file()
+        else "0.0.0"
+    )
     marketplace = {
         "name": "fred-skills",
+        "version": marketplace_version,
+        "description": description,
         "owner": {"name": "fderuiter"},
-        "metadata": {"description": description},
+        "metadata": {
+            "description": description,
+            "version": marketplace_version,
+        },
         "plugins": plugins,
     }
     marketplace_text = json.dumps(marketplace, indent=2, ensure_ascii=False) + "\n"

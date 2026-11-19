@@ -114,22 +114,22 @@ The ledger validator also needs jsonschema; instruction-only use does not need P
      `<finding/run artifacts>`, `<path-to-diagnostic-bundle-output>`,
      `<path-to-run-workspace-directory>`, `<path-to-session-transcript>`,
      `<repository/revision>`, `<repository>`, `<revision>`.
-   - **Negative constraints**: `assets/prompt.md` must include explicit negative constraints or
-     boundary guardrails (such as `do not`, `never`, `must not`, `only when`, `keep ... unchanged`,
-     `boundaries`, `guardrails`, or `invariants`).
-   - **Boundary headings**: `SKILL.md` must contain at least one `##` or deeper boundary/workflow
-     section matching validator patterns (`## Workflow`, `## Boundary`, `## Guardrails`,
-     `## Deliver`, `## Inventory`, `## Investigate`, `## Challenge`, `## Triage`,
-     `## Establish`, `## Coordinate`, or `## Validate`).
-   - **Output schemas**: Define at least one Draft 2020-12 JSON output schema in
-     `assets/*.schema.json` (excluding `evaluation-scenarios*`).
+   - **Negative constraints**: `assets/prompt.md` must include explicit negative prohibitions
+     (such as `do not`, `never`, `must not`, `cannot`, `should not`, `prohibit`, `forbid`,
+     `avoid`, or `disallow`) and reference the skill's output schema contract.
+   - **Boundary headings**: `SKILL.md` must include a dedicated `## Guardrails` or `## Deliver`
+     boundary section containing explicit negative prohibitions, and link every
+     `assets/*.schema.json` output schema directly within 1-hop reference depth.
+   - **Output schemas**: Define at least one closed Draft 2020-12 JSON output schema in
+     `assets/*.schema.json` (excluding `evaluation-scenarios*`) with root `properties` and
+     `additionalProperties: false` on structured objects.
    - **UI limits**: When `agents/openai.yaml` is present, `interface.display_name` must be
      nonempty, `interface.short_description` must contain `25–64` characters, and
      `interface.default_prompt` must reference `$<skill-name>`.
    - **Scenario suffixes**: `references/evaluation-scenarios.json` must conform to
      `schemas/evaluation-scenarios.schema.json` with three scenarios using `-failure`, `-safe`,
-     and `-routing` identifier suffixes (a failure case, a safe control, and an unrelated
-     activation scenario). Keep expected answers out of fresh-context execution prompts.
+     and `-routing` identifier suffixes (including `sibling_skill` on `-routing` scenarios for
+     near-neighbor activation routing). Keep expected answers out of fresh-context execution prompts.
 4. Run packaging checks and relevant deterministic tests. Initial outcomes for newly authored
    skills are recorded in `.fred-skills/validation-attempts.json` so local revision loops preserve
    first-pass telemetry. For behavioral changes, run representative agent tasks and record actual
