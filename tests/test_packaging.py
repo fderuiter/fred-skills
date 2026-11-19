@@ -661,6 +661,10 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(validate_wf_path.is_file())
         with validate_wf_path.open("r", encoding="utf-8") as f:
             validate_wf = yaml.safe_load(f)
+        validate_triggers = validate_wf.get("on") or validate_wf.get(True) or {}
+        self.assertIn("push", validate_triggers)
+        self.assertIn("pull_request", validate_triggers)
+        self.assertIn("workflow_call", validate_triggers)
         concurrency = validate_wf.get("concurrency", {})
         self.assertIsInstance(concurrency, dict)
         group_expr = concurrency.get("group", "")
@@ -855,6 +859,19 @@ class PackageTests(unittest.TestCase):
                 "cancel-in-progress": False,
             },
         )
+        dispatch_release_ctx = {
+            "workflow": "Release",
+            "event_name": "workflow_dispatch",
+            "ref": "refs/heads/feature/dry-run",
+            "sha": "e8d6832900000000000000000000000000000004",
+            "run_id": "9004",
+        }
+        caller_group = eval_gha_template(
+            release_wf["concurrency"]["group"], dispatch_release_ctx
+        )
+        called_validate_group = eval_gha_template(group_tpl, dispatch_release_ctx)
+        self.assertNotEqual(caller_group, called_validate_group)
+        self.assertIn(dispatch_release_ctx["sha"], called_validate_group)
 
     def test_makefile_target_definitions(self):
         makefile_path = ROOT / "Makefile"
