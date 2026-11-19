@@ -497,6 +497,99 @@ class EvaluationTests(unittest.TestCase):
         )
         self.assertEqual(2, bad.returncode)
 
+    def test_cli_evaluate_projects_normalized_records_across_suite_schemas(self):
+        argv = json.dumps(
+            [
+                sys.executable,
+                str(ROOT / "evals/reference_adapter.py"),
+                "--prompt",
+                "{prompt_file}",
+                "--output",
+                "{output_file}",
+            ]
+        )
+        sampled_cases = [
+            "review-diff-analysis-a",
+            "arch-decision-record-a",
+            "test-gap-analysis-a",
+            "spec-convergence-a",
+            "repo-verify-finding-a",
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            out_dir = Path(temp) / "bench"
+            cmd = [
+                sys.executable,
+                str(ROOT / "scripts/fred.py"),
+                "evaluate",
+                "--output",
+                str(out_dir),
+                "--adapter-argv",
+                argv,
+            ]
+            for cid in sampled_cases:
+                cmd.extend(["--case", cid])
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            bench = json.loads((out_dir / "benchmark.json").read_text(encoding="utf-8"))
+            self.assertEqual(10, len(bench["runs"]))
+            for row in bench["runs"]:
+                self.assertEqual("executed", row["state"])
+                self.assertTrue(row["exact_match"])
+                records = row["normalized_records"]
+                self.assertTrue(
+                    records, f"Expected normalized_records for {row['case']}"
+                )
+                for rec in records:
+                    self.assertEqual({"key", "status", "evidence"}, set(rec.keys()))
+                    self.assertTrue(rec["key"])
+                    self.assertIn(rec["status"], evaluations._AUDIT_STATUSES)
+                    self.assertTrue(rec["evidence"])
+
+        public_exports = [
+            name
+            for name in dir(evaluations)
+            if not name.startswith("_")
+            and callable(getattr(evaluations, name))
+            and getattr(evaluations, name).__module__ == evaluations.__name__
+        ]
+        self.assertEqual(["evaluate"], public_exports)
+
+    def test_routing_prompts_use_domain_near_misses_without_artificial_hints(self):
+        forbidden_hints = (
+            "do not audit",
+            "proofread",
+            "sibling routing request",
+            "abstain with",
+            "return no audit findings",
+        )
+        manifest = json.loads((ROOT / "evals/cases.json").read_text(encoding="utf-8"))
+        routing_cases = [
+            c for c in manifest["cases"] if str(c["id"]).endswith("-routing")
+        ]
+        self.assertEqual(23, len(routing_cases))
+        for case in routing_cases:
+            low = str(case["prompt"]).lower()
+            for hint in forbidden_hints:
+                self.assertNotIn(hint, low, f"{case['id']} leaked hint {hint!r}")
+
+        scenario_files = sorted(
+            (ROOT / "skills").glob("*/references/evaluation-scenarios.json")
+        )
+        self.assertEqual(55, len(scenario_files))
+        for sf in scenario_files:
+            doc = json.loads(sf.read_text(encoding="utf-8"))
+            for sc in doc["scenarios"]:
+                low = str(sc["prompt"]).lower()
+                for hint in forbidden_hints:
+                    self.assertNotIn(
+                        hint, low, f"{sf.relative_to(ROOT)}:{sc['id']} leaked {hint!r}"
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

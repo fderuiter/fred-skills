@@ -928,7 +928,7 @@
     },
     {
       "name": "review-diff-analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "description": "Use when analyzing pull request diffs to evaluate behavioral impact, blast radius, and unintended regressions.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -940,7 +940,7 @@
     },
     {
       "name": "review-invariant-violations",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "description": "Use when reviewing code changes for broken data invariants, unsafe state transitions, and concurrency hazards.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"

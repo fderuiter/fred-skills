@@ -38,8 +38,8 @@ class PackageTests(unittest.TestCase):
         self.entry.write_text(
             '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
             "# Sample\n\nInspect the supplied contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
-            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json) "
-            "and verify with [audit validator](scripts/validate_audit.py).\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json), "
+            "verify with [audit validator](scripts/validate_audit.py), and run standalone via [prompt](assets/prompt.md).\n"
             "Do not modify application code without explicit user authorization.\n",
             encoding="utf-8",
         )
@@ -1587,7 +1587,8 @@ class PackageTests(unittest.TestCase):
         (second_skill / "SKILL.md").write_text(
             '---\nname: second-audit\ndescription: "Audit secondary contracts when explicitly requested."\n---\n\n'
             "# Second\n\nInspect the secondary contract using [worked examples](references/examples.md).\n\n## Deliver\n\n"
-            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json).\n"
+            "Deliver the audit output conforming to [audit schema](assets/audit.schema.json), "
+            "[audit validator](scripts/validate_audit.py), and [prompt](assets/prompt.md).\n"
             "Do not modify application code without explicit user authorization.\n",
             encoding="utf-8",
         )
@@ -1842,15 +1843,111 @@ class PackageTests(unittest.TestCase):
             f"Expected guardrail/delivery placement error, got: {misplaced_errors}",
         )
 
-        # Dedicated ## Guardrails section with explicit prohibition and linked schema is accepted
+        # Dedicated ## Guardrails section with explicit prohibition and linked companions is accepted
         self.entry.write_text(
             '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n'
             "# Sample\n\nSee [worked examples](references/examples.md).\n\n"
             "## Guardrails\n\n- Never modify application code without authorization.\n\n"
-            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries.\n",
+            "## Deliver\n\nDeliver [audit schema](assets/audit.schema.json) summaries with "
+            "[validator](scripts/validate_audit.py) and [prompt](assets/prompt.md).\n",
             encoding="utf-8",
         )
         self.assertEqual([], validate_skill(self.skill))
+
+    def test_unreferenced_companion_files_are_rejected_and_sync_exclusions_enforced(
+        self,
+    ) -> None:
+        # 1. Unreferenced references/*.md, assets/*.md, and scripts/*.py are blocked
+        orphan_ref = self.skill / "references/unreferenced-notes.md"
+        orphan_ref.write_text("# Orphan Notes\n\nUnused text.\n", encoding="utf-8")
+        orphan_tpl = self.skill / "assets/unused-template.md"
+        orphan_tpl.write_text("# Unused Template\n", encoding="utf-8")
+        orphan_script = self.skill / "scripts/extra_helper.py"
+        orphan_script.write_text(
+            "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n", encoding="utf-8"
+        )
+        orphan_script.chmod(0o755)
+
+        orphan_errors = validate_skill(self.skill)
+        for expected_rel in (
+            "references/unreferenced-notes.md",
+            "assets/unused-template.md",
+            "scripts/extra_helper.py",
+        ):
+            self.assertTrue(
+                any(
+                    f"missing markdown link to companion file {expected_rel}" in e
+                    for e in orphan_errors
+                ),
+                f"Expected companion link error for {expected_rel}, got: {orphan_errors}",
+            )
+
+        orphan_ref.unlink()
+        orphan_tpl.unlink()
+        orphan_script.unlink()
+
+        # Dropping the link to assets/prompt.md is also rejected
+        orig_entry = self.entry.read_text(encoding="utf-8")
+        self.entry.write_text(
+            orig_entry.replace("[prompt](assets/prompt.md)", "`assets/prompt.md`"),
+            encoding="utf-8",
+        )
+        prompt_unlinked = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "missing markdown link to companion file assets/prompt.md" in e
+                for e in prompt_unlinked
+            ),
+            prompt_unlinked,
+        )
+        self.entry.write_text(orig_entry, encoding="utf-8")
+        self.assertEqual([], validate_skill(self.skill))
+
+        # 2. Per-skill exclude in shared manifest drops unused templates on sync and flags drift on --check
+        diag_dir = ROOT / "skills/repo-audit-diagnostics"
+        self.assertFalse((diag_dir / "assets/report-template.md").exists())
+        self.assertFalse((diag_dir / "assets/handoff-template.md").exists())
+
+        shared_dir = self.root / "shared/repo-audit/resources/assets"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        (shared_dir / "report-template.md").write_text("# Report\n", encoding="utf-8")
+        (self.root / "shared/repo-audit/manifest.json").write_text(
+            json.dumps(
+                {
+                    "version": "1.0",
+                    "suite": "repository-audits",
+                    "files": ["assets/report-template.md"],
+                    "exclude": {"sample-audit": ["assets/report-template.md"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "catalog").mkdir(exist_ok=True)
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "repository-audits",
+                            "phases": [
+                                {"id": 1, "title": "Init", "skills": ["sample-audit"]}
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        stale = self.skill / "assets/report-template.md"
+        stale.write_text("# Stale\n", encoding="utf-8")
+        check_problems = sync(self.root, check=True)
+        self.assertIn(
+            "Unexpected excluded resource in skill: sample-audit/assets/report-template.md",
+            check_problems,
+        )
+        self.assertEqual([], sync(self.root, check=False))
+        self.assertFalse(stale.exists())
 
     def test_skill_markdown_missing_schema_link_is_rejected(self):
         self.entry.write_text(
@@ -2529,6 +2626,7 @@ class PackageTests(unittest.TestCase):
                 target.unlink()
 
         # 2. Safe offline stdlib script (including re.compile and shlex.quote) passes
+        original_skill_md = (self.skill / "SKILL.md").read_text(encoding="utf-8")
         scripts_dir = self.skill / "scripts"
         scripts_dir.mkdir(exist_ok=True)
         script_file = scripts_dir / "offline_helper.py"
@@ -2537,6 +2635,11 @@ class PackageTests(unittest.TestCase):
             "PAT = re.compile(r'[a-z]+')\n"
             "def quote_arg(val: str) -> str:\n"
             "    return shlex.quote(json.dumps(bool(PAT.match(val))))\n",
+            encoding="utf-8",
+        )
+        (self.skill / "SKILL.md").write_text(
+            original_skill_md
+            + "\n- Run [scripts/offline_helper.py](scripts/offline_helper.py) when quoting offline helper arguments.\n",
             encoding="utf-8",
         )
         self.assertEqual([], validate_skill(self.skill))
@@ -2568,6 +2671,7 @@ class PackageTests(unittest.TestCase):
                     )
         finally:
             script_file.unlink()
+            (self.skill / "SKILL.md").write_text(original_skill_md, encoding="utf-8")
 
     def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
@@ -2725,6 +2829,13 @@ class PackageTests(unittest.TestCase):
         )
 
     def test_protocol_depth_rejects_reference_inversion(self) -> None:
+        self.entry.write_text(
+            self.entry.read_text(encoding="utf-8").replace(
+                "# Sample\n\n",
+                "# Sample\n\nRead [review protocol](references/review-protocol.md).\n\n",
+            ),
+            encoding="utf-8",
+        )
         proto = self.skill / "references/review-protocol.md"
         proto.write_text("# Shallow Protocol\n\nToo short.\n", encoding="utf-8")
         inv_errors = validate_skill(self.skill)
@@ -2735,7 +2846,7 @@ class PackageTests(unittest.TestCase):
 
         deep_lines = ["# Deep Review Protocol", ""] + [
             f"- Rule {i}: Verify boundary precondition and evidence line spans before promotion."
-            for i in range(1, 25)
+            for i in range(1, 28)
         ]
         proto.write_text("\n".join(deep_lines) + "\n", encoding="utf-8")
         self.assertEqual([], validate_skill(self.skill))

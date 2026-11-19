@@ -1,6 +1,6 @@
 {
   "name": "review-diff-analysis",
-  "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+  "description": "Use when analyzing pull request diffs to evaluate behavioral impact, blast radius, and unintended regressions.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

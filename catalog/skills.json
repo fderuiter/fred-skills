@@ -1275,7 +1275,7 @@
     {
       "name": "review-diff-analysis",
       "title": "Diff Analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "description": "Use when analyzing pull request diffs to evaluate behavioral impact, blast radius, and unintended regressions.",
       "path": "skills/review-diff-analysis/SKILL.md",
       "suite": "code-review",
       "phase": 0,
@@ -1300,8 +1300,8 @@
     },
     {
       "name": "review-invariant-violations",
-      "title": "Invariant Verification",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "title": "Invariant Violations",
+      "description": "Use when reviewing code changes for broken data invariants, unsafe state transitions, and concurrency hazards.",
       "path": "skills/review-invariant-violations/SKILL.md",
       "suite": "code-review",
       "phase": 1,

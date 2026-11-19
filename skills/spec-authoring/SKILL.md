@@ -24,5 +24,5 @@ Translate settled pre-code decisions and verified codebase constraints into an u
 
 ## Deliver
 
-Emit synchronized `SPEC.md` (via the [spec template](assets/spec-template.md)) and `spec.json` (validated against the [spec schema](assets/spec.schema.json) with the [spec validator](scripts/validate_spec.py)).
+Emit synchronized `SPEC.md` (via the [spec template](assets/spec-template.md)) and `spec.json` (validated against the [spec schema](assets/spec.schema.json) with the [spec validator](scripts/validate_spec.py)), and load the [invocation prompt](assets/prompt.md) when launching standalone runs.
 Ensure `interview_decisions`, `new_file_scopes`, `out_of_scope`, and `verification_commands` agree between `SPEC.md` and `spec.json` for downstream `spec-convergence` checks.

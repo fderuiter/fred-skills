@@ -88,35 +88,35 @@
       "id": "concurrency-routing",
       "fixture": "fixtures/concurrency/a",
       "skill": "repo-audit-concurrency",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "prompt": "Audit abort signal propagation, background task draining, and post-cancellation side effects during request shutdown.",
       "expected_keys": []
     },
     {
       "id": "trust-routing",
       "fixture": "fixtures/trust/a",
       "skill": "repo-audit-trust-boundaries",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "prompt": "Audit URL path normalization, percent-encoding ambiguity, and Unicode canonicalization before allowlist checks.",
       "expected_keys": []
     },
     {
       "id": "transactions-routing",
       "fixture": "fixtures/transactions/a",
       "skill": "repo-audit-transactions",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "prompt": "Audit duplicate webhook delivery handling, retry safety, and idempotency key scoping on payment endpoints.",
       "expected_keys": []
     },
     {
       "id": "oracles-routing",
       "fixture": "fixtures/oracles/a",
       "skill": "repo-audit-test-oracles",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "prompt": "Audit critical recovery and negative behavioral contracts that have zero automated test coverage.",
       "expected_keys": []
     },
     {
       "id": "synthesis-routing",
       "fixture": "fixtures/synthesis/a",
       "skill": "repo-audit-synthesis",
-      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
+      "prompt": "Select initial specialist passes and initialize an audit workspace plan before any findings exist.",
       "expected_keys": []
     },
     {
@@ -157,7 +157,7 @@
       "skill": "arch-decision-record",
       "contract": "architecture",
       "schema": "skills/arch-decision-record/assets/architecture.schema.json",
-      "prompt": "Sibling routing request: map trust boundary validation guards where raw HTTP headers enter storage repositories rather than authoring an architectural decision record. Abstain with draft status and empty lists when the request belongs to boundary specification.",
+      "prompt": "Specify trust boundary validation guards and gateway interfaces where untrusted HTTP requests enter the order repository.",
       "expected_keys": [],
       "expected_assertions": {
         "status": "draft",
@@ -206,7 +206,7 @@
       "skill": "arch-boundary-specification",
       "contract": "architecture",
       "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
-      "prompt": "Sibling routing request: decompose a monolithic reporting pipeline into cohesive extractor, calculator, and publisher components rather than specifying trust boundaries. Abstain with draft status and empty lists when the request belongs to component decomposition.",
+      "prompt": "Decompose this monolithic billing pipeline into cohesive ingestion, calculation, and notification components with acyclic interfaces.",
       "expected_keys": [],
       "expected_assertions": {
         "status": "draft",
@@ -258,7 +258,7 @@
       "skill": "arch-component-decomposition",
       "contract": "architecture",
       "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
-      "prompt": "Sibling routing request: author a standalone ADR comparing message broker durability trade-offs rather than decomposing module capabilities. Abstain with draft status and empty lists when the request belongs to architectural decision records.",
+      "prompt": "Author an architectural decision record comparing transactional outbox queues against synchronous RPC for checkout event delivery.",
       "expected_keys": [],
       "expected_assertions": {
         "status": "draft",
@@ -308,7 +308,7 @@
       "skill": "review-diff-analysis",
       "contract": "review",
       "schema": "skills/review-diff-analysis/assets/review.schema.json",
-      "prompt": "Sibling routing request: synthesize pre-existing reviewer comments into deduplicated developer remediation guidance rather than performing diff impact analysis. Abstain with comment verdict and empty findings.",
+      "prompt": "Verify that state transitions and lock lifecycles in the escrow module preserve behavioral invariants across error paths.",
       "expected_keys": [],
       "expected_assertions": {
         "verdict": "comment",
@@ -357,7 +357,7 @@
       "skill": "review-invariant-violations",
       "contract": "review",
       "schema": "skills/review-invariant-violations/assets/review.schema.json",
-      "prompt": "Sibling routing request: map exported API signature hunks and downstream caller blast radius from a pull request diff rather than checking state invariants. Abstain with comment verdict and empty findings.",
+      "prompt": "Consolidate overlapping raw review comments into deduplicated, severity-ranked remediation guidance with replacement code examples.",
       "expected_keys": [],
       "expected_assertions": {
         "verdict": "comment",
@@ -404,7 +404,7 @@
       "skill": "review-actionable-feedback",
       "contract": "review",
       "schema": "skills/review-actionable-feedback/assets/review.schema.json",
-      "prompt": "Sibling routing request: verify escrow state machine transition invariants directly from code rather than synthesizing raw review feedback. Abstain with comment verdict and empty findings.",
+      "prompt": "Inspect the pull request diff hunks to map altered function signatures and downstream caller blast radius across modules.",
       "expected_keys": [],
       "expected_assertions": {
         "verdict": "comment",
@@ -451,7 +451,7 @@
       "skill": "test-gap-analysis",
       "contract": "testing",
       "schema": "skills/test-gap-analysis/assets/testing.schema.json",
-      "prompt": "Sibling routing request: execute existing test suites repeatedly to detect shared mutable state leakage rather than cataloging coverage gaps. Abstain with empty test_cases.",
+      "prompt": "Write runnable unit tests with independent boundary and exception oracles for the uncovered rate limiter module.",
       "expected_keys": [],
       "expected_assertions": {
         "test_case_ids": []
@@ -502,7 +502,7 @@
       "skill": "test-case-generation",
       "contract": "testing",
       "schema": "skills/test-case-generation/assets/testing.schema.json",
-      "prompt": "Sibling routing request: produce a read-only coverage gap inventory without writing or generating any test files. Abstain with empty test_cases and leave ./source untouched.",
+      "prompt": "Execute the existing generated test suite across reordered runs to check for shared state leakage and seeded regression detection.",
       "expected_keys": [],
       "expected_assertions": {
         "test_case_ids": []
@@ -547,7 +547,7 @@
       "skill": "test-suite-verification",
       "contract": "testing",
       "schema": "skills/test-suite-verification/assets/testing.schema.json",
-      "prompt": "Sibling routing request: author brand-new unit test files for uncovered rate limiter branches rather than verifying existing suite isolation. Abstain with empty test_cases.",
+      "prompt": "Inventory untested exception branches and missing boundary assertions across the discount calculation module without running suites.",
       "expected_keys": [],
       "expected_assertions": {
         "test_case_ids": []
@@ -591,7 +591,7 @@
       "skill": "repo-verify-finding",
       "contract": "workflow",
       "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
-      "prompt": "Sibling routing request: reconcile finding fingerprints and remediation state transitions across multiple completed runs rather than reproducing candidate F-101. Abstain with finding_id none.",
+      "prompt": "Run before-and-after verification checks on a proposed patch to confirm the defect is resolved without breaking safe controls.",
       "expected_keys": [],
       "expected_assertions": {
         "finding_id": "none",
@@ -637,7 +637,7 @@
       "skill": "repo-specify-regression",
       "contract": "workflow",
       "schema": "skills/repo-specify-regression/assets/regression.schema.json",
-      "prompt": "Sibling routing request: implement a production code patch directly in quota_ledger.py rather than specifying a regression test. Abstain with finding_id none and do not edit ./source.",
+      "prompt": "Reproduce or refute the unverified concurrency candidate finding against existing caller mutex safeguards before writing new tests.",
       "expected_keys": [],
       "expected_assertions": {
         "finding_id": "none"
@@ -681,7 +681,7 @@
       "skill": "repo-plan-fix",
       "contract": "workflow",
       "schema": "skills/repo-plan-fix/assets/plan.schema.json",
-      "prompt": "Sibling routing request: execute post-patch before/after verification checks to certify a completed fix rather than planning tasks. Abstain with a noop task and empty dependency_order.",
+      "prompt": "Implement the authorized minimal guard change in retry_budget.py and record diff and test execution results.",
       "expected_keys": [],
       "expected_assertions": {
         "dependency_order": []
@@ -725,7 +725,7 @@
       "skill": "repo-apply-fix",
       "contract": "workflow",
       "schema": "skills/repo-apply-fix/assets/fix.schema.json",
-      "prompt": "Sibling routing request: draft an implementation task plan and handoff sequence without modifying any source files. Abstain with file_changes none and keep ./source untouched.",
+      "prompt": "Convert verified repository findings into an acyclic implementation task breakdown and agent handoff without editing source code.",
       "expected_keys": [],
       "expected_assertions": {
         "changed_files": []
@@ -771,7 +771,7 @@
       "skill": "repo-verify-fix",
       "contract": "workflow",
       "schema": "skills/repo-verify-fix/assets/verification.schema.json",
-      "prompt": "Sibling routing request: reproduce an unpatched initial candidate finding on a single baseline revision rather than verifying a proposed fix. Abstain with result abstained.",
+      "prompt": "Reconcile finding fingerprints, verification proofs, and remediation state transitions across prior and current run ledgers.",
       "expected_keys": [],
       "expected_assertions": {
         "result": "abstained"
@@ -812,7 +812,7 @@
       "skill": "repo-reconcile-findings",
       "contract": "workflow",
       "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
-      "prompt": "Sibling routing request: specify a standalone failing regression test for a single defect rather than reconciling cross-run remediation records. Abstain with empty matches, transitions, and unmapped_records.",
+      "prompt": "Define a deterministic, sleep-free regression test with an independent oracle that fails against the uncorrected quota defect.",
       "expected_keys": [],
       "expected_assertions": {
         "unmapped_count": 0
@@ -860,7 +860,7 @@
       "skill": "spec-interview",
       "contract": "spec",
       "schema": "skills/spec-interview/assets/spec.schema.json",
-      "prompt": "Sibling routing request: synthesize settled decisions into SPEC.md rather than conducting a pre-code interview. Abstain with draft status and empty lists.",
+      "prompt": "Synthesize these settled interview decisions into a complete SPEC.md file and validate spec.json against the specification schema.",
       "expected_keys": [],
       "expected_assertions": {
         "status": "draft",
@@ -912,7 +912,7 @@
       "skill": "spec-authoring",
       "contract": "spec",
       "schema": "skills/spec-authoring/assets/spec.schema.json",
-      "prompt": "Sibling routing request: verify whether implemented diffs stay inside SPEC.md file scopes rather than authoring a specification. Abstain with draft status and empty lists.",
+      "prompt": "Verify whether the planned implementation tasks and modified source files stay within SPEC.md file scopes and pass all verification commands.",
       "expected_keys": [],
       "expected_assertions": {
         "status": "draft",
@@ -959,7 +959,7 @@
       "skill": "spec-convergence",
       "contract": "spec",
       "schema": "skills/spec-convergence/assets/spec.schema.json",
-      "prompt": "Sibling routing request: pause implementation and interview the user on non-obvious UX and trade-off choices rather than checking specification convergence. Abstain with draft status and empty lists.",
+      "prompt": "Pause implementation and interview me on non-obvious UX, architectural trade-offs, and edge cases before drafting a feature specification.",
       "expected_keys": [],
       "expected_assertions": {
         "status": "draft",

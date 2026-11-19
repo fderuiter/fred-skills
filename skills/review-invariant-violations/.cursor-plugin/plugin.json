@@ -1,6 +1,6 @@
 {
   "name": "review-invariant-violations",
-  "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+  "description": "Use when reviewing code changes for broken data invariants, unsafe state transitions, and concurrency hazards.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

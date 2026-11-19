@@ -12,59 +12,68 @@ ACTOR: dict[str, Any] = {"kind": "deterministic-fixture-adapter", "model": None}
 
 def _handle_audit(request: str, source: Path) -> dict[str, Any]:
     keys: list[tuple[str, str]] = []
+    req_lower = request.lower()
     if (
-        "Proofread this sentence only" not in request
-        and "Sibling routing request:" not in request
+        "asynchronous publication" in req_lower
+        and (source / "session.mjs").exists()
+        and "if (mine === this.generation)"
+        not in (source / "session.mjs").read_text(encoding="utf-8")
     ):
-        if (
-            source / "session.mjs"
-        ).exists() and "if (mine === this.generation)" not in (
-            source / "session.mjs"
-        ).read_text(encoding="utf-8"):
-            keys.append(
-                (
-                    "stale-publication",
-                    "session.mjs: completion assignment is unconditional",
-                )
+        keys.append(
+            (
+                "stale-publication",
+                "session.mjs: completion assignment is unconditional",
             )
-        if (source / "records.py").exists() and 'record["owner_id"] != user_id' not in (
-            source / "records.py"
-        ).read_text(encoding="utf-8"):
-            keys.append(
-                (
-                    "authorization-bypass",
-                    "records.py: returned object is not bound to its authenticated owner",
-                )
+        )
+    if (
+        "object-level authorization" in req_lower
+        and (source / "records.py").exists()
+        and 'record["owner_id"] != user_id'
+        not in (source / "records.py").read_text(encoding="utf-8")
+    ):
+        keys.append(
+            (
+                "authorization-bypass",
+                "records.py: returned object is not bound to its authenticated owner",
             )
-        if (source / "transfer.py").exists() and "with db:" not in (
-            source / "transfer.py"
-        ).read_text(encoding="utf-8"):
-            keys.append(
-                (
-                    "partial-commit",
-                    "transfer.py: debit is committed before a possible interruption",
-                )
+        )
+    if (
+        "transaction boundary" in req_lower
+        and (source / "transfer.py").exists()
+        and "with db:" not in (source / "transfer.py").read_text(encoding="utf-8")
+    ):
+        keys.append(
+            (
+                "partial-commit",
+                "transfer.py: debit is committed before a possible interruption",
             )
-        if (source / "test_fee.py").exists() and "expected = fee(100)" in (
-            source / "test_fee.py"
-        ).read_text(encoding="utf-8"):
-            keys.append(
-                (
-                    "circular-oracle",
-                    "test_fee.py: expected result calls the same fee implementation",
-                )
+        )
+    if (
+        "independently checks its stated contract" in req_lower
+        and (source / "test_fee.py").exists()
+        and "expected = fee(100)"
+        in (source / "test_fee.py").read_text(encoding="utf-8")
+    ):
+        keys.append(
+            (
+                "circular-oracle",
+                "test_fee.py: expected result calls the same fee implementation",
             )
-        if (source / "candidates.json").exists():
-            candidates = json.loads(
-                (source / "candidates.json").read_text(encoding="utf-8")
+        )
+    if (
+        "consolidate these supplied supported findings" in req_lower
+        and (source / "candidates.json").exists()
+    ):
+        candidates = json.loads(
+            (source / "candidates.json").read_text(encoding="utf-8")
+        )
+        keys.extend(
+            (
+                key,
+                "candidates.json: supplied records share the named corrective mechanism",
             )
-            keys.extend(
-                (
-                    key,
-                    "candidates.json: supplied records share the named corrective mechanism",
-                )
-                for key in sorted({str(f["root_cause"]) for f in candidates})
-            )
+            for key in sorted({str(f["root_cause"]) for f in candidates})
+        )
     return {
         "actor": ACTOR,
         "findings": [
@@ -81,16 +90,18 @@ def _handle_audit(request: str, source: Path) -> dict[str, Any]:
 
 
 def _handle_architecture(request: str, source: Path) -> dict[str, Any]:
-    if "Sibling routing request:" in request:
-        return {
-            "actor": ACTOR,
-            "schema_version": "1.0",
-            "title": "Architecture specification abstention",
-            "status": "draft",
-            "boundaries": [],
-            "decisions": [],
-        }
+    req_lower = request.lower()
+    abstain_payload: dict[str, Any] = {
+        "actor": ACTOR,
+        "schema_version": "1.0",
+        "title": "Architecture specification abstention",
+        "status": "draft",
+        "boundaries": [],
+        "decisions": [],
+    }
     if (source / "dispatch_adr_context.json").exists():
+        if "event dispatch trade-offs" not in req_lower:
+            return abstain_payload
         ctx = json.loads(
             (source / "dispatch_adr_context.json").read_text(encoding="utf-8")
         )
@@ -124,6 +135,8 @@ def _handle_architecture(request: str, source: Path) -> dict[str, Any]:
         }
 
     if (source / "http_order_repo.py").exists():
+        if "entry invariants for this order repository" not in req_lower:
+            return abstain_payload
         code = (source / "http_order_repo.py").read_text(encoding="utf-8")
         if "ValidatedOrderCommand" not in code:
             return {
@@ -154,6 +167,8 @@ def _handle_architecture(request: str, source: Path) -> dict[str, Any]:
         }
 
     if (source / "pipeline_modules.py").exists():
+        if "tangled billing pipeline responsibilities" not in req_lower:
+            return abstain_payload
         code = (source / "pipeline_modules.py").read_text(encoding="utf-8")
         if "run_billing_monolith" in code:
             return {
@@ -203,16 +218,18 @@ def _handle_architecture(request: str, source: Path) -> dict[str, Any]:
 
 
 def _handle_review(request: str, source: Path) -> dict[str, Any]:
-    if "Sibling routing request:" in request:
-        return {
-            "actor": ACTOR,
-            "schema_version": "1.0",
-            "verdict": "comment",
-            "summary": "Abstained on sibling code-review specialist request.",
-            "findings": [],
-        }
+    req_lower = request.lower()
+    abstain_payload: dict[str, Any] = {
+        "actor": ACTOR,
+        "schema_version": "1.0",
+        "verdict": "comment",
+        "summary": "Abstained on sibling code-review specialist request.",
+        "findings": [],
+    }
 
     if (source / "change.diff").exists() and (source / "invoice_client.py").exists():
+        if "supplied diff and downstream caller impact" not in req_lower:
+            return abstain_payload
         diff_text = (source / "change.diff").read_text(encoding="utf-8")
         client_text = (source / "invoice_client.py").read_text(encoding="utf-8")
         if "+def format_invoice(total: int, currency: str) -> str:" in diff_text and (
@@ -244,6 +261,8 @@ def _handle_review(request: str, source: Path) -> dict[str, Any]:
         }
 
     if (source / "escrow_state.py").exists():
+        if "escrow_state.py" not in req_lower:
+            return abstain_payload
         code = (source / "escrow_state.py").read_text(encoding="utf-8")
         if "dispute_resolved" not in code.split("def release_funds", 1)[-1]:
             return {
@@ -272,6 +291,8 @@ def _handle_review(request: str, source: Path) -> dict[str, Any]:
         }
 
     if (source / "raw_comments.json").exists():
+        if "supplied raw review comments" not in req_lower:
+            return abstain_payload
         comments = json.loads(
             (source / "raw_comments.json").read_text(encoding="utf-8")
         )
@@ -311,16 +332,18 @@ def _handle_review(request: str, source: Path) -> dict[str, Any]:
 
 
 def _handle_testing(request: str, source: Path) -> dict[str, Any]:
-    if "Sibling routing request:" in request:
-        return {
-            "actor": ACTOR,
-            "schema_version": "1.0",
-            "component": "repository",
-            "framework": "unittest",
-            "test_cases": [],
-        }
+    req_lower = request.lower()
+    abstain_payload: dict[str, Any] = {
+        "actor": ACTOR,
+        "schema_version": "1.0",
+        "component": "repository",
+        "framework": "unittest",
+        "test_cases": [],
+    }
 
     if (source / "discount_calc.py").exists():
+        if "coverage gaps for component discount_calc" not in req_lower:
+            return abstain_payload
         if (source / "discount_checks_a.py").exists():
             return {
                 "actor": ACTOR,
@@ -353,6 +376,11 @@ def _handle_testing(request: str, source: Path) -> dict[str, Any]:
         }
 
     if (source / "rate_limiter.py").exists():
+        if (
+            "generate automated unit test cases for component rate_limiter"
+            not in req_lower
+        ):
+            return abstain_payload
         if not (source / "tests/existing_rate_limiter_checks.py").exists():
             gen_test = source / "tests/test_rate_limiter_generated.py"
             gen_test.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +419,8 @@ def _handle_testing(request: str, source: Path) -> dict[str, Any]:
         }
 
     if (source / "cache_store.py").exists():
+        if "isolation and failure oracles for component cache_store" not in req_lower:
+            return abstain_payload
         if (source / "suite_probe_a.py").exists():
             return {
                 "actor": ACTOR,
@@ -425,10 +455,10 @@ def _handle_testing(request: str, source: Path) -> dict[str, Any]:
 
 
 def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
-    is_routing = "Sibling routing request:" in request
+    req_lower = request.lower()
 
     if "finding-verification.schema.json" in request:
-        if is_routing:
+        if "candidate finding f-101" not in req_lower:
             return {
                 "actor": ACTOR,
                 "finding_id": "none",
@@ -463,7 +493,10 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
         }
 
     if "regression.schema.json" in request:
-        if is_routing or (source / "tests/existing_quota_regression.py").exists():
+        if (
+            "defect f-201 in quota_ledger.py" not in req_lower
+            or (source / "tests/existing_quota_regression.py").exists()
+        ):
             return {
                 "actor": ACTOR,
                 "finding_id": "none",
@@ -508,7 +541,7 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
         }
 
     if "plan.schema.json" in request:
-        if is_routing:
+        if "verified_findings.json" not in req_lower:
             return {
                 "actor": ACTOR,
                 "task_breakdowns": [
@@ -566,7 +599,10 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
     if "fix.schema.json" in request:
         target = source / "retry_budget.py"
         code = target.read_text(encoding="utf-8") if target.exists() else ""
-        if is_routing or "if attempts >= max_attempts:" in code:
+        if (
+            "authorized bounded fix in retry_budget.py" not in req_lower
+            or "if attempts >= max_attempts:" in code
+        ):
             return {
                 "actor": ACTOR,
                 "file_changes": ["none"],
@@ -615,7 +651,7 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
         }
 
     if "verification.schema.json" in request:
-        if is_routing:
+        if "verification_inputs.json" not in req_lower:
             return {
                 "actor": ACTOR,
                 "before_revision": "unchanged",
@@ -646,7 +682,7 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
         }
 
     if "reconciliation.schema.json" in request:
-        if is_routing:
+        if "reconcile_inputs.json" not in req_lower:
             return {
                 "actor": ACTOR,
                 "finding_fingerprint_matches": [],
@@ -698,18 +734,20 @@ def _handle_workflow(request: str, source: Path) -> dict[str, Any]:
 
 
 def _handle_spec(request: str, source: Path) -> dict[str, Any]:
-    if "Sibling routing request:" in request:
-        return {
-            "actor": ACTOR,
-            "schema_version": "1.0",
-            "title": "Specification routing abstention",
-            "status": "draft",
-            "interview_decisions": [],
-            "new_file_scopes": [],
-            "out_of_scope": [],
-            "verification_commands": [],
-        }
+    req_lower = request.lower()
+    abstain_payload: dict[str, Any] = {
+        "actor": ACTOR,
+        "schema_version": "1.0",
+        "title": "Specification routing abstention",
+        "status": "draft",
+        "interview_decisions": [],
+        "new_file_scopes": [],
+        "out_of_scope": [],
+        "verification_commands": [],
+    }
     if (source / "webhook_context.json").exists():
+        if "webhook_context.json" not in req_lower:
+            return abstain_payload
         ctx = json.loads((source / "webhook_context.json").read_text(encoding="utf-8"))
         mod = str(ctx["existing_module"])
         if ctx.get("ambiguous"):
@@ -742,6 +780,8 @@ def _handle_spec(request: str, source: Path) -> dict[str, Any]:
             "verification_commands": ["pytest tests/test_dispatcher.py"],
         }
     if (source / "spec_notes.json").exists():
+        if "spec_notes.json" not in req_lower:
+            return abstain_payload
         notes = json.loads((source / "spec_notes.json").read_text(encoding="utf-8"))
         if notes.get("ready"):
             scope = str(notes["scope"])
@@ -781,6 +821,8 @@ def _handle_spec(request: str, source: Path) -> dict[str, Any]:
             "verification_commands": [],
         }
     if (source / "convergence_inputs.json").exists():
+        if "convergence_inputs.json" not in req_lower:
+            return abstain_payload
         cdata = json.loads(
             (source / "convergence_inputs.json").read_text(encoding="utf-8")
         )
