@@ -56,7 +56,6 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
         run: |
           set -eu
-          export MSYS2_ARG_CONV_EXCL="*"
 
           validate_tag_syntax() {
             CANDIDATE_TAG="$1"
@@ -193,8 +192,7 @@ jobs:
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
           if [ "$LS_EXIT" -eq 0 ]; then
-            git -c maintenance.auto=false -c gc.auto=0 fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
-              git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
             RAW_TARGET_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
             TARGET_SHA="$(printf '%s' "$RAW_TARGET_SHA" | tr -d '[:space:]')"
           elif [ "$LS_EXIT" -eq 2 ] && [ "$EVENT" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
@@ -225,19 +223,17 @@ jobs:
             exit 1
           fi
 
-          FETCH_ERR_FILE="$(mktemp)"
-          VIEW_ERR_FILE="$(mktemp)"
-          trap 'rm -f "$FETCH_ERR_FILE" "$VIEW_ERR_FILE"' EXIT
+          FETCH_ERR=""
           FETCH_OK="true"
           IS_SHALLOW="$(git rev-parse --is-shallow-repository 2>/dev/null || true)"
           IS_SHALLOW="$(printf '%s' "$IS_SHALLOW" | tr -d '[:space:]')"
           if [ "$IS_SHALLOW" = "true" ]; then
-            git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            FETCH_ERR="$(git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" 2>&1 >/dev/null)" || FETCH_OK="false"
           else
-            git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            FETCH_ERR="$(git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" 2>&1 >/dev/null)" || FETCH_OK="false"
           fi
           if [ "$FETCH_OK" != "true" ]; then
-            echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
+            echo "Error: Failed to fetch full history and tags for origin/main: $FETCH_ERR" >&2
             exit 1
           fi
 
@@ -275,6 +271,8 @@ jobs:
             exit 1
           fi
 
+          VIEW_ERR_FILE="$(mktemp)"
+          trap 'rm -f "$VIEW_ERR_FILE"' EXIT
           SHOULD_BUILD="false"
           SHOULD_PUBLISH="false"
           DECISION_TEXT=""
@@ -396,7 +394,6 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -eu
-          export MSYS2_ARG_CONV_EXCL="*"
 
           if [ ! -s LICENSE ] || [ -z "$(tr -d '[:space:]' < LICENSE)" ]; then
             echo "Error: LICENSE file is missing or empty in repository root" >&2
@@ -470,18 +467,17 @@ jobs:
             export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
           fi
 
-          FETCH_ERR_FILE="$(mktemp)"
-          trap 'rm -f "$FETCH_ERR_FILE"' EXIT
+          FETCH_ERR=""
           FETCH_OK="true"
           IS_SHALLOW="$(git rev-parse --is-shallow-repository 2>/dev/null || true)"
           IS_SHALLOW="$(printf '%s' "$IS_SHALLOW" | tr -d '[:space:]')"
           if [ "$IS_SHALLOW" = "true" ]; then
-            git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            FETCH_ERR="$(git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" 2>&1 >/dev/null)" || FETCH_OK="false"
           else
-            git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            FETCH_ERR="$(git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" 2>&1 >/dev/null)" || FETCH_OK="false"
           fi
           if [ "$FETCH_OK" != "true" ]; then
-            echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
+            echo "Error: Failed to fetch full history and tags for origin/main: $FETCH_ERR" >&2
             exit 1
           fi
 
@@ -662,7 +658,6 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -eu
-          export MSYS2_ARG_CONV_EXCL="*"
 
           write_summary() {
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -727,19 +722,17 @@ jobs:
             export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
           fi
 
-          FETCH_ERR_FILE="$(mktemp)"
-          VIEW_ERR_FILE="$(mktemp)"
-          trap 'rm -f "$FETCH_ERR_FILE" "$VIEW_ERR_FILE"' EXIT
+          FETCH_ERR=""
           FETCH_OK="true"
           IS_SHALLOW="$(git rev-parse --is-shallow-repository 2>/dev/null || true)"
           IS_SHALLOW="$(printf '%s' "$IS_SHALLOW" | tr -d '[:space:]')"
           if [ "$IS_SHALLOW" = "true" ]; then
-            git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            FETCH_ERR="$(git -c maintenance.auto=false -c gc.auto=0 fetch --unshallow --tags --force origin "refs/heads/main:refs/remotes/origin/main" 2>&1 >/dev/null)" || FETCH_OK="false"
           else
-            git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+            FETCH_ERR="$(git -c maintenance.auto=false -c gc.auto=0 fetch --tags --force origin "refs/heads/main:refs/remotes/origin/main" 2>&1 >/dev/null)" || FETCH_OK="false"
           fi
           if [ "$FETCH_OK" != "true" ]; then
-            echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
+            echo "Error: Failed to fetch full history and tags for origin/main: $FETCH_ERR" >&2
             exit 1
           fi
 
@@ -751,8 +744,7 @@ jobs:
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
           if [ "$LS_EXIT" -eq 0 ]; then
-            git -c maintenance.auto=false -c gc.auto=0 fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
-              git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
+            git -c maintenance.auto=false -c gc.auto=0 fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
             RAW_REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
             REMOTE_TAG_SHA="$(printf '%s' "$RAW_REMOTE_TAG_SHA" | tr -d '[:space:]')"
             if [ "$REMOTE_TAG_SHA" != "$TARGET_SHA" ]; then
@@ -779,6 +771,8 @@ jobs:
           esac
 
           NOTES_FILE="docs/release-notes-${VERSION}.md"
+          VIEW_ERR_FILE="$(mktemp)"
+          trap 'rm -f "$VIEW_ERR_FILE"' EXIT
           if VIEW_OUT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
             NORMALIZED_VIEW="$(printf '%s' "$VIEW_OUT" | tr -d '[:space:]')"
             case "$NORMALIZED_VIEW" in

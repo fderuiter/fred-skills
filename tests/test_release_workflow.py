@@ -213,7 +213,6 @@ def _isolated_env(tmp: Path, extra_env: dict[str, str]) -> dict[str, str]:
     env["HOME"] = str(home_dir)
     env["USERPROFILE"] = str(home_dir)
     env["GIT_CONFIG_NOSYSTEM"] = "1"
-    env["MSYS2_ARG_CONV_EXCL"] = "*"
     env.update(extra_env)
     return env
 
@@ -728,7 +727,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_verification_fails_when_license_missing_or_empty(self) -> None:
         """Verify release prerequisites aborts non-zero when LICENSE is absent or whitespace."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             tmp = Path(tmp_dir)
             _write_lf(tmp / "VERSION", "0.2.0\n")
             missing = self._run_verification_script(
@@ -748,7 +747,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_verification_fails_when_tag_mismatches_version(self) -> None:
         """Verify release prerequisites aborts when git tag or input tag mismatches VERSION."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             tmp = Path(tmp_dir)
             _write_lf(tmp / "VERSION", "0.2.0\n")
             _write_lf(tmp / "LICENSE", "MIT License\n")
@@ -811,7 +810,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_downloaded_artifact_checksum_verification_step(self) -> None:
         """Downloaded artifact checksum step enforces matching manifests, rejects unlisted files, and catches tampering."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with _temp_dir() as tmp_dir:
             tmp = Path(tmp_dir)
             dist = tmp / "dist" / "release"
             dist.mkdir(parents=True)
