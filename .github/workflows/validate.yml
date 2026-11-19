@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: skills-${{ github.workflow }}-${{ (github.event_name == 'push' || github.ref == 'refs/heads/main') && github.sha || github.ref }}
+  group: skills-${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -45,7 +45,7 @@ jobs:
       - name: Check Python static types
         run: python scripts/run_checks.py --phase typecheck
       - name: Validate skill packages and catalogs
-        run: python scripts/run_checks.py --phase packages
+        run: python scripts/run_checks.py --phase packages --telemetry validation-telemetry.json
       - name: Verify Makefile syntax
         if: runner.os != 'Windows'
         run: make -n check

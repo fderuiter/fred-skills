@@ -3,6 +3,7 @@ Revalidate source evidence where accessible, challenge safeguards, consolidate f
 by root cause, and search existing issues/PRs before proposing new work. Preserve finding
 traceability and unresolved assumptions. Produce coherent issue drafts, independent
 acceptance criteria, an acyclic dependency order, bounded implementation workstreams,
-and a standalone implementation-agent prompt. Treat unverified risks as investigations.
-Keep application code unchanged. Publish issues only if the current task authorizes it;
+and a standalone implementation-agent prompt. Treat unverified risks as investigations
+and keep audit.json conforming to assets/audit.schema.json. Do not modify application
+code, and do not publish issues unless the current task explicitly authorizes it;
 otherwise return drafts with publication state explicitly recorded.

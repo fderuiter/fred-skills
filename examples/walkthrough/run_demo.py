@@ -85,7 +85,8 @@ runs.reconcile(
     "Verified the separate corrected synthetic variant; no application code was changed.",
     args.output / "verification.json",
 )
-reports.render(audit, args.output / "report.html")
+remediation = read_json(args.output / "remediation.json")
+reports.render(audit, args.output / "report.html", remediation=remediation)
 reports.issue_drafts(audit, args.output / "issues")
 errors = runs.validate_run(args.output)
 if errors:

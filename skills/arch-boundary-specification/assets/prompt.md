@@ -2,4 +2,5 @@ Use arch-boundary-specification to define and verify boundaries for <repository>
 Map trust boundaries where untrusted inputs enter privileged system components.
 Define encapsulation barriers, interface contracts, and module communication rules.
 Verify that invariant checks and authorization guards execute at each crossing.
-Document boundary specifications adhering to the architecture template and schema.
+Do not modify application code or publish external records without explicit user authorization.
+Document boundary specifications adhering to the architecture template and assets/architecture.schema.json.

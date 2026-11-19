@@ -176,6 +176,81 @@ def _extract_commands_from_block(
     return cmds
 
 
+_YAML_BLOCK_RUN_RE = re.compile(r"^\s*(?:-\s+)?run:\s*[|>][-+]?\s*(?:#.*)?$")
+_YAML_INLINE_RUN_RE = re.compile(r"^\s*(?:-\s+)?run:\s+(.+?)\s*$")
+
+
+def _unquote_yaml_scalar(value: str) -> str:
+    """Strip matching outer YAML quotes from a single-line scalar run command."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        inner = value[1:-1]
+        return inner.replace("''", "'") if value[0] == "'" else inner
+    return value
+
+
+def _parse_yaml_run_header(text: str) -> tuple[str, int, str]:
+    """Classify a YAML line as block run, inline run, or non-run line."""
+    if _YAML_BLOCK_RUN_RE.match(text):
+        return "block", len(text) - len(text.lstrip()), ""
+    inline_match = _YAML_INLINE_RUN_RE.match(text)
+    if inline_match:
+        return "inline", 0, _unquote_yaml_scalar(inline_match.group(1))
+    return "none", 0, ""
+
+
+def _is_yaml_step_continuation(text: str, base_indent: int) -> bool:
+    """Return True if a line remains inside an indented YAML block scalar."""
+    if not text.strip():
+        return True
+    return (len(text) - len(text.lstrip())) > base_indent
+
+
+def _collect_yaml_block_step(
+    b_lines: list[tuple[int, str]],
+    start_idx: int,
+    base_indent: int,
+) -> tuple[list[tuple[int, str]], int]:
+    """Collect indented lines belonging to a YAML block-scalar run step."""
+    step_lines: list[tuple[int, str]] = []
+    idx = start_idx
+    while idx < len(b_lines) and _is_yaml_step_continuation(
+        b_lines[idx][1], base_indent
+    ):
+        step_lines.append(b_lines[idx])
+        idx += 1
+    return step_lines, idx
+
+
+def _extract_yaml_run_commands(
+    b_lines: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
+    """Extract shell commands and exact file line numbers from YAML workflow run steps."""
+    cmds: list[tuple[int, str]] = []
+    idx = 0
+    while idx < len(b_lines):
+        line_no, text = b_lines[idx]
+        kind, indent, inline_cmd = _parse_yaml_run_header(text)
+        if kind == "block":
+            step_lines, idx = _collect_yaml_block_step(b_lines, idx + 1, indent)
+            cmds.extend(_extract_commands_from_block(step_lines))
+        elif kind == "inline":
+            cmds.extend(_extract_commands_from_block([(line_no, inline_cmd)]))
+            idx += 1
+        else:
+            idx += 1
+    return cmds
+
+
+def _extract_block_commands(
+    b_lang: str,
+    b_lines: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
+    """Extract commands from a fenced code block according to its language tag."""
+    if b_lang in ("yaml", "yml"):
+        return _extract_yaml_run_commands(b_lines)
+    return _extract_commands_from_block(b_lines)
+
+
 def _parse_fenced_blocks(
     lines: list[str],
 ) -> list[tuple[int, int, str, list[tuple[int, str]]]]:
@@ -231,7 +306,7 @@ def extract_blocks_from_file(
     for b_start, b_end, b_lang, b_lines in raw_blocks:
         if not _is_block_in_range(start_line, end_line, b_start, b_end):
             continue
-        cmds = _extract_commands_from_block(b_lines)
+        cmds = _extract_block_commands(b_lang, b_lines)
         blocks.append(
             CommandBlock(
                 file_path=file_path,
@@ -1387,20 +1462,128 @@ def _validate_pre_commit(parts: list[str], root: Path, _cmd: str) -> tuple[bool,
     return _validate_pre_commit_config(root)
 
 
-def _validate_curl_urls(args: list[str]) -> tuple[bool, str]:
-    """Verify curl targets match the repository without opening network connections."""
+STATIC_RELEASE_ASSETS: frozenset[str] = frozenset(
+    {"SHA256SUMS", "checksums.sha256", "manifest.json", "fred-skills-suite.tar.gz"}
+)
+_PACK_ARCHIVE_RE = re.compile(
+    r"^fred-skills-(?P<ver>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-(?P<pack>[a-z0-9-]+)\.(?:tar|zip)$"
+)
+
+
+def _read_expected_version(root: Path) -> str:
+    """Read expected VERSION from root, falling back to repository ROOT."""
+    candidate = root / "VERSION"
+    source = candidate if candidate.is_file() else ROOT / "VERSION"
+    return source.read_text(encoding="utf-8").strip() if source.is_file() else "0.0.0"
+
+
+def _load_known_packs(root: Path) -> dict[str, list[str]]:
+    """Load canonical pack definitions from catalog/packs.json."""
+    candidate = root / "catalog/packs.json"
+    source = candidate if candidate.is_file() else ROOT / "catalog/packs.json"
+    if not source.is_file():
+        return {}
+    raw = json.loads(source.read_text(encoding="utf-8")).get("packs", {})
+    return {str(name): list(cfg.get("skills", [])) for name, cfg in raw.items()}
+
+
+def _load_known_skills(root: Path) -> set[str]:
+    """Load standalone skill names from skills/*/SKILL.md."""
+    candidate = root / "skills"
+    skills_dir = candidate if candidate.is_dir() else ROOT / "skills"
+    if not skills_dir.is_dir():
+        return set()
+    return {entry.parent.name for entry in skills_dir.glob("*/SKILL.md")}
+
+
+def _split_pack_archive_stem(
+    filename: str,
+    expected_version: str,
+) -> tuple[str, str] | None:
+    """Extract (version, pack_name) from a fred-skills-<version>-<pack>.(tar|zip) filename."""
+    stem = (
+        filename.removesuffix(".tar")
+        if filename.endswith(".tar")
+        else filename.removesuffix(".zip")
+    )
+    exact_prefix = f"fred-skills-{expected_version}-"
+    if stem != filename and stem.startswith(exact_prefix):
+        pack_part = stem.removeprefix(exact_prefix)
+        return (expected_version, pack_part) if pack_part else None
+    match = _PACK_ARCHIVE_RE.match(filename)
+    return (match.group("ver"), match.group("pack")) if match else None
+
+
+def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
+    """Verify pack archive version and canonical pack name against VERSION and catalog/packs.json."""
+    expected_ver = _read_expected_version(root)
+    parsed = _split_pack_archive_stem(filename, expected_ver)
+    if parsed is None:
+        return False, f"Malformed release pack archive filename: {filename}"
+    found_ver, pack_name = parsed
+    if found_ver != expected_ver:
+        return (
+            False,
+            f"Pack archive '{filename}' version '{found_ver}' does not match VERSION '{expected_ver}'",
+        )
+    known_packs = _load_known_packs(root)
+    if known_packs and pack_name not in known_packs:
+        return (
+            False,
+            f"Unknown pack '{pack_name}' in archive '{filename}' (not in catalog/packs.json)",
+        )
+    return True, ""
+
+
+def _validate_release_asset_name(asset: str, root: Path) -> tuple[bool, str]:
+    """Validate a release asset filename in curl or tar snippets."""
+    if asset in STATIC_RELEASE_ASSETS:
+        return True, ""
+    if asset.startswith("fred-skills-"):
+        return _validate_pack_archive_name(asset, root)
+    if asset.endswith(".tar.gz"):
+        skill_name = asset.removesuffix(".tar.gz")
+        known_skills = _load_known_skills(root)
+        if known_skills and skill_name not in known_skills:
+            return False, f"Unknown standalone skill archive: {asset}"
+        return True, ""
+    return False, f"Unrecognized release asset filename: {asset}"
+
+
+def _validate_curl_release_url(url: str, root: Path) -> tuple[bool, str]:
+    """Verify GitHub release download URL tag and asset name against VERSION and catalog."""
+    if "fderuiter/fred-skills" not in url:
+        return False, f"curl target does not match repo: {url}"
+    marker = "/releases/download/"
+    if marker not in url:
+        return True, ""
+    tag, sep, asset = url.split(marker, 1)[1].partition("/")
+    expected_tag = f"v{_read_expected_version(root)}"
+    if not sep or not asset:
+        return False, f"Incomplete release download URL: {url}"
+    if tag != expected_tag:
+        return (
+            False,
+            f"Release URL tag '{tag}' does not match expected '{expected_tag}' from VERSION",
+        )
+    return _validate_release_asset_name(asset, root)
+
+
+def _validate_curl_urls(args: list[str], root: Path) -> tuple[bool, str]:
+    """Verify curl targets match the repository, VERSION tag, and catalog pack/skill names."""
     if any(flag in args for flag in ("-h", "--help", "-V", "--version")):
         return True, ""
     urls = [part for part in args if part.startswith(("http://", "https://"))]
     if not urls:
         return False, "curl command missing target URL"
     for url in urls:
-        if "fderuiter/fred-skills" not in url:
-            return False, f"curl target does not match repo: {url}"
+        ok, err = _validate_curl_release_url(url, root)
+        if not ok:
+            return False, err
     return True, ""
 
 
-def _validate_curl(parts: list[str], _root: Path, _cmd: str) -> tuple[bool, str]:
+def _validate_curl(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     """Validate curl CLI flags and target repository URL without network requests."""
     dynamic = (
         _get_help_flags(["curl", "--help", "all"]) if shutil.which("curl") else None
@@ -1409,7 +1592,7 @@ def _validate_curl(parts: list[str], _root: Path, _cmd: str) -> tuple[bool, str]
     bad = _find_unknown_flag(parts[1:], allowed, allow_bundled=True)
     if bad:
         return False, f"Invalid curl flag: {bad}"
-    return _validate_curl_urls(parts[1:])
+    return _validate_curl_urls(parts[1:], root)
 
 
 def _validate_gh_attestation(parts: list[str], cmd: str) -> tuple[bool, str]:
@@ -1611,8 +1794,23 @@ def _validate_tar_host_dir(parts: list[str], root: Path, cmd: str) -> tuple[bool
     return True, ""
 
 
+def _validate_tar_archive_identity(archive: str, root: Path) -> tuple[bool, str]:
+    """Validate tar archive version, pack name, or skill name when targeting toolkit archives."""
+    name = Path(archive).name
+    if name in STATIC_RELEASE_ASSETS:
+        return True, ""
+    if name.startswith("fred-skills-"):
+        return _validate_pack_archive_name(name, root)
+    has_repo_context = (root / "skills").is_dir() or (
+        root / "catalog/packs.json"
+    ).is_file()
+    if name.endswith(".tar.gz") and has_repo_context:
+        return _validate_release_asset_name(name, root)
+    return True, ""
+
+
 def _validate_tar(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
-    """Validate tar command flags, archive compression, and host destination paths."""
+    """Validate tar command flags, archive compression, archive identity, and host paths."""
     mode_flag, positionals, err = _parse_tar_tokens(parts[1:])
     if err:
         return False, err
@@ -1621,6 +1819,9 @@ def _validate_tar(parts: list[str], root: Path, cmd: str) -> tuple[bool, str]:
     ok, mode_err = _validate_tar_archive_mode(positionals[0], mode_flag)
     if not ok:
         return False, mode_err
+    id_ok, id_err = _validate_tar_archive_identity(positionals[0], root)
+    if not id_ok:
+        return False, id_err
     return _validate_tar_host_dir(parts, root, cmd)
 
 
@@ -1821,24 +2022,102 @@ def _verify_shell_block(
     return errors
 
 
+RELEASE_COUNT_DOCS: frozenset[str] = frozenset({"README.md", "docs/usage.md"})
+_TOTAL_COUNT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\*\*(\d+)\s+standalone skills\*\*"),
+    re.compile(r"`complete`\s+for all\s+(\d+)\s+(?:skills|packages)"),
+    re.compile(r"each of the\s+(\d+)\s+skills"),
+    re.compile(r"complete\s+(\d+)-package pack"),
+    re.compile(r"creates all\s+(\d+)\s+skill directories"),
+    re.compile(r"Total:\s*(\d+)\s+skills"),
+)
+_STARTER_COUNT_PATTERN = re.compile(r"`starter`\s+for\s+(\d+)\s+core audit skills")
+
+
+def _is_release_count_doc(rel_path: str) -> bool:
+    """Return True if rel_path is a release or onboarding guide checked for skill counts."""
+    if rel_path in RELEASE_COUNT_DOCS:
+        return True
+    return rel_path.startswith("docs/release-notes-") and rel_path.endswith(".md")
+
+
+def _check_line_count_patterns(
+    rel_path: str,
+    line_no: int,
+    line: str,
+    expected_total: int,
+    expected_starter: int,
+) -> list[str]:
+    """Return count mismatch errors found on a single documentation line."""
+    errors: list[str] = []
+    for pat in _TOTAL_COUNT_PATTERNS:
+        for match in pat.finditer(line):
+            found = int(match.group(1))
+            if found != expected_total:
+                errors.append(
+                    f"{rel_path}:L{line_no}: Documented skill count {found} does not match catalog total {expected_total}"
+                )
+    starter_match = _STARTER_COUNT_PATTERN.search(line)
+    if starter_match and int(starter_match.group(1)) != expected_starter:
+        errors.append(
+            f"{rel_path}:L{line_no}: Documented starter pack count {starter_match.group(1)} does not match catalog count {expected_starter}"
+        )
+    return errors
+
+
+def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
+    """Verify documented total and starter pack skill counts against catalog/packs.json."""
+    if not _is_release_count_doc(rel_path):
+        return []
+    doc_path = root / rel_path
+    packs = _load_known_packs(root)
+    if not doc_path.is_file() or "complete" not in packs:
+        return []
+    expected_total = len(packs["complete"])
+    expected_starter = len(packs.get("starter", []))
+    errors: list[str] = []
+    for line_no, line in enumerate(
+        doc_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        errors.extend(
+            _check_line_count_patterns(
+                rel_path, line_no, line, expected_total, expected_starter
+            )
+        )
+    return errors
+
+
+def _verify_release_notes_files(root: Path) -> list[str]:
+    """Verify skill counts in docs/release-notes-*.md without requiring fenced code blocks."""
+    docs_dir = root / "docs"
+    if not docs_dir.is_dir():
+        return []
+    errors: list[str] = []
+    for path in sorted(docs_dir.glob("release-notes-*.md")):
+        errors.extend(_verify_doc_release_counts(f"docs/{path.name}", root))
+    return errors
+
+
 def _verify_file_snippets(
     rel_path: str,
     blocks: list[CommandBlock],
     root: Path,
     should_execute: bool = True,
 ) -> list[str]:
-    """Verify code snippet commands within discovered blocks of a single file."""
+    """Verify code snippet commands and release counts within a single file."""
     doc_path = root / rel_path
     if not doc_path.is_file():
         return [f"{rel_path}: File does not exist"]
+    if rel_path.startswith("docs/release-notes-"):
+        return _verify_doc_release_counts(rel_path, root) if should_execute else []
     if not blocks:
         return [f"{rel_path}: No code blocks discovered in specified range"]
     if not should_execute:
         return []
 
-    errors: list[str] = []
+    errors = _verify_doc_release_counts(rel_path, root)
     for block in blocks:
-        if block.language in ("sh", "bash", "shell"):
+        if block.language in ("sh", "bash", "shell", "yaml", "yml"):
             errors.extend(_verify_shell_block(rel_path, block, root))
     return errors
 
@@ -1871,6 +2150,9 @@ def verify_all_snippets(
     for rel_path, blocks in blocks_by_file.items():
         file_errors = _verify_file_snippets(rel_path, blocks, root, should_execute=True)
         errors.extend(file_errors)
+
+    if target_rel_paths is None:
+        errors.extend(_verify_release_notes_files(root))
 
     return errors
 

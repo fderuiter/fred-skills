@@ -80,6 +80,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
         page.emulate_media(media="print")
         expect(page.locator("#query")).to_be_hidden()
+        expect(page.locator("#severity")).to_be_hidden()
         expect(page.locator("#status")).to_be_hidden()
         expect(toggle_btn).to_be_hidden()
         expect(page.locator("#empty-state")).to_be_hidden()
@@ -134,7 +135,9 @@ with tempfile.TemporaryDirectory() as temporary:
         assert not page_errors
         assert page.locator("article.finding").count() == 0
         assert page.locator("#query").count() == 0
+        assert page.locator("#severity").count() == 0
         assert page.locator("#status").count() == 0
+        assert page.locator("#remediation").count() == 0
         assert page.locator("#empty-state").count() == 0
         assert page.locator("#reset-filters").count() == 0
         assert page.locator("#toggle-details").count() == 0
@@ -146,6 +149,115 @@ with tempfile.TemporaryDirectory() as temporary:
             == 1
         )
         page.screenshot(path="/tmp/empty_audit_report.png")
+
+        triage_report = Path(temporary) / "triage_comparison_report.html"
+        prior_audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        prior_audit["run_id"] = "audit-2026-11-01"
+        curr_audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        curr_audit["run_id"] = "audit-2026-11-18"
+        curr_audit["limitations"] = []
+        curr_audit["evidence"].append(
+            {
+                "id": "E-2",
+                "path": "queue.mjs",
+                "line_start": 12,
+                "line_end": 19,
+                "symbol": "Queue.drain",
+                "context": "Unbounded drain batch",
+            }
+        )
+        curr_audit["findings"][0].update(
+            severity="critical",
+            status="confirmed",
+            validation={
+                "state": "executed",
+                "commands": ["node examples/walkthrough/check.mjs"],
+                "result": "Original race reproduced; fenced variant passed",
+            },
+            related_findings=["F-2"],
+        )
+        curr_audit["findings"].append(
+            {
+                **curr_audit["findings"][0],
+                "id": "F-2",
+                "topic": "resilience",
+                "title": "Unbounded drain batch under burst traffic",
+                "severity": "high",
+                "status": "needs-validation",
+                "contract_ids": [],
+                "evidence_ids": ["E-2"],
+                "root_cause": "Missing batch limit",
+                "validation": {
+                    "state": "not-run",
+                    "commands": [],
+                    "result": "Needs load harness",
+                },
+                "related_findings": [],
+            }
+        )
+        remediation_doc = {
+            "schema_version": "1.0",
+            "records": [
+                {
+                    "at": "2026-11-18T16:00:00Z",
+                    "finding_id": "F-1",
+                    "state": "verified-fixed",
+                    "note": "Verified fenced publication and safe controls.",
+                }
+            ],
+        }
+        render(
+            curr_audit, triage_report, prior=prior_audit, remediation=remediation_doc
+        )
+        page.goto(triage_report.as_uri())
+        assert not page_errors
+        assert page.locator("#comparison pre").count() == 0
+        assert page.locator("#comparison table").count() == 5
+        assert page.locator('#comparison a[href="#F-1"]').count() >= 1
+        assert page.locator('#comparison a[href="#F-2"]').count() >= 1
+        assert page.locator("pre:empty").count() == 0
+        assert page.locator("ul:empty").count() == 0
+        assert (
+            page.locator("article#F-1")
+            .get_by_text("Verified fixed", exact=True)
+            .count()
+            == 1
+        )
+        assert (
+            page.locator("article#F-1")
+            .get_by_text("Verified fenced publication and safe controls.")
+            .count()
+            == 1
+        )
+        assert page.locator("#count").text_content() == "2 findings shown"
+
+        # Combine severity, status, and remediation filters
+        page.get_by_label("Severity").select_option("critical")
+        assert page.locator("article.finding:visible").count() == 1
+        assert page.locator("#count").text_content() == "1 finding shown"
+        page.get_by_label("Remediation state").select_option("unreconciled")
+        assert page.locator("article.finding:visible").count() == 0
+        assert page.locator("#empty-state").is_visible()
+        page.get_by_role("button", name="Reset filters").click()
+        assert page.locator("article.finding:visible").count() == 2
+        assert not page.locator("#empty-state").is_visible()
+        assert (
+            page.evaluate("document.activeElement && document.activeElement.id")
+            == "query"
+        )
+        page.set_viewport_size({"width": 375, "height": 812})
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth"
+        )
+        page.set_viewport_size({"width": 1100, "height": 850})
+        page.emulate_media(media="print")
+        expect(page.locator("#remediation")).to_be_hidden()
+        page.emulate_media(media="screen")
+        page.screenshot(path="/tmp/triage_filters_and_badges.png")
+        page.locator('#comparison a[href="#F-2"]').first.click()
+        assert page.url.endswith("#F-2")
+        page.locator("#comparison").scroll_into_view_if_needed()
+        page.screenshot(path="/tmp/comparison_tables.png")
 
         arch_report = Path(temporary) / "architecture_report.html"
         render(
