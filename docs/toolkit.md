@@ -101,8 +101,9 @@ the same paths or a hostile filesystem.
 
 ```sh
 python scripts/fred.py init /path/to/repository --task investigate-bug --budget brief --output audit-output/bug
+python scripts/fred.py init /path/to/repository --task apply-fix --allow-fixes --source-audit audit-output/bug --output audit-output/fix
 python scripts/fred.py init /path/to/repository --task apply-fix --allow-fixes --single-task --output audit-output/fix-loop
-python scripts/fred.py checkpoint audit-output/bug --state running --note "Inspecting request publication"
+python scripts/fred.py checkpoint audit-output/bug --state running --completed-skill repo-audit-architecture --note "Inspecting request publication"
 python scripts/fred.py validate-run audit-output/bug
 python scripts/fred.py checkpoint audit-output/bug --state paused --note "Need a supported database fixture"
 python scripts/fred.py resume audit-output/bug
@@ -110,30 +111,40 @@ python scripts/fred.py advance audit-output/fix-loop --note "Completed pass 1"
 ```
 
 Give the generated `prompt.md` to an agent that can access the repository and selected
-skills. Pass `--single-task` to `init` when driving an external fresh-window shell loop:
-`run.json` records a `loop` task queue and `prompt.md` emits only the single active pass's
-skill. After each pass (including verified commits), run `advance` to write
-`revalidation.json`, append the prior digest to `loop.snapshot_history`, update
-`run.json` snapshot hashes, and emit the next single-skill `prompt.md`. All initialized
-coverage is `not-reviewed`. `--allow-fixes` and `--allow-issue-publication` record task
-authority only when it already exists; they do not override current user constraints,
-host policy, or approval requirements.
+skills. Each generated `prompt.md` is a stateless phase brief scoped to at most 3 active
+skills while `run.json` retains the full planned list and deferred coverage. Pass
+`--source-audit` to `init` on workflow/audit tasks to seed an existing `audit.json`
+ledger into the new run directory without overwriting the original ledger. Pass
+`--single-task` to `init` when driving an external fresh-window shell loop: `run.json`
+records a `loop` task queue and `prompt.md` emits only the single active pass's skill.
+After each pass (including verified commits), run `advance` to write `revalidation.json`,
+append the prior digest to `loop.snapshot_history`, update `run.json` snapshot hashes,
+and emit the next single-skill `prompt.md`. All initialized coverage is `not-reviewed`.
+`--allow-fixes` and `--allow-issue-publication` record task authority only when it
+already exists; they do not override current user constraints, host policy, or approval
+requirements.
 
-`resume` compares current source hashes with the original inventory. It writes
-`revalidation.json`, marks directly cited changed files stale, and flags all findings for
-impact review when any file changes. Configuration/caller changes may invalidate a
-claim without changing its cited lines. The original audit and snapshot remain intact;
-start a new run to establish a new baseline. Snapshotting omits symlinks and default
-build/install/output directories, and records skipped oversized/unreadable files and
-inventory limits. Incomplete source inventory is never presented as complete coverage.
+`resume` compares current source hashes with the original inventory, advances `prompt.md`
+to the next uncompleted slice recorded via `checkpoint --completed-skill`, and writes
+`revalidation.json` (`run_id`, `deliverable`, `old_snapshot`, `new_snapshot`,
+`changed_files`, `stale_finding_ids`, `unreviewed_changed_files`, `needs_impact_review`,
+`provenance_valid`, `active_phase`, `active_skills`, `completed_skills`,
+`remaining_skills`, `complete`, and `next_action`). It marks directly cited changed files
+stale across `audit.json`, `architecture.json`, `review.json`, and `testing.json`, and
+flags records for impact review when any file changes. Configuration/caller changes may
+invalidate a claim without changing its cited lines. The original audit and snapshot
+remain intact; start a new run to establish a new baseline. Snapshotting omits symlinks
+and default build/install/output directories, and records skipped oversized/unreadable
+files and inventory limits. Incomplete source inventory is never presented as complete
+coverage.
 
 | Artifact | Contract and purpose |
 | --- | --- |
-| `run.json` | Versioned run ID, source revision/dirty flag, hash inventory, selected/deferred work, capabilities, authority, checkpoints; `schemas/run.schema.json` |
+| `run.json` | Versioned run ID, source revision/dirty flag, hash inventory, selected/deferred work, capabilities, authority, slice checkpoints; `schemas/run.schema.json` |
 | `audit.json` | Existing audit schema 1.0: contracts, evidence, findings, coverage, checks, draft issue graph |
-| `prompt.md` | Portable handoff derived from the plan; no runtime-specific calls |
-| `revalidation.json` | Later source comparison from `resume`; original evidence is retained |
-| `remediation.json` | Append-only local status records, separate from audit certainty |
+| `prompt.md` | Portable stateless phase brief (<= 3 active skills) derived from the plan and checkpoint cursor |
+| `revalidation.json` | Source freshness and slice-cursor metadata from `resume`; original evidence is retained |
+| `remediation.json` | Reconciled finding transitions and status records (`reconciliation.schema.json`), separate from audit certainty |
 | `verification.json` | Explicit before/after identity, reproduction, regression, safe controls, actual commands and result |
 
 `validate-run` checks schemas and cross-record identities. It cannot verify that a claim,

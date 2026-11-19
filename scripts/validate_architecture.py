@@ -11,6 +11,14 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def _is_repo_relative(raw_path: str) -> bool:
+    if not raw_path or "\\" in raw_path:
+        return False
+    posix = pathlib.PurePosixPath(raw_path)
+    win = pathlib.PureWindowsPath(raw_path)
+    return not (posix.is_absolute() or win.is_absolute() or ".." in posix.parts)
+
+
 def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema
@@ -25,6 +33,20 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
     if errors or not isinstance(data, Mapping):
         return errors
 
+    for top_path in data.get("paths", []):
+        if isinstance(top_path, str) and not _is_repo_relative(top_path):
+            errors.append(
+                f"Deliverable path must be repository-relative (paths): {top_path}"
+            )
+
+    for cov in data.get("coverage", []):
+        if isinstance(cov, Mapping):
+            for cov_path in cov.get("paths", []):
+                if isinstance(cov_path, str) and not _is_repo_relative(cov_path):
+                    errors.append(
+                        f"Deliverable path must be repository-relative (coverage.paths): {cov_path}"
+                    )
+
     seen_boundaries: set[str] = set()
     dup_boundaries: set[str] = set()
     for boundary in data.get("boundaries", []):
@@ -36,6 +58,55 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
                 errors.append(f"Duplicate names in boundaries: {b_name}")
                 dup_boundaries.add(b_name)
             seen_boundaries.add(b_name)
+        for b_path in boundary.get("paths", []):
+            if isinstance(b_path, str) and not _is_repo_relative(b_path):
+                errors.append(
+                    f"Deliverable path must be repository-relative ({b_name or 'boundary'}.paths): {b_path}"
+                )
+
+    seen_components: set[str] = set()
+    dup_components: set[str] = set()
+    component_deps: dict[str, list[str]] = {}
+    for component in data.get("components", []):
+        if not isinstance(component, Mapping):
+            continue
+        cid = component.get("id")
+        if isinstance(cid, str):
+            if cid in seen_components and cid not in dup_components:
+                errors.append(f"Duplicate IDs in components: {cid}")
+                dup_components.add(cid)
+            seen_components.add(cid)
+            component_deps[cid] = [
+                dep for dep in component.get("depends_on", []) if isinstance(dep, str)
+            ]
+        for c_path in component.get("paths", []):
+            if isinstance(c_path, str) and not _is_repo_relative(c_path):
+                errors.append(
+                    f"Deliverable path must be repository-relative ({cid or 'component'}.paths): {c_path}"
+                )
+
+    for cid, deps in component_deps.items():
+        for dep in deps:
+            if dep not in seen_components:
+                errors.append(f"Unknown component dependency {dep} in {cid}")
+
+    visiting: set[str] = set()
+    done: set[str] = set()
+
+    def visit_component(node: str) -> None:
+        if node in visiting:
+            errors.append(f"Component dependency cycle: {node}")
+            return
+        if node in done or node not in component_deps:
+            return
+        visiting.add(node)
+        for dep in component_deps[node]:
+            visit_component(dep)
+        visiting.remove(node)
+        done.add(node)
+
+    for cid in component_deps:
+        visit_component(cid)
 
     seen_decisions: set[str] = set()
     dup_decisions: set[str] = set()
@@ -48,6 +119,11 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
                 errors.append(f"Duplicate IDs in decisions: {did}")
                 dup_decisions.add(did)
             seen_decisions.add(did)
+        for d_path in decision.get("paths", []):
+            if isinstance(d_path, str) and not _is_repo_relative(d_path):
+                errors.append(
+                    f"Deliverable path must be repository-relative ({did or 'decision'}.paths): {d_path}"
+                )
 
     return errors
 

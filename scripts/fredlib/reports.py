@@ -114,6 +114,7 @@ def _render_architecture_html(doc: dict) -> str:
     }
     status_tone = status_badges.get(doc["status"], "info")
     boundaries = doc.get("boundaries", [])
+    components = doc.get("components", [])
     decisions = doc.get("decisions", [])
     boundary_rows = (
         "".join(
@@ -124,6 +125,17 @@ def _render_architecture_html(doc: dict) -> str:
             for b in boundaries
         )
         or '<tr><td colspan="4" class="empty-state">No system boundaries recorded.</td></tr>'
+    )
+    component_rows = (
+        "".join(
+            f"<tr><td><code>{text(c['id'])}</code></td>"
+            f"<td>{text(c['name'])}</td>"
+            f"<td>{text(c['responsibility'])}</td>"
+            f"<td>{', '.join(f'<code>{text(p)}</code>' for p in c.get('paths', [])) or '<span class="muted">None</span>'}</td>"
+            f"<td>{', '.join(f'<code>{text(dep)}</code>' for dep in c.get('depends_on', [])) or '<span class="muted">None</span>'}</td></tr>"
+            for c in components
+        )
+        or '<tr><td colspan="5" class="empty-state">No components recorded.</td></tr>'
     )
     if decisions:
         cards = []
@@ -163,9 +175,10 @@ def _render_architecture_html(doc: dict) -> str:
         f'<header><p class="muted">fred-skills · software architecture report</p>'
         f"<h1>{text(doc['title'])}</h1>"
         f'<p><span class="badge badge-{status_tone} {status_tone}">{text(doc["status"])}</span> · schema {text(doc["schema_version"])}</p>'
-        f'<nav aria-label="Report views"><a href="#executive">Overview</a><a href="#boundaries">Boundaries</a><a href="#decisions">Decisions</a></nav></header>\n'
-        f'<section id="executive"><h2>Architecture overview</h2><p>{len(boundaries)} system boundaries; {len(decisions)} decision records; status: <code>{text(doc["status"])}</code>.</p></section>\n'
+        f'<nav aria-label="Report views"><a href="#executive">Overview</a><a href="#boundaries">Boundaries</a><a href="#components">Components</a><a href="#decisions">Decisions</a></nav></header>\n'
+        f'<section id="executive"><h2>Architecture overview</h2><p>{len(boundaries)} system boundaries; {len(components)} components; {len(decisions)} decision records; status: <code>{text(doc["status"])}</code>.</p></section>\n'
         f'<section id="boundaries"><h2>System boundaries</h2><div class="table-container"><table><thead><tr><th>Boundary</th><th>Type</th><th>Description</th><th>Invariants</th></tr></thead><tbody>{boundary_rows}</tbody></table></div></section>\n'
+        f'<section id="components"><h2>Component decomposition</h2><div class="table-container"><table><thead><tr><th>ID</th><th>Component</th><th>Responsibility</th><th>Paths</th><th>Depends on</th></tr></thead><tbody>{component_rows}</tbody></table></div></section>\n'
         f'<section id="decisions"><h2>Architectural decisions</h2>{decisions_body}</section>'
     )
     return _page_shell(f"Software architecture — {text(doc['title'])}", body)
@@ -345,25 +358,47 @@ def _index_remediation(
 ) -> tuple[dict[str, dict[str, str]], bool]:
     if remediation is None:
         return {}, False
-    if (
-        not isinstance(remediation, dict)
-        or "records" not in remediation
-        or not isinstance(remediation["records"], list)
-    ):
+    has_records = isinstance(remediation, dict) and "records" in remediation
+    has_transitions = (
+        isinstance(remediation, dict) and "remediation_state_transitions" in remediation
+    )
+    if not has_records and not has_transitions:
+        raise ValueError(
+            "Invalid remediation ledger: expected 'records' or 'remediation_state_transitions'"
+        )
+    if has_records and not isinstance(remediation["records"], list):
         raise ValueError("Invalid remediation ledger: expected a 'records' list")
-    raw_records = remediation["records"]
+    if has_transitions and not isinstance(
+        remediation["remediation_state_transitions"], list
+    ):
+        raise ValueError(
+            "Invalid remediation ledger: expected a 'remediation_state_transitions' list"
+        )
+    raw_records = remediation.get("records") or []
+    raw_transitions = remediation.get("remediation_state_transitions") or []
     finding_ids = {f["id"] for f in audit["findings"]}
     fp_to_ids: dict[str, list[str]] = {}
     for finding in audit["findings"]:
         fp_to_ids.setdefault(fingerprint(finding, audit), []).append(finding["id"])
+    explicit_fp_map: dict[str, str] = {}
+    for match in remediation.get("finding_fingerprint_matches") or []:
+        if (
+            isinstance(match, dict)
+            and isinstance(match.get("finding_id"), str)
+            and isinstance(match.get("fingerprint"), str)
+            and match.get("match_status") != "ambiguous"
+        ):
+            explicit_fp_map[match["finding_id"]] = match["fingerprint"]
     latest: dict[str, dict[str, str]] = {}
-    for rec in raw_records:
-        state = rec.get("state") if isinstance(rec, dict) else None
-        if not isinstance(rec, dict) or state not in _REMEDIATION_LABELS:
+    for tr in raw_transitions:
+        state = tr.get("new_state") if isinstance(tr, dict) else None
+        if not isinstance(tr, dict) or state not in _REMEDIATION_LABELS:
             raise ValueError(f"Unknown remediation state: {state!r}")
-        note = str(rec.get("note", ""))
-        fid = rec.get("finding_id")
-        fp = rec.get("fingerprint")
+        note = str(tr.get("reason", ""))
+        fid = tr.get("finding_id")
+        fp = tr.get("fingerprint") or (
+            explicit_fp_map.get(fid) if isinstance(fid, str) else None
+        )
         matched_id: str | None = None
         if isinstance(fid, str) and fid in finding_ids:
             matched_id = fid
@@ -371,7 +406,21 @@ def _index_remediation(
             matched_id = fp_to_ids[fp][0]
         if matched_id is not None:
             latest[matched_id] = {"state": state, "note": note}
-    return latest, len(raw_records) > 0
+    for rec in raw_records:
+        state = rec.get("state") if isinstance(rec, dict) else None
+        if not isinstance(rec, dict) or state not in _REMEDIATION_LABELS:
+            raise ValueError(f"Unknown remediation state: {state!r}")
+        note = str(rec.get("note", ""))
+        fid = rec.get("finding_id")
+        fp = rec.get("fingerprint")
+        matched_id = None
+        if isinstance(fid, str) and fid in finding_ids:
+            matched_id = fid
+        elif isinstance(fp, str) and len(fp_to_ids.get(fp, [])) == 1:
+            matched_id = fp_to_ids[fp][0]
+        if matched_id is not None:
+            latest[matched_id] = {"state": state, "note": note}
+    return latest, (len(raw_records) + len(raw_transitions)) > 0
 
 
 def _severity_badge_html(sev: str) -> str:

@@ -11,6 +11,14 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def _is_repo_relative(raw_path: str) -> bool:
+    if not raw_path or "\\" in raw_path:
+        return False
+    posix = pathlib.PurePosixPath(raw_path)
+    win = pathlib.PureWindowsPath(raw_path)
+    return not (posix.is_absolute() or win.is_absolute() or ".." in posix.parts)
+
+
 def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema
@@ -26,18 +34,28 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
         return errors
 
     component = data.get("component")
-    if isinstance(component, str) and ("/" in component or "\\" in component):
-        posix = pathlib.PurePosixPath(component)
-        win = pathlib.PureWindowsPath(component)
-        if (
-            posix.is_absolute()
-            or win.is_absolute()
-            or ".." in posix.parts
-            or "\\" in component
-        ):
+    if (
+        isinstance(component, str)
+        and ("/" in component or "\\" in component)
+        and not _is_repo_relative(component)
+    ):
+        errors.append(
+            f"Component path must be repository-relative when path-formatted: {component}"
+        )
+
+    for top_path in data.get("paths", []):
+        if isinstance(top_path, str) and not _is_repo_relative(top_path):
             errors.append(
-                f"Component path must be repository-relative when path-formatted: {component}"
+                f"Deliverable path must be repository-relative (paths): {top_path}"
             )
+
+    for cov in data.get("coverage", []):
+        if isinstance(cov, Mapping):
+            for cov_path in cov.get("paths", []):
+                if isinstance(cov_path, str) and not _is_repo_relative(cov_path):
+                    errors.append(
+                        f"Deliverable path must be repository-relative (coverage.paths): {cov_path}"
+                    )
 
     seen_ids: set[str] = set()
     dup_ids: set[str] = set()
@@ -50,6 +68,16 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
                 errors.append(f"Duplicate IDs in test_cases: {tc_id}")
                 dup_ids.add(tc_id)
             seen_ids.add(tc_id)
+        tc_file = tc.get("file")
+        if isinstance(tc_file, str) and not _is_repo_relative(tc_file):
+            errors.append(
+                f"Deliverable path must be repository-relative ({tc_id or 'test_case'}.file): {tc_file}"
+            )
+        for tc_path in tc.get("paths", []):
+            if isinstance(tc_path, str) and not _is_repo_relative(tc_path):
+                errors.append(
+                    f"Deliverable path must be repository-relative ({tc_id or 'test_case'}.paths): {tc_path}"
+                )
 
     return errors
 
