@@ -1165,18 +1165,59 @@ def concise_environment(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _skill_search_text(row: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in (
+        "name",
+        "title",
+        "description",
+        "path",
+        "suite",
+        "phase_title",
+        "maturity",
+        "behavior_evaluation",
+    ):
+        val = row.get(key)
+        if val:
+            parts.append(str(val))
+    for key in ("symptoms", "expected_inputs", "outcomes", "optional_tools"):
+        items = row.get(key)
+        if isinstance(items, list):
+            parts.extend(str(item) for item in items if item)
+    return " ".join(parts).casefold()
+
+
+def _search_skills(query: str, root: Path = ROOT) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = read_json(root / "catalog/skills.json")["skills"]
+    tokens = [tok for tok in re.split(r"[\s-]+", query.casefold()) if tok]
+    if not tokens:
+        return rows
+    recipes_path = root / "catalog/recipes.json"
+    recipes = (
+        read_json(recipes_path).get("recipes", {}) if recipes_path.is_file() else {}
+    )
+    matched_task_skills: set[str] = set()
+    for task_name, recipe in recipes.items():
+        task_key = task_name.casefold()
+        if all(tok in task_key for tok in tokens):
+            matched_task_skills.update(str(s) for s in recipe.get("skills", []))
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("name") in matched_task_skills:
+            results.append(row)
+            continue
+        haystack = _skill_search_text(row)
+        if all(tok in haystack for tok in tokens):
+            results.append(row)
+    return results
+
+
 def handle_catalog(a: argparse.Namespace) -> Any:
     if a.command in {"tasks", "packs", "hosts"}:
         filename = {"tasks": "recipes", "packs": "packs", "hosts": "hosts"}[a.command]
         return read_json(ROOT / "catalog" / (filename + ".json"))
     if a.command == "search":
-        rows = read_json(ROOT / "catalog/skills.json")["skills"]
-        query = a.query.casefold()
-        return [
-            row
-            for row in rows
-            if query in json.dumps(row, ensure_ascii=False).casefold()
-        ]
+        return _search_skills(a.query)
     raise ValueError(f"Unknown catalog command: {a.command}")
 
 

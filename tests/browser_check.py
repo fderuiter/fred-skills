@@ -204,28 +204,118 @@ with tempfile.TemporaryDirectory() as temporary:
         assert page.locator("article.finding:visible").count() == 2
         page.screenshot(path="/tmp/testing_report.png")
 
-        page.goto((ROOT / "docs/explorer.html").as_uri())
+        explorer_uri = (ROOT / "docs/explorer.html").as_uri()
+        recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
+
+        # Verify above-the-fold controls on 1280x800 desktop and 375x812 mobile viewports
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.goto(explorer_uri)
+        assert not page_errors
+        desktop_query_box = page.locator("#query").bounding_box()
+        desktop_status_box = page.locator("#status").bounding_box()
+        assert desktop_query_box is not None and desktop_query_box["y"] < 450, (
+            desktop_query_box
+        )
+        assert (
+            desktop_status_box is not None
+            and desktop_status_box["y"] + desktop_status_box["height"] < 800
+        ), desktop_status_box
+
+        page.set_viewport_size({"width": 375, "height": 812})
+        page.goto(explorer_uri)
+        mobile_query_box = page.locator("#query").bounding_box()
+        mobile_status_box = page.locator("#status").bounding_box()
+        assert mobile_query_box is not None and mobile_query_box["y"] < 650, (
+            mobile_query_box
+        )
+        assert (
+            mobile_status_box is not None
+            and mobile_status_box["y"] + mobile_status_box["height"] < 812
+        ), mobile_status_box
+
+        page.set_viewport_size({"width": 1280, "height": 800})
+        page.goto(explorer_uri)
         count = page.locator("article.finding").count()
         assert count >= 41
-        page.get_by_label("Task or symptom").fill("stale response")
-        assert 0 < page.locator("article.finding:visible").count() < count
-        page.get_by_label("Task or symptom").fill("")
+        assert page.locator("details.task:visible").count() == len(recipes)
+
+        # Verify all 17 tasks match their task block and member skills
+        query_input = page.get_by_label("Task or symptom")
+        for task_name, recipe in recipes.items():
+            query_input.fill(task_name)
+            assert page.locator(f"details#task-{task_name}").is_visible(), task_name
+            for member_skill in recipe["skills"]:
+                assert page.locator(f"article#{member_skill}").is_visible(), (
+                    task_name,
+                    member_skill,
+                )
+
+        # Verify curated symptoms and multi-word queries in any token order
+        for term in (
+            "stale response",
+            "database migration",
+            "migration database",
+            "trust boundary",
+            "deadlock",
+            "memory leak",
+            "leak memory",
+            "xss",
+            "ssrf",
+            "breaking change",
+            "rollback",
+        ):
+            query_input.fill(term)
+            assert 0 < page.locator("article.finding:visible").count() < count, term
+
+        # Verify sections with zero visible items hide cleanly
+        query_input.fill("memory leak")
+        assert page.locator("details.task:visible").count() == 0
+        assert not page.locator("section#tasks").is_visible()
+        assert page.locator("section#skills").is_visible()
+
+        query_input.fill("zzzznonexistentquery")
+        assert not page.locator("section#tasks").is_visible()
+        assert not page.locator("section#skills").is_visible()
+        assert page.locator("#empty-state").is_visible()
+        page.get_by_role("button", name="Reset filters").click()
+        assert page.locator("section#tasks").is_visible()
+        assert page.locator("section#skills").is_visible()
+        assert page.locator("article.finding:visible").count() == count
+
+        # Verify cross-suite #anchor click reveals and scrolls to hidden card without resetting Family first
         page.get_by_label("Family").select_option("repository-workflows")
         assert page.locator("article.finding:visible").count() == 6
+        assert page.locator("details#task-investigate-bug").is_visible()
+        assert not page.locator("details#task-review-code-changes").is_visible()
         target_card = page.locator("article#repo-audit-concurrency")
         assert not target_card.is_visible()
-        page.get_by_label("Family").select_option("")
-        assert page.locator("article.finding:visible").count() == count
-        assert target_card.is_visible()
         page.get_by_text(
-            "review-pr — Review changed behavior and affected contracts.",
+            "investigate-bug — Reconstruct and demonstrate a concrete failure.",
             exact=True,
         ).click()
-        skill_link = page.locator('a[href="#repo-audit-concurrency"]').first
+        skill_link = page.locator(
+            'details#task-investigate-bug a[href="#repo-audit-concurrency"]'
+        )
         assert skill_link.is_visible()
         skill_link.click()
         assert target_card.is_visible()
+        assert page.locator("#status").input_value() == ""
         assert page.url.endswith("#repo-audit-concurrency")
+        revealed_box = target_card.bounding_box()
+        assert (
+            revealed_box is not None
+            and revealed_box["y"] < 800
+            and revealed_box["y"] + revealed_box["height"] > 0
+        ), revealed_box
+
+        # Also verify hashchange reveal when hidden by active query filter
+        query_input.fill("verify fix")
+        assert not target_card.is_visible()
+        page.evaluate("location.hash = '#repo-audit-diagnostics'")
+        diag_card = page.locator("article#repo-audit-diagnostics")
+        assert diag_card.is_visible()
+        assert query_input.input_value() == ""
+
         if args.screenshot:
             args.screenshot.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(args.screenshot))

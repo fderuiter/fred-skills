@@ -34,15 +34,39 @@ SITE_DIRECTORIES: tuple[str, ...] = (
     "skills",
 )
 EXCLUDED_SITE_NAMES: frozenset[str] = frozenset({"__pycache__", ".DS_Store"})
+_SUITE_LABELS: dict[str, str] = {
+    "repository-audits": "Audits",
+    "repository-workflows": "Verified engineering",
+    "software-architecture": "Software architecture",
+    "code-review": "Code review",
+    "automated-testing": "Automated testing",
+}
+
+
+def _suite_label(suite: dict[str, Any]) -> str:
+    name = str(suite.get("name", ""))
+    return str(
+        suite.get("title")
+        or _SUITE_LABELS.get(name)
+        or name.replace("-", " ").capitalize()
+    )
 
 
 def _render_explorer_html(
     catalog: list[dict[str, Any]],
     recipes: dict[str, dict[str, Any]],
+    suites: list[dict[str, Any]] | None = None,
     *,
     root_prefix: str = "../",
     docs_prefix: str = "",
 ) -> str:
+    if suites is None:
+        suites = read_json(ROOT / "catalog/suites.json")["suites"]
+    skill_suites = {
+        str(entry["name"]): str(entry["suite"])
+        for entry in catalog
+        if entry.get("name") and entry.get("suite")
+    }
     cards: list[str] = []
     for entry in catalog:
 
@@ -52,21 +76,34 @@ def _render_explorer_html(
         cards.append(
             f'<article class="finding" id="{_esc("name")}" data-status="{_esc("suite")}"><h2><a href="{root_prefix}{_esc("path")}">{_esc("title")}</a></h2><p><code>{_esc("name")}</code></p><p>{_esc("description")}</p><p>Symptoms: {escape(", ".join(entry.get("symptoms", [])))}</p><p>Maturity: {_esc("maturity")}</p><details><summary>Inputs and outcomes</summary><p>{escape("; ".join(entry.get("expected_inputs", [])))}</p><p>{escape("; ".join(entry.get("outcomes", [])))}</p><p>{_esc("behavior_evaluation")}</p></details></article>'
         )
-    tasks = "".join(
-        f"<details><summary>{escape(name)} — {escape(item['outcome'])}</summary><pre>python scripts/fred.py plan /path/to/repo --task {escape(name)}"
-        + (" --mode changes --base main" if item.get("requires_base") else "")
-        + "</pre><p>"
-        + ", ".join(
-            f'<a href="#{escape(skill, quote=True)}">{escape(skill)}</a>'
-            for skill in item["skills"]
+    task_blocks: list[str] = []
+    for name, item in recipes.items():
+        member_skills = [str(skill) for skill in item["skills"]]
+        member_suites = list(
+            dict.fromkeys(skill_suites[s] for s in member_skills if s in skill_suites)
         )
-        + '</p><p class="muted">Outputs: '
-        + escape(", ".join(item.get("outputs", [])))
-        + "</p></details>"
-        for name, item in recipes.items()
+        search_terms = (
+            f"{name} {item['outcome']} {' '.join(item.get('workflows', []))}".lower()
+        )
+        task_blocks.append(
+            f'<details class="task" id="task-{escape(name, quote=True)}" data-skills="{escape(" ".join(member_skills), quote=True)}" data-suites="{escape(" ".join(member_suites), quote=True)}" data-search="{escape(search_terms, quote=True)}"><summary>{escape(name)} — {escape(item["outcome"])}</summary><pre>python scripts/fred.py plan /path/to/repo --task {escape(name)}'
+            + (" --mode changes --base main" if item.get("requires_base") else "")
+            + "</pre><p>"
+            + ", ".join(
+                f'<a href="#{escape(skill, quote=True)}">{escape(skill)}</a>'
+                for skill in member_skills
+            )
+            + '</p><p class="muted">Outputs: '
+            + escape(", ".join(item.get("outputs", [])))
+            + "</p></details>"
+        )
+    tasks = "".join(task_blocks)
+    status_options = "".join(
+        f'<option value="{escape(str(suite["name"]), quote=True)}">{escape(_suite_label(suite))}</option>'
+        for suite in suites
     )
     h = base64.b64encode(hashlib.sha256(SCRIPT.encode()).digest()).decode()
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';script-src 'sha256-{h}';base-uri 'none';connect-src 'none'"><title>fred-skills task explorer</title><style>{STYLE}</style></head><body><header><h1>Find an engineering workflow</h1><p>Choose an outcome, then inspect a small relevant set of portable skills.</p><nav><a href="{root_prefix}README.md">Quickstart</a><a href="{docs_prefix}experience.md">Task guide</a><a href="{docs_prefix}catalog.md">Catalog</a><a href="{docs_prefix}toolkit.md">CLI guide</a><a href="{docs_prefix}validation.md">What has been tested</a></nav></header><section><h2>Start from your task</h2>{tasks}</section><section><h2>Search skills</h2><label for="query">Task or symptom <input id="query" type="search" placeholder="stale response, tenant, migration…"></label><label for="status">Family <select id="status"><option value="">All</option><option value="repository-audits">Audits</option><option value="repository-workflows">Verified engineering</option><option value="software-architecture">Software architecture</option><option value="code-review">Code review</option><option value="automated-testing">Automated testing</option></select></label><p id="count" data-noun="skills" role="status" aria-live="polite"></p><div id="empty-state" class="empty-state" hidden><p>No skills match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>{"".join(cards)}</section><script>{SCRIPT}</script></body></html>"""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none';style-src 'unsafe-inline';script-src 'sha256-{h}';base-uri 'none';connect-src 'none'"><title>fred-skills task explorer</title><style>{STYLE}</style></head><body><header><h1>Find an engineering workflow</h1><p>Choose an outcome, then inspect a small relevant set of portable skills.</p><nav><a href="{root_prefix}README.md">Quickstart</a><a href="{docs_prefix}experience.md">Task guide</a><a href="{docs_prefix}catalog.md">Catalog</a><a href="{docs_prefix}toolkit.md">CLI guide</a><a href="{docs_prefix}validation.md">What has been tested</a></nav></header><section aria-label="Search and filter"><label for="query">Task or symptom <input id="query" type="search" placeholder="database migration, memory leak, review-pr…"></label><label for="status">Family <select id="status"><option value="">All</option>{status_options}</select></label><p id="count" data-noun="skills" role="status" aria-live="polite"></p><div id="empty-state" class="empty-state" hidden><p>No tasks or skills match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div></section><section id="tasks" data-filter-section><h2>Start from your task</h2>{tasks}</section><section id="skills" data-filter-section><h2>Search skills</h2>{"".join(cards)}</section><script>{SCRIPT}</script></body></html>"""
 
 
 def outputs(root: Path = ROOT) -> dict[str, str]:
@@ -74,6 +111,7 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
     recipes = read_json(root / "catalog/recipes.json")["recipes"]
     packs = read_json(root / "catalog/packs.json")["packs"]
     hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    suites = read_json(root / "catalog/suites.json")["suites"]
     known = {item["name"] for item in catalog}
     for name, data in {**recipes, **packs}.items():
         if not data["skills"] or set(data["skills"]) - known:
@@ -96,7 +134,9 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
     doc += "\n## Host adapters\n\nPaths are relative to the explicit project/home destination. Filesystem checks are not host behavior certification. See the [integration guide](integration.md) for host setup and orchestration instructions.\n\n| Host | Project | User | Behavioral status |\n| --- | --- | --- | --- |\n"
     for name, host in hosts.items():
         doc += f"| {name} | `{host['project_path']}` | `{host['user_path']}` | {host['behavior_test']} |\n"
-    html = _render_explorer_html(catalog, recipes, root_prefix="../", docs_prefix="")
+    html = _render_explorer_html(
+        catalog, recipes, suites, root_prefix="../", docs_prefix=""
+    )
     return {"docs/experience.md": doc, "docs/explorer.html": html}
 
 
@@ -128,10 +168,12 @@ def stage_site(output_dir: Path, root: Path = ROOT) -> Path:
 
     catalog = read_json(resolved_root / "catalog/skills.json")["skills"]
     recipes = read_json(resolved_root / "catalog/recipes.json")["recipes"]
+    suites = read_json(resolved_root / "catalog/suites.json")["suites"]
     generated = outputs(resolved_root)
     root_index_html = _render_explorer_html(
         catalog,
         recipes,
+        suites,
         root_prefix="",
         docs_prefix="docs/",
     )

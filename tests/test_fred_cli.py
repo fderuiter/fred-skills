@@ -473,6 +473,56 @@ class FredCLITests(unittest.TestCase):
         self.assertIsInstance(data, list)
         self.assertTrue(len(data) > 0)
 
+    def test_search_matches_all_tasks_symptoms_and_token_orders(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import fred
+
+        recipes = json.loads((ROOT / "catalog/recipes.json").read_text("utf-8"))[
+            "recipes"
+        ]
+        self.assertEqual(17, len(recipes))
+        for task_name, recipe in recipes.items():
+            with self.subTest(task=task_name):
+                results = fred._search_skills(task_name)
+                found_names = {item["name"] for item in results}
+                self.assertTrue(
+                    set(recipe["skills"]).issubset(found_names),
+                    f"Task {task_name} missing member skills: {set(recipe['skills']) - found_names}",
+                )
+                spaced = task_name.replace("-", " ")
+                reversed_tokens = " ".join(reversed(task_name.split("-")))
+                self.assertEqual(
+                    [r["name"] for r in results],
+                    [r["name"] for r in fred._search_skills(spaced)],
+                )
+                self.assertTrue(
+                    set(recipe["skills"]).issubset(
+                        {r["name"] for r in fred._search_skills(reversed_tokens)}
+                    )
+                )
+
+        for query in (
+            "database migration",
+            "migration database",
+            "trust boundary",
+            "deadlock",
+            "memory leak",
+            "leak memory",
+            "xss",
+            "ssrf",
+            "breaking change",
+            "rollback",
+        ):
+            with self.subTest(query=query):
+                proc = self.run_cli("search", query, isatty=False)
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                rows = json.loads(proc.stdout)
+                self.assertIsInstance(rows, list)
+                self.assertGreater(
+                    len(rows), 0, f"Expected CLI search matches for {query!r}"
+                )
+                self.assertTrue(all(isinstance(item, dict) for item in rows))
+
     def test_json_flag_forces_raw_json_even_in_terminal(self):
         # hosts --json
         proc = self.run_cli("hosts", "--json", isatty=True)

@@ -49,12 +49,20 @@ class ExperienceTests(unittest.TestCase):
         page = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
         self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
         self.assertIn('id="reset-filters"', page)
+        self.assertIn("Task or symptom", page)
+        self.assertIn("Family", page)
+        self.assertLess(page.index("</header>"), page.index('id="query"'))
+        self.assertLess(page.index('id="query"'), page.index('id="status"'))
+        self.assertLess(page.index('id="status"'), page.index('id="tasks"'))
+        self.assertLess(page.index('id="tasks"'), page.index('id="skills"'))
         self.assertIn(
             '<a href="#repo-audit-concurrency">repo-audit-concurrency</a>', page
         )
         self.assertIn('<article class="finding" id="repo-audit-concurrency"', page)
         recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
-        for item in recipes.values():
+        for name, item in recipes.items():
+            self.assertIn(f'id="task-{name}"', page)
+            self.assertIn(f'data-skills="{" ".join(item["skills"])}"', page)
             for skill in item["skills"]:
                 self.assertIn(f'<a href="#{skill}">{skill}</a>', page)
                 self.assertIn(f'id="{skill}"', page)
@@ -65,12 +73,65 @@ class ExperienceTests(unittest.TestCase):
         for suite in suites:
             self.assertIn(f'<option value="{suite["name"]}">', select_html)
 
+    def test_curated_symptoms_replace_slug_splits(self):
+        experience = read_json(ROOT / "catalog/experience.json")["skills"]
+        skills = read_json(ROOT / "catalog/skills.json")["skills"]
+        self.assertEqual(
+            {item["name"] for item in skills},
+            set(experience.keys()),
+        )
+        for item in skills:
+            name = item["name"]
+            with self.subTest(skill=name):
+                symptoms = experience[name].get("symptoms", [])
+                self.assertTrue(
+                    isinstance(symptoms, list) and len(symptoms) >= 3,
+                    f"{name} must define curated symptom phrases",
+                )
+                self.assertEqual(symptoms, item.get("symptoms"))
+                slug_tokens = set(name.split("-"))
+                stripped_tokens = set(
+                    name.removeprefix("repo-audit-").removeprefix("repo-").split("-")
+                )
+                normalized = [s.strip().lower() for s in symptoms]
+                self.assertFalse(
+                    set(normalized) <= slug_tokens
+                    or set(normalized) <= stripped_tokens,
+                    f"{name} symptoms merely split its slug: {symptoms}",
+                )
+                self.assertTrue(
+                    any(" " in s for s in normalized),
+                    f"{name} must include multi-word engineering symptom phrases: {symptoms}",
+                )
+
+        all_symptom_text = " | ".join(
+            " ".join(entry.get("symptoms", [])).lower() for entry in experience.values()
+        )
+        for required_term in (
+            "deadlock",
+            "memory leak",
+            "xss",
+            "ssrf",
+            "breaking change",
+            "rollback",
+            "trust boundary",
+            "database migration",
+        ):
+            with self.subTest(term=required_term):
+                self.assertIn(required_term, all_symptom_text)
+
     def test_experience_detects_drift(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_root = Path(tmp_dir)
             catalog_dir = tmp_root / "catalog"
             catalog_dir.mkdir(parents=True)
-            for file in ["skills.json", "recipes.json", "packs.json", "hosts.json"]:
+            for file in [
+                "skills.json",
+                "recipes.json",
+                "packs.json",
+                "hosts.json",
+                "suites.json",
+            ]:
                 (catalog_dir / file).write_bytes((ROOT / "catalog" / file).read_bytes())
             self.assertEqual([], build(root=tmp_root))
             self.assertEqual([], build(root=tmp_root, check=True))
