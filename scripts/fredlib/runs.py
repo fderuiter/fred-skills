@@ -568,6 +568,54 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
     )
 
 
+def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for field in ("decisions", "findings", "test_cases"):
+        items = deliverable.get(field)
+        if not isinstance(items, list):
+            continue
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str):
+                if item_id in seen and item_id not in duplicates:
+                    errors.append(f"Duplicate IDs in {field}: {item_id}")
+                    duplicates.add(item_id)
+                seen.add(item_id)
+    findings = deliverable.get("findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            fpath = finding.get("file")
+            fid = finding.get("id", "unknown")
+            if not isinstance(fpath, str):
+                continue
+            try:
+                checked = relative_path(fpath)
+                if not checked.parts:
+                    raise ValueError(f"Unsafe relative path: {fpath!r}")
+            except ValueError as exc:
+                errors.append(
+                    f"Finding file path must be repository-relative ({fid}): {exc}"
+                )
+    return errors
+
+
+def _deliverable_errors(
+    deliverable: dict[str, Any], expected_name: str, schema_rel: str
+) -> list[str]:
+    if expected_name == "audit.json":
+        return audit_errors(deliverable)
+    schema_errs = _schema_errors(deliverable, schema_rel)
+    if schema_errs:
+        return schema_errs
+    return _domain_deliverable_errors(deliverable)
+
+
 def validate_run(directory: Path) -> list[str]:
     run_dir = resolve_run_directory(directory)
     run = read_json_object(
@@ -588,12 +636,10 @@ def validate_run(directory: Path) -> list[str]:
         label=f"Deliverable '{expected_name}'",
         hint=f"Ensure '{deliverable_path}' exists and contains a JSON object matching {schema_rel}.",
     )
-    errors = _schema_errors(run, "schemas/run.schema.json")
-    if expected_name != "audit.json":
-        errors.extend(_schema_errors(deliverable, schema_rel))
-    else:
-        errors.extend(audit_errors(deliverable))
-    if errors:
+    run_errs = _schema_errors(run, "schemas/run.schema.json")
+    deliverable_errs = _deliverable_errors(deliverable, expected_name, schema_rel)
+    errors = [*run_errs, *deliverable_errs]
+    if run_errs:
         return errors
     if run["snapshot"]["digest"] != digest(
         {key: run["snapshot"][key] for key in ["files", "skipped", "exclude"]}
@@ -601,7 +647,7 @@ def validate_run(directory: Path) -> list[str]:
         errors.append(
             "Snapshot content identity does not match its recorded file inventory"
         )
-    if expected_name == "audit.json":
+    if expected_name == "audit.json" and not deliverable_errs:
         if run["run_id"] != deliverable.get("run_id"):
             errors.append("Run and audit IDs differ")
         if (
@@ -634,6 +680,17 @@ def checkpoint(directory: Path, state: str, note: str) -> dict:
     return run
 
 
+def _normalize_deliverable_path(raw_path: object) -> str | None:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    candidate = raw_path.strip().replace("\\", "/")
+    try:
+        checked = relative_path(candidate)
+    except ValueError:
+        return candidate
+    return checked.as_posix() if checked.parts else candidate
+
+
 def _revalidate_domain_records(
     deliverable: dict[str, Any],
     expected_name: str,
@@ -644,9 +701,10 @@ def _revalidate_domain_records(
     stale: list[str] = []
     if expected_name == "review.json":
         findings = deliverable.get("findings", [])
+        changed_set = set(changed)
         for finding in findings:
-            fpath = finding.get("file")
-            if fpath in changed or fpath in skipped or not complete:
+            norm_path = _normalize_deliverable_path(finding.get("file"))
+            if norm_path in changed_set or norm_path in skipped or not complete:
                 stale.append(finding["id"])
         impact = [f["id"] for f in findings] if changed else []
         return stale, impact
