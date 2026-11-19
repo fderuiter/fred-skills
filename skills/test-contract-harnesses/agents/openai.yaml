@@ -1,0 +1,4 @@
+interface:
+  display_name: "Contract Test Harnesses"
+  short_description: "Design producer/consumer wire and schema contract test harnesses"
+  default_prompt: "Use $test-contract-harnesses on these API schemas and consumer mocks."

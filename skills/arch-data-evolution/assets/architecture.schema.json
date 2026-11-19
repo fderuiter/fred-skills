@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Software Architecture Specification Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "accepted", "superseded", "deprecated"]
+    },
+    "boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "type": { "type": "string", "enum": ["trust", "module", "service", "storage"] },
+          "description": { "type": "string" },
+          "invariants": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["name", "type"]
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "context": { "type": "string" },
+          "decision": { "type": "string" },
+          "consequences": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["id", "title", "decision"]
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "responsibility": { "type": "string", "minLength": 1 },
+          "owned_models": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["name", "responsibility"]
+      }
+    },
+    "interfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "protocol": { "type": "string", "minLength": 1 },
+          "producer": { "type": "string" },
+          "consumers": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "contract": { "type": "string" },
+          "compatibility": { "type": "string" }
+        },
+        "required": ["name", "protocol"]
+      }
+    }
+  },
+  "required": ["schema_version", "title", "status"]
+}

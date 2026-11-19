@@ -118,6 +118,75 @@
       "skill": "repo-audit-synthesis",
       "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not audit the supplied source; return no audit findings.",
       "expected_keys": []
+    },
+    {
+      "id": "data-evolution-a",
+      "fixture": "fixtures/data_evolution/a",
+      "skill": "arch-data-evolution",
+      "prompt": "Evaluate zero-downtime rolling schema compatibility in this migration. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "single-phase-schema-break"
+      ]
+    },
+    {
+      "id": "api-compatibility-a",
+      "fixture": "fixtures/api_compatibility/a",
+      "skill": "review-api-compatibility",
+      "prompt": "Review public v1 wire and caller compatibility in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "breaking-wire-change"
+      ]
+    },
+    {
+      "id": "flakiness-isolation-a",
+      "fixture": "fixtures/flakiness_isolation/a",
+      "skill": "test-flakiness-isolation",
+      "prompt": "Isolate async timing and shared-state test flakiness in this test module. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": [
+        "sleep-poll-race"
+      ]
+    },
+    {
+      "id": "data-evolution-b",
+      "fixture": "fixtures/data_evolution/b",
+      "skill": "arch-data-evolution",
+      "prompt": "Evaluate zero-downtime rolling schema compatibility in this migration. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "api-compatibility-b",
+      "fixture": "fixtures/api_compatibility/b",
+      "skill": "review-api-compatibility",
+      "prompt": "Review public v1 wire and caller compatibility in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "flakiness-isolation-b",
+      "fixture": "fixtures/flakiness_isolation/b",
+      "skill": "test-flakiness-isolation",
+      "prompt": "Isolate async timing and shared-state test flakiness in this test module. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are single-phase-schema-break, breaking-wire-change, and sleep-poll-race. Return no actionable findings when the existing mechanism establishes the requested contract.",
+      "expected_keys": []
+    },
+    {
+      "id": "data-evolution-routing",
+      "fixture": "fixtures/data_evolution/a",
+      "skill": "arch-data-evolution",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not inspect the supplied source; return no findings.",
+      "expected_keys": []
+    },
+    {
+      "id": "api-compatibility-routing",
+      "fixture": "fixtures/api_compatibility/a",
+      "skill": "review-api-compatibility",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not inspect the supplied source; return no findings.",
+      "expected_keys": []
+    },
+    {
+      "id": "flakiness-isolation-routing",
+      "fixture": "fixtures/flakiness_isolation/a",
+      "skill": "test-flakiness-isolation",
+      "prompt": "Proofread this sentence only: \"The documant is ready.\" Do not inspect the supplied source; return no findings.",
+      "expected_keys": []
     }
   ]
 }

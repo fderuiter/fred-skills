@@ -32,9 +32,9 @@ unsafe fixture was correct. No production system or remote issue record was modi
 
 ## Specified evaluations are not executed evaluations
 
-Each of the 51 skills in the suite includes three scenario specifications in
+Each of the 60 skills in the suite includes three scenario specifications in
 `references/evaluation-scenarios.json`: relevant failure, safe control, and unrelated
-activation request. These 153 specifications are not 153 executed evaluations. They are
+activation request. These 180 specifications are not 180 executed evaluations. They are
 authoring inputs for future raw fixtures and fresh-context agent runs; do not supply
 their expected answers to the agent performing an audit.
 
@@ -45,7 +45,7 @@ misses, false positives, and environment constraints when extending the suite.
 
 ## 0.2.0 usability and correction-workflow validation
 
-The expanded deterministic suite exercises 51 total packages, generated recipes,
+The expanded deterministic suite exercises 60 total packages, generated recipes,
 packs and explorer, explicit Git change scope, incomplete inventories, stale evidence,
 proof requirements, comparison collisions, safe SARIF imports, HTML escaping, managed
 installation lifecycle/recovery, deterministic archives/tamper detection, and evaluation
@@ -57,8 +57,8 @@ variant, controlled overlap/cancellation, and synchronous abort reentrancy. It p
 schema-valid audit, report, local issue draft, and separate proof/remediation record. This
 is a synthetic demonstration, not an agent audit or correction of a user's application.
 
-The reference evaluation adapter executed 15 raw cases in baseline and with-skill
-configurations (30 runs). Its deterministic key matching passed in both configurations;
+The reference evaluation adapter executed 24 raw cases in baseline and with-skill
+configurations (48 runs). Its deterministic key matching passed in both configurations;
 this verifies harness plumbing and is not evidence of a model-quality improvement.
 
 Two fresh-context agent tasks on 13 November 2026 used only selected skill instructions

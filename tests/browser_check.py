@@ -113,6 +113,24 @@ with tempfile.TemporaryDirectory() as temporary:
                         ],
                     }
                 ],
+                "components": [
+                    {
+                        "name": "SettlementCoordinator",
+                        "responsibility": 'Commits ledger entries and outbox messages atomically <img src="https://example.invalid/comp" onerror="window.injected=true">',
+                        "owned_models": ["LedgerEntry", "OutboxEvent"],
+                        "dependencies": ["Ledger Store"],
+                    }
+                ],
+                "interfaces": [
+                    {
+                        "name": "POST /v1/settlements",
+                        "protocol": "HTTP/JSON",
+                        "producer": "SettlementCoordinator",
+                        "consumers": ["BillingAPI"],
+                        "contract": "Idempotent settlement submission keyed by Idempotency-Key header",
+                        "compatibility": "Additive response fields only",
+                    }
+                ],
             },
             arch_report,
         )
@@ -120,6 +138,8 @@ with tempfile.TemporaryDirectory() as temporary:
         assert not page_errors
         assert page.locator("img").count() == 0
         assert page.evaluate("window.injected === undefined")
+        assert page.locator("section#components").is_visible()
+        assert page.locator("section#interfaces").is_visible()
         assert page.locator("article.finding").count() == 1
         page.get_by_label("Search decisions").fill("nonexistent")
         assert page.locator("article.finding:visible").count() == 0
@@ -180,6 +200,7 @@ with tempfile.TemporaryDirectory() as temporary:
                         "name": "test_duplicate_idempotency_key_preserves_single_entry",
                         "description": "Replaying an identical settlement request commits exactly one journal row.",
                         "oracle_type": "state",
+                        "priority": "critical",
                         "verified": True,
                     },
                     {
@@ -187,9 +208,19 @@ with tempfile.TemporaryDirectory() as temporary:
                         "name": "test_zero_byte_payload_raises_validation_error",
                         "description": 'Empty batch boundary raises ValueError before opening a transaction <img src="https://example.invalid/tst" onerror="window.injected=true">',
                         "oracle_type": "exception",
+                        "priority": "high",
                         "verified": True,
                     },
                 ],
+                "execution_summary": {
+                    "state": "passed",
+                    "total": 2,
+                    "passed": 2,
+                    "failed": 0,
+                    "skipped": 0,
+                    "commands": ["pytest tests/test_settlement.py"],
+                    "notes": 'Verified on clean fixture <img src="https://example.invalid/exec" onerror="window.injected=true">',
+                },
             },
             testing_report,
         )
@@ -197,6 +228,7 @@ with tempfile.TemporaryDirectory() as temporary:
         assert not page_errors
         assert page.locator("img").count() == 0
         assert page.evaluate("window.injected === undefined")
+        assert page.locator("section#execution-summary").is_visible()
         assert page.locator("article.finding").count() == 2
         page.get_by_label("Oracle type").select_option("exception")
         assert page.locator("article.finding:visible").count() == 1
@@ -206,13 +238,13 @@ with tempfile.TemporaryDirectory() as temporary:
 
         page.goto((ROOT / "docs/explorer.html").as_uri())
         count = page.locator("article.finding").count()
-        assert count >= 41
+        assert count == 60
         page.get_by_label("Task or symptom").fill("stale response")
         assert 0 < page.locator("article.finding:visible").count() < count
         page.get_by_label("Task or symptom").fill("")
         page.get_by_label("Family").select_option("repository-workflows")
         assert page.locator("article.finding:visible").count() == 6
-        target_card = page.locator("article#repo-audit-concurrency")
+        target_card = page.locator("article#review-concurrency-hazards")
         assert not target_card.is_visible()
         page.get_by_label("Family").select_option("")
         assert page.locator("article.finding:visible").count() == count
@@ -221,11 +253,11 @@ with tempfile.TemporaryDirectory() as temporary:
             "review-pr — Review changed behavior and affected contracts.",
             exact=True,
         ).click()
-        skill_link = page.locator('a[href="#repo-audit-concurrency"]').first
+        skill_link = page.locator('a[href="#review-concurrency-hazards"]').first
         assert skill_link.is_visible()
         skill_link.click()
         assert target_card.is_visible()
-        assert page.url.endswith("#repo-audit-concurrency")
+        assert page.url.endswith("#review-concurrency-hazards")
         if args.screenshot:
             args.screenshot.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(args.screenshot))

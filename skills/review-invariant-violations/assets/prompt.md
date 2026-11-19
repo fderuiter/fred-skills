@@ -1,5 +1,7 @@
-Use review-invariant-violations to verify behavioral invariants for <repository> at <revision>.
-Check modified code for invariant violations, concurrency hazards, and state transitions.
-Verify error handling preserves transactional integrity and resource lifecycles.
-Highlight subtle timing, ordering, or reentrancy issues introduced by code changes.
-Record invariant findings adhering to the review template and schema.
+Use review-invariant-violations to verify domain, state-machine, and rollback invariants for <repository> at <revision>.
+
+Prioritize <critical workflows> and reuse <existing audit workspace, if any>.
+Establish invariants from constructors, persistence constraints, and callers, then trace early returns and exception exits in the diff.
+Check object lifetimes and rollback wrappers as safe controls before claiming partial-mutation bugs.
+Record evidence-backed `findings` in `review.json` conforming to `assets/review.schema.json`.
+Do not edit repository source or test files outside the run workspace without explicit user permission.

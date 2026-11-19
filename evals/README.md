@@ -1,9 +1,10 @@
 # Executable evaluation harness
 
-`cases.json` selects 15 raw cases across concurrency, authorization, transactions,
-test oracles, and synthesis: two relevant/control inputs and an unrelated routing task
-per domain. The original 99 specialist scenario specifications are separate authoring
-inputs, not 99 executable cases or completed model evaluations.
+`cases.json` selects 24 raw cases across concurrency, authorization, transactions,
+test oracles, synthesis, data evolution, API compatibility, and flakiness isolation:
+two relevant/control inputs and an unrelated routing task per domain. The 180
+per-skill scenario specifications are separate authoring inputs, not 180 executable
+cases or completed model evaluations.
 
 The harness creates a fresh case directory for each configuration/repeat, copies only
 raw `source/` and (for `with_skill`) one standalone `skill/`, writes a user request,

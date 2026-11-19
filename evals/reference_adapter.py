@@ -58,6 +58,33 @@ if "Proofread this sentence only" not in request:
                 }
             )
         )
+    if (source / "migration.sql").exists() and "RENAME COLUMN" in (
+        source / "migration.sql"
+    ).read_text():
+        keys.append(
+            (
+                "single-phase-schema-break",
+                "migration.sql: column rename and NOT NULL constraint break rolling N-1 readers/writers",
+            )
+        )
+    if (source / "invoice_api.py").exists() and '"amount_cents"' not in (
+        source / "invoice_api.py"
+    ).read_text():
+        keys.append(
+            (
+                "breaking-wire-change",
+                "invoice_api.py: public v1 response dropped amount_cents and required currency parameter",
+            )
+        )
+    if (source / "test_worker.py").exists() and "time.sleep(" in (
+        source / "test_worker.py"
+    ).read_text():
+        keys.append(
+            (
+                "sleep-poll-race",
+                "test_worker.py: assertion depends on fixed sleep delay and module-global list",
+            )
+        )
 args.output.write_text(
     json.dumps(
         {

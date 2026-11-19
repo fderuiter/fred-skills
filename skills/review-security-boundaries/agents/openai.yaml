@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security Boundary Review"
+  short_description: "Review diffs for auth bypass, injection, and trust boundary gaps"
+  default_prompt: "Use $review-security-boundaries on this pull request diff and trust perimeter."

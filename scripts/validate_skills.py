@@ -95,6 +95,10 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
         errors.append(
             "SKILL.md: skill markdown lacks boundary sections (e.g. ## Deliver, ## Workflow, ## Boundary, ## Guardrails)"
         )
+    if not NEGATIVE_CONSTRAINT_PATTERN.search(body):
+        errors.append(
+            "SKILL.md: skill markdown lacks negative constraints (e.g. do not, never, must not, only when, without permission)"
+        )
     prompt_path = package / "assets/prompt.md"
     prompt_rel = prompt_path.relative_to(package).as_posix()
     if not prompt_path.is_file():
@@ -281,11 +285,21 @@ def validate_with_telemetry(root: Path = ROOT) -> tuple[list[str], dict]:
         skill_text = (
             skill_path.read_text(encoding="utf-8") if skill_path.is_file() else ""
         )
-        has_boundary_sections = bool(BOUNDARY_SECTION_PATTERN.search(skill_text))
+        try:
+            _, skill_body = read_frontmatter(skill_path)
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
+            skill_body = skill_text
+        has_boundary_sections = bool(BOUNDARY_SECTION_PATTERN.search(skill_body))
+        has_skill_negative_constraints = bool(
+            NEGATIVE_CONSTRAINT_PATTERN.search(skill_body)
+        )
 
         pkg_valid = len(pkg_errors) == 0
         deterministic_coverage = (
-            has_schema and has_prompt_constraints and has_boundary_sections
+            has_schema
+            and has_prompt_constraints
+            and has_boundary_sections
+            and has_skill_negative_constraints
         )
 
         package_telemetry.append(
@@ -296,6 +310,7 @@ def validate_with_telemetry(root: Path = ROOT) -> tuple[list[str], dict]:
                 "output_schemas": output_schemas,
                 "has_prompt_constraints": has_prompt_constraints,
                 "has_boundary_sections": has_boundary_sections,
+                "has_skill_negative_constraints": has_skill_negative_constraints,
                 "deterministic_constraint_coverage": deterministic_coverage,
                 "errors": pkg_errors,
             }

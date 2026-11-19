@@ -777,6 +777,66 @@
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
+    "arch-data-evolution": {
+      "maturity": "experimental",
+      "symptoms": [
+        "migration",
+        "schema-evolution",
+        "backfill",
+        "dual-read",
+        "rollback"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "schema migrations and ORM models",
+        "deployment rollout topology"
+      ],
+      "outcomes": [
+        "Evidence-backed zero-downtime data evolution handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "arch-integration-contracts": {
+      "maturity": "experimental",
+      "symptoms": [
+        "api-contract",
+        "event-schema",
+        "webhook",
+        "idempotency",
+        "versioning"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "interface definitions or schemas",
+        "producer and consumer workflows"
+      ],
+      "outcomes": [
+        "Evidence-backed integration contract specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "arch-operational-resilience": {
+      "maturity": "experimental",
+      "symptoms": [
+        "timeouts",
+        "retries",
+        "backpressure",
+        "degradation",
+        "recovery"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "dependency call topology",
+        "capacity and recovery budgets"
+      ],
+      "outcomes": [
+        "Evidence-backed operational resilience specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
     "review-diff-analysis": {
       "maturity": "experimental",
       "symptoms": [
@@ -792,6 +852,66 @@
       ],
       "outcomes": [
         "Evidence-backed diff impact analysis handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "review-api-compatibility": {
+      "maturity": "experimental",
+      "symptoms": [
+        "api-compatibility",
+        "breaking-change",
+        "wire-format",
+        "semver",
+        "deprecation"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "public API or wire schemas",
+        "downstream consumer contracts"
+      ],
+      "outcomes": [
+        "Evidence-backed API compatibility review handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "review-security-boundaries": {
+      "maturity": "experimental",
+      "symptoms": [
+        "authz",
+        "tenant-isolation",
+        "injection",
+        "ssrf",
+        "secret-leak"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "entry points and auth middleware",
+        "trust boundary assumptions"
+      ],
+      "outcomes": [
+        "Evidence-backed security boundary review handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "review-concurrency-hazards": {
+      "maturity": "experimental",
+      "symptoms": [
+        "race-condition",
+        "deadlock",
+        "lost-update",
+        "cancellation",
+        "reentrancy"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "shared state and lock topology",
+        "async or transaction schedules"
+      ],
+      "outcomes": [
+        "Evidence-backed concurrency hazard review handoff"
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
@@ -868,6 +988,65 @@
       ],
       "outcomes": [
         "Evidence-backed test case generation handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "test-contract-harnesses": {
+      "maturity": "experimental",
+      "symptoms": [
+        "contract-tests",
+        "fake-parity",
+        "wire-compatibility",
+        "provider-consumer"
+      ],
+      "expected_inputs": [
+        "boundary schemas or adapters",
+        "test doubles and mocks",
+        "existing test suite"
+      ],
+      "outcomes": [
+        "Evidence-backed contract harness specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "test-property-invariants": {
+      "maturity": "experimental",
+      "symptoms": [
+        "property-testing",
+        "round-trip",
+        "metamorphic",
+        "idempotency",
+        "fuzz-seeds"
+      ],
+      "expected_inputs": [
+        "parsers, codecs, or reducers",
+        "domain invariants",
+        "existing test framework"
+      ],
+      "outcomes": [
+        "Evidence-backed property invariant specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    "test-flakiness-isolation": {
+      "maturity": "experimental",
+      "symptoms": [
+        "flaky-tests",
+        "intermittent-failure",
+        "sleep-race",
+        "order-dependent",
+        "nondeterministic"
+      ],
+      "expected_inputs": [
+        "intermittent test suite or logs",
+        "shared fixtures and timers",
+        "execution environment"
+      ],
+      "outcomes": [
+        "Evidence-backed flakiness isolation specification handoff"
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"

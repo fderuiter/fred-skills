@@ -92,6 +92,9 @@ class ExperienceTests(unittest.TestCase):
                     "arch-decision-record",
                     "arch-boundary-specification",
                     "arch-component-decomposition",
+                    "arch-data-evolution",
+                    "arch-integration-contracts",
+                    "arch-operational-resilience",
                 ],
                 "requires_base": False,
                 "deliverable": "architecture.json",
@@ -99,6 +102,9 @@ class ExperienceTests(unittest.TestCase):
             "review-code-changes": {
                 "skills": [
                     "review-diff-analysis",
+                    "review-api-compatibility",
+                    "review-security-boundaries",
+                    "review-concurrency-hazards",
                     "review-invariant-violations",
                     "review-actionable-feedback",
                 ],
@@ -109,6 +115,53 @@ class ExperienceTests(unittest.TestCase):
                 "skills": [
                     "test-gap-analysis",
                     "test-case-generation",
+                    "test-contract-harnesses",
+                    "test-property-invariants",
+                    "test-flakiness-isolation",
+                    "test-suite-verification",
+                ],
+                "requires_base": False,
+                "deliverable": "testing.json",
+            },
+            "review-pr": {
+                "skills": [
+                    "review-diff-analysis",
+                    "review-api-compatibility",
+                    "review-security-boundaries",
+                    "review-concurrency-hazards",
+                    "review-invariant-violations",
+                    "review-actionable-feedback",
+                ],
+                "requires_base": True,
+                "deliverable": "review.json",
+            },
+            "api-change": {
+                "skills": [
+                    "review-api-compatibility",
+                    "review-diff-analysis",
+                    "review-security-boundaries",
+                    "review-invariant-violations",
+                    "review-actionable-feedback",
+                ],
+                "requires_base": False,
+                "deliverable": "review.json",
+            },
+            "database-migration": {
+                "skills": [
+                    "arch-data-evolution",
+                    "arch-boundary-specification",
+                    "arch-component-decomposition",
+                    "arch-operational-resilience",
+                    "arch-decision-record",
+                ],
+                "requires_base": False,
+                "deliverable": "architecture.json",
+            },
+            "flaky-tests": {
+                "skills": [
+                    "test-flakiness-isolation",
+                    "test-property-invariants",
+                    "test-gap-analysis",
                     "test-suite-verification",
                 ],
                 "requires_base": False,

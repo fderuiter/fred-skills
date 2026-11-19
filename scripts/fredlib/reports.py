@@ -61,6 +61,8 @@ def _render_architecture_html(doc: dict) -> str:
     status_tone = status_badges.get(doc["status"], "info")
     boundaries = doc.get("boundaries", [])
     decisions = doc.get("decisions", [])
+    components = doc.get("components", [])
+    interfaces = doc.get("interfaces", [])
     boundary_rows = (
         "".join(
             f"<tr><td>{text(b['name'])}</td>"
@@ -70,6 +72,28 @@ def _render_architecture_html(doc: dict) -> str:
             for b in boundaries
         )
         or '<tr><td colspan="4" class="empty-state">No system boundaries recorded.</td></tr>'
+    )
+    component_rows = (
+        "".join(
+            f"<tr><td>{text(c['name'])}</td>"
+            f"<td>{text(c['responsibility'])}</td>"
+            f"<td>{', '.join(f'<code>{text(m)}</code>' for m in c.get('owned_models', [])) or '<span class="muted">None recorded</span>'}</td>"
+            f"<td>{', '.join(f'<code>{text(dep)}</code>' for dep in c.get('dependencies', [])) or '<span class="muted">None recorded</span>'}</td></tr>"
+            for c in components
+        )
+        or '<tr><td colspan="4" class="empty-state">No components recorded.</td></tr>'
+    )
+    interface_rows = (
+        "".join(
+            f"<tr><td>{text(iface['name'])}</td>"
+            f'<td><span class="badge badge-info info">{text(iface["protocol"])}</span></td>'
+            f"<td>{text(iface.get('producer', '')) or '<span class="muted">Unspecified</span>'}</td>"
+            f"<td>{', '.join(text(con) for con in iface.get('consumers', [])) or '<span class="muted">None recorded</span>'}</td>"
+            f"<td>{text(iface.get('contract', ''))}</td>"
+            f"<td>{text(iface.get('compatibility', ''))}</td></tr>"
+            for iface in interfaces
+        )
+        or '<tr><td colspan="6" class="empty-state">No interfaces recorded.</td></tr>'
     )
     if decisions:
         cards = []
@@ -108,9 +132,11 @@ def _render_architecture_html(doc: dict) -> str:
         f'<header><p class="muted">fred-skills · software architecture report</p>'
         f"<h1>{text(doc['title'])}</h1>"
         f'<p><span class="badge badge-{status_tone} {status_tone}">{text(doc["status"])}</span> · schema {text(doc["schema_version"])}</p>'
-        f'<nav aria-label="Report views"><a href="#executive">Overview</a><a href="#boundaries">Boundaries</a><a href="#decisions">Decisions</a></nav></header>\n'
-        f'<section id="executive"><h2>Architecture overview</h2><p>{len(boundaries)} system boundaries; {len(decisions)} decision records; status: <code>{text(doc["status"])}</code>.</p></section>\n'
+        f'<nav aria-label="Report views"><a href="#executive">Overview</a><a href="#boundaries">Boundaries</a><a href="#components">Components</a><a href="#interfaces">Interfaces</a><a href="#decisions">Decisions</a></nav></header>\n'
+        f'<section id="executive"><h2>Architecture overview</h2><p>{len(boundaries)} system boundaries; {len(components)} components; {len(interfaces)} interfaces; {len(decisions)} decision records; status: <code>{text(doc["status"])}</code>.</p></section>\n'
         f'<section id="boundaries"><h2>System boundaries</h2><div class="table-container"><table><thead><tr><th>Boundary</th><th>Type</th><th>Description</th><th>Invariants</th></tr></thead><tbody>{boundary_rows}</tbody></table></div></section>\n'
+        f'<section id="components"><h2>Components</h2><div class="table-container"><table><thead><tr><th>Component</th><th>Responsibility</th><th>Owned models</th><th>Dependencies</th></tr></thead><tbody>{component_rows}</tbody></table></div></section>\n'
+        f'<section id="interfaces"><h2>Interfaces</h2><div class="table-container"><table><thead><tr><th>Interface</th><th>Protocol</th><th>Producer</th><th>Consumers</th><th>Contract</th><th>Compatibility</th></tr></thead><tbody>{interface_rows}</tbody></table></div></section>\n'
         f'<section id="decisions"><h2>Architectural decisions</h2>{decisions_body}</section>'
     )
     return _page_shell(f"Software architecture — {text(doc['title'])}", body)
@@ -174,6 +200,12 @@ def _render_testing_html(doc: dict) -> str:
     test_cases = doc["test_cases"]
     oracle_types = ["state", "exception", "output", "boundary"]
     verified_count = sum(tc.get("verified") is True for tc in test_cases)
+    priority_tones = {
+        "critical": "critical",
+        "high": "high",
+        "medium": "medium",
+        "low": "low",
+    }
     if test_cases:
         cards = []
         for tc in test_cases:
@@ -183,10 +215,17 @@ def _render_testing_html(doc: dict) -> str:
                 v_badge = '<span class="badge badge-medium medium">unverified</span>'
             else:
                 v_badge = '<span class="badge badge-info info">pending</span>'
+            prio = tc.get("priority")
+            p_tone = priority_tones.get(prio, "info") if isinstance(prio, str) else ""
+            p_badge = (
+                f' <span class="badge badge-{p_tone} {p_tone}">priority: {text(prio)}</span>'
+                if isinstance(prio, str) and prio
+                else ""
+            )
             cards.append(
                 f'<article class="finding" data-status="{text(tc["oracle_type"])}" id="{text(tc["id"])}">'
                 f"<h3>{text(tc['id'])}: {text(tc['name'])}</h3>"
-                f'<p><span class="badge badge-info info">oracle: {text(tc["oracle_type"])}</span> {v_badge}</p>'
+                f'<p><span class="badge badge-info info">oracle: {text(tc["oracle_type"])}</span> {v_badge}{p_badge}</p>'
                 f"<p>{text(tc['description'])}</p></article>"
             )
         oracle_options = "".join(f"<option>{o}</option>" for o in oracle_types)
@@ -199,12 +238,59 @@ def _render_testing_html(doc: dict) -> str:
         )
     else:
         cases_body = "<p>No test cases recorded.</p>"
+
+    exec_summary = doc.get("execution_summary")
+    state_tones = {
+        "passed": "low",
+        "failed": "high",
+        "partial": "medium",
+        "not_run": "info",
+    }
+    if isinstance(exec_summary, dict):
+        exec_state = str(exec_summary.get("state", "not_run"))
+        exec_tone = state_tones.get(exec_state, "info")
+        counts_parts = [
+            f"{label}: {text(exec_summary[key])}"
+            for key, label in (
+                ("total", "Total"),
+                ("passed", "Passed"),
+                ("failed", "Failed"),
+                ("skipped", "Skipped"),
+            )
+            if key in exec_summary
+        ]
+        counts_html = f" · {' · '.join(counts_parts)}" if counts_parts else ""
+        cmds = exec_summary.get("commands", [])
+        cmds_html = (
+            "<p><b>Commands:</b> "
+            + ", ".join(f"<code>{text(cmd)}</code>" for cmd in cmds)
+            + "</p>"
+            if cmds
+            else ""
+        )
+        notes_html = (
+            f"<p><b>Notes:</b> {text(exec_summary['notes'])}</p>"
+            if exec_summary.get("notes")
+            else ""
+        )
+        exec_section = (
+            f'<section id="execution-summary"><h2>Execution summary</h2>'
+            f'<p><span class="badge badge-{exec_tone} {exec_tone}">{text(exec_state)}</span>{counts_html}</p>'
+            f"{cmds_html}{notes_html}</section>\n"
+        )
+    else:
+        exec_section = (
+            '<section id="execution-summary"><h2>Execution summary</h2>'
+            '<p class="muted">No execution summary recorded.</p></section>\n'
+        )
+
     body = (
         f'<header><p class="muted">fred-skills · automated testing report</p>'
         f"<h1>Automated testing — {text(doc['component'])}</h1>"
         f"<p>Framework: <code>{text(doc['framework'])}</code> · {len(test_cases)} test cases · schema {text(doc['schema_version'])}</p>"
-        f'<nav aria-label="Report views"><a href="#executive">Scope</a><a href="#test-cases">Test cases</a></nav></header>\n'
+        f'<nav aria-label="Report views"><a href="#executive">Scope</a><a href="#execution-summary">Execution</a><a href="#test-cases">Test cases</a></nav></header>\n'
         f'<section id="executive"><h2>Test suite scope</h2><p>Component: <code>{text(doc["component"])}</code> · Framework: <code>{text(doc["framework"])}</code> · {len(test_cases)} test cases ({verified_count} verified).</p></section>\n'
+        f"{exec_section}"
         f'<section id="test-cases"><h2>Test cases</h2>{cases_body}</section>'
     )
     return _page_shell(f"Automated testing — {text(doc['component'])}", body)

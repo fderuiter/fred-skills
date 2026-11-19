@@ -16,5 +16,6 @@
 
 ## Invariant Adherence Summary
 
-- **Preserved Invariants**: [List of verified behaviors]
-- **Potential Regressions**: [Areas requiring additional testing or confirmation]
+- **Preserved Invariants & Safe Controls**: [Verified behaviors and refuted false-positive leads]
+- **Compatibility, Security & Concurrency Checks**: [Summary of contract, boundary, and lock/async checks]
+- **Potential Regressions & Deferred Leads**: [Areas requiring follow-up testing or specialist confirmation]

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Flakiness Isolation"
+  short_description: "Isolate nondeterministic clocks, seeds, races, and leaky state"
+  default_prompt: "Use $test-flakiness-isolation on this intermittent or order-dependent test suite."

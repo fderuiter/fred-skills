@@ -1,0 +1,35 @@
+{
+  "topic": "test-property-invariants",
+  "scenarios": [
+    {
+      "id": "test-property-invariants-failure",
+      "prompt": "Specify property-based and metamorphic test invariants for parsers and state reducers in this repository.",
+      "fixture_shape": "A path canonicalizer and secret scrubber are tested with only two ASCII happy-path strings, missing Unicode normalization, mixed slashes, and idempotency invariants.",
+      "expected_behavior": [
+        "Formulate seeded round-trip, idempotency, and containment property invariants over structured edge-case generators.",
+        "Record prioritized test_cases and execution_summary in testing.json without writing repository files unless permitted.",
+        "Avoid introducing unapproved external dependencies when stdlib seeded generators suffice."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "test-property-invariants-safe",
+      "prompt": "Specify property-based and metamorphic test invariants for parsers and state reducers in this repository.",
+      "fixture_shape": "A serializer suite already runs deterministic seeded round-trip and idempotency checks plus pinned regression counterexamples.",
+      "expected_behavior": [
+        "Verify generator domain coverage, fixed seed reproducibility, and non-vacuous precondition hit rates.",
+        "Preserve concise exhaustive table tests where finite domains are already completely covered."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "test-property-invariants-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to design property tests."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

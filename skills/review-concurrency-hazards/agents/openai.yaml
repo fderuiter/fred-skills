@@ -1,0 +1,4 @@
+interface:
+  display_name: "Concurrency Hazard Review"
+  short_description: "Review diffs for data races, lock ordering, and async hazards"
+  default_prompt: "Use $review-concurrency-hazards on this pull request diff and shared state."

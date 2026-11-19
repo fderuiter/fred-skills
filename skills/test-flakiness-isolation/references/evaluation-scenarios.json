@@ -1,0 +1,35 @@
+{
+  "topic": "test-flakiness-isolation",
+  "scenarios": [
+    {
+      "id": "test-flakiness-isolation-failure",
+      "prompt": "Isolate intermittent test flakiness and nondeterminism in this repository's test suite.",
+      "fixture_shape": "Tests share a module-level mutable cache across test cases, poll async workers via fixed time.sleep(0.05) delays, and bind a hardcoded localhost port under parallel execution.",
+      "expected_behavior": [
+        "Identify the async sleep race, order-dependent shared state, and port collision mechanisms.",
+        "Specify deterministic synchronization barriers, per-test state isolation, and ephemeral port binding in testing.json without masking failures behind retries.",
+        "Keep repository files untouched unless explicit user write permission is granted."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "test-flakiness-isolation-safe",
+      "prompt": "Isolate intermittent test flakiness and nondeterminism in this repository's test suite.",
+      "fixture_shape": "Tests synchronize background tasks via explicit readiness/completion events with deadlock guard timeouts, use function-scoped temp directories and ephemeral ports, and inject deterministic clocks and RNG seeds.",
+      "expected_behavior": [
+        "Recognize bounded deadlock timeouts over explicit readiness events as sound synchronization rather than sleep polling.",
+        "Avoid false-positive flakiness alarms when state, clocks, ports, and seeds are already isolated."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "test-flakiness-isolation-routing",
+      "prompt": "Update the copyright year in the LICENSE header.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to triage flaky tests."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

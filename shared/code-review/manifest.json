@@ -4,6 +4,7 @@
   "files": [
     "references/review-protocol.md",
     "assets/review-template.md",
+    "assets/handoff-template.md",
     "assets/review.schema.json"
   ]
 }

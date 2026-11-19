@@ -1628,7 +1628,7 @@ class FredCLITests(unittest.TestCase):
                     )
                     self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
                     plan_json = json.loads(plan_proc.stdout)["plan"]
-                    self.assertEqual(3, len(plan_json["skills"]))
+                    self.assertEqual(6, len(plan_json["skills"]))
                     self.assertFalse(
                         any(
                             s.startswith("repo-audit-")

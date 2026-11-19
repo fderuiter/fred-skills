@@ -18,7 +18,7 @@
       "fixture_shape": "An automated test suite uses independent expected values and verifies edge conditions such as zero, negative, and maximum boundary inputs.",
       "expected_behavior": [
         "Select targeted test gaps and choose the appropriate isolation layer.",
-        "Generate clean, runnable test cases integrated into the repository test framework.",
+        "Record prioritized test specifications in testing.json inside the run workspace, writing repository test files only when explicit user permission is granted.",
         "Produce test definitions adhering to the testing schema."
       ],
       "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."

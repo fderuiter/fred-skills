@@ -1,6 +1,6 @@
-Use review-actionable-feedback to synthesize review findings for <repository> at <revision>.
-Consolidate individual review observations and deduplicate overlapping findings.
-Assign accurate severity classifications and draft constructive remediation advice.
-Provide concrete code diffs or implementation patterns to guide developers.
-Do not approve breaking contract changes without concrete remediation guardrails.
-Format review feedback adhering to the review template and schema.
+Use review-actionable-feedback to deduplicate, calibrate, and synthesize code review findings for <repository> at <revision>.
+
+Prioritize <critical workflows> and reuse <existing audit workspace, if any>.
+Consolidate overlapping observations into single root-cause `findings`, verify `file:line` citations, and align `verdict` with confirmed severity.
+Do not invent nitpicks on clean diffs or approve breaking contract/security regressions without verified safe controls.
+Validate `review.json` against `assets/review.schema.json` and do not modify repository files or publish remote comments without explicit user permission.

@@ -4,18 +4,19 @@
     "review-pr": {
       "outcome": "Review changed behavior and affected contracts.",
       "skills": [
-        "repo-audit-behavioral-contracts",
-        "repo-audit-concurrency",
-        "repo-audit-trust-boundaries",
-        "repo-audit-test-contracts",
-        "repo-audit-synthesis"
+        "review-diff-analysis",
+        "review-api-compatibility",
+        "review-security-boundaries",
+        "review-concurrency-hazards",
+        "review-invariant-violations",
+        "review-actionable-feedback"
       ],
       "requires_base": true,
       "workflows": [
         "Changed execution paths and their callers/consumers"
       ],
       "outputs": [
-        "audit.json",
+        "review.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -162,18 +163,18 @@
     "database-migration": {
       "outcome": "Review mixed-version persistence, consistency, and restart.",
       "skills": [
-        "repo-audit-compatibility",
-        "repo-audit-transactions",
-        "repo-audit-data-integrity",
-        "repo-audit-idempotency",
-        "repo-audit-synthesis"
+        "arch-data-evolution",
+        "arch-boundary-specification",
+        "arch-component-decomposition",
+        "arch-operational-resilience",
+        "arch-decision-record"
       ],
       "requires_base": false,
       "workflows": [
         "Schema readers/writers and interrupted migration"
       ],
       "outputs": [
-        "audit.json",
+        "architecture.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -182,17 +183,17 @@
     "flaky-tests": {
       "outcome": "Find nondeterminism and weak test oracles.",
       "skills": [
-        "repo-audit-nondeterminism",
-        "repo-audit-concurrency",
-        "repo-audit-test-oracles",
-        "repo-verify-finding"
+        "test-flakiness-isolation",
+        "test-property-invariants",
+        "test-gap-analysis",
+        "test-suite-verification"
       ],
       "requires_base": false,
       "workflows": [
         "Failing schedule, seed, environment, and independent oracle"
       ],
       "outputs": [
-        "audit.json",
+        "testing.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -201,18 +202,18 @@
     "api-change": {
       "outcome": "Trace producer/consumer semantics and supported compatibility.",
       "skills": [
-        "repo-audit-api-consistency",
-        "repo-audit-protocol-drift",
-        "repo-audit-compatibility",
-        "repo-audit-error-semantics",
-        "repo-audit-synthesis"
+        "review-api-compatibility",
+        "review-diff-analysis",
+        "review-security-boundaries",
+        "review-invariant-violations",
+        "review-actionable-feedback"
       ],
       "requires_base": false,
       "workflows": [
         "Public consumers, error semantics, and rollout"
       ],
       "outputs": [
-        "audit.json",
+        "review.json",
         "topic report",
         "validation record",
         "continuation or implementation handoff"
@@ -276,15 +277,18 @@
       ]
     },
     "design-architecture": {
-      "outcome": "Record architecture decisions, specify system boundaries, and decompose components.",
+      "outcome": "Record architecture decisions, specify boundaries and contracts, and plan data and resilience behavior.",
       "skills": [
         "arch-decision-record",
         "arch-boundary-specification",
-        "arch-component-decomposition"
+        "arch-component-decomposition",
+        "arch-data-evolution",
+        "arch-integration-contracts",
+        "arch-operational-resilience"
       ],
       "requires_base": false,
       "workflows": [
-        "System boundaries, architectural decisions, and component decomposition"
+        "System boundaries, architectural decisions, component decomposition, data evolution, integration contracts, and operational resilience"
       ],
       "outputs": [
         "architecture.json",
@@ -294,15 +298,18 @@
       ]
     },
     "review-code-changes": {
-      "outcome": "Review pull request changes, verify invariants, and synthesize feedback.",
+      "outcome": "Review pull request changes, compatibility, security, concurrency, invariants, and actionable feedback.",
       "skills": [
         "review-diff-analysis",
+        "review-api-compatibility",
+        "review-security-boundaries",
+        "review-concurrency-hazards",
         "review-invariant-violations",
         "review-actionable-feedback"
       ],
       "requires_base": true,
       "workflows": [
-        "Modified files, contract invariants, and differential review feedback"
+        "Modified files, API compatibility, security boundaries, concurrency hazards, contract invariants, and differential review feedback"
       ],
       "outputs": [
         "review.json",
@@ -312,15 +319,18 @@
       ]
     },
     "expand-automated-tests": {
-      "outcome": "Detect test gaps, generate regression tests, and verify test suite coverage.",
+      "outcome": "Detect test gaps, specify unit, contract, property, and flakiness tests, and verify suite coverage.",
       "skills": [
         "test-gap-analysis",
         "test-case-generation",
+        "test-contract-harnesses",
+        "test-property-invariants",
+        "test-flakiness-isolation",
         "test-suite-verification"
       ],
       "requires_base": false,
       "workflows": [
-        "Uncovered execution paths, generated test cases, and test suite verification"
+        "Uncovered execution paths, generated test cases, contract harnesses, property invariants, flakiness isolation, and test suite verification"
       ],
       "outputs": [
         "testing.json",

@@ -50,6 +50,45 @@
         },
         "required": ["id", "title", "decision"]
       }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "responsibility": { "type": "string", "minLength": 1 },
+          "owned_models": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["name", "responsibility"]
+      }
+    },
+    "interfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "protocol": { "type": "string", "minLength": 1 },
+          "producer": { "type": "string" },
+          "consumers": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "contract": { "type": "string" },
+          "compatibility": { "type": "string" }
+        },
+        "required": ["name", "protocol"]
+      }
     }
   },
   "required": ["schema_version", "title", "status"]

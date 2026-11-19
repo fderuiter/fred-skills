@@ -4,6 +4,7 @@
   "files": [
     "references/architecture-protocol.md",
     "assets/architecture-template.md",
+    "assets/handoff-template.md",
     "assets/architecture.schema.json"
   ]
 }

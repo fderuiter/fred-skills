@@ -1,0 +1,35 @@
+{
+  "topic": "review-api-compatibility",
+  "scenarios": [
+    {
+      "id": "review-api-compatibility-failure",
+      "prompt": "Review this diff for API, wire, and consumer compatibility regressions.",
+      "fixture_shape": "A public endpoint makes a previously optional field mandatory, drops a documented response key, and alters its error status code without bumping the API version.",
+      "expected_behavior": [
+        "Trace before/after input, output, and error-status semantics on exported surfaces.",
+        "Report breaking compatibility findings with exact file:line citations and additive fallback guidance in review.json.",
+        "Keep repository files untouched without explicit user permission."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "review-api-compatibility-safe",
+      "prompt": "Review this diff for API, wire, and consumer compatibility regressions.",
+      "fixture_shape": "A public endpoint adds an optional request parameter with a backward-compatible default while preserving existing response keys and status codes.",
+      "expected_behavior": [
+        "Verify default-value fallback and response compatibility for existing callers.",
+        "Avoid flagging additive optional fields or private helper updates as breaking API defects."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "review-api-compatibility-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform a code review."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

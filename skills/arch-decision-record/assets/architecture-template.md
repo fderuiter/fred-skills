@@ -9,8 +9,13 @@
 ## System Boundaries
 
 - **Trust Boundaries**: [Define boundaries between trusted and untrusted inputs]
-- **Service & Module Boundaries**: [Components, APIs, and data storage encapsulation]
+- **Service, Module & Storage Boundaries**: [Components, APIs, and data storage encapsulation]
 - **Invariants**: [Core system invariants maintained across boundaries]
+
+## Components & Interfaces
+
+- **Components**: [Component names, owned models, responsibilities, and allowed dependencies]
+- **Interfaces**: [Protocols, producers, consumers, contract guarantees, and compatibility rules]
 
 ## Decision & Rationale
 

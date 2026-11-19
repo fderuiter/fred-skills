@@ -1,0 +1,35 @@
+{
+  "topic": "test-contract-harnesses",
+  "scenarios": [
+    {
+      "id": "test-contract-harnesses-failure",
+      "prompt": "Specify contract test harnesses for producer/consumer wire schemas and test doubles in this repository.",
+      "fixture_shape": "Client tests mock a JSON response with camelCase keys and integer timestamps, whereas the server handler emits snake_case keys and ISO-8601 strings with no shared schema check.",
+      "expected_behavior": [
+        "Detect mock-to-producer schema drift across serializer and parser code paths.",
+        "Specify prioritized contract test_cases and fake-parity checks in testing.json without modifying repository files unless permitted.",
+        "Validate testing.json against assets/testing.schema.json."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "test-contract-harnesses-safe",
+      "prompt": "Specify contract test harnesses for producer/consumer wire schemas and test doubles in this repository.",
+      "fixture_shape": "Producer outputs and consumer fixtures are both validated against the same Draft 2020-12 JSON Schema in CI.",
+      "expected_behavior": [
+        "Recognize existing shared-schema contract enforcement and verify error-envelope and unknown-field coverage.",
+        "Avoid proposing redundant serialization harnesses for internal typed function calls."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "test-contract-harnesses-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to design test harnesses."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

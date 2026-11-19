@@ -4,7 +4,7 @@
     {
       "name": "arch-boundary-specification",
       "title": "Boundary Specification",
-      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "description": "Specify and verify trust, module, service, and storage boundaries with explicit invariants and enforcement seams. Use when defining privilege barriers, encapsulating domain storage, establishing service perimeters, or auditing boundary crossings.",
       "path": "skills/arch-boundary-specification/SKILL.md",
       "suite": "software-architecture",
       "phase": 1,
@@ -30,7 +30,7 @@
     {
       "name": "arch-component-decomposition",
       "title": "Component Decomposition",
-      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "description": "Partition system capabilities into cohesive components, owned domain models, and narrow interfaces without cyclic coupling. Use when decomposing monoliths, untangling god modules, assigning model ownership, or designing module seams.",
       "path": "skills/arch-component-decomposition/SKILL.md",
       "suite": "software-architecture",
       "phase": 2,
@@ -54,9 +54,36 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "arch-data-evolution",
+      "title": "Data and Persistence Evolution",
+      "description": "Plan zero-downtime schema migrations, persistence ownership, and mixed-version read/write evolution. Use when designing database migrations, splitting shared tables, evolving serialized state, or planning expand-backfill-contract rollouts.",
+      "path": "skills/arch-data-evolution/SKILL.md",
+      "suite": "software-architecture",
+      "phase": 3,
+      "phase_title": "Data Evolution",
+      "maturity": "experimental",
+      "symptoms": [
+        "migration",
+        "schema-evolution",
+        "backfill",
+        "dual-read",
+        "rollback"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "schema migrations and ORM models",
+        "deployment rollout topology"
+      ],
+      "outcomes": [
+        "Evidence-backed zero-downtime data evolution handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "arch-decision-record",
       "title": "Architectural Decision Records",
-      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "description": "Formulate and evaluate architectural decision records grounded in repository constraints and operational trade-offs. Use when recording ADRs, comparing architectural alternatives, superseding obsolete design choices, or documenting binding system trade-offs.",
       "path": "skills/arch-decision-record/SKILL.md",
       "suite": "software-architecture",
       "phase": 0,
@@ -75,6 +102,60 @@
       ],
       "outcomes": [
         "Evidence-backed architectural decision record"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "arch-integration-contracts",
+      "title": "Integration Contracts and Protocol Evolution",
+      "description": "Specify synchronous RPC/HTTP APIs, asynchronous event schemas, idempotency semantics, and version compatibility across producer/consumer seams. Use when designing external integrations, webhook/event contracts, protocol versioning, or cross-service interfaces.",
+      "path": "skills/arch-integration-contracts/SKILL.md",
+      "suite": "software-architecture",
+      "phase": 4,
+      "phase_title": "Integration Contracts",
+      "maturity": "experimental",
+      "symptoms": [
+        "api-contract",
+        "event-schema",
+        "webhook",
+        "idempotency",
+        "versioning"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "interface definitions or schemas",
+        "producer and consumer workflows"
+      ],
+      "outcomes": [
+        "Evidence-backed integration contract specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "arch-operational-resilience",
+      "title": "Operational Resilience and Failure Containment",
+      "description": "Specify failure-domain isolation, timeout and retry budgets, backpressure bulkheads, graceful degradation, and startup/shutdown recovery invariants. Use when designing fault-tolerant services, preventing cascading outages, bounding queue overload, or planning operational recovery.",
+      "path": "skills/arch-operational-resilience/SKILL.md",
+      "suite": "software-architecture",
+      "phase": 5,
+      "phase_title": "Operational Resilience",
+      "maturity": "experimental",
+      "symptoms": [
+        "timeouts",
+        "retries",
+        "backpressure",
+        "degradation",
+        "recovery"
+      ],
+      "expected_inputs": [
+        "source snapshot",
+        "dependency call topology",
+        "capacity and recovery budgets"
+      ],
+      "outcomes": [
+        "Evidence-backed operational resilience specification handoff"
       ],
       "optional_tools": [],
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
@@ -1094,11 +1175,11 @@
     },
     {
       "name": "review-actionable-feedback",
-      "title": "Feedback Synthesis",
-      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "title": "Actionable Feedback Synthesis",
+      "description": "Consolidate, deduplicate, and calibrate code review findings into an evidence-backed verdict and minimal remediation guidance. Use when synthesizing specialist review findings, calibrating blocking vs advisory severity, or producing final pull request feedback.",
       "path": "skills/review-actionable-feedback/SKILL.md",
       "suite": "code-review",
-      "phase": 2,
+      "phase": 5,
       "phase_title": "Feedback Synthesis",
       "maturity": "experimental",
       "symptoms": [
@@ -1119,9 +1200,63 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "review-api-compatibility",
+      "title": "API and Wire Compatibility Review",
+      "description": "Review code changes for backward and forward API compatibility across exported symbols, wire schemas, CLI flags, status codes, and error contracts. Use when reviewing public signature edits, OpenAPI/Protobuf changes, SDK exports, or rolling-deploy wire changes.",
+      "path": "skills/review-api-compatibility/SKILL.md",
+      "suite": "code-review",
+      "phase": 1,
+      "phase_title": "API Compatibility",
+      "maturity": "experimental",
+      "symptoms": [
+        "api-compatibility",
+        "breaking-change",
+        "wire-format",
+        "semver",
+        "deprecation"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "public API or wire schemas",
+        "downstream consumer contracts"
+      ],
+      "outcomes": [
+        "Evidence-backed API compatibility review handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "review-concurrency-hazards",
+      "title": "Concurrency and Async Hazard Review",
+      "description": "Review code changes for data races, lock-order inversions, check-then-act TOCTOU windows, async await interleavings, and leaked background tasks. Use when diffs modify locks, shared caches, worker pools, async coroutines, or concurrent database updates.",
+      "path": "skills/review-concurrency-hazards/SKILL.md",
+      "suite": "code-review",
+      "phase": 3,
+      "phase_title": "Concurrency Hazards",
+      "maturity": "experimental",
+      "symptoms": [
+        "race-condition",
+        "deadlock",
+        "lost-update",
+        "cancellation",
+        "reentrancy"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "shared state and lock topology",
+        "async or transaction schedules"
+      ],
+      "outcomes": [
+        "Evidence-backed concurrency hazard review handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "review-diff-analysis",
-      "title": "Diff Analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "title": "Differential Blast-Radius Analysis",
+      "description": "Map pull request diff blast radius, modified execution paths, deleted safeguards, and affected upstream callers or downstream consumers. Use when triaging pull request hunks, tracing changed symbol callers, or scoping differential review impact.",
       "path": "skills/review-diff-analysis/SKILL.md",
       "suite": "code-review",
       "phase": 0,
@@ -1146,11 +1281,11 @@
     },
     {
       "name": "review-invariant-violations",
-      "title": "Invariant Verification",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "title": "Behavioral and State Invariant Verification",
+      "description": "Verify that code changes preserve domain invariants, state-machine transitions, transactional rollback guarantees, and resource lifecycles. Use when reviewing state transitions, error-recovery paths, partial mutations, or invariant preservation in diffs.",
       "path": "skills/review-invariant-violations/SKILL.md",
       "suite": "code-review",
-      "phase": 1,
+      "phase": 4,
       "phase_title": "Invariant Verification",
       "maturity": "experimental",
       "symptoms": [
@@ -1171,9 +1306,36 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "review-security-boundaries",
+      "title": "Security and Trust-Boundary Review",
+      "description": "Review code changes for authentication or authorization bypasses, tenant isolation leaks, untrusted input sinks, secret exposure, and unsafe deserialization or path traversal. Use when diffs touch auth guards, permissions, parsers, file/shell/SQL sinks, or trust boundaries.",
+      "path": "skills/review-security-boundaries/SKILL.md",
+      "suite": "code-review",
+      "phase": 2,
+      "phase_title": "Security Boundaries",
+      "maturity": "experimental",
+      "symptoms": [
+        "authz",
+        "tenant-isolation",
+        "injection",
+        "ssrf",
+        "secret-leak"
+      ],
+      "expected_inputs": [
+        "diff hunk or pull request",
+        "entry points and auth middleware",
+        "trust boundary assumptions"
+      ],
+      "outcomes": [
+        "Evidence-backed security boundary review handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "test-case-generation",
-      "title": "Test Case Generation",
-      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "title": "Deterministic Test Case Specification and Generation",
+      "description": "Specify deterministic unit and regression test cases with independent behavioral oracles and clean fixture isolation, writing repository test files only with explicit user permission. Use when designing regression tests, unit test specifications, or boundary input cases.",
       "path": "skills/test-case-generation/SKILL.md",
       "suite": "automated-testing",
       "phase": 1,
@@ -1197,9 +1359,62 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "test-contract-harnesses",
+      "title": "Producer-Consumer Contract Harnesses",
+      "description": "Specify producer-consumer contract test harnesses, wire serialization round-trips, and fake/stub parity checks across HTTP, RPC, CLI, and event schemas. Use when testing API schemas, preventing mock drift from real providers, or verifying cross-version wire fixtures.",
+      "path": "skills/test-contract-harnesses/SKILL.md",
+      "suite": "automated-testing",
+      "phase": 2,
+      "phase_title": "Contract Harnesses",
+      "maturity": "experimental",
+      "symptoms": [
+        "contract-tests",
+        "fake-parity",
+        "wire-compatibility",
+        "provider-consumer"
+      ],
+      "expected_inputs": [
+        "boundary schemas or adapters",
+        "test doubles and mocks",
+        "existing test suite"
+      ],
+      "outcomes": [
+        "Evidence-backed contract harness specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
+      "name": "test-flakiness-isolation",
+      "title": "Flakiness Isolation and Determinism Specifications",
+      "description": "Isolate nondeterministic test failures caused by wall-clock sleeps, unseeded randomness, shared mutable state, port collisions, and uncoordinated async completions. Use when triaging intermittent CI failures, flaky test suites, order-dependent tests, or timing-sensitive assertions.",
+      "path": "skills/test-flakiness-isolation/SKILL.md",
+      "suite": "automated-testing",
+      "phase": 4,
+      "phase_title": "Flakiness Isolation",
+      "maturity": "experimental",
+      "symptoms": [
+        "flaky-tests",
+        "intermittent-failure",
+        "sleep-race",
+        "order-dependent",
+        "nondeterministic"
+      ],
+      "expected_inputs": [
+        "intermittent test suite or logs",
+        "shared fixtures and timers",
+        "execution environment"
+      ],
+      "outcomes": [
+        "Evidence-backed flakiness isolation specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "test-gap-analysis",
-      "title": "Test Gap Analysis",
-      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "title": "Behavioral Test Gap Analysis",
+      "description": "Discover untested behavioral contracts, missing error-path assertions, tautological mocks, and boundary blind spots across existing test suites. Use when auditing assertion coverage, prioritizing missing regression cases, or identifying weak test oracles.",
       "path": "skills/test-gap-analysis/SKILL.md",
       "suite": "automated-testing",
       "phase": 0,
@@ -1223,12 +1438,39 @@
       "behavior_evaluation": "See docs/validation.md; no universal host certification"
     },
     {
+      "name": "test-property-invariants",
+      "title": "Property-Based and Metamorphic Test Invariants",
+      "description": "Specify property-based, round-trip, idempotency, and metamorphic test invariants with deterministic seeds and bounded input generators. Use when testing parsers, serializers, normalizers, state-machine sequences, or algebraic domain invariants.",
+      "path": "skills/test-property-invariants/SKILL.md",
+      "suite": "automated-testing",
+      "phase": 3,
+      "phase_title": "Property Invariants",
+      "maturity": "experimental",
+      "symptoms": [
+        "property-testing",
+        "round-trip",
+        "metamorphic",
+        "idempotency",
+        "fuzz-seeds"
+      ],
+      "expected_inputs": [
+        "parsers, codecs, or reducers",
+        "domain invariants",
+        "existing test framework"
+      ],
+      "outcomes": [
+        "Evidence-backed property invariant specification handoff"
+      ],
+      "optional_tools": [],
+      "behavior_evaluation": "See docs/validation.md; no universal host certification"
+    },
+    {
       "name": "test-suite-verification",
-      "title": "Test Suite Verification",
-      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "title": "Test Suite Execution and Oracle Verification",
+      "description": "Execute and audit automated test suites for pass/fail fidelity, mutation sensitivity, clean teardown, and honest execution_summary telemetry. Use when verifying regression suites, checking whether tests catch seeded faults, or certifying suite execution state.",
       "path": "skills/test-suite-verification/SKILL.md",
       "suite": "automated-testing",
-      "phase": 2,
+      "phase": 5,
       "phase_title": "Test Verification",
       "maturity": "experimental",
       "symptoms": [

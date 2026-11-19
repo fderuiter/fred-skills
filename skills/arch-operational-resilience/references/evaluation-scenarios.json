@@ -1,0 +1,35 @@
+{
+  "topic": "arch-operational-resilience",
+  "scenarios": [
+    {
+      "id": "arch-operational-resilience-failure",
+      "prompt": "Specify operational resilience, timeout budgets, and failure isolation for this repository.",
+      "fixture_shape": "Outbound HTTP calls use unbounded default timeouts, unbounded in-memory retry queues, and nested retries across two internal layers.",
+      "expected_behavior": [
+        "Trace nested retry amplification, missing deadlines, and unbounded queue growth from actual client code.",
+        "Specify bulkhead boundaries, bounded queues, deadline invariants, and degradation decisions in architecture.json.",
+        "Keep repository code and deployment configs unchanged without explicit user permission."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "arch-operational-resilience-safe",
+      "prompt": "Specify operational resilience, timeout budgets, and failure isolation for this repository.",
+      "fixture_shape": "Outbound clients propagate context deadlines, cap jittered retries to idempotent operations, and isolate slow dependencies behind bounded worker pools.",
+      "expected_behavior": [
+        "Verify deadline propagation, retry idempotency guards, and bounded concurrency controls.",
+        "Record verified failure-containment boundaries without adding redundant circuit-breaker complexity."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "arch-operational-resilience-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an architecture specification."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

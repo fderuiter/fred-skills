@@ -295,15 +295,24 @@ _SUITE_SKILLS: dict[str, tuple[str, ...]] = {
         "arch-decision-record",
         "arch-boundary-specification",
         "arch-component-decomposition",
+        "arch-data-evolution",
+        "arch-integration-contracts",
+        "arch-operational-resilience",
     ),
     "code-review": (
         "review-diff-analysis",
+        "review-api-compatibility",
+        "review-security-boundaries",
+        "review-concurrency-hazards",
         "review-invariant-violations",
         "review-actionable-feedback",
     ),
     "automated-testing": (
         "test-gap-analysis",
         "test-case-generation",
+        "test-contract-harnesses",
+        "test-property-invariants",
+        "test-flakiness-isolation",
         "test-suite-verification",
     ),
 }
@@ -1400,6 +1409,8 @@ def _detect_artifact_suite(audit_data: dict[str, Any] | None) -> str | None:
     if (
         "boundaries" in audit_data
         or "decisions" in audit_data
+        or "components" in audit_data
+        or "interfaces" in audit_data
         or (
             "title" in audit_data
             and "status" in audit_data
@@ -1438,16 +1449,18 @@ def _extract_artifact_references(
                 has_candidates = True
                 if item_id in transcript_text:
                     ledger_refs.append(f"{section}:{item_id}")
-    boundaries = audit_data.get("boundaries")
-    if isinstance(boundaries, list):
-        for boundary in boundaries:
-            if not isinstance(boundary, dict):
+    for named_section in ("boundaries", "components", "interfaces"):
+        named_items = audit_data.get(named_section)
+        if not isinstance(named_items, list):
+            continue
+        for entry in named_items:
+            if not isinstance(entry, dict):
                 continue
-            bname = boundary.get("name")
-            if isinstance(bname, str) and bname:
+            ename = entry.get("name")
+            if isinstance(ename, str) and ename:
                 has_candidates = True
-                if bname in transcript_text:
-                    ledger_refs.append(f"boundaries:{bname}")
+                if ename in transcript_text:
+                    ledger_refs.append(f"{named_section}:{ename}")
 
     if not ledger_refs and not has_candidates:
         return sorted(set(id_pattern.findall(transcript_text)))

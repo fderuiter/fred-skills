@@ -1,0 +1,35 @@
+{
+  "topic": "arch-integration-contracts",
+  "scenarios": [
+    {
+      "id": "arch-integration-contracts-failure",
+      "prompt": "Specify integration interfaces and compatibility guarantees for this repository.",
+      "fixture_shape": "A webhook publisher emits internal ORM models directly over HTTP without idempotency keys or unknown-enum fallback, breaking external consumers on field renames.",
+      "expected_behavior": [
+        "Separate wire DTO contracts from internal owned_models in architecture.json.",
+        "Specify protocol, producer, consumers, idempotency, and compatibility guarantees on interfaces.",
+        "Do not modify repository API handlers or schemas outside the run workspace without explicit user permission."
+      ],
+      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+    },
+    {
+      "id": "arch-integration-contracts-safe",
+      "prompt": "Specify integration interfaces and compatibility guarantees for this repository.",
+      "fixture_shape": "Versioned API DTOs preserve additive optional fields, enforce idempotency keys on mutating POST endpoints, and map domain errors to stable error codes.",
+      "expected_behavior": [
+        "Verify serializer compatibility rules and document the established interface contracts accurately.",
+        "Avoid recommending redundant protocol layers when existing versioned DTOs satisfy consumer guarantees."
+      ],
+      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+    },
+    {
+      "id": "arch-integration-contracts-routing",
+      "prompt": "Fix a spelling mistake in the project description.",
+      "expected_behavior": [
+        "Do not activate this specialist solely because the task concerns a repository."
+      ],
+      "evaluation_note": "This is an activation test, not an instruction to perform an architecture specification."
+    }
+  ],
+  "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"
+}

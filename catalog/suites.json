@@ -162,7 +162,9 @@
           "title": "Architecture specification",
           "status": "draft",
           "boundaries": [],
-          "decisions": []
+          "decisions": [],
+          "components": [],
+          "interfaces": []
         }
       },
       "phases": [
@@ -185,6 +187,27 @@
           "title": "System Decomposition",
           "skills": [
             "arch-component-decomposition"
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Data Evolution",
+          "skills": [
+            "arch-data-evolution"
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Integration Contracts",
+          "skills": [
+            "arch-integration-contracts"
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Operational Resilience",
+          "skills": [
+            "arch-operational-resilience"
           ]
         }
       ]
@@ -212,13 +235,34 @@
         },
         {
           "id": 1,
+          "title": "API Compatibility",
+          "skills": [
+            "review-api-compatibility"
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Security Boundaries",
+          "skills": [
+            "review-security-boundaries"
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Concurrency Hazards",
+          "skills": [
+            "review-concurrency-hazards"
+          ]
+        },
+        {
+          "id": 4,
           "title": "Invariant Verification",
           "skills": [
             "review-invariant-violations"
           ]
         },
         {
-          "id": 2,
+          "id": 5,
           "title": "Feedback Synthesis",
           "skills": [
             "review-actionable-feedback"
@@ -236,7 +280,15 @@
           "schema_version": "1.0",
           "component": "repository",
           "framework": "unspecified",
-          "test_cases": []
+          "test_cases": [],
+          "execution_summary": {
+            "state": "not_run",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "commands": []
+          }
         }
       },
       "phases": [
@@ -256,6 +308,27 @@
         },
         {
           "id": 2,
+          "title": "Contract Harnesses",
+          "skills": [
+            "test-contract-harnesses"
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Property Invariants",
+          "skills": [
+            "test-property-invariants"
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Flakiness Isolation",
+          "skills": [
+            "test-flakiness-isolation"
+          ]
+        },
+        {
+          "id": 5,
           "title": "Test Verification",
           "skills": [
             "test-suite-verification"

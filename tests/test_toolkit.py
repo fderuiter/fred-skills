@@ -584,6 +584,9 @@ class RunTests(unittest.TestCase):
                     "arch-decision-record",
                     "arch-boundary-specification",
                     "arch-component-decomposition",
+                    "arch-data-evolution",
+                    "arch-integration-contracts",
+                    "arch-operational-resilience",
                 ],
                 "architecture.json",
             ),
@@ -592,6 +595,9 @@ class RunTests(unittest.TestCase):
                 base,
                 [
                     "review-diff-analysis",
+                    "review-api-compatibility",
+                    "review-security-boundaries",
+                    "review-concurrency-hazards",
                     "review-invariant-violations",
                     "review-actionable-feedback",
                 ],
@@ -603,6 +609,9 @@ class RunTests(unittest.TestCase):
                 [
                     "test-gap-analysis",
                     "test-case-generation",
+                    "test-contract-harnesses",
+                    "test-property-invariants",
+                    "test-flakiness-isolation",
                     "test-suite-verification",
                 ],
                 "testing.json",
@@ -618,8 +627,14 @@ class RunTests(unittest.TestCase):
                         budget=budget,
                         base=base_rev,
                     )
-                    self.assertEqual(expected_skills, planned["skills"])
-                    self.assertEqual([], planned["deferred_skills"])
+                    if budget == "brief":
+                        self.assertEqual(expected_skills[:3], planned["skills"])
+                        self.assertEqual(
+                            expected_skills[3:], planned["deferred_skills"]
+                        )
+                    else:
+                        self.assertEqual(expected_skills, planned["skills"])
+                        self.assertEqual([], planned["deferred_skills"])
                     self.assertFalse(
                         any(
                             s.startswith("repo-audit-")
@@ -1151,6 +1166,24 @@ class ReportTests(unittest.TestCase):
                     "consequences": [f"Predictable memory {hostile}"],
                 }
             ],
+            "components": [
+                {
+                    "name": f"QueueWorker {hostile}",
+                    "responsibility": f"Drains ring buffer {hostile}",
+                    "owned_models": [f"QueueEntry {hostile}"],
+                    "dependencies": [f"Storage {hostile}"],
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": f"POST /v1/enqueue {hostile}",
+                    "protocol": f"HTTP/JSON {hostile}",
+                    "producer": f"Edge {hostile}",
+                    "consumers": [f"QueueWorker {hostile}"],
+                    "contract": f"Bounded enqueue {hostile}",
+                    "compatibility": f"Additive fields {hostile}",
+                }
+            ],
         }
         rev = {
             "schema_version": "1.0",
@@ -1185,9 +1218,19 @@ class ReportTests(unittest.TestCase):
                     "name": f"test_expired_token {hostile}",
                     "description": f"Rejects expired token {hostile}",
                     "oracle_type": "boundary",
+                    "priority": "critical",
                     "verified": True,
                 }
             ],
+            "execution_summary": {
+                "state": "passed",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "skipped": 0,
+                "commands": [f"pytest -k expired {hostile}"],
+                "notes": f"Clean run {hostile}",
+            },
         }
 
         with tempfile.TemporaryDirectory() as tmp:

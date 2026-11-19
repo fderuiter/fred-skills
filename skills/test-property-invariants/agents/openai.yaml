@@ -1,0 +1,4 @@
+interface:
+  display_name: "Property Invariant Testing"
+  short_description: "Specify property-based round-trip and algebraic test invariants"
+  default_prompt: "Use $test-property-invariants on this parser, codec, or state model."

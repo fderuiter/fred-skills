@@ -15,7 +15,10 @@
       "skills": [
         "./skills/arch-boundary-specification",
         "./skills/arch-component-decomposition",
+        "./skills/arch-data-evolution",
         "./skills/arch-decision-record",
+        "./skills/arch-integration-contracts",
+        "./skills/arch-operational-resilience",
         "./skills/repo-apply-fix",
         "./skills/repo-audit-accessibility-state",
         "./skills/repo-audit-api-consistency",
@@ -59,10 +62,16 @@
         "./skills/repo-verify-finding",
         "./skills/repo-verify-fix",
         "./skills/review-actionable-feedback",
+        "./skills/review-api-compatibility",
+        "./skills/review-concurrency-hazards",
         "./skills/review-diff-analysis",
         "./skills/review-invariant-violations",
+        "./skills/review-security-boundaries",
         "./skills/test-case-generation",
+        "./skills/test-contract-harnesses",
+        "./skills/test-flakiness-isolation",
         "./skills/test-gap-analysis",
+        "./skills/test-property-invariants",
         "./skills/test-suite-verification"
       ]
     },
@@ -153,45 +162,57 @@
     },
     {
       "name": "software-architecture",
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "description": "Architectural decision records, boundaries, decomposition, data evolution, integration contracts, and resilience.",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/arch-decision-record",
         "./skills/arch-boundary-specification",
-        "./skills/arch-component-decomposition"
+        "./skills/arch-component-decomposition",
+        "./skills/arch-data-evolution",
+        "./skills/arch-integration-contracts",
+        "./skills/arch-operational-resilience"
       ]
     },
     {
       "name": "architecture",
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "description": "Architectural decision records, boundaries, decomposition, data evolution, integration contracts, and resilience.",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/arch-decision-record",
         "./skills/arch-boundary-specification",
-        "./skills/arch-component-decomposition"
+        "./skills/arch-component-decomposition",
+        "./skills/arch-data-evolution",
+        "./skills/arch-integration-contracts",
+        "./skills/arch-operational-resilience"
       ]
     },
     {
       "name": "code-review",
-      "description": "Pull request diff review, invariant verification, and actionable feedback.",
+      "description": "Pull request diff review, API compatibility, security boundaries, concurrency hazards, invariants, and feedback.",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/review-diff-analysis",
+        "./skills/review-api-compatibility",
+        "./skills/review-security-boundaries",
+        "./skills/review-concurrency-hazards",
         "./skills/review-invariant-violations",
         "./skills/review-actionable-feedback"
       ]
     },
     {
       "name": "automated-testing",
-      "description": "Test gap detection, regression test generation, and test suite verification.",
+      "description": "Test gap detection, unit/regression specs, contract harnesses, property invariants, flakiness isolation, and suite verification.",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/test-gap-analysis",
         "./skills/test-case-generation",
+        "./skills/test-contract-harnesses",
+        "./skills/test-property-invariants",
+        "./skills/test-flakiness-isolation",
         "./skills/test-suite-verification"
       ]
     },
@@ -246,7 +267,10 @@
       "skills": [
         "./skills/arch-boundary-specification",
         "./skills/arch-component-decomposition",
+        "./skills/arch-data-evolution",
         "./skills/arch-decision-record",
+        "./skills/arch-integration-contracts",
+        "./skills/arch-operational-resilience",
         "./skills/repo-audit-accessibility-state",
         "./skills/repo-audit-api-consistency",
         "./skills/repo-audit-architecture",
@@ -290,16 +314,22 @@
         "./skills/repo-verify-fix",
         "./skills/repo-reconcile-findings",
         "./skills/review-actionable-feedback",
+        "./skills/review-api-compatibility",
+        "./skills/review-concurrency-hazards",
         "./skills/review-diff-analysis",
         "./skills/review-invariant-violations",
+        "./skills/review-security-boundaries",
         "./skills/test-case-generation",
+        "./skills/test-contract-harnesses",
+        "./skills/test-flakiness-isolation",
         "./skills/test-gap-analysis",
+        "./skills/test-property-invariants",
         "./skills/test-suite-verification"
       ]
     },
     {
       "name": "arch-boundary-specification",
-      "description": "Use when defining, documenting, or verifying system, service, module, and trust boundaries.",
+      "description": "Specify and verify trust, module, service, and storage boundaries with explicit invariants and enforcement seams. Use when defining privilege barriers, encapsulating domain storage, establishing service perimeters, or auditing boundary crossings.",
       "source": "./skills/arch-boundary-specification",
       "skills": [
         "."
@@ -307,16 +337,40 @@
     },
     {
       "name": "arch-component-decomposition",
-      "description": "Use when decomposing system capabilities into cohesive components, interfaces, and domain models.",
+      "description": "Partition system capabilities into cohesive components, owned domain models, and narrow interfaces without cyclic coupling. Use when decomposing monoliths, untangling god modules, assigning model ownership, or designing module seams.",
       "source": "./skills/arch-component-decomposition",
       "skills": [
         "."
       ]
     },
     {
+      "name": "arch-data-evolution",
+      "description": "Plan zero-downtime schema migrations, persistence ownership, and mixed-version read/write evolution. Use when designing database migrations, splitting shared tables, evolving serialized state, or planning expand-backfill-contract rollouts.",
+      "source": "./skills/arch-data-evolution",
+      "skills": [
+        "."
+      ]
+    },
+    {
       "name": "arch-decision-record",
-      "description": "Use when creating, evaluating, or recording architectural decision records and system trade-offs.",
+      "description": "Formulate and evaluate architectural decision records grounded in repository constraints and operational trade-offs. Use when recording ADRs, comparing architectural alternatives, superseding obsolete design choices, or documenting binding system trade-offs.",
       "source": "./skills/arch-decision-record",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "arch-integration-contracts",
+      "description": "Specify synchronous RPC/HTTP APIs, asynchronous event schemas, idempotency semantics, and version compatibility across producer/consumer seams. Use when designing external integrations, webhook/event contracts, protocol versioning, or cross-service interfaces.",
+      "source": "./skills/arch-integration-contracts",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "arch-operational-resilience",
+      "description": "Specify failure-domain isolation, timeout and retry budgets, backpressure bulkheads, graceful degradation, and startup/shutdown recovery invariants. Use when designing fault-tolerant services, preventing cascading outages, bounding queue overload, or planning operational recovery.",
+      "source": "./skills/arch-operational-resilience",
       "skills": [
         "."
       ]
@@ -659,15 +713,31 @@
     },
     {
       "name": "review-actionable-feedback",
-      "description": "Use when synthesizing review findings into prioritized, actionable feedback with correction guidance.",
+      "description": "Consolidate, deduplicate, and calibrate code review findings into an evidence-backed verdict and minimal remediation guidance. Use when synthesizing specialist review findings, calibrating blocking vs advisory severity, or producing final pull request feedback.",
       "source": "./skills/review-actionable-feedback",
       "skills": [
         "."
       ]
     },
     {
+      "name": "review-api-compatibility",
+      "description": "Review code changes for backward and forward API compatibility across exported symbols, wire schemas, CLI flags, status codes, and error contracts. Use when reviewing public signature edits, OpenAPI/Protobuf changes, SDK exports, or rolling-deploy wire changes.",
+      "source": "./skills/review-api-compatibility",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "review-concurrency-hazards",
+      "description": "Review code changes for data races, lock-order inversions, check-then-act TOCTOU windows, async await interleavings, and leaked background tasks. Use when diffs modify locks, shared caches, worker pools, async coroutines, or concurrent database updates.",
+      "source": "./skills/review-concurrency-hazards",
+      "skills": [
+        "."
+      ]
+    },
+    {
       "name": "review-diff-analysis",
-      "description": "Use when analyzing pull request diffs, change impact surfaces, and affected interface contracts.",
+      "description": "Map pull request diff blast radius, modified execution paths, deleted safeguards, and affected upstream callers or downstream consumers. Use when triaging pull request hunks, tracing changed symbol callers, or scoping differential review impact.",
       "source": "./skills/review-diff-analysis",
       "skills": [
         "."
@@ -675,31 +745,63 @@
     },
     {
       "name": "review-invariant-violations",
-      "description": "Use when reviewing code changes against behavioral invariants, state machines, and system invariants.",
+      "description": "Verify that code changes preserve domain invariants, state-machine transitions, transactional rollback guarantees, and resource lifecycles. Use when reviewing state transitions, error-recovery paths, partial mutations, or invariant preservation in diffs.",
       "source": "./skills/review-invariant-violations",
       "skills": [
         "."
       ]
     },
     {
+      "name": "review-security-boundaries",
+      "description": "Review code changes for authentication or authorization bypasses, tenant isolation leaks, untrusted input sinks, secret exposure, and unsafe deserialization or path traversal. Use when diffs touch auth guards, permissions, parsers, file/shell/SQL sinks, or trust boundaries.",
+      "source": "./skills/review-security-boundaries",
+      "skills": [
+        "."
+      ]
+    },
+    {
       "name": "test-case-generation",
-      "description": "Use when generating automated regression and unit test cases for uncovered behavioral contracts.",
+      "description": "Specify deterministic unit and regression test cases with independent behavioral oracles and clean fixture isolation, writing repository test files only with explicit user permission. Use when designing regression tests, unit test specifications, or boundary input cases.",
       "source": "./skills/test-case-generation",
       "skills": [
         "."
       ]
     },
     {
+      "name": "test-contract-harnesses",
+      "description": "Specify producer-consumer contract test harnesses, wire serialization round-trips, and fake/stub parity checks across HTTP, RPC, CLI, and event schemas. Use when testing API schemas, preventing mock drift from real providers, or verifying cross-version wire fixtures.",
+      "source": "./skills/test-contract-harnesses",
+      "skills": [
+        "."
+      ]
+    },
+    {
+      "name": "test-flakiness-isolation",
+      "description": "Isolate nondeterministic test failures caused by wall-clock sleeps, unseeded randomness, shared mutable state, port collisions, and uncoordinated async completions. Use when triaging intermittent CI failures, flaky test suites, order-dependent tests, or timing-sensitive assertions.",
+      "source": "./skills/test-flakiness-isolation",
+      "skills": [
+        "."
+      ]
+    },
+    {
       "name": "test-gap-analysis",
-      "description": "Use when discovering test coverage gaps, unexercised error paths, and missing boundary assertions.",
+      "description": "Discover untested behavioral contracts, missing error-path assertions, tautological mocks, and boundary blind spots across existing test suites. Use when auditing assertion coverage, prioritizing missing regression cases, or identifying weak test oracles.",
       "source": "./skills/test-gap-analysis",
       "skills": [
         "."
       ]
     },
     {
+      "name": "test-property-invariants",
+      "description": "Specify property-based, round-trip, idempotency, and metamorphic test invariants with deterministic seeds and bounded input generators. Use when testing parsers, serializers, normalizers, state-machine sequences, or algebraic domain invariants.",
+      "source": "./skills/test-property-invariants",
+      "skills": [
+        "."
+      ]
+    },
+    {
       "name": "test-suite-verification",
-      "description": "Use when executing and verifying generated test suites against regressions and failure oracles.",
+      "description": "Execute and audit automated test suites for pass/fail fidelity, mutation sensitivity, clean teardown, and honest execution_summary telemetry. Use when verifying regression suites, checking whether tests catch seeded faults, or certifying suite execution state.",
       "source": "./skills/test-suite-verification",
       "skills": [
         "."

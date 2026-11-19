@@ -221,6 +221,10 @@ def _empty_deliverable(
         base_title = seeded.get("title", "Architecture specification")
         if base_title == "Architecture specification" and task_name:
             seeded["title"] = f"Architecture specification for {task_name}"
+        seeded.setdefault("boundaries", [])
+        seeded.setdefault("decisions", [])
+        seeded.setdefault("components", [])
+        seeded.setdefault("interfaces", [])
         return seeded
     if deliverable == "review.json":
         return seeded
@@ -228,6 +232,18 @@ def _empty_deliverable(
         repo_name = Path(run["repository"]["path"]).name or "repository"
         if seeded.get("component") in {None, "", "repository"}:
             seeded["component"] = repo_name
+        seeded.setdefault("test_cases", [])
+        seeded.setdefault(
+            "execution_summary",
+            {
+                "state": "not_run",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "commands": [],
+            },
+        )
         return seeded
     return empty_audit(run)
 
@@ -238,17 +254,17 @@ def _deliverable_prompt_rules(
     if deliverable == "architecture.json":
         return f"""Work in bounded slices. Update architecture.json using assets/architecture-template.md
 for narrative records and verify conformance against {schema_rel}
-(schema_version, title, status, boundaries, and decisions; additionalProperties is false).
-Report architectural decisions and system boundaries with concrete source locations,
-rationale, and consequences. Stop with a precise checkpoint when the selected work
-cannot be completed. Empty boundaries or decisions lists are valid starter states."""
+(schema_version, title, status, boundaries, decisions, components, and interfaces; additionalProperties is false).
+Report architectural decisions, system boundaries, component responsibilities, and interface contracts with concrete source locations,
+rationale, and consequences without modifying application source code unless explicitly authorized.
+Stop with a precise checkpoint when the selected work cannot be completed. Empty boundaries, decisions, components, or interfaces lists are valid starter states."""
     if deliverable == "review.json":
         return f"""Work in bounded slices. Update review.json using assets/review-template.md to structure
 change findings and validate findings format against {schema_rel}
 (schema_version, verdict, summary, and findings; additionalProperties is false).
-Report change impact surfaces and invariant checks with precise file paths, line
-ranges, and actionable recommendations. Stop with a precise checkpoint when the
-selected work cannot be completed. An empty findings list is valid."""
+Report change impact surfaces, compatibility checks, security boundaries, concurrency hazards, and invariant checks with precise file paths, line
+ranges, and actionable recommendations without modifying repository files outside the run workspace unless explicitly permitted.
+Stop with a precise checkpoint when the selected work cannot be completed. An empty findings list is valid."""
     if deliverable == "testing.json":
         allow_fixes = bool(
             isinstance(run, dict)
@@ -270,9 +286,9 @@ selected work cannot be completed. An empty findings list is valid."""
             )
         return f"""Work in bounded slices. Update testing.json using assets/testing-template.md to document
 uncovered gaps and ensure test gap specifications conform to {schema_rel}
-(schema_version, component, framework, and test_cases; additionalProperties is false).
-Provide prioritized test scenarios with deterministic, independent assertion oracles
-(state, exception, output, or boundary). Stop with a precise checkpoint when the
+(schema_version, component, framework, test_cases with optional priority, and execution_summary; additionalProperties is false).
+Provide prioritized test scenarios (critical, high, medium, or low) with deterministic, independent assertion oracles
+(state, exception, output, or boundary) and maintain an accurate execution_summary. Stop with a precise checkpoint when the
 selected work cannot be completed. An empty test_cases list is valid.{fixes_guidance}"""
     return f"""Work in bounded slices. Validate the ledger against {schema_rel} and maintain the existing
 audit schema and IDs, evidence, coverage, counterevidence, uncertainty, and independent
@@ -486,7 +502,19 @@ def _revalidate_domain_records(
         return stale, impact
     if expected_name == "architecture.json":
         decisions = deliverable.get("decisions", [])
+        components = deliverable.get("components", [])
+        interfaces = deliverable.get("interfaces", [])
         ids = [d["id"] for d in decisions if isinstance(d, dict) and "id" in d]
+        ids.extend(
+            f"component:{c['name']}"
+            for c in components
+            if isinstance(c, dict) and "name" in c
+        )
+        ids.extend(
+            f"interface:{i['name']}"
+            for i in interfaces
+            if isinstance(i, dict) and "name" in i
+        )
         return (list(ids) if not complete else []), (list(ids) if changed else [])
     if expected_name == "testing.json":
         cases = deliverable.get("test_cases", [])

@@ -36,7 +36,7 @@ class PackageTests(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.entry = self.skill / "SKILL.md"
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\nDeliver the audit output.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract; do not modify application code without permission.\n\n## Deliver\n\nDeliver the audit output.\n'
         )
         assets_dir = self.skill / "assets"
         assets_dir.mkdir(parents=True)
@@ -801,34 +801,36 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(51, len(suite_skills))
+        self.assertEqual(60, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", arch_text)
+        self.assertIn("60 total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", val_text)
+        self.assertIn("60 total packages", val_text)
         self.assertIn(
-            "Each of the 51 skills in the suite includes three scenario specifications",
+            "Each of the 60 skills in the suite includes three scenario specifications",
             val_text,
         )
         self.assertIn(
-            "These 153 specifications are not 153 executed evaluations",
+            "These 180 specifications are not 180 executed evaluations",
             val_text,
         )
+        self.assertNotIn("51 skills in the suite", val_text)
+        self.assertNotIn("153 specifications", val_text)
         self.assertNotIn("42 skills in the suite", val_text)
         self.assertNotIn("126 specifications", val_text)
         self.assertNotIn("35 skills in the suite", val_text)
         self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("51 total packages", impl_text)
+        self.assertIn("60 total packages", impl_text)
 
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 51-package pack", usage_text)
+        self.assertIn("complete 60-package pack", usage_text)
         self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
         self.assertIn(
-            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`)",
+            "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 60 packages or `starter`)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
@@ -840,7 +842,7 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 skills or `starter` for 6 core audit skills)",
+            "Register the marketplace catalog, then install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 60 skills or `starter` for 6 core audit skills)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
@@ -872,7 +874,7 @@ class PackageTests(unittest.TestCase):
             exp_text,
         )
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow. | 51 |",
+            "| `complete` | Every audit and engineering workflow. | 60 |",
             exp_text,
         )
 
@@ -992,7 +994,7 @@ class PackageTests(unittest.TestCase):
 
     def test_skill_markdown_lacking_boundary_sections_is_rejected(self):
         self.entry.write_text(
-            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract without standard headers.\n'
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract without standard headers; do not modify application code.\n'
         )
         errors = validate_skill(self.skill)
         self.assertTrue(
@@ -1000,11 +1002,117 @@ class PackageTests(unittest.TestCase):
             f"Expected missing boundary section error, got: {errors}",
         )
 
+    def test_skill_markdown_lacking_negative_constraints_is_rejected(self):
+        self.entry.write_text(
+            '---\nname: sample-audit\ndescription: "Audit synthetic contracts when explicitly requested."\n---\n\n# Sample\n\nInspect the supplied contract.\n\n## Deliver\n\nDeliver the audit output.\n'
+        )
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "skill markdown lacks negative constraints" in error for error in errors
+            ),
+            f"Expected missing SKILL.md negative constraint error, got: {errors}",
+        )
+
+    def test_enriched_architecture_and_testing_schemas_enforce_strict_contracts(self):
+        import jsonschema
+
+        arch_schema = json.loads(
+            (
+                ROOT
+                / "shared/software-architecture/resources/assets/architecture.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        arch_validator = jsonschema.Draft202012Validator(arch_schema)
+        valid_arch = {
+            "schema_version": "1.0",
+            "title": "Settlement Service",
+            "status": "accepted",
+            "boundaries": [
+                {"name": "Ingress", "type": "trust", "description": "Edge gateway"}
+            ],
+            "decisions": [
+                {
+                    "id": "ADR-001",
+                    "title": "Outbox",
+                    "context": "Dual write hazard",
+                    "decision": "Transactional outbox",
+                    "consequences": ["Idempotent consumers required"],
+                }
+            ],
+            "components": [
+                {
+                    "name": "SettlementCoordinator",
+                    "responsibility": "Owns ledger writes",
+                    "owned_models": ["LedgerEntry"],
+                    "dependencies": ["LedgerStore"],
+                }
+            ],
+            "interfaces": [
+                {
+                    "name": "POST /v1/settlements",
+                    "protocol": "HTTP/JSON",
+                    "producer": "SettlementCoordinator",
+                    "consumers": ["BillingAPI"],
+                    "contract": "Idempotent settlement submission",
+                    "compatibility": "Additive fields only",
+                }
+            ],
+        }
+        self.assertEqual([], list(arch_validator.iter_errors(valid_arch)))
+        bad_arch = {
+            **valid_arch,
+            "components": [{"name": "Broken", "extra": True}],
+        }
+        self.assertTrue(list(arch_validator.iter_errors(bad_arch)))
+
+        testing_schema = json.loads(
+            (
+                ROOT / "shared/automated-testing/resources/assets/testing.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        testing_validator = jsonschema.Draft202012Validator(testing_schema)
+        valid_testing = {
+            "schema_version": "1.0",
+            "component": "settlement",
+            "framework": "pytest",
+            "test_cases": [
+                {
+                    "id": "TC-01",
+                    "name": "test_idempotency",
+                    "description": "Rejects duplicate settlement side effects",
+                    "oracle_type": "state",
+                    "priority": "critical",
+                    "verified": True,
+                }
+            ],
+            "execution_summary": {
+                "state": "passed",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "skipped": 0,
+                "commands": ["pytest -q"],
+                "notes": "Clean run",
+            },
+        }
+        self.assertEqual([], list(testing_validator.iter_errors(valid_testing)))
+        bad_testing = {
+            **valid_testing,
+            "execution_summary": {
+                "state": "invented_state",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+            },
+        }
+        self.assertTrue(list(testing_validator.iter_errors(bad_testing)))
+
     def test_validation_telemetry_metrics_and_export(self):
         errors, telemetry = validate_with_telemetry(ROOT)
         self.assertEqual([], errors)
-        self.assertEqual(51, telemetry["total_packages"])
-        self.assertEqual(51, telemetry["passed_packages"])
+        self.assertEqual(60, telemetry["total_packages"])
+        self.assertEqual(60, telemetry["passed_packages"])
         self.assertEqual(0, telemetry["failed_packages"])
         self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
         self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
@@ -1029,7 +1137,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
         self.assertTrue(telemetry_file.is_file())
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
-        self.assertEqual(51, exported["total_packages"])
+        self.assertEqual(60, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
 
     def test_all_skills_have_output_format_schemas(self):
@@ -1037,7 +1145,7 @@ class PackageTests(unittest.TestCase):
         packages = sorted(
             p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
         )
-        self.assertEqual(len(packages), 51)
+        self.assertEqual(len(packages), 60)
         for package in packages:
             schemas = sorted(package.glob("assets/*.schema.json"))
             self.assertGreater(

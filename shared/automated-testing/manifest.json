@@ -4,6 +4,7 @@
   "files": [
     "references/testing-protocol.md",
     "assets/testing-template.md",
+    "assets/handoff-template.md",
     "assets/testing.schema.json"
   ]
 }

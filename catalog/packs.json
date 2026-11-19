@@ -69,34 +69,46 @@
       ]
     },
     "software-architecture": {
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "description": "Architectural decision records, boundaries, decomposition, data evolution, integration contracts, and resilience.",
       "skills": [
         "arch-decision-record",
         "arch-boundary-specification",
-        "arch-component-decomposition"
+        "arch-component-decomposition",
+        "arch-data-evolution",
+        "arch-integration-contracts",
+        "arch-operational-resilience"
       ]
     },
     "architecture": {
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
+      "description": "Architectural decision records, boundaries, decomposition, data evolution, integration contracts, and resilience.",
       "skills": [
         "arch-decision-record",
         "arch-boundary-specification",
-        "arch-component-decomposition"
+        "arch-component-decomposition",
+        "arch-data-evolution",
+        "arch-integration-contracts",
+        "arch-operational-resilience"
       ]
     },
     "code-review": {
-      "description": "Pull request diff review, invariant verification, and actionable feedback.",
+      "description": "Pull request diff review, API compatibility, security boundaries, concurrency hazards, invariants, and feedback.",
       "skills": [
         "review-diff-analysis",
+        "review-api-compatibility",
+        "review-security-boundaries",
+        "review-concurrency-hazards",
         "review-invariant-violations",
         "review-actionable-feedback"
       ]
     },
     "automated-testing": {
-      "description": "Test gap detection, regression test generation, and test suite verification.",
+      "description": "Test gap detection, unit/regression specs, contract harnesses, property invariants, flakiness isolation, and suite verification.",
       "skills": [
         "test-gap-analysis",
         "test-case-generation",
+        "test-contract-harnesses",
+        "test-property-invariants",
+        "test-flakiness-isolation",
         "test-suite-verification"
       ]
     },
@@ -145,7 +157,10 @@
       "skills": [
         "arch-boundary-specification",
         "arch-component-decomposition",
+        "arch-data-evolution",
         "arch-decision-record",
+        "arch-integration-contracts",
+        "arch-operational-resilience",
         "repo-audit-accessibility-state",
         "repo-audit-api-consistency",
         "repo-audit-architecture",
@@ -189,10 +204,16 @@
         "repo-verify-fix",
         "repo-reconcile-findings",
         "review-actionable-feedback",
+        "review-api-compatibility",
+        "review-concurrency-hazards",
         "review-diff-analysis",
         "review-invariant-violations",
+        "review-security-boundaries",
         "test-case-generation",
+        "test-contract-harnesses",
+        "test-flakiness-isolation",
         "test-gap-analysis",
+        "test-property-invariants",
         "test-suite-verification"
       ]
     }

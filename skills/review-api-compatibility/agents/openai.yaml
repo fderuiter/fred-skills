@@ -1,0 +1,4 @@
+interface:
+  display_name: "API Compatibility Review"
+  short_description: "Review diffs for public API, wire, and SDK compatibility breaks"
+  default_prompt: "Use $review-api-compatibility on this pull request diff and public API."

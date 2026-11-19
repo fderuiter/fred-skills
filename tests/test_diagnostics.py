@@ -1493,15 +1493,34 @@ Bearer sk-proj-1234567890abcdef1234567890
             self.assertIn("**Credentials Redacted:**", report_md)
             self.assertIn("**Total Redactions:**", report_md)
 
-    def test_known_specialists_cover_all_51_catalog_skills_without_false_audit_matches(
+    def test_known_specialists_cover_all_60_catalog_skills_without_false_audit_matches(
         self,
     ):
         catalog_skills = json.loads(
             (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
         )["skills"]
         expected_names = {item["name"] for item in catalog_skills}
-        self.assertEqual(51, len(expected_names))
+        self.assertEqual(60, len(expected_names))
         self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
+
+        arch_refs = triage._extract_artifact_references(
+            "Updated ADR-010, API Gateway, SettlementEngine, and POST /v1/settle in architecture.json",
+            {
+                "boundaries": [{"name": "API Gateway"}],
+                "components": [{"name": "SettlementEngine"}],
+                "interfaces": [{"name": "POST /v1/settle"}],
+                "decisions": [{"id": "ADR-010"}],
+            },
+        )
+        self.assertEqual(
+            [
+                "decisions:ADR-010",
+                "boundaries:API Gateway",
+                "components:SettlementEngine",
+                "interfaces:POST /v1/settle",
+            ],
+            arch_refs,
+        )
 
         # Every single catalog skill correlates cleanly before any keyword fallback
         for item in catalog_skills:

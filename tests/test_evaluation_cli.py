@@ -23,7 +23,7 @@ class EvaluationTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as temp:
             result = evaluations.evaluate(Path(temp), argv)
-            self.assertEqual(30, len(result["runs"]))
+            self.assertEqual(48, len(result["runs"]))
             self.assertTrue(all(row["exact_match"] for row in result["runs"]))
             self.assertTrue(
                 all(
@@ -31,6 +31,13 @@ class EvaluationTests(unittest.TestCase):
                     for row in result["runs"]
                 )
             )
+            executed_cases = {row["case"] for row in result["runs"]}
+            for non_audit_case in (
+                "data-evolution-a",
+                "api-compatibility-a",
+                "flakiness-isolation-a",
+            ):
+                self.assertIn(non_audit_case, executed_cases)
             request = (Path(temp) / "concurrency-a/with_skill/1/prompt.md").read_text()
             self.assertNotIn("expected_keys", request)
             self.assertFalse(

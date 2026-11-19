@@ -51,6 +51,8 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
             "status": "draft",
             "boundaries": [],
             "decisions": [],
+            "components": [],
+            "interfaces": [],
         },
     },
     "code-review": {
@@ -71,6 +73,14 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
             "component": "repository",
             "framework": "unspecified",
             "test_cases": [],
+            "execution_summary": {
+                "state": "not_run",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "commands": [],
+            },
         },
     },
 }
@@ -196,11 +206,17 @@ def _detect_domain_kind(data: object) -> str | None:
         return None
     if "verdict" in data or ("summary" in data and "findings" in data):
         return "review"
-    if "test_cases" in data or ("component" in data and "framework" in data):
+    if (
+        "test_cases" in data
+        or "execution_summary" in data
+        or ("component" in data and "framework" in data)
+    ):
         return "testing"
     if (
         "boundaries" in data
         or "decisions" in data
+        or "components" in data
+        or "interfaces" in data
         or ("title" in data and "status" in data and "findings" not in data)
     ):
         return "architecture"

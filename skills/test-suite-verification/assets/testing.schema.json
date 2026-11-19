@@ -29,10 +29,34 @@
             "type": "string",
             "enum": ["state", "exception", "output", "boundary"]
           },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
           "verified": { "type": "boolean" }
         },
         "required": ["id", "name", "description", "oracle_type"]
       }
+    },
+    "execution_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["not_run", "passed", "failed", "partial"]
+        },
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "commands": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "notes": { "type": "string" }
+      },
+      "required": ["state"]
     }
   },
   "required": ["schema_version", "component", "framework", "test_cases"]
