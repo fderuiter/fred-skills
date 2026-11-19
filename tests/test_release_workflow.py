@@ -314,6 +314,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
         jobs = self.workflow_data["jobs"]
         self.assertIn("preflight", jobs)
+        self.assertIn("validate", jobs)
         self.assertIn("build", jobs)
         self.assertIn("release", jobs)
 
@@ -329,8 +330,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
             preflight_checkout.get("with", {}).get("persist-credentials"), False
         )
 
+        validate_job = jobs["validate"]
+        self.assertEqual(validate_job.get("needs"), "preflight")
+        self.assertEqual(
+            validate_job.get("if"), "needs.preflight.outputs.should_build == 'true'"
+        )
+        self.assertEqual(validate_job.get("permissions"), {"contents": "read"})
+        self.assertEqual(validate_job.get("uses"), "./.github/workflows/validate.yml")
+        self.assertEqual(
+            validate_job.get("with"),
+            {"ref": "${{ needs.preflight.outputs.target_sha }}"},
+        )
+
         build = jobs["build"]
-        self.assertEqual(build.get("needs"), "preflight")
+        self.assertEqual(build.get("needs"), ["preflight", "validate"])
         self.assertEqual(
             build.get("if"), "needs.preflight.outputs.should_build == 'true'"
         )
@@ -343,7 +356,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIs(build_checkout["with"]["persist-credentials"], False)
 
         release = jobs["release"]
-        self.assertEqual(release.get("needs"), ["preflight", "build"])
+        self.assertEqual(release.get("needs"), ["preflight", "validate", "build"])
         self.assertEqual(
             release.get("if"), "needs.preflight.outputs.should_publish == 'true'"
         )
@@ -363,6 +376,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             release_checkout["with"]["ref"], "${{ needs.preflight.outputs.target_sha }}"
         )
+        self.assertEqual(release_checkout["with"].get("fetch-depth"), 0)
         self.assertIs(release_checkout["with"]["persist-credentials"], False)
 
     def test_no_inline_workflow_expressions_in_shell_steps(self) -> None:
@@ -1321,10 +1335,280 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertNotEqual(res_untagged.returncode, 0)
             self.assertIn("origin", res_untagged.stderr)
 
+    def test_reusable_validate_workflow_blocks_release_across_all_ci_gates(
+        self,
+    ) -> None:
+        """release.yml calls reusable validate.yml so Ubuntu/Windows, Python 3.12/3.13, pre-commit, walkthrough, and Chromium gate releases."""
+        validate_data = yaml.safe_load(VALIDATE_WORKFLOW.read_text(encoding="utf-8"))
+        triggers = validate_data.get("on") or validate_data.get(True) or {}
+        self.assertIn("workflow_call", triggers)
+        wf_call_inputs = (triggers["workflow_call"] or {}).get("inputs", {})
+        self.assertIn("ref", wf_call_inputs)
+        self.assertEqual(wf_call_inputs["ref"].get("default"), "")
+
+        matrix = validate_data["jobs"]["validate"]["strategy"]["matrix"]
+        self.assertEqual(matrix["os"], ["ubuntu-latest", "windows-latest"])
+        self.assertEqual(matrix["python-version"], ["3.12", "3.13"])
+
+        validate_steps = validate_data["jobs"]["validate"]["steps"]
+        validate_checkout = validate_steps[0]
+        self.assertEqual(validate_checkout.get("uses"), CHECKOUT_SHA)
+        self.assertEqual(
+            validate_checkout.get("with", {}).get("ref"), "${{ inputs.ref }}"
+        )
+        run_cmds = "\n".join(s.get("run", "") for s in validate_steps)
+        self.assertIn("pre-commit run --all-files", run_cmds)
+        self.assertIn("examples/walkthrough/run_demo.py", run_cmds)
+        self.assertIn("verify-release", run_cmds)
+
+        browser_steps = validate_data["jobs"]["browser"]["steps"]
+        browser_checkout = browser_steps[0]
+        self.assertEqual(browser_checkout.get("uses"), CHECKOUT_SHA)
+        self.assertEqual(
+            browser_checkout.get("with", {}).get("ref"), "${{ inputs.ref }}"
+        )
+        browser_cmds = "\n".join(s.get("run", "") for s in browser_steps)
+        self.assertIn("python tests/browser_check.py", browser_cmds)
+
+    def test_preflight_and_prerequisite_reject_unmerged_commits_outside_origin_main(
+        self,
+    ) -> None:
+        """Unmerged tags or workflow_dispatch runs outside origin/main fail in both preflight and Verify release prerequisites."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            gh_env, _ = _install_fake_gh(base)
+            origin, _, main_sha = self._setup_origin_and_clone(
+                base,
+                version_text="0.1.0\n",
+                license_text="MIT License\n",
+                remote_tag="v0.1.0",
+            )
+
+            seed = base / "seed"
+            _git(seed, "checkout", "-b", "feature/unmerged")
+            _write_lf(seed / "VERSION", "0.2.0\n")
+            _git(seed, "add", "VERSION")
+            _git(seed, "commit", "-m", "Unmerged version bump")
+            unmerged_sha = _git(seed, "rev-parse", "HEAD")
+            _git(seed, "push", "origin", "HEAD:refs/heads/feature/unmerged")
+            _git(seed, "tag", "-a", "v0.2.0", "-m", "Unmerged tag v0.2.0")
+            _git(seed, "push", "origin", "refs/tags/v0.2.0")
+
+            unmerged_ws = base / "unmerged-ws"
+            _git(
+                base,
+                "clone",
+                "--depth=1",
+                "--no-tags",
+                "--branch",
+                "feature/unmerged",
+                origin.as_uri(),
+                str(unmerged_ws),
+            )
+
+            # 1. Tag push from unmerged commit fails preflight ancestry check.
+            preflight_tag, _ = self._run_preflight_script(
+                unmerged_ws,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "push",
+                    "WORKFLOW_SHA": unmerged_sha,
+                    "INPUT_PUBLISH": "",
+                    "INPUT_TAG": "",
+                    "REF_NAME": "v0.2.0",
+                    "REF_TYPE": "tag",
+                },
+            )
+            self.assertNotEqual(preflight_tag.returncode, 0)
+            self.assertIn("origin/main", preflight_tag.stderr)
+
+            # 2. workflow_dispatch publish=true on unmerged branch fails preflight ancestry check.
+            preflight_dispatch, _ = self._run_preflight_script(
+                unmerged_ws,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "workflow_dispatch",
+                    "WORKFLOW_SHA": unmerged_sha,
+                    "INPUT_PUBLISH": "true",
+                    "INPUT_TAG": "v0.2.0",
+                    "REF_NAME": "feature/unmerged",
+                    "REF_TYPE": "branch",
+                },
+            )
+            self.assertNotEqual(preflight_dispatch.returncode, 0)
+            self.assertIn("origin/main", preflight_dispatch.stderr)
+
+            # 3. Verify release prerequisites rejects GITHUB_SHA outside origin/main after unshallow fetch.
+            prereq_unmerged = self._run_verification_script(
+                unmerged_ws,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_SHA": unmerged_sha,
+                    "REF_TYPE": "tag",
+                    "REF_NAME": "v0.2.0",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertNotEqual(prereq_unmerged.returncode, 0)
+            self.assertIn("origin/main", prereq_unmerged.stderr)
+
+            # 4. Dry-run workflow_dispatch (publish=false) on unmerged branch still succeeds for artifact inspection.
+            preflight_dry, dry_outputs = self._run_preflight_script(
+                unmerged_ws,
+                {
+                    "EVENT_NAME": "workflow_dispatch",
+                    "WORKFLOW_SHA": unmerged_sha,
+                    "INPUT_PUBLISH": "",
+                    "INPUT_TAG": "",
+                    "REF_NAME": "feature/unmerged",
+                    "REF_TYPE": "branch",
+                },
+            )
+            self.assertEqual(preflight_dry.returncode, 0, msg=preflight_dry.stderr)
+            self.assertEqual(dry_outputs["should_build"], "true")
+            self.assertEqual(dry_outputs["should_publish"], "false")
+            self.assertNotEqual(main_sha, unmerged_sha)
+
+    def test_prerequisite_enforces_remote_tag_binding_and_accepts_historical_main_ancestor(
+        self,
+    ) -> None:
+        """Verify release prerequisites rejects missing/mismatched remote tags and accepts ancestor commits on origin/main."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            gh_env, _ = _install_fake_gh(base)
+            origin, untagged_ws, head_sha = self._setup_origin_and_clone(
+                base / "missing-tag",
+                version_text="0.2.0\n",
+                license_text="MIT License\n",
+                remote_tag=None,
+            )
+
+            # 1. Missing remote v<VERSION> tag fails on tag push and on workflow_dispatch (even on main).
+            prereq_missing_tag = self._run_verification_script(
+                untagged_ws,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_SHA": head_sha,
+                    "REF_TYPE": "tag",
+                    "REF_NAME": "v0.2.0",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertNotEqual(prereq_missing_tag.returncode, 0)
+            self.assertIn("refs/tags/v0.2.0", prereq_missing_tag.stderr)
+
+            prereq_dispatch_main = self._run_verification_script(
+                untagged_ws,
+                {
+                    "EVENT_NAME": "workflow_dispatch",
+                    "GITHUB_SHA": head_sha,
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertNotEqual(prereq_dispatch_main.returncode, 0)
+            self.assertIn("refs/tags/v0.2.0", prereq_dispatch_main.stderr)
+
+            preflight_dispatch_main, _ = self._run_preflight_script(
+                untagged_ws,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "workflow_dispatch",
+                    "WORKFLOW_SHA": head_sha,
+                    "INPUT_PUBLISH": "true",
+                    "INPUT_TAG": "",
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                },
+            )
+            self.assertNotEqual(preflight_dispatch_main.returncode, 0)
+            self.assertIn("refs/tags/v0.2.0", preflight_dispatch_main.stderr)
+
+            # 2. Direct push to main (EVENT_NAME=push, branch:main) passes prerequisite check before Publish mints tag.
+            prereq_main_push = self._run_verification_script(
+                untagged_ws,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_SHA": head_sha,
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertEqual(
+                prereq_main_push.returncode, 0, msg=prereq_main_push.stderr
+            )
+
+            # 3. Historical ancestor commit on origin/main passes after main advances in a shallow checkout.
+            hist_origin, _, v020_sha = self._setup_origin_and_clone(
+                base / "historical",
+                version_text="0.2.0\n",
+                license_text="MIT License\n",
+                remote_tag="v0.2.0",
+                annotated=True,
+            )
+            hist_seed = base / "historical" / "seed"
+            _write_lf(hist_seed / "VERSION", "0.3.0\n")
+            _git(hist_seed, "add", "VERSION")
+            _git(hist_seed, "commit", "-m", "Advance main to 0.3.0")
+            _git(hist_seed, "push", "origin", "HEAD:refs/heads/main")
+
+            shallow_tag_ws = base / "historical" / "shallow-tag-ws"
+            shallow_tag_ws.mkdir(parents=True)
+            _git(shallow_tag_ws, "init")
+            _git(shallow_tag_ws, "remote", "add", "origin", hist_origin.as_uri())
+            _git(
+                shallow_tag_ws,
+                "-c",
+                "protocol.file.allow=always",
+                "fetch",
+                "--depth=1",
+                "origin",
+                "refs/tags/v0.2.0:refs/tags/v0.2.0",
+            )
+            _git(shallow_tag_ws, "checkout", "--detach", v020_sha)
+            self.assertEqual(
+                _git(shallow_tag_ws, "rev-parse", "--is-shallow-repository"), "true"
+            )
+
+            prereq_hist = self._run_verification_script(
+                shallow_tag_ws,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_SHA": v020_sha,
+                    "REF_TYPE": "tag",
+                    "REF_NAME": "v0.2.0",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertEqual(prereq_hist.returncode, 0, msg=prereq_hist.stderr)
+
+            # 4. Remote tag pointing to a different commit than GITHUB_SHA / TARGET_SHA is rejected.
+            _git(hist_seed, "tag", "-f", "v0.2.0", "HEAD")
+            _git(hist_seed, "push", "--force", "origin", "refs/tags/v0.2.0")
+            prereq_retargeted = self._run_verification_script(
+                shallow_tag_ws,
+                {
+                    "EVENT_NAME": "push",
+                    "GITHUB_SHA": v020_sha,
+                    "REF_TYPE": "tag",
+                    "REF_NAME": "v0.2.0",
+                    "INPUT_TAG": "",
+                },
+            )
+            self.assertNotEqual(prereq_retargeted.returncode, 0)
+            self.assertIn("expected", prereq_retargeted.stderr)
+            self.assertNotEqual(origin, hist_origin)
+
     def test_releasing_docs_match_workflow_contracts(self) -> None:
-        """docs/releasing.md must document main publishing, preflight gating, inputs.publish, and inputs.tag."""
+        """docs/releasing.md must document reusable validation, main ancestry, tag verification, dry-run gating, and zero-touch publish."""
         doc_text = RELEASING_DOC.read_text(encoding="utf-8")
         self.assertIn("Pushes to `main`", doc_text)
+        self.assertIn("validate.yml", doc_text)
+        self.assertIn("origin/main", doc_text)
+        self.assertIn("--verify-tag", doc_text)
+        self.assertIn("--target", doc_text)
         self.assertIn("inputs.publish", doc_text)
         self.assertIn("`false` by default", doc_text)
         self.assertIn("inputs.tag", doc_text)
