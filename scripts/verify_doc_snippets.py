@@ -20,6 +20,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import jsonschema
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -40,16 +43,27 @@ try:
 except ImportError:
     audit_to_sarif_mod = None
 
+
+def _discover_default_doc_ranges(
+    root: Path = ROOT,
+) -> dict[str, tuple[int | None, int | None]]:
+    """Discover all root Markdown guides and every Markdown file under docs/."""
+    ranges: dict[str, tuple[int | None, int | None]] = {}
+    for md_path in sorted(root.glob("*.md")):
+        if md_path.is_file():
+            ranges[md_path.name] = (1, None)
+    docs_dir = root / "docs"
+    if docs_dir.is_dir():
+        for md_path in sorted(docs_dir.rglob("*.md")):
+            if md_path.is_file():
+                ranges[md_path.relative_to(root).as_posix()] = (1, None)
+    return ranges
+
+
 # Line ranges for acceptance criteria verification
-DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = {
-    "README.md": (1, None),
-    "CONTRIBUTING.md": (1, None),
-    "AGENTS.md": (1, None),
-    "docs/toolkit.md": (1, None),
-    "docs/usage.md": (1, None),
-    "docs/runbooks.md": (1, None),
-    "docs/integration.md": (1, None),
-}
+DOCUMENTED_RANGES: dict[str, tuple[int | None, int | None]] = (
+    _discover_default_doc_ranges(ROOT)
+)
 
 MARKETPLACE_ONBOARDING_DOCS: frozenset[str] = frozenset(
     {"README.md", "docs/usage.md", "docs/integration.md"}
@@ -63,6 +77,10 @@ PLACEHOLDER_DEFAULTS: dict[str, str] = {
     "skill": "repo-audit-concurrency",
     "skill-1": "repo-audit-concurrency",
     "skill-2": "repo-audit-trust-boundaries",
+    "profile": "web-app",
+    "case": "concurrency-a",
+    "pack": "starter",
+    "task": "review-pr",
     "base": "main",
     "revision": "HEAD",
     "branch": "main",
@@ -115,6 +133,7 @@ class CommandBlock:
     end_line: int
     language: str
     commands: list[tuple[int, str]]  # (line_no, command_str)
+    content: str = ""
 
 
 def _is_block_in_range(
@@ -307,6 +326,7 @@ def extract_blocks_from_file(
         if not _is_block_in_range(start_line, end_line, b_start, b_end):
             continue
         cmds = _extract_block_commands(b_lang, b_lines)
+        raw_content = "\n".join(text for _, text in b_lines)
         blocks.append(
             CommandBlock(
                 file_path=file_path,
@@ -315,6 +335,7 @@ def extract_blocks_from_file(
                 end_line=b_end,
                 language=b_lang,
                 commands=cmds,
+                content=raw_content,
             )
         )
 
@@ -327,7 +348,11 @@ def discover_doc_blocks(
 ) -> dict[str, list[CommandBlock]]:
     """Discover all command blocks in the target documentation files."""
     if ranges is None:
-        ranges = DOCUMENTED_RANGES
+        ranges = (
+            DOCUMENTED_RANGES
+            if root.resolve() == ROOT.resolve()
+            else _discover_default_doc_ranges(root)
+        )
 
     discovered: dict[str, list[CommandBlock]] = {}
     for rel_path, (s_line, e_line) in ranges.items():
@@ -393,12 +418,17 @@ def _validate_toolkit_args(
     parts: list[str],
     cmd: str,
     line_no: int,
+    root: Path = ROOT,
 ) -> tuple[bool, str | None]:
-    """Validate documented fred.py CLI arguments against the parser."""
+    """Validate documented fred.py CLI arguments against parser and catalogs."""
+    script_idx = next(i for i, p in enumerate(parts) if p.endswith("fred.py"))
+    raw_args = parts[script_idx + 1 :]
+    cat_ok, cat_err = _validate_fred_catalog_flags(raw_args, root)
+    if not cat_ok:
+        return False, f"docs/toolkit.md:L{line_no}: {cat_err} in '{cmd}'"
     if not cli_parser:
         return True, None
-    script_idx = next(i for i, p in enumerate(parts) if p.endswith("fred.py"))
-    args = [normalize_cli_token(arg) for arg in parts[script_idx + 1 :]]
+    args = [normalize_cli_token(arg) for arg in raw_args]
     err_buf = io.StringIO()
     try:
         with contextlib.redirect_stderr(err_buf):
@@ -421,6 +451,7 @@ def _collect_documented_toolkit_subcommands(
     blocks: list[CommandBlock],
     all_registered: set[str],
     cli_parser: Any,
+    root: Path = ROOT,
 ) -> tuple[list[str], set[str], int]:
     """Validate documented commands and return detected errors, subcommands, and verified count."""
     errors: list[str] = []
@@ -441,7 +472,9 @@ def _collect_documented_toolkit_subcommands(
                     f"docs/toolkit.md:L{line_no}: Documented subcommand '{subcmd}' is not in scripts/fred.py LIFECYCLE_GROUPS"
                 )
                 continue
-            valid, err = _validate_toolkit_args(cli_parser, parts, cmd, line_no)
+            valid, err = _validate_toolkit_args(
+                cli_parser, parts, cmd, line_no, root=root
+            )
             if not valid and err:
                 errors.append(err)
             elif cli_parser:
@@ -461,7 +494,7 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
     cli_parser = fred.parser() if (fred and hasattr(fred, "parser")) else None
 
     errors, documented, verified = _collect_documented_toolkit_subcommands(
-        blocks, all_registered, cli_parser
+        blocks, all_registered, cli_parser, root=root
     )
 
     for missing in sorted(all_registered - documented):
@@ -707,6 +740,7 @@ GH_SUBCOMMANDS = {
     "version",
     "help",
 }
+GH_GLOBAL_FLAGS = {"-R", "--repo", "-h", "--help"}
 GH_ATTESTATION_FLAGS = {
     "-R",
     "--repo",
@@ -736,6 +770,252 @@ GH_ATTESTATION_FLAGS = {
     "--template",
     "-h",
     "--help",
+}
+GH_RELEASE_FLAGS = GH_GLOBAL_FLAGS | {
+    "-d",
+    "--draft",
+    "-p",
+    "--prerelease",
+    "-t",
+    "--title",
+    "-n",
+    "--notes",
+    "-F",
+    "--notes-file",
+    "--generate-notes",
+    "--notes-start-tag",
+    "--notes-from-tag",
+    "--target",
+    "--verify-tag",
+    "--latest",
+    "--discussion-category",
+    "-A",
+    "--archive",
+    "--clobber",
+    "-D",
+    "--dir",
+    "-O",
+    "--output",
+    "--pattern",
+    "--skip-existing",
+    "-q",
+    "--jq",
+    "--json",
+    "-w",
+    "--web",
+    "-L",
+    "--limit",
+    "--exclude-drafts",
+    "--exclude-pre-releases",
+    "-y",
+    "--yes",
+    "--cleanup-tag",
+}
+GH_ISSUE_FLAGS = GH_GLOBAL_FLAGS | {
+    "-t",
+    "--title",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-l",
+    "--label",
+    "-a",
+    "--assignee",
+    "-m",
+    "--milestone",
+    "-p",
+    "--project",
+    "-T",
+    "--template",
+    "--recover",
+    "-w",
+    "--web",
+    "-s",
+    "--state",
+    "-L",
+    "--limit",
+    "-S",
+    "--search",
+    "-A",
+    "--app",
+    "--author",
+    "--mention",
+    "-q",
+    "--jq",
+    "--json",
+    "-c",
+    "--comment",
+    "-r",
+    "--reason",
+    "-e",
+    "--editor",
+}
+GH_PR_FLAGS = GH_GLOBAL_FLAGS | {
+    "-t",
+    "--title",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-B",
+    "--base",
+    "-H",
+    "--head",
+    "-d",
+    "--draft",
+    "-f",
+    "--fill",
+    "--fill-first",
+    "--fill-verbose",
+    "-l",
+    "--label",
+    "-a",
+    "--assignee",
+    "-r",
+    "--reviewer",
+    "-m",
+    "--milestone",
+    "-p",
+    "--project",
+    "-T",
+    "--template",
+    "-w",
+    "--web",
+    "-s",
+    "--state",
+    "-L",
+    "--limit",
+    "-S",
+    "--search",
+    "-c",
+    "--comments",
+    "-q",
+    "--jq",
+    "--json",
+    "--merge",
+    "--squash",
+    "--rebase",
+    "--auto",
+    "--delete-branch",
+}
+GH_SUBCOMMAND_FLAGS: dict[str, set[str]] = {
+    "attestation": GH_ATTESTATION_FLAGS,
+    "release": GH_RELEASE_FLAGS,
+    "issue": GH_ISSUE_FLAGS,
+    "pr": GH_PR_FLAGS,
+    "repo": GH_GLOBAL_FLAGS
+    | {
+        "--clone",
+        "--public",
+        "--private",
+        "--internal",
+        "-d",
+        "--description",
+        "-y",
+        "--yes",
+        "-q",
+        "--jq",
+        "--json",
+        "-w",
+        "--web",
+        "-L",
+        "--limit",
+        "--source",
+        "--remote",
+    },
+    "run": GH_GLOBAL_FLAGS
+    | {
+        "-b",
+        "--branch",
+        "-c",
+        "--commit",
+        "-e",
+        "--event",
+        "-s",
+        "--status",
+        "-u",
+        "--user",
+        "-w",
+        "--workflow",
+        "-L",
+        "--limit",
+        "-q",
+        "--jq",
+        "--json",
+        "--log",
+        "--log-failed",
+        "--exit-status",
+        "-i",
+        "--interval",
+        "-n",
+        "--name",
+        "-D",
+        "--dir",
+        "-p",
+        "--pattern",
+    },
+    "workflow": GH_GLOBAL_FLAGS
+    | {
+        "-a",
+        "--all",
+        "-L",
+        "--limit",
+        "-q",
+        "--jq",
+        "--json",
+        "-r",
+        "--ref",
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "-w",
+        "--web",
+        "--yaml",
+    },
+    "auth": {
+        "-h",
+        "--help",
+        "--hostname",
+        "-p",
+        "--git-protocol",
+        "-s",
+        "--scopes",
+        "--web",
+        "--with-token",
+        "--show-token",
+        "-u",
+        "--user",
+    },
+    "api": {
+        "-X",
+        "--method",
+        "-F",
+        "--field",
+        "-f",
+        "--raw-field",
+        "-H",
+        "--header",
+        "-i",
+        "--include",
+        "--input",
+        "-q",
+        "--jq",
+        "--paginate",
+        "--slurp",
+        "--cache",
+        "--hostname",
+        "--preview",
+        "--silent",
+        "-t",
+        "--template",
+        "--verbose",
+        "-h",
+        "--help",
+    },
+    "version": {"-h", "--help"},
+    "help": {"-h", "--help"},
 }
 
 CURL_FALLBACK_FLAGS = {
@@ -1274,16 +1554,100 @@ def _validate_python_module(mod_parts: list[str], root: Path) -> tuple[bool, str
     return True, ""
 
 
+def _load_json_section_keys(
+    root: Path,
+    rel_file: str,
+    section: str,
+) -> set[str]:
+    """Load top-level keys of a named mapping section from a JSON catalog file."""
+    candidate = root / rel_file
+    source = candidate if candidate.is_file() else ROOT / rel_file
+    if not source.is_file():
+        return set()
+    raw = json.loads(source.read_text(encoding="utf-8")).get(section, {})
+    return {str(key) for key in raw} if isinstance(raw, Mapping) else set()
+
+
+def _load_known_cases(root: Path) -> set[str]:
+    """Load canonical evaluation case IDs from evals/cases.json."""
+    candidate = root / "evals/cases.json"
+    source = candidate if candidate.is_file() else ROOT / "evals/cases.json"
+    if not source.is_file():
+        return set()
+    cases = json.loads(source.read_text(encoding="utf-8")).get("cases", [])
+    return {
+        str(item["id"]) for item in cases if isinstance(item, Mapping) and "id" in item
+    }
+
+
+def _extract_cli_option_values(args: list[str], flag: str) -> list[str]:
+    """Extract all values supplied to a long CLI option (--flag val or --flag=val)."""
+    values: list[str] = []
+    prefix = f"{flag}="
+    idx = 0
+    while idx < len(args):
+        tok = args[idx]
+        if tok == "--":
+            break
+        if tok == flag and idx + 1 < len(args):
+            values.append(args[idx + 1])
+            idx += 2
+            continue
+        if tok.startswith(prefix):
+            values.append(tok[len(prefix) :])
+        idx += 1
+    return values
+
+
+def _validate_fred_catalog_flags(
+    raw_args: list[str],
+    root: Path,
+) -> tuple[bool, str]:
+    """Verify --skill, --profile, --case, --pack, --task, and --host against repository catalogs."""
+    norm_args = [normalize_cli_token(arg) for arg in raw_args]
+    catalog_specs: tuple[tuple[str, str, set[str]], ...] = (
+        ("--skill", "skill", _load_known_skills(root)),
+        (
+            "--profile",
+            "profile",
+            _load_json_section_keys(root, "catalog/profiles.json", "profiles"),
+        ),
+        ("--case", "evaluation case", _load_known_cases(root)),
+        ("--pack", "pack", set(_load_known_packs(root).keys())),
+        (
+            "--task",
+            "task",
+            _load_json_section_keys(root, "catalog/recipes.json", "recipes"),
+        ),
+        (
+            "--host",
+            "host",
+            _load_json_section_keys(root, "catalog/hosts.json", "hosts"),
+        ),
+    )
+    for flag, label, allowed_names in catalog_specs:
+        if not allowed_names:
+            continue
+        for val in _extract_cli_option_values(norm_args, flag):
+            if val not in allowed_names:
+                return False, f"Unknown {label} '{val}' for {flag}"
+    return True, ""
+
+
 def _validate_python_fred(
     parts: list[str],
     script_path: Path,
     root: Path,
 ) -> tuple[bool, str]:
-    """Validate scripts/fred.py invocations against argument parser and search."""
+    """Validate scripts/fred.py invocations against argument parser, catalogs, and search."""
     if fred and hasattr(fred, "parser"):
         ok, err = _parse_with_argparse(fred.parser(), parts[2:], "scripts/fred.py")
         if not ok:
             return False, err
+
+    cat_ok, cat_err = _validate_fred_catalog_flags(parts[2:], root)
+    if not cat_ok:
+        return False, cat_err
 
     if len(parts) >= 3 and parts[2] == "search":
         search_args = [normalize_cli_token(arg) for arg in parts[2:]]
@@ -1604,8 +1968,21 @@ def _validate_gh_attestation(parts: list[str], cmd: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _get_gh_subcommand_flags(subcmd: str, sub_args: list[str]) -> set[str]:
+    """Resolve valid CLI flags for a specific gh subcommand and optional action."""
+    fallback = GH_SUBCOMMAND_FLAGS.get(subcmd, GH_GLOBAL_FLAGS)
+    if not shutil.which("gh") or subcmd == "attestation":
+        return fallback
+    if sub_args and not sub_args[0].startswith("-") and subcmd != "api":
+        action_flags = _get_help_flags(["gh", subcmd, sub_args[0], "--help"])
+        if action_flags:
+            return action_flags | GH_GLOBAL_FLAGS
+    top_flags = _get_help_flags(["gh", subcmd, "--help"])
+    return fallback | (top_flags or set())
+
+
 def _validate_gh(parts: list[str], _root: Path, cmd: str) -> tuple[bool, str]:
-    """Validate GitHub CLI subcommands and attestation flags safely."""
+    """Validate GitHub CLI subcommands and per-subcommand flags safely."""
     if len(parts) < 2:
         return False, "gh requires a subcommand or flag"
     subcmd = parts[1]
@@ -1614,9 +1991,10 @@ def _validate_gh(parts: list[str], _root: Path, cmd: str) -> tuple[bool, str]:
         return (False, f"Invalid gh flag: {bad}") if bad else (True, "")
     if subcmd not in GH_SUBCOMMANDS:
         return False, f"Invalid gh subcommand: {subcmd}"
-    bad = _find_unknown_flag(parts[2:], GH_ATTESTATION_FLAGS)
+    allowed = _get_gh_subcommand_flags(subcmd, parts[2:])
+    bad = _find_unknown_flag(parts[2:], allowed, allow_bundled=True)
     if bad:
-        return False, f"Invalid gh flag: {bad}"
+        return False, f"Invalid gh {subcmd} flag: {bad}"
     if subcmd == "attestation":
         return _validate_gh_attestation(parts, cmd)
     return True, ""
@@ -1916,6 +2294,77 @@ def _strip_shell_redirections(segment: str) -> str:
     return result.strip()
 
 
+SHELL_CONTROL_PREFIXES: frozenset[str] = frozenset(
+    {"if", "then", "elif", "else", "while", "until", "do", "!"}
+)
+SHELL_CLOSING_KEYWORDS: frozenset[str] = frozenset({"fi", "done", "esac"})
+ENV_VALUE_FLAGS: frozenset[str] = frozenset(
+    {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}
+)
+ENV_BOOL_FLAGS: frozenset[str] = frozenset(
+    {"-i", "-", "--ignore-environment", "-0", "--null"}
+)
+_SHELL_VAR_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _consume_env_token(parts: list[str], idx: int) -> tuple[int, bool]:
+    """Consume a single option or variable assignment following env."""
+    tok = parts[idx]
+    if tok == "--":
+        return idx + 1, False
+    if tok in ENV_VALUE_FLAGS:
+        return min(len(parts), idx + 2), True
+    is_inline_env = (
+        tok in ENV_BOOL_FLAGS
+        or tok.startswith(("--unset=", "--chdir=", "--split-string="))
+        or bool(_SHELL_VAR_ASSIGN_RE.match(tok))
+    )
+    if is_inline_env:
+        return idx + 1, True
+    return idx, False
+
+
+def _strip_env_wrapper(parts: list[str]) -> list[str]:
+    """Strip an env command wrapper and its flags/assignments from parts."""
+    idx = 1
+    while idx < len(parts):
+        idx, keep_going = _consume_env_token(parts, idx)
+        if not keep_going:
+            break
+    return parts[idx:]
+
+
+def _is_for_loop_header(parts: list[str]) -> bool:
+    """Return True if parts represent a shell 'for <var> in ...' loop header."""
+    if parts[0] != "for":
+        return False
+    return len(parts) <= 2 or parts[2] == "in"
+
+
+def _strip_one_shell_prefix(parts: list[str]) -> tuple[list[str], bool]:
+    """Strip one leading shell keyword, env wrapper, or VAR=val token."""
+    head = parts[0]
+    if head in SHELL_CLOSING_KEYWORDS or _is_for_loop_header(parts):
+        return [], False
+    if head in SHELL_CONTROL_PREFIXES or head == "for":
+        return parts[1:], True
+    if _SHELL_VAR_ASSIGN_RE.match(head):
+        return parts[1:], True
+    if head == "env":
+        return _strip_env_wrapper(parts), True
+    return parts, False
+
+
+def _strip_command_prefixes(parts: list[str]) -> list[str]:
+    """Unwrap leading shell control keywords, env wrappers, and assignments."""
+    current = parts
+    while current:
+        current, changed = _strip_one_shell_prefix(current)
+        if not changed:
+            break
+    return current
+
+
 def _has_singular_agent_skills_path(segment: str) -> bool:
     """Return True if a command segment references singular .agent/skills."""
     return bool(re.search(r"(?:^|[\s/\\~\"'])\.agent/skills(?:$|[\s/\\\"'])", segment))
@@ -1931,7 +2380,7 @@ def _execute_single_segment(segment: str, root: Path) -> tuple[bool, str]:
             False,
             f"Singular '.agent/skills' path is invalid in '{cleaned}'; use '.agents/skills'",
         )
-    parts = shlex.split(cleaned)
+    parts = _strip_command_prefixes(shlex.split(cleaned))
     if not parts:
         return True, ""
     dispatcher = find_tool_dispatcher(parts)
@@ -1975,6 +2424,8 @@ def _normalize_target_path(target: str | Path, root: Path = ROOT) -> str:
     try:
         return path.relative_to(root.resolve()).as_posix()
     except ValueError:
+        if Path(path_str).is_absolute():
+            return path.as_posix()
         return path_str.lstrip("./")
 
 
@@ -2087,15 +2538,143 @@ def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
     return errors
 
 
-def _verify_release_notes_files(root: Path) -> list[str]:
-    """Verify skill counts in docs/release-notes-*.md without requiring fenced code blocks."""
-    docs_dir = root / "docs"
-    if not docs_dir.is_dir():
+_NON_AUDIT_SCHEMA_V1_KEYS: frozenset[str] = frozenset(
+    {
+        "packs",
+        "hosts",
+        "profiles",
+        "recipes",
+        "cases",
+        "suites",
+        "plan",
+        "reconciliations",
+    }
+)
+
+
+def _verify_yaml_block(
+    rel_path: str,
+    block: CommandBlock,
+    root: Path,
+) -> list[str]:
+    """Validate YAML syntax and dry-run execute extracted run: steps."""
+    if block.content.strip():
+        try:
+            yaml.safe_load(block.content)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            offset = (mark.line + 1) if mark is not None else 1
+            return [
+                f"{rel_path}:L{block.start_line + offset}: Invalid YAML syntax: {exc}"
+            ]
+    return _verify_shell_block(rel_path, block, root)
+
+
+def _is_valid_signature_stub(source: str) -> bool:
+    """Return True if source is a documented bare def/async def signature header."""
+    stripped = source.strip()
+    if not stripped.startswith(("def ", "async def ", "@")) or stripped.endswith(":"):
+        return False
+    try:
+        tree = ast.parse(f"{stripped}:\n    ...\n")
+    except SyntaxError:
+        return False
+    return len(tree.body) == 1 and isinstance(
+        tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+    )
+
+
+def _verify_python_block(rel_path: str, block: CommandBlock) -> list[str]:
+    """Validate Python fenced code block syntax via AST parsing."""
+    dedented = textwrap.dedent(block.content)
+    if not dedented.strip():
         return []
-    errors: list[str] = []
-    for path in sorted(docs_dir.glob("release-notes-*.md")):
-        errors.extend(_verify_doc_release_counts(f"docs/{path.name}", root))
-    return errors
+    try:
+        ast.parse(dedented)
+        return []
+    except SyntaxError as exc:
+        if _is_valid_signature_stub(dedented):
+            return []
+        err_line = block.start_line + (exc.lineno or 1)
+        return [f"{rel_path}:L{err_line}: Python syntax error: {exc.msg}"]
+
+
+def _is_audit_json_candidate(data: Any) -> bool:
+    """Return True when a parsed JSON object represents an Audit Schema 1.0 ledger."""
+    if not isinstance(data, dict):
+        return False
+    if _NON_AUDIT_SCHEMA_V1_KEYS.intersection(data.keys()):
+        return False
+    if data.get("schema_version") == "1.0":
+        return True
+    return "findings" in data and "actor" not in data
+
+
+def _load_audit_schema(root: Path) -> dict[str, Any] | None:
+    """Load shared/repo-audit/resources/assets/audit.schema.json from root or ROOT."""
+    rel = "shared/repo-audit/resources/assets/audit.schema.json"
+    candidate = root / rel
+    source = candidate if candidate.is_file() else ROOT / rel
+    if not source.is_file():
+        return None
+    loaded: dict[str, Any] = json.loads(source.read_text(encoding="utf-8"))
+    return loaded
+
+
+def _validate_audit_json_schema(
+    rel_path: str,
+    line_no: int,
+    data: dict[str, Any],
+    root: Path,
+) -> list[str]:
+    """Validate an Audit Schema 1.0 JSON object against audit.schema.json."""
+    schema = _load_audit_schema(root)
+    if schema is None:
+        return [f"{rel_path}:L{line_no}: Missing audit.schema.json contract"]
+    validator = jsonschema.Draft202012Validator(schema)
+    schema_errs = sorted(
+        validator.iter_errors(data), key=lambda e: list(e.absolute_path)
+    )
+    return [
+        f"{rel_path}:L{line_no}: Audit schema validation failed: {err.message}"
+        for err in schema_errs
+    ]
+
+
+def _verify_json_block(
+    rel_path: str,
+    block: CommandBlock,
+    root: Path,
+) -> list[str]:
+    """Validate JSON syntax and Audit Schema 1.0 compliance in fenced JSON blocks."""
+    if not block.content.strip():
+        return [f"{rel_path}:L{block.start_line + 1}: Empty JSON code block"]
+    try:
+        data = json.loads(block.content)
+    except json.JSONDecodeError as exc:
+        err_line = block.start_line + exc.lineno
+        return [f"{rel_path}:L{err_line}: Invalid JSON syntax: {exc.msg}"]
+    if _is_audit_json_candidate(data):
+        return _validate_audit_json_schema(rel_path, block.start_line + 1, data, root)
+    return []
+
+
+def _verify_single_block(
+    rel_path: str,
+    block: CommandBlock,
+    root: Path,
+) -> list[str]:
+    """Dispatch validation for a single fenced code block according to language."""
+    lang = block.language.lower()
+    if lang in ("sh", "bash", "shell"):
+        return _verify_shell_block(rel_path, block, root)
+    if lang in ("yaml", "yml"):
+        return _verify_yaml_block(rel_path, block, root)
+    if lang in ("python", "py"):
+        return _verify_python_block(rel_path, block)
+    if lang == "json":
+        return _verify_json_block(rel_path, block, root)
+    return []
 
 
 def _verify_file_snippets(
@@ -2104,21 +2683,16 @@ def _verify_file_snippets(
     root: Path,
     should_execute: bool = True,
 ) -> list[str]:
-    """Verify code snippet commands and release counts within a single file."""
+    """Verify code snippet commands, non-shell blocks, and release counts in a file."""
     doc_path = root / rel_path
     if not doc_path.is_file():
         return [f"{rel_path}: File does not exist"]
-    if rel_path.startswith("docs/release-notes-"):
-        return _verify_doc_release_counts(rel_path, root) if should_execute else []
-    if not blocks:
-        return [f"{rel_path}: No code blocks discovered in specified range"]
     if not should_execute:
         return []
 
     errors = _verify_doc_release_counts(rel_path, root)
     for block in blocks:
-        if block.language in ("sh", "bash", "shell", "yaml", "yml"):
-            errors.extend(_verify_shell_block(rel_path, block, root))
+        errors.extend(_verify_single_block(rel_path, block, root))
     return errors
 
 
@@ -2138,21 +2712,17 @@ def verify_all_snippets(
         subcmd_errors = verify_toolkit_subcommands(root=root)
         errors.extend(subcmd_errors)
 
+    ranges_to_check: Mapping[str, tuple[int | None, int | None]] | None = None
     if target_rel_paths is not None:
-        ranges_to_check: dict[str, tuple[int | None, int | None]] = {
+        ranges_to_check = {
             rel_path: DOCUMENTED_RANGES.get(rel_path, (None, None))
-            for rel_path in target_rel_paths
+            for rel_path in sorted(target_rel_paths)
         }
-    else:
-        ranges_to_check = DOCUMENTED_RANGES
 
     blocks_by_file = discover_doc_blocks(root=root, ranges=ranges_to_check)
     for rel_path, blocks in blocks_by_file.items():
         file_errors = _verify_file_snippets(rel_path, blocks, root, should_execute=True)
         errors.extend(file_errors)
-
-    if target_rel_paths is None:
-        errors.extend(_verify_release_notes_files(root))
 
     return errors
 

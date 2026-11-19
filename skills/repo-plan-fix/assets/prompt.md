@@ -1,7 +1,5 @@
-Use repo-plan-fix on <repository/revision> with <finding/run artifacts>.
-Inspect the exact source and supported contract. Trace preconditions and safeguards,
-use independent validation and safe controls, and preserve uncertainty and source
-identity. Write plan.json validated against assets/plan.schema.json and return a
-standalone handoff with actual commands/results and next action.
-Honor the current user-authorized mutation scope; draft external changes otherwise.
-Do not modify application code, invent issue metadata, or publish external changes without authorization.
+Use repo-plan-fix on <repository/revision> with <finding/run artifacts> scoped to <directory>, <symbol>, and issue <issue-number>.
+Revalidate current source, tests, and open issues/PRs; group verified defects by violated contract, authoritative boundary, and minimal corrective mechanism.
+Sequence acyclic remediation steps across contracts, implementations, callers, and regression tests with independent acceptance criteria.
+Write `plan.json` validated against `assets/plan.schema.json` and return a standalone remediation plan handoff.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify application code, invent issue metadata, or publish external changes without authorization.

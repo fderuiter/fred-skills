@@ -4,12 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 
-from skill_tools import ROOT, extract_relative_links, resolve_relative_link_target
+from skill_tools import (
+    ROOT,
+    extract_document_anchors,
+    extract_link_fragment,
+    extract_relative_links,
+    resolve_relative_link_target,
+)
 
 EXCLUDE_DIRS = {
     ".git",
@@ -25,20 +32,73 @@ EXCLUDE_DIRS = {
 }
 NESTED_EXCLUDE_DIRS = {".git", ".venv", "node_modules", "__pycache__"}
 DOC_EXTENSIONS = {".md", ".html"}
+_HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+_FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
-def check_file_links(file_path: Path, root: Path = ROOT) -> list[str]:
-    """Check that all relative links in a markdown or HTML file resolve cleanly."""
-    errors = []
+def _strip_non_link_blocks(content: str, is_html: bool) -> str:
+    """Strip HTML script/style blocks or Markdown fenced code blocks before scanning links."""
+    if is_html:
+        return _HTML_SCRIPT_STYLE_RE.sub("", content)
+    kept: list[str] = []
+    fence_char = ""
+    fence_len = 0
+    for line in content.splitlines(keepends=True):
+        match = _FENCE_MARKER_RE.match(line)
+        if match:
+            marker = match.group(1)
+            if not fence_char:
+                fence_char = marker[0]
+                fence_len = len(marker)
+                continue
+            if marker[0] == fence_char and len(marker) >= fence_len:
+                fence_char = ""
+                fence_len = 0
+                continue
+        if not fence_char:
+            kept.append(line)
+    return "".join(kept)
+
+
+def _get_cached_anchors(
+    target_path: Path,
+    cache: dict[Path, set[str]],
+) -> set[str] | None:
+    """Load and cache valid #fragment anchors for a Markdown or HTML file."""
+    resolved = target_path.resolve()
+    if resolved in cache:
+        return cache[resolved]
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    anchors = extract_document_anchors(text, suffix=resolved.suffix)
+    cache[resolved] = anchors
+    return anchors
+
+
+def check_file_links(
+    file_path: Path,
+    root: Path = ROOT,
+    anchor_cache: dict[Path, set[str]] | None = None,
+) -> list[str]:
+    """Check that all relative links and #fragment anchors in a markdown or HTML file resolve cleanly."""
+    errors: list[str] = []
     try:
         content = file_path.read_text(encoding="utf-8")
     except OSError as exc:
         return [f"{file_path}: Cannot read file: {exc}"]
 
-    targets = extract_relative_links(content)
     resolved_file = file_path.resolve()
     file_dir = resolved_file.parent
     is_html = resolved_file.suffix.lower() == ".html"
+    active_cache = anchor_cache if anchor_cache is not None else {}
+    active_cache.setdefault(
+        resolved_file, extract_document_anchors(content, suffix=resolved_file.suffix)
+    )
+
+    scannable = _strip_non_link_blocks(content, is_html=is_html)
+    targets = extract_relative_links(scannable, include_fragments=True)
 
     try:
         rel_file: Path = Path(resolved_file.relative_to(root.resolve()).as_posix())
@@ -46,18 +106,39 @@ def check_file_links(file_path: Path, root: Path = ROOT) -> list[str]:
         rel_file = file_path
 
     for target in targets:
+        fragment = extract_link_fragment(target)
         resolved = resolve_relative_link_target(target, file_dir)
         if resolved is None:
+            if fragment is not None:
+                self_anchors = _get_cached_anchors(resolved_file, active_cache)
+                if self_anchors is not None and fragment not in self_anchors:
+                    errors.append(
+                        f"{rel_file.as_posix()}: Broken anchor link '{target}' -> anchor '#{fragment}' does not exist"
+                    )
             continue
 
         if not resolved.exists():
             errors.append(
                 f"{rel_file.as_posix()}: Broken relative link '{target}' -> path does not exist"
             )
-        elif is_html and resolved.is_dir() and not (resolved / "index.html").is_file():
+            continue
+        if is_html and resolved.is_dir() and not (resolved / "index.html").is_file():
             errors.append(
                 f"{rel_file.as_posix()}: Broken directory link '{target}' -> missing index.html"
             )
+            continue
+
+        if fragment is not None:
+            anchor_target = resolved / "index.html" if resolved.is_dir() else resolved
+            if (
+                anchor_target.is_file()
+                and anchor_target.suffix.lower() in DOC_EXTENSIONS
+            ):
+                target_anchors = _get_cached_anchors(anchor_target, active_cache)
+                if target_anchors is not None and fragment not in target_anchors:
+                    errors.append(
+                        f"{rel_file.as_posix()}: Broken anchor link '{target}' -> anchor '#{fragment}' does not exist"
+                    )
     return errors
 
 
@@ -110,10 +191,13 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
         if staged_site.is_dir():
             files.extend(_collect_dir_doc_files(staged_site))
 
+    anchor_cache: dict[Path, set[str]] = {}
     for doc_file in sorted(set(files)):
         if not doc_file.is_file():
             continue
-        errors.extend(check_file_links(doc_file, root=resolved_root))
+        errors.extend(
+            check_file_links(doc_file, root=resolved_root, anchor_cache=anchor_cache)
+        )
 
     return errors
 

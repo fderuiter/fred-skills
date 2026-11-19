@@ -1,6 +1,5 @@
-Use test-gap-analysis to discover uncovered behavioral contracts for <repository> at <revision>.
-Map existing test coverage across components, critical workflows, and error paths.
-Prioritize <critical workflows> and identify missing regression assertions and boundary conditions.
-Detect untested exception paths, edge cases, and fragile or tautological tests.
-Do not modify repository files without explicit user authorization or rely on tautological assertions.
-Document uncovered test gaps using the testing template and assets/testing.schema.json.
+Use test-gap-analysis to discover uncovered behavioral contracts for <repository> at <revision> across <directory>, <symbol>, and issue <issue-number>.
+Map existing test assertions across <critical workflows>, pinpointing untested error branches, boundary edges, and concurrency/rollback paths.
+Detect fragile or tautological assertions and rank coverage gaps by regression severity and blast radius.
+Write `testing.json` conforming to the testing template and `assets/testing.schema.json`.
+Honor <allowed-paths> and <do-not-modify-paths>; do not modify files outside authorized scope or rely on tautological assertions.

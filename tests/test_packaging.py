@@ -712,7 +712,7 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("ruff-format", skip_ids)
 
         run_cmds = [s.get("run", "") for s in validate_steps]
-        for phase in ["lint", "typecheck", "packages", "tests"]:
+        for phase in ["lint", "typecheck", "packages", "docs", "tests"]:
             self.assertTrue(
                 any(
                     f"scripts/run_checks.py --phase {phase}" in cmd for cmd in run_cmds
@@ -938,14 +938,14 @@ class PackageTests(unittest.TestCase):
             ALL_PHASES,
         )
         self.assertEqual(
-            ("lint", "format", "typecheck", "packages", "tests"),
+            ("lint", "format", "typecheck", "packages", "docs", "tests"),
             DEFAULT_PHASES,
         )
         self.assertEqual(
-            ["lint", "format", "typecheck", "packages", "tests"],
+            ["lint", "format", "typecheck", "packages", "docs", "tests"],
             resolve_phases(),
         )
-        self.assertNotIn("docs", resolve_phases())
+        self.assertIn("docs", resolve_phases())
         self.assertEqual(["docs"], resolve_phases(["docs"]))
         self.assertEqual(
             ["lint", "typecheck", "tests"],
@@ -1000,8 +1000,8 @@ class PackageTests(unittest.TestCase):
         self.assertIn("[dry-run:format]", dry.stdout)
         self.assertIn("[dry-run:typecheck]", dry.stdout)
         self.assertIn("[dry-run:packages]", dry.stdout)
+        self.assertIn("[dry-run:docs]", dry.stdout)
         self.assertIn("[dry-run:tests]", dry.stdout)
-        self.assertNotIn("[dry-run:docs]", dry.stdout)
 
         invoked: list[tuple[list[str], dict[str, str]]] = []
 
@@ -2199,6 +2199,99 @@ class PackageTests(unittest.TestCase):
                 any("Duplicate UI short_description" in err for err in all_errors),
                 f"Symlinked openai.yaml must not trigger duplicate short_description: {all_errors}",
             )
+
+    def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
+        errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
+        self.assertEqual([], errors)
+        self.assertEqual(51, telemetry["total_packages"])
+
+        bodies_by_skill: dict[str, str] = {}
+        for prompt_path in sorted((ROOT / "skills").glob("*/assets/prompt.md")):
+            lines = prompt_path.read_text(encoding="utf-8").splitlines()
+            self.assertGreater(
+                len(lines), 1, f"{prompt_path} must have a multi-line body"
+            )
+            normalized = " ".join(" ".join(lines[1:]).split())
+            self.assertTrue(normalized, f"{prompt_path} body after line 1 is empty")
+            bodies_by_skill[prompt_path.parent.parent.name] = normalized
+
+        self.assertEqual(51, len(bodies_by_skill))
+        self.assertEqual(
+            len(bodies_by_skill),
+            len(set(bodies_by_skill.values())),
+            "Every skills/*/assets/prompt.md must have a unique body after line 1",
+        )
+
+    def test_tactical_placeholders_allowed_and_duplicate_or_unknown_prompts_rejected(
+        self,
+    ) -> None:
+        schemas_dir = self.root / "schemas"
+        schemas_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            ROOT / "schemas/evaluation-scenarios.schema.json",
+            schemas_dir / "evaluation-scenarios.schema.json",
+        )
+        self._write_ui_metadata(
+            self.skill,
+            skill_name="sample-audit",
+            short_description="Verify tactical prompt placeholder guardrails",
+        )
+        tactical_body = (
+            "Scope inspection to <directory> and <symbol> with issue <issue-number>.\n"
+            "Write `audit.json` conforming to `assets/audit.schema.json`.\n"
+            "Honor <allowed-paths> and <do-not-modify-paths>; do not modify code unauthorized.\n"
+        )
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+
+        # Unknown placeholders must be rejected.
+        self.prompt.write_text(
+            "Use sample-audit on <repository> with <bogus-placeholder>.\n"
+            + tactical_body,
+            encoding="utf-8",
+        )
+        unknown_errors = validate_skill(self.skill)
+        self.assertTrue(
+            any(
+                "unauthorized placeholder '<bogus-placeholder>'" in err
+                for err in unknown_errors
+            ),
+            unknown_errors,
+        )
+
+        # Restore valid prompt on first skill and clone an identical body after line 1 onto a second skill.
+        self.prompt.write_text(
+            "Use sample-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        twin = self.root / "skills/twin-audit"
+        shutil.copytree(self.skill, twin)
+        (twin / "SKILL.md").write_text(
+            '---\nname: twin-audit\ndescription: "Audit distinct topic with cloned prompt body."\n---\n\n'
+            "# Twin\n\n## Boundaries\n\nDo not modify code.\n\n## Deliver\n\n"
+            "Deliver [audit schema](assets/audit.schema.json).\n",
+            encoding="utf-8",
+        )
+        self._write_ui_metadata(
+            twin,
+            skill_name="twin-audit",
+            short_description="Verify distinct twin UI short description",
+        )
+        (twin / "assets/prompt.md").write_text(
+            "Use twin-audit on <repository> at <revision>.\n" + tactical_body,
+            encoding="utf-8",
+        )
+        dup_errors, _ = validate_with_telemetry(self.root, record_attempts=False)
+        self.assertTrue(
+            any(
+                "Duplicate prompt template body: twin-audit and sample-audit" in err
+                for err in dup_errors
+            ),
+            dup_errors,
+        )
 
 
 if __name__ == "__main__":
