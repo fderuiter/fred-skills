@@ -1078,6 +1078,255 @@ class RunTests(unittest.TestCase):
         self.assertTrue((in_repo_ws / "assets/architecture.schema.json").is_file())
         self.assertEqual([], runs.revalidate(in_repo_ws)["changed_files"])
 
+    @unittest.skipUnless(shutil.which("git"), "Git unavailable")
+    def test_domain_deliverable_semantic_validation_and_revalidation_normalization(
+        self,
+    ):
+        (self.repo / "pkg").mkdir(exist_ok=True)
+        (self.repo / "pkg/helper.py").write_text("def helper():\n    return 1\n")
+        (self.repo / "unchanged.py").write_text("CONST = True\n")
+        for argv in [
+            ["init", "-q"],
+            ["config", "user.name", "Fixture"],
+            ["config", "user.email", "fixture@example.invalid"],
+            ["add", "."],
+            ["commit", "-qm", "fixture"],
+        ]:
+            subprocess.run(["git", "-C", str(self.repo), *argv], check=True)
+        base = repository.git(self.repo, "rev-parse", "HEAD", required=True)
+
+        # 1. Duplicate IDs rejected across architecture.json, review.json, and testing.json
+        ws_arch = self.root / "ws-sem-arch"
+        runs.initialize(self.repo, ws_arch, "design-architecture")
+        dup_arch = {
+            "schema_version": "1.0",
+            "title": "Architecture",
+            "status": "draft",
+            "decisions": [
+                {"id": "ADR-001", "title": "First", "decision": "Use queue"},
+                {"id": "ADR-001", "title": "Duplicate", "decision": "Use stream"},
+            ],
+        }
+        atomic_json(ws_arch / "architecture.json", dup_arch)
+        arch_errs = runs.validate_run(ws_arch)
+        self.assertIn("Duplicate IDs in decisions: ADR-001", arch_errs)
+
+        ws_rev = self.root / "ws-sem-review"
+        runs.initialize(self.repo, ws_rev, "review-code-changes", base=base)
+        dup_rev = {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Duplicate finding IDs",
+            "findings": [
+                {
+                    "id": "REV-1",
+                    "title": "First",
+                    "severity": "high",
+                    "file": "source.py",
+                    "description": "Issue A",
+                },
+                {
+                    "id": "REV-1",
+                    "title": "Second",
+                    "severity": "low",
+                    "file": "unchanged.py",
+                    "description": "Issue B",
+                },
+            ],
+        }
+        atomic_json(ws_rev / "review.json", dup_rev)
+        rev_errs = runs.validate_run(ws_rev)
+        self.assertIn("Duplicate IDs in findings: REV-1", rev_errs)
+
+        ws_test = self.root / "ws-sem-test"
+        runs.initialize(self.repo, ws_test, "expand-automated-tests")
+        dup_test = {
+            "schema_version": "1.0",
+            "component": "pkg.helper",
+            "framework": "unittest",
+            "test_cases": [
+                {
+                    "id": "TC-1",
+                    "name": "test_one",
+                    "description": "Case one",
+                    "oracle_type": "output",
+                },
+                {
+                    "id": "TC-1",
+                    "name": "test_two",
+                    "description": "Case two",
+                    "oracle_type": "state",
+                },
+            ],
+        }
+        atomic_json(ws_test / "testing.json", dup_test)
+        test_errs = runs.validate_run(ws_test)
+        self.assertIn("Duplicate IDs in test_cases: TC-1", test_errs)
+
+        # 2. Unsafe relative paths in review.json findings[*].file are rejected
+        for bad_path in (
+            "../secret.py",
+            "pkg/../../secret.py",
+            "/etc/passwd",
+            "C:/repo/source.py",
+            ".git/config",
+            "pkg\\helper.py",
+            ".",
+        ):
+            with self.subTest(bad_path=bad_path):
+                bad_rev = {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Unsafe path check",
+                    "findings": [
+                        {
+                            "id": "REV-PATH",
+                            "title": "Bad path",
+                            "severity": "medium",
+                            "file": bad_path,
+                            "description": "Points outside repository",
+                        }
+                    ],
+                }
+                atomic_json(ws_rev / "review.json", bad_rev)
+                path_errs = runs.validate_run(ws_rev)
+                self.assertTrue(
+                    any(
+                        "Finding file path must be repository-relative" in e
+                        for e in path_errs
+                    ),
+                    path_errs,
+                )
+
+        # 3. Malformed payloads skip semantic ID and path checks when JSON Schema validation fails
+        malformed_rev = {
+            "schema_version": "1.0",
+            "verdict": "invalid_enum_value",
+            "findings": [
+                {
+                    "id": "REV-DUP",
+                    "title": "One",
+                    "severity": "high",
+                    "file": "../outside.py",
+                    "description": "Desc",
+                },
+                {
+                    "id": "REV-DUP",
+                    "title": "Two",
+                    "severity": "high",
+                    "file": "/etc/passwd",
+                    "description": "Desc",
+                },
+            ],
+        }
+        atomic_json(ws_rev / "review.json", malformed_rev)
+        malformed_errs = runs.validate_run(ws_rev)
+        self.assertTrue(malformed_errs)
+        self.assertFalse(any("Duplicate IDs" in e for e in malformed_errs))
+        self.assertFalse(
+            any(
+                "Finding file path must be repository-relative" in e
+                for e in malformed_errs
+            )
+        )
+
+        # 4. Normalize review.json findings[*].file before comparing against changed_files and skipped,
+        #    and populate needs_impact_review across review.json, architecture.json, and testing.json
+        valid_arch = {
+            "schema_version": "1.0",
+            "title": "Architecture",
+            "status": "accepted",
+            "decisions": [
+                {"id": "ADR-001", "title": "Boundary", "decision": "Isolate"}
+            ],
+        }
+        atomic_json(ws_arch / "architecture.json", valid_arch)
+        valid_test = {
+            "schema_version": "1.0",
+            "component": "pkg.helper",
+            "framework": "unittest",
+            "test_cases": [
+                {
+                    "id": "TC-1",
+                    "name": "test_helper",
+                    "description": "Checks helper",
+                    "oracle_type": "output",
+                }
+            ],
+        }
+        atomic_json(ws_test / "testing.json", valid_test)
+        normalized_rev = {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Review with non-canonical relative paths",
+            "findings": [
+                {
+                    "id": "REV-DOT",
+                    "title": "Dot-prefixed path",
+                    "severity": "high",
+                    "file": "./source.py",
+                    "description": "Changed file with ./ prefix",
+                },
+                {
+                    "id": "REV-SUB",
+                    "title": "Redundant segment path",
+                    "severity": "medium",
+                    "file": "pkg/./helper.py",
+                    "description": "Changed file with /./ segment",
+                },
+                {
+                    "id": "REV-CLEAN",
+                    "title": "Unchanged file",
+                    "severity": "low",
+                    "file": "./unchanged.py",
+                    "description": "Unchanged file should not be stale",
+                },
+            ],
+        }
+        atomic_json(ws_rev / "review.json", normalized_rev)
+        self.assertEqual([], runs.validate_run(ws_rev))
+
+        # Before file modifications: nothing stale, needs_impact_review is empty
+        self.assertEqual([], runs.revalidate(ws_arch)["needs_impact_review"])
+        self.assertEqual([], runs.revalidate(ws_test)["needs_impact_review"])
+        initial_rev = runs.revalidate(ws_rev)
+        self.assertEqual([], initial_rev["stale_finding_ids"])
+        self.assertEqual([], initial_rev["needs_impact_review"])
+
+        # Modify source.py and pkg/helper.py while leaving unchanged.py untouched
+        (self.repo / "source.py").write_text("value = 42\n")
+        (self.repo / "pkg/helper.py").write_text("def helper():\n    return 2\n")
+
+        after_rev = runs.revalidate(ws_rev)
+        self.assertEqual(["pkg/helper.py", "source.py"], after_rev["changed_files"])
+        self.assertEqual(["REV-DOT", "REV-SUB"], after_rev["stale_finding_ids"])
+        self.assertEqual(
+            ["REV-DOT", "REV-SUB", "REV-CLEAN"], after_rev["needs_impact_review"]
+        )
+
+        after_arch = runs.revalidate(ws_arch)
+        self.assertEqual([], after_arch["stale_finding_ids"])
+        self.assertEqual(["ADR-001"], after_arch["needs_impact_review"])
+
+        after_test = runs.revalidate(ws_test)
+        self.assertEqual([], after_test["stale_finding_ids"])
+        self.assertEqual(["TC-1"], after_test["needs_impact_review"])
+
+        # Direct skipped-key normalization check (including backslash separator)
+        stale_skipped, _ = runs._revalidate_domain_records(
+            {
+                "findings": [
+                    {"id": "REV-SKIP", "file": "pkg\\helper.py"},
+                    {"id": "REV-OK", "file": "./unchanged.py"},
+                ]
+            },
+            "review.json",
+            changed=[],
+            skipped={"pkg/helper.py": "size-limit"},
+            complete=True,
+        )
+        self.assertEqual(["REV-SKIP"], stale_skipped)
+
 
 class ReportTests(unittest.TestCase):
     def test_untrusted_source_is_escaped_and_no_network_is_required(self):
