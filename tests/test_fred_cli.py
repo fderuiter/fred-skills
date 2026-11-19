@@ -947,6 +947,86 @@ class FredCLITests(unittest.TestCase):
             self.assertTrue(out_file.is_file())
             self.assertIn("<!doctype html>", out_file.read_text(encoding="utf-8"))
 
+    def test_report_loads_sibling_remediation_and_renders_comparison_tables(self):
+        import shutil
+        import tempfile
+
+        audit_fixture = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = tmp_path / "reconciled_run"
+            run_dir.mkdir()
+            shutil.copyfile(audit_fixture, run_dir / "audit.json")
+            proof_path = tmp_path / "verification.json"
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "before_revision": "rev-a",
+                        "after_revision": "rev-b",
+                        "original_reproduced": True,
+                        "regression_passed": True,
+                        "safe_controls_passed": True,
+                        "commands": ["pytest tests/test_fix.py"],
+                        "result": "Passed regression and safe controls",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rec_proc = self.run_cli(
+                "reconcile",
+                str(run_dir),
+                "--finding",
+                "F-1",
+                "--state",
+                "verified-fixed",
+                "--note",
+                "Verified via regression harness",
+                "--verification",
+                str(proof_path),
+            )
+            self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
+
+            # Directory input auto-loads sibling remediation.json
+            dir_report = tmp_path / "dir_report.html"
+            proc_dir = self.run_cli("report", str(run_dir), "--output", str(dir_report))
+            self.assertEqual(0, proc_dir.returncode, proc_dir.stderr)
+            dir_html = dir_report.read_text(encoding="utf-8")
+            self.assertIn("Verified fixed", dir_html)
+            self.assertIn("Verified via regression harness", dir_html)
+            self.assertIn('id="remediation"', dir_html)
+
+            # Explicit audit.json file input in run_dir also auto-loads sibling remediation.json
+            file_report = tmp_path / "file_report.html"
+            proc_file = self.run_cli(
+                "report", str(run_dir / "audit.json"), "--output", str(file_report)
+            )
+            self.assertEqual(0, proc_file.returncode, proc_file.stderr)
+            self.assertIn("Verified fixed", file_report.read_text(encoding="utf-8"))
+
+            # --prior renders structured HTML comparison tables with #F-* links and zero <pre>
+            prior_dir = tmp_path / "prior_run"
+            prior_dir.mkdir()
+            prior_audit = json.loads(audit_fixture.read_text(encoding="utf-8"))
+            prior_audit["findings"] = []
+            (prior_dir / "audit.json").write_text(
+                json.dumps(prior_audit), encoding="utf-8"
+            )
+            cmp_report = tmp_path / "cmp_report.html"
+            proc_cmp = self.run_cli(
+                "report",
+                str(run_dir),
+                "--prior",
+                str(prior_dir),
+                "--output",
+                str(cmp_report),
+            )
+            self.assertEqual(0, proc_cmp.returncode, proc_cmp.stderr)
+            cmp_html = cmp_report.read_text(encoding="utf-8")
+            comp_section = cmp_html[cmp_html.index('<section id="comparison">') :]
+            self.assertIn('<a href="#F-1">F-1</a>', comp_section)
+            self.assertIn("<table>", comp_section)
+            self.assertNotIn("<pre>", comp_section)
+
     def test_report_omitting_audit_argument_uses_cwd(self):
         import shutil
         import tempfile
@@ -1759,6 +1839,137 @@ class FredCLITests(unittest.TestCase):
                     )
                     self.assertEqual(1, rec_proc.returncode)
                     self.assertIn("audit.json", rec_proc.stderr)
+
+    def test_cli_profile_and_config_scope_domain_plans_and_copy_suite_assets(self):
+        import shutil
+
+        if not shutil.which("git"):
+            self.skipTest("Git unavailable")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir).resolve()
+            repo = tmp_path / "profile_repo"
+            repo.mkdir()
+            (repo / "app.py").write_text("def calc(x):\n    return x * 2\n")
+            for argv in [
+                ["init", "-q"],
+                ["config", "user.name", "Fixture"],
+                ["config", "user.email", "fixture@example.invalid"],
+                ["add", "."],
+                ["commit", "-qm", "initial"],
+            ]:
+                subprocess.run(["git", "-C", str(repo), *argv], check=True)
+            base_rev = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "app.py").write_text("def calc(x):\n    return x * 2 + 1\n")
+            config_file = ROOT / "examples/project-config.yaml"
+
+            cases = [
+                (
+                    "design-architecture",
+                    "software-architecture",
+                    [],
+                    "architecture.json",
+                    [
+                        "arch-decision-record",
+                        "arch-boundary-specification",
+                        "arch-component-decomposition",
+                    ],
+                    ["architecture-template.md", "architecture.schema.json"],
+                ),
+                (
+                    "review-code-changes",
+                    "code-review",
+                    ["--base", base_rev],
+                    "review.json",
+                    [
+                        "review-diff-analysis",
+                        "review-invariant-violations",
+                        "review-actionable-feedback",
+                    ],
+                    ["review-template.md", "review.schema.json"],
+                ),
+                (
+                    "expand-automated-tests",
+                    "automated-testing",
+                    [],
+                    "testing.json",
+                    [
+                        "test-gap-analysis",
+                        "test-case-generation",
+                        "test-suite-verification",
+                    ],
+                    ["testing-template.md", "testing.schema.json"],
+                ),
+            ]
+
+            for (
+                task,
+                suite_name,
+                extra_args,
+                deliverable,
+                expected_skills,
+                asset_files,
+            ) in cases:
+                for budget in ("brief", "balanced", "deep"):
+                    for flag_args in (
+                        ["--profile", "modular-backend"],
+                        ["--config", str(config_file)],
+                    ):
+                        with self.subTest(task=task, budget=budget, flags=flag_args[0]):
+                            plan_proc = self.run_cli(
+                                "plan",
+                                str(repo),
+                                "--task",
+                                task,
+                                "--budget",
+                                budget,
+                                *flag_args,
+                                *extra_args,
+                                "--json",
+                            )
+                            self.assertEqual(0, plan_proc.returncode, plan_proc.stderr)
+                            plan_json = json.loads(plan_proc.stdout)["plan"]
+                            self.assertEqual(expected_skills, plan_json["skills"])
+                            self.assertEqual([], plan_json["deferred_skills"])
+                            self.assertFalse(
+                                any(
+                                    s.startswith("repo-audit-")
+                                    for s in plan_json["skills"]
+                                    + plan_json["deferred_skills"]
+                                )
+                            )
+
+                ws = tmp_path / f"ws-cfg-{task}"
+                init_proc = self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    task,
+                    "--budget",
+                    "brief",
+                    "--config",
+                    str(config_file),
+                    "--output",
+                    str(ws),
+                    *extra_args,
+                    "--json",
+                )
+                self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+                self.assertTrue((ws / deliverable).is_file())
+                self.assertFalse((ws / "audit.json").exists())
+                for asset_name in asset_files:
+                    copied = ws / "assets" / asset_name
+                    canonical = (
+                        ROOT / "shared" / suite_name / "resources/assets" / asset_name
+                    )
+                    self.assertTrue(copied.is_file(), f"Missing {copied}")
+                    self.assertEqual(canonical.read_bytes(), copied.read_bytes())
+                prompt_text = (ws / "prompt.md").read_text(encoding="utf-8")
+                self.assertNotIn("repo-audit-", prompt_text)
+                self.assertNotIn("audit.json", prompt_text)
+                val_proc = self.run_cli("validate-run", str(ws))
+                self.assertEqual(0, val_proc.returncode, val_proc.stderr)
 
 
 class FredDispatchRegistryTests(unittest.TestCase):

@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: skills-${{ github.workflow }}-${{ github.ref }}
+  group: skills-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}
   cancel-in-progress: false
 
 env:

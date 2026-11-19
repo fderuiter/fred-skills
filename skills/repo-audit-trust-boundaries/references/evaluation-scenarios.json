@@ -4,13 +4,13 @@
     {
       "id": "trust-boundaries-failure",
       "prompt": "Audit this supplied repository for trust and authorization boundaries.",
-      "fixture_shape": "Tenant A supplies tenant B\u2019s object ID to a handler that authenticates the caller but never binds the object to that tenant.",
+      "fixture_shape": "Tenant A supplies tenant B’s object ID to a handler that authenticates the caller but never binds the object to that tenant.",
       "expected_behavior": [
         "Inspect actual reachable code and safeguards.",
         "Tie the intended guarantee to independent evidence.",
         "Give a concrete trace, actual validation state, and coverage limitations."
       ],
-      "evaluation_note": "Fixture shape is for the author only; execute with raw code and a neutral task, without revealing expected findings."
+      "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral audit task without revealing expected findings."
     },
     {
       "id": "trust-boundaries-safe",
@@ -20,15 +20,17 @@
         "Inspect the safeguard and avoid a defect claim when it establishes the contract.",
         "Record a healthy pattern or refuted candidate."
       ],
-      "evaluation_note": "Construct a raw safe implementation; keep this expected outcome out of the execution prompt."
+      "evaluation_note": "Construct a raw safe control; keep expected audit outcomes out of the execution prompt."
     },
     {
       "id": "trust-boundaries-routing",
-      "prompt": "Fix a spelling mistake in the project description.",
+      "prompt": "Audit URL path normalization, percent-encoding ambiguity, and Unicode canonicalization before allowlist checks.",
       "expected_behavior": [
-        "Do not activate this specialist solely because the task concerns a repository."
+        "Recognize that this request targets repo-audit-canonicalization rather than repo-audit-trust-boundaries.",
+        "Defer or route to repo-audit-canonicalization instead of forcing an out-of-scope repository-audits pass."
       ],
-      "evaluation_note": "This is an activation test, not an instruction to perform an audit."
+      "evaluation_note": "Near-neighbor sibling routing check within repository-audits; verify routing to repo-audit-canonicalization instead of repo-audit-trust-boundaries.",
+      "sibling_skill": "repo-audit-canonicalization"
     }
   ],
   "execution_state": "specified-not-executed; see companion validation report for actual sampled runs"

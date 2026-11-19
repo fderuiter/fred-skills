@@ -295,7 +295,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.workflow_data.get("concurrency"),
             {
-                "group": "skills-${{ github.workflow }}-${{ github.ref }}",
+                "group": "skills-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}",
                 "cancel-in-progress": False,
             },
         )
@@ -319,6 +319,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("release", jobs)
 
         preflight = jobs["preflight"]
+        self.assertNotIn("concurrency", preflight)
         self.assertEqual(preflight.get("permissions"), {"contents": "read"})
         self.assertEqual(
             set(preflight.get("outputs", {}).keys()),
@@ -331,6 +332,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
 
         validate_job = jobs["validate"]
+        self.assertNotIn("concurrency", validate_job)
         self.assertEqual(validate_job.get("needs"), "preflight")
         self.assertEqual(
             validate_job.get("if"), "needs.preflight.outputs.should_build == 'true'"
@@ -343,6 +345,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
 
         build = jobs["build"]
+        self.assertNotIn("concurrency", build)
         self.assertEqual(build.get("needs"), ["preflight", "validate"])
         self.assertEqual(
             build.get("if"), "needs.preflight.outputs.should_build == 'true'"
@@ -378,6 +381,120 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(release_checkout["with"].get("fetch-depth"), 0)
         self.assertIs(release_checkout["with"]["persist-credentials"], False)
+
+    def test_release_concurrency_isolates_builds_and_locks_release_per_tag(
+        self,
+    ) -> None:
+        """release.yml must key workflow runs by SHA and run_id while locking jobs.release per tag."""
+        import re
+        from types import SimpleNamespace
+
+        expr_pattern = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+
+        def to_ns(val: Any) -> Any:
+            if isinstance(val, dict):
+                return SimpleNamespace(**{k: to_ns(v) for k, v in val.items()})
+            return val
+
+        def eval_gha_template(
+            template: str,
+            github_ctx: dict[str, Any],
+            needs_ctx: dict[str, Any] | None = None,
+        ) -> Any:
+            def eval_expr(expr: str) -> Any:
+                py_expr = expr.replace("&&", " and ").replace("||", " or ")
+                return eval(
+                    py_expr,
+                    {"__builtins__": {}},
+                    {
+                        "github": to_ns(github_ctx),
+                        "needs": to_ns(needs_ctx or {}),
+                    },
+                )
+
+            full_match = expr_pattern.fullmatch(template.strip())
+            if full_match:
+                return eval_expr(full_match.group(1))
+            return expr_pattern.sub(lambda m: str(eval_expr(m.group(1))), template)
+
+        wf_concurrency = self.workflow_data["concurrency"]
+        wf_group_tpl = wf_concurrency["group"]
+        self.assertIs(wf_concurrency["cancel-in-progress"], False)
+
+        # Rapid main push burst: every commit run resolves a distinct SHA + run_id group.
+        main_run_1 = {
+            "workflow": "Release",
+            "ref": "refs/heads/main",
+            "sha": "1" * 40,
+            "run_id": "9001",
+        }
+        main_run_2 = {
+            "workflow": "Release",
+            "ref": "refs/heads/main",
+            "sha": "2" * 40,
+            "run_id": "9002",
+        }
+        main_run_3 = {
+            "workflow": "Release",
+            "ref": "refs/heads/main",
+            "sha": "3" * 40,
+            "run_id": "9003",
+        }
+        wf_groups_burst = {
+            eval_gha_template(wf_group_tpl, main_run_1),
+            eval_gha_template(wf_group_tpl, main_run_2),
+            eval_gha_template(wf_group_tpl, main_run_3),
+        }
+        self.assertEqual(3, len(wf_groups_burst))
+
+        # Concurrent workflow_dispatch dry-run builds or tag push sharing the same commit SHA
+        # still resolve distinct groups via run_id so jobs.build never suffers queue eviction.
+        dispatch_run_a = {
+            "workflow": "Release",
+            "ref": "refs/heads/main",
+            "sha": "1" * 40,
+            "run_id": "9004",
+        }
+        tag_push_same_sha = {
+            "workflow": "Release",
+            "ref": "refs/tags/v0.2.0",
+            "sha": "1" * 40,
+            "run_id": "9005",
+        }
+        self.assertEqual(
+            3,
+            len(
+                {
+                    eval_gha_template(wf_group_tpl, main_run_1),
+                    eval_gha_template(wf_group_tpl, dispatch_run_a),
+                    eval_gha_template(wf_group_tpl, tag_push_same_sha),
+                }
+            ),
+        )
+
+        # jobs.release serializes publication per resolved release_tag across triggers.
+        rel_concurrency = self.workflow_data["jobs"]["release"]["concurrency"]
+        rel_group_tpl = rel_concurrency["group"]
+        self.assertIs(rel_concurrency["cancel-in-progress"], False)
+
+        needs_v020 = {"preflight": {"outputs": {"release_tag": "v0.2.0"}}}
+        needs_v021 = {"preflight": {"outputs": {"release_tag": "v0.2.1"}}}
+        needs_empty = {"preflight": {"outputs": {"release_tag": ""}}}
+
+        lock_main_v020 = eval_gha_template(rel_group_tpl, main_run_1, needs_v020)
+        lock_tag_v020 = eval_gha_template(rel_group_tpl, tag_push_same_sha, needs_v020)
+        lock_dispatch_v020 = eval_gha_template(
+            rel_group_tpl, dispatch_run_a, needs_v020
+        )
+        lock_main_v021 = eval_gha_template(rel_group_tpl, main_run_2, needs_v021)
+        lock_fallback = eval_gha_template(rel_group_tpl, tag_push_same_sha, needs_empty)
+
+        self.assertEqual("skills-release-publish-v0.2.0", lock_main_v020)
+        self.assertEqual(lock_main_v020, lock_tag_v020)
+        self.assertEqual(lock_main_v020, lock_dispatch_v020)
+        self.assertEqual("skills-release-publish-v0.2.1", lock_main_v021)
+        self.assertNotEqual(lock_main_v020, lock_main_v021)
+        self.assertEqual("skills-release-publish-refs/tags/v0.2.0", lock_fallback)
 
     def test_no_inline_workflow_expressions_in_shell_steps(self) -> None:
         """Shell run blocks must consume inputs via env blocks rather than inline expressions."""
