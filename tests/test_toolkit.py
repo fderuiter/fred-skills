@@ -1357,6 +1357,9 @@ class ReportTests(unittest.TestCase):
             self.assertIn('<div id="empty-state" class="empty-state" hidden>', page)
             self.assertIn('id="reset-filters"', page)
             self.assertIn("--table-border", page)
+            self.assertIn("overflow-wrap:anywhere", page)
+            self.assertIn("@media (max-width: 640px)", page)
+            self.assertIn("@media print", page)
 
     def test_mixed_empty_sections_and_badge_severities(self):
         audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
@@ -1402,6 +1405,8 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn('id="count"', page)
             self.assertNotIn('id="empty-state"', page)
             self.assertNotIn('id="reset-filters"', page)
+            self.assertNotIn('id="toggle-details"', page)
+            self.assertNotIn(">Expand all</button>", page)
             self.assertNotIn("Search findings", page)
             self.assertNotIn("Evidence status", page)
             self.assertNotIn('article class="finding"', page)
@@ -1420,6 +1425,10 @@ class ReportTests(unittest.TestCase):
             self.assertIn('id="count"', page)
             self.assertIn('id="empty-state"', page)
             self.assertIn('id="reset-filters"', page)
+            self.assertIn(
+                '<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>',
+                page,
+            )
             self.assertIn("Search findings", page)
             self.assertIn("Severity", page)
             self.assertIn("Evidence status", page)
@@ -1938,6 +1947,10 @@ class ReportTests(unittest.TestCase):
                     self.assertIn("connect-src &#x27;none&#x27;", html)
                     self.assertIn(expected_heading, html)
                     self.assertIn('id="query"', html)
+                    if label == "arch":
+                        self.assertIn('id="toggle-details"', html)
+                    else:
+                        self.assertNotIn('id="toggle-details"', html)
 
                     # Prior comparison, remediation, and issue drafts reject domain artifacts clearly
                     with self.assertRaises(ValueError) as prior_ctx:
