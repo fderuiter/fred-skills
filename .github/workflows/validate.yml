@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -53,7 +54,15 @@ jobs:
       - name: Check Python static types
         run: python scripts/run_checks.py --phase typecheck
       - name: Validate skill packages and catalogs
-        run: python scripts/run_checks.py --phase packages --telemetry validation-telemetry.json
+        run: python scripts/run_checks.py --phase packages --telemetry validation-telemetry.json --base-ref "${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}" --step-summary
+      - name: Upload skill validation telemetry
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validation-telemetry-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: validation-telemetry.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Verify Makefile syntax
         if: runner.os != 'Windows'
         run: make -n check
