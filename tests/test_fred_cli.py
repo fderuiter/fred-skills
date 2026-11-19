@@ -947,6 +947,86 @@ class FredCLITests(unittest.TestCase):
             self.assertTrue(out_file.is_file())
             self.assertIn("<!doctype html>", out_file.read_text(encoding="utf-8"))
 
+    def test_report_loads_sibling_remediation_and_renders_comparison_tables(self):
+        import shutil
+        import tempfile
+
+        audit_fixture = ROOT / "tests/fixtures/audit-valid.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            run_dir = tmp_path / "reconciled_run"
+            run_dir.mkdir()
+            shutil.copyfile(audit_fixture, run_dir / "audit.json")
+            proof_path = tmp_path / "verification.json"
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "before_revision": "rev-a",
+                        "after_revision": "rev-b",
+                        "original_reproduced": True,
+                        "regression_passed": True,
+                        "safe_controls_passed": True,
+                        "commands": ["pytest tests/test_fix.py"],
+                        "result": "Passed regression and safe controls",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rec_proc = self.run_cli(
+                "reconcile",
+                str(run_dir),
+                "--finding",
+                "F-1",
+                "--state",
+                "verified-fixed",
+                "--note",
+                "Verified via regression harness",
+                "--verification",
+                str(proof_path),
+            )
+            self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
+
+            # Directory input auto-loads sibling remediation.json
+            dir_report = tmp_path / "dir_report.html"
+            proc_dir = self.run_cli("report", str(run_dir), "--output", str(dir_report))
+            self.assertEqual(0, proc_dir.returncode, proc_dir.stderr)
+            dir_html = dir_report.read_text(encoding="utf-8")
+            self.assertIn("Verified fixed", dir_html)
+            self.assertIn("Verified via regression harness", dir_html)
+            self.assertIn('id="remediation"', dir_html)
+
+            # Explicit audit.json file input in run_dir also auto-loads sibling remediation.json
+            file_report = tmp_path / "file_report.html"
+            proc_file = self.run_cli(
+                "report", str(run_dir / "audit.json"), "--output", str(file_report)
+            )
+            self.assertEqual(0, proc_file.returncode, proc_file.stderr)
+            self.assertIn("Verified fixed", file_report.read_text(encoding="utf-8"))
+
+            # --prior renders structured HTML comparison tables with #F-* links and zero <pre>
+            prior_dir = tmp_path / "prior_run"
+            prior_dir.mkdir()
+            prior_audit = json.loads(audit_fixture.read_text(encoding="utf-8"))
+            prior_audit["findings"] = []
+            (prior_dir / "audit.json").write_text(
+                json.dumps(prior_audit), encoding="utf-8"
+            )
+            cmp_report = tmp_path / "cmp_report.html"
+            proc_cmp = self.run_cli(
+                "report",
+                str(run_dir),
+                "--prior",
+                str(prior_dir),
+                "--output",
+                str(cmp_report),
+            )
+            self.assertEqual(0, proc_cmp.returncode, proc_cmp.stderr)
+            cmp_html = cmp_report.read_text(encoding="utf-8")
+            comp_section = cmp_html[cmp_html.index('<section id="comparison">') :]
+            self.assertIn('<a href="#F-1">F-1</a>', comp_section)
+            self.assertIn("<table>", comp_section)
+            self.assertNotIn("<pre>", comp_section)
+
     def test_report_omitting_audit_argument_uses_cwd(self):
         import shutil
         import tempfile

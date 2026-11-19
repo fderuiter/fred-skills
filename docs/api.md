@@ -668,18 +668,24 @@ Escapes a value into an HTML-safe string with double and single quotes escaped.
 ### `render`
 
 ```python
-def render(audit: dict, output: Path, prior: dict | None = None) -> None
+def render(
+    audit: dict,
+    output: Path,
+    prior: dict | None = None,
+    remediation: dict | None = None,
+) -> Path
 ```
 
-Renders a standalone, single-file interactive HTML report from an audit ledger and optional prior audit ledger for diff comparison.
+Renders a standalone, single-file interactive HTML report from an audit ledger, optional prior audit ledger for structured diff comparison tables, and optional remediation ledger for reconciled fix states.
 
 - **Parameters:**
-  - `audit` (`dict`): Current audit ledger dictionary.
-  - `output` (`Path`): Output file path for the generated HTML report.
-  - `prior` (`dict | None`, default: `None`): Prior audit ledger dictionary to render comparison sections.
-- **Returns:** `None`
+  - `audit` (`dict`): Current audit ledger dictionary (or domain deliverable dictionary).
+  - `output` (`Path`): Output directory or file path for the generated HTML report.
+  - `prior` (`dict | None`, default: `None`): Prior audit ledger dictionary to render structured comparison tables.
+  - `remediation` (`dict | None`, default: `None`): Optional `remediation.json` dictionary containing reconciled finding state and note records, rendered separately from evidence certainty.
+- **Returns:** `Path` — Resolved file path of the written HTML report.
 - **Exceptions:**
-  - `ValueError`: Raised if `audit` fails schema or consistency validation.
+  - `ValueError`: Raised if `audit` or `remediation` fails schema or consistency validation, or if `prior` or `remediation` is supplied for a non-audit domain artifact.
 
 ---
 
