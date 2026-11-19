@@ -169,7 +169,7 @@ class BuildSiteTests(unittest.TestCase):
         """Offline explorer uses .md links, web explorer uses .html links, and both render all packs and hosts."""
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
         hosts = read_json(ROOT / "catalog/hosts.json")["hosts"]
-        self.assertEqual(12, len(packs))
+        self.assertEqual(11, len(packs))
         self.assertGreaterEqual(len(hosts), 4)
 
         offline_explorer = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")

@@ -2,8 +2,8 @@
 
 Portable engineering workflows for investigating repositories, planning useful fixes,
 and verifying that those fixes work. **51 standalone skills**: 33 audit domains,
-a coordinator, findings synthesis, six workflows from finding verification to
-remediation reconciliation, and nine software architecture, code review, and automated
+a coordinator, diagnostics, findings synthesis, six workflows from finding verification
+to remediation reconciliation, and nine software architecture, code review, and automated
 testing skills. All packages currently have experimental maturity.
 
 Start with a task in the [task guide](docs/experience.md), browse the

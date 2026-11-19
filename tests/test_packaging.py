@@ -66,18 +66,22 @@ class PackageTests(unittest.TestCase):
                             "id": "sample-audit-failure",
                             "prompt": "Audit synthetic contracts when explicitly requested.",
                             "expected_behavior": ["Report finding with evidence."],
+                            "evaluation_note": "Fixture shape is for the author only; execute with raw source and a neutral audit task without revealing expected findings.",
                         },
                         {
                             "id": "sample-audit-safe",
                             "prompt": "Audit synthetic contracts when explicitly requested.",
                             "expected_behavior": ["Safeguards verified, no defect."],
+                            "evaluation_note": "Construct a raw safe control; keep expected audit outcomes out of the execution prompt.",
                         },
                         {
                             "id": "sample-audit-routing",
-                            "prompt": "Fix a spelling mistake in the project description.",
+                            "sibling_skill": "sample-sibling-audit",
+                            "prompt": "Audit asynchronous cancellation propagation and stale completion handlers across worker tasks.",
                             "expected_behavior": [
-                                "Do not activate this specialist solely because the task concerns a repository."
+                                "Route this request to sample-sibling-audit instead of activating sample-audit."
                             ],
+                            "evaluation_note": "Near-neighbor sibling routing check within repository-audits; verify routing to sample-sibling-audit.",
                         },
                     ],
                 }
@@ -117,6 +121,142 @@ class PackageTests(unittest.TestCase):
         errors = validate_skill(self.skill)
         self.assertTrue(
             any("references/evaluation-scenarios.json" in error for error in errors)
+        )
+
+    def test_generic_typo_routing_prompt_and_misplaced_audit_notes_are_rejected(self):
+        # 1. Generic spelling/typo prompt is rejected
+        data = json.loads(self.scenarios_file.read_text(encoding="utf-8"))
+        data["scenarios"][2]["prompt"] = (
+            "Fix a spelling mistake in the project description."
+        )
+        self.scenarios_file.write_text(json.dumps(data), encoding="utf-8")
+        errors = validate_skill(self.skill)
+        self.assertTrue(
+            any("generic typo or proofreading prompt" in error for error in errors),
+            f"Expected generic typo prompt error, got: {errors}",
+        )
+
+        # 2. Misplaced audit notes inside a software-architecture skill are rejected
+        arch_skill = self.root / "skills/arch-sample-spec"
+        shutil.copytree(self.skill, arch_skill)
+        (arch_skill / "SKILL.md").write_text(
+            '---\nname: arch-sample-spec\ndescription: "Specify sample architecture boundaries."\n---\n\n# Arch Sample\n\n## Deliver\n\nDeliver architecture spec.\n',
+            encoding="utf-8",
+        )
+        (arch_skill / "assets/prompt.md").write_text(
+            "Use arch-sample-spec on <repository> at <revision>. Do not invent ungrounded boundaries.\n",
+            encoding="utf-8",
+        )
+        (arch_skill / "references/evaluation-scenarios.json").write_text(
+            json.dumps(
+                {
+                    "topic": "arch-sample-spec",
+                    "scenarios": [
+                        {
+                            "id": "arch-sample-spec-failure",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Document trust boundary."],
+                            "evaluation_note": "Execute without revealing expected findings.",
+                        },
+                        {
+                            "id": "arch-sample-spec-safe",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Verify clean gateway."],
+                            "evaluation_note": "Construct a raw safe implementation.",
+                        },
+                        {
+                            "id": "arch-sample-spec-routing",
+                            "sibling_skill": "arch-decision-record",
+                            "prompt": "Author an architectural decision record comparing queue trade-offs.",
+                            "expected_behavior": [
+                                "Route to arch-decision-record instead."
+                            ],
+                            "evaluation_note": "This is an activation test, not an instruction to perform an audit.",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        arch_errors = validate_skill(arch_skill)
+        self.assertTrue(
+            any("misplaced" in err or "legacy audit" in err for err in arch_errors),
+            f"Expected misplaced audit note errors, got: {arch_errors}",
+        )
+
+        # 3. Out-of-suite sibling_skill is rejected when catalog/suites.json defines suite siblings
+        (self.root / "catalog").mkdir(exist_ok=True)
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "software-architecture",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Arch",
+                                    "skills": [
+                                        "arch-sample-spec",
+                                        "arch-decision-record",
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "code-review",
+                            "phases": [
+                                {
+                                    "id": 0,
+                                    "title": "Review",
+                                    "skills": ["review-diff-analysis"],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (arch_skill / "references/evaluation-scenarios.json").write_text(
+            json.dumps(
+                {
+                    "topic": "arch-sample-spec",
+                    "scenarios": [
+                        {
+                            "id": "arch-sample-spec-failure",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Document trust boundary."],
+                            "evaluation_note": "Execute without revealing expected boundary outcomes.",
+                        },
+                        {
+                            "id": "arch-sample-spec-safe",
+                            "prompt": "Specify service boundaries for this module.",
+                            "expected_behavior": ["Verify clean gateway."],
+                            "evaluation_note": "Construct a raw safe boundary control.",
+                        },
+                        {
+                            "id": "arch-sample-spec-routing",
+                            "sibling_skill": "review-diff-analysis",
+                            "prompt": "Inspect pull request diff hunks and caller blast radius.",
+                            "expected_behavior": [
+                                "Route to review-diff-analysis instead."
+                            ],
+                            "evaluation_note": "Sibling routing check for review-diff-analysis.",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cross_suite_errors = validate_skill(arch_skill)
+        self.assertTrue(
+            any(
+                "not a member of suite 'software-architecture'" in err
+                for err in cross_suite_errors
+            ),
+            f"Expected cross-suite sibling error, got: {cross_suite_errors}",
         )
 
     def test_name_mismatch_is_rejected(self):
@@ -216,17 +356,31 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
+        root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual(root_version, marketplace_default["version"])
+        self.assertEqual(root_version, marketplace_default["metadata"]["version"])
+        self.assertTrue(marketplace_default["description"])
 
         (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
         problems_version = build(self.root, check=True)
         self.assertTrue(
             any("gemini-extension.json" in problem for problem in problems_version)
         )
+        self.assertTrue(
+            any(
+                ".claude-plugin/marketplace.json" in problem
+                for problem in problems_version
+            )
+        )
         self.assertEqual([], build(self.root))
         self.assertEqual(
             "1.2.3",
             json.loads(gemini_ext_path.read_text(encoding="utf-8"))["version"],
         )
+        updated_marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual("1.2.3", updated_marketplace["version"])
+        self.assertEqual("1.2.3", updated_marketplace["metadata"]["version"])
 
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
         cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
@@ -358,6 +512,7 @@ class PackageTests(unittest.TestCase):
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
         ]
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         for rel_manifest in [
             ".claude-plugin/marketplace.json",
             ".cursor-plugin/marketplace.json",
@@ -366,6 +521,10 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(manifest_path.is_file())
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(data["name"], "fred-skills")
+            self.assertEqual(data["version"], active_version)
+            self.assertTrue(data["description"])
+            self.assertEqual(data["description"], data["metadata"]["description"])
+            self.assertEqual(data["metadata"]["version"], active_version)
             self.assertEqual(data["owner"]["name"], "fderuiter")
             plugins = data["plugins"]
             self.assertEqual(len(plugins), 1 + len(packs) + len(suite_skills))
@@ -465,6 +624,10 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(hooks[hook_id].get("language"), "system")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
             self.assertTrue(hooks[hook_id].get("always_run", False))
+        self.assertEqual(
+            hooks["validate-skills"].get("entry"),
+            "python scripts/validate_skills.py --telemetry validation-telemetry.json",
+        )
         self.assertEqual(hooks["unit-tests"].get("stages"), ["pre-push"])
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
@@ -540,6 +703,22 @@ class PackageTests(unittest.TestCase):
                 ),
                 f"validate.yml must run dedicated '{phase}' phase step",
             )
+        self.assertTrue(
+            any(
+                "scripts/run_checks.py --phase packages --telemetry validation-telemetry.json"
+                in cmd
+                for cmd in run_cmds
+            ),
+            "validate.yml packages phase must export validation-telemetry.json",
+        )
+        self.assertFalse(
+            any(cmd.strip().startswith("ruff ") for cmd in run_cmds),
+            "validate.yml must not run duplicate standalone ruff commands",
+        )
+        self.assertFalse(
+            any(cmd.strip() == "make check" for cmd in run_cmds),
+            "validate.yml must not run duplicate make check command",
+        )
         self.assertEqual(
             1,
             sum(
@@ -593,6 +772,10 @@ class PackageTests(unittest.TestCase):
             **push_ctx_a,
             "sha": "c6b4610700000000000000000000000000000002",
         }
+        push_ctx_c = {
+            **push_ctx_a,
+            "sha": "e8d6832900000000000000000000000000000004",
+        }
         pr_ctx_1 = {
             "workflow": "Validate skill packages",
             "event_name": "pull_request",
@@ -603,24 +786,47 @@ class PackageTests(unittest.TestCase):
             **pr_ctx_1,
             "sha": "d7c5721800000000000000000000000000000003",
         }
+        branch_push_1 = {
+            "workflow": "Validate skill packages",
+            "event_name": "push",
+            "ref": "refs/heads/feature/branch",
+            "sha": "a111111100000000000000000000000000000001",
+        }
+        branch_push_2 = {
+            **branch_push_1,
+            "sha": "b222222200000000000000000000000000000002",
+        }
 
         group_push_a = eval_gha_template(group_tpl, push_ctx_a)
         group_push_b = eval_gha_template(group_tpl, push_ctx_b)
-        self.assertNotEqual(group_push_a, group_push_b)
+        group_push_c = eval_gha_template(group_tpl, push_ctx_c)
+        self.assertEqual(3, len({group_push_a, group_push_b, group_push_c}))
         self.assertIn(push_ctx_a["sha"], group_push_a)
         self.assertIn(push_ctx_b["sha"], group_push_b)
+        self.assertIn(push_ctx_c["sha"], group_push_c)
         self.assertEqual(group_push_a, eval_gha_template(group_tpl, push_ctx_a))
         self.assertIs(eval_gha_template(cancel_tpl, push_ctx_a), False)
         self.assertIs(eval_gha_template(cancel_tpl, push_ctx_b), False)
+        self.assertIs(eval_gha_template(cancel_tpl, push_ctx_c), False)
 
         group_pr_1 = eval_gha_template(group_tpl, pr_ctx_1)
         group_pr_2 = eval_gha_template(group_tpl, pr_ctx_2)
         self.assertEqual(
             group_pr_1, "skills-Validate skill packages-refs/pull/42/merge"
         )
+        self.assertNotIn(pr_ctx_1["sha"], group_pr_1)
         self.assertEqual(group_pr_1, group_pr_2)
         self.assertNotEqual(group_push_a, group_pr_1)
         self.assertIs(eval_gha_template(cancel_tpl, pr_ctx_1), True)
+
+        group_branch_1 = eval_gha_template(group_tpl, branch_push_1)
+        group_branch_2 = eval_gha_template(group_tpl, branch_push_2)
+        self.assertEqual(
+            group_branch_1, "skills-Validate skill packages-refs/heads/feature/branch"
+        )
+        self.assertNotIn(branch_push_1["sha"], group_branch_1)
+        self.assertEqual(group_branch_1, group_branch_2)
+        self.assertIs(eval_gha_template(cancel_tpl, branch_push_1), True)
 
         release_wf = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -628,7 +834,14 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(
             release_wf["concurrency"],
             {
-                "group": "skills-${{ github.workflow }}-${{ github.ref }}",
+                "group": "skills-${{ github.workflow }}-${{ github.sha }}-${{ github.run_id }}",
+                "cancel-in-progress": False,
+            },
+        )
+        self.assertEqual(
+            release_wf["jobs"]["release"]["concurrency"],
+            {
+                "group": "skills-release-publish-${{ needs.preflight.outputs.release_tag || github.ref }}",
                 "cancel-in-progress": False,
             },
         )
@@ -824,9 +1037,10 @@ class PackageTests(unittest.TestCase):
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
         self.assertIn("51 total packages", impl_text)
 
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
         self.assertIn("complete 51-package pack", usage_text)
-        self.assertIn("fred-skills-0.2.0-complete.tar", usage_text)
+        self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertIn(
             "Register the marketplace catalog and install the `fred-skills` suite plugin, a curated pack (such as `complete` for all 51 packages or `starter`)",
             usage_text,
@@ -868,9 +1082,10 @@ class PackageTests(unittest.TestCase):
 
         exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
         self.assertIn(
-            "| `full-audit` | All 33 specialist audits plus coordinator and synthesis. | 35 |",
+            "| `full-audit` | All 33 specialist audits plus coordinator, diagnostics, and synthesis. | 36 |",
             exp_text,
         )
+        self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
             "| `complete` | Every audit and engineering workflow. | 51 |",
             exp_text,

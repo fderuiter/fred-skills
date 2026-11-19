@@ -1,0 +1,14 @@
+[
+  {
+    "reviewer": "r1",
+    "file": "auth_token.py",
+    "line": 4,
+    "note": "Token expiry timestamp is never compared against current time."
+  },
+  {
+    "reviewer": "r2",
+    "file": "auth_token.py",
+    "line": 4,
+    "note": "Expired tokens still validate because exp check is missing."
+  }
+]

@@ -76,14 +76,6 @@
         "arch-component-decomposition"
       ]
     },
-    "architecture": {
-      "description": "Architectural decision records, boundary specifications, and system decomposition.",
-      "skills": [
-        "arch-decision-record",
-        "arch-boundary-specification",
-        "arch-component-decomposition"
-      ]
-    },
     "code-review": {
       "description": "Pull request diff review, invariant verification, and actionable feedback.",
       "skills": [
@@ -101,7 +93,7 @@
       ]
     },
     "full-audit": {
-      "description": "All 33 specialist audits plus coordinator and synthesis.",
+      "description": "All 33 specialist audits plus coordinator, diagnostics, and synthesis.",
       "skills": [
         "repo-audit-accessibility-state",
         "repo-audit-api-consistency",
@@ -119,6 +111,7 @@
         "repo-audit-configuration",
         "repo-audit-data-integrity",
         "repo-audit-dead-code",
+        "repo-audit-diagnostics",
         "repo-audit-domain-models",
         "repo-audit-error-semantics",
         "repo-audit-failure-modes",

@@ -65,7 +65,7 @@ class ExperienceTests(unittest.TestCase):
         for suite in suites:
             self.assertIn(f'<option value="{suite["name"]}">', select_html)
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
-        self.assertEqual(len(packs), 12)
+        self.assertEqual(len(packs), 11)
         for pack_name in packs:
             self.assertIn(f'id="pack-{pack_name}"', page)
             self.assertIn(f"--pack {pack_name}", page)
@@ -155,15 +155,15 @@ class ExperienceTests(unittest.TestCase):
             ),
             "software-architecture": (
                 "architecture.json",
-                "skills/arch-decision-record/assets/architecture.schema.json",
+                "shared/software-architecture/resources/assets/architecture.schema.json",
             ),
             "code-review": (
                 "review.json",
-                "skills/review-diff-analysis/assets/review.schema.json",
+                "shared/code-review/resources/assets/review.schema.json",
             ),
             "automated-testing": (
                 "testing.json",
-                "skills/test-case-generation/assets/testing.schema.json",
+                "shared/automated-testing/resources/assets/testing.schema.json",
             ),
         }
         self.assertEqual(set(expected_artifacts), set(suites))

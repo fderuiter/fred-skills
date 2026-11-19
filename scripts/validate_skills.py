@@ -55,6 +55,141 @@ BOUNDARY_SECTION_PATTERN = re.compile(
     r"^##+\s+.*(boundar\w*|guardrail\w*|deliver\w*|workflow\w*|inventory\w*|investigat\w*|challenge\w*|triage\w*|establish\w*|coordinate\w*|validate\w*)",
     re.IGNORECASE | re.MULTILINE,
 )
+GENERIC_ROUTING_PROMPT_PATTERN = re.compile(
+    r"\b(spelling\s+mistake|fix\s+a\s+typo|\btypo\b|proofread\b|grammar\s+check|"
+    r"project\s+description\s+typo|readme\s+spelling)\b",
+    re.IGNORECASE,
+)
+LEGACY_AUDIT_ACTIVATION_NOTE_PATTERN = re.compile(
+    r"not\s+an\s+instruction\s+to\s+perform\s+an\s+audit",
+    re.IGNORECASE,
+)
+AUDIT_WORD_PATTERN = re.compile(r"\baudit\b", re.IGNORECASE)
+WORKFLOW_MISPLACED_AUDIT_NOTE_PATTERN = re.compile(
+    r"\b(perform\s+an\s+audit|audit\s+specialist|audit\s+activation)\b",
+    re.IGNORECASE,
+)
+EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
+    r"\bexpected\s+findings\b",
+    re.IGNORECASE,
+)
+
+
+def _infer_suite_and_siblings(package: Path, skill_name: str) -> tuple[str, set[str]]:
+    candidate_root = package.parent.parent
+    suites_file = candidate_root / "catalog/suites.json"
+    if suites_file.is_file():
+        try:
+            members = suite_members(candidate_root)
+            if skill_name in members:
+                suite_name = str(members[skill_name]["suite"])
+                siblings = {
+                    s
+                    for s, info in members.items()
+                    if info.get("suite") == suite_name and s != skill_name
+                }
+                return suite_name, siblings
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+    if skill_name.startswith("arch-"):
+        return "software-architecture", set()
+    if skill_name.startswith("review-"):
+        return "code-review", set()
+    if skill_name.startswith("test-"):
+        return "automated-testing", set()
+    if skill_name.startswith("repo-") and not skill_name.startswith("repo-audit-"):
+        return "repository-workflows", set()
+    return "repository-audits", set()
+
+
+def _validate_scenario_semantics(
+    package: Path, skill_name: str, scenarios: list[object]
+) -> list[str]:
+    problems: list[str] = []
+    suite_name, siblings = _infer_suite_and_siblings(package, skill_name)
+    non_routing_prompts: set[str] = set()
+    routing_scenarios: list[dict] = []
+
+    for item in scenarios:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("id", ""))
+        prompt = str(item.get("prompt", ""))
+        note = str(item.get("evaluation_note", ""))
+        kind = sid.rsplit("-", 1)[-1] if "-" in sid else ""
+
+        if GENERIC_ROUTING_PROMPT_PATTERN.search(prompt):
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): generic typo or proofreading prompt is disallowed; use a near-neighbor sibling prompt"
+            )
+
+        if LEGACY_AUDIT_ACTIVATION_NOTE_PATTERN.search(note):
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): legacy audit activation note must be replaced with a suite-accurate sibling routing note"
+            )
+
+        if suite_name in {
+            "software-architecture",
+            "code-review",
+            "automated-testing",
+        } and AUDIT_WORD_PATTERN.search(note):
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): misplaced audit terminology in {suite_name} evaluation_note"
+            )
+        elif (
+            suite_name == "repository-workflows"
+            and WORKFLOW_MISPLACED_AUDIT_NOTE_PATTERN.search(note)
+        ):
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): misplaced audit activation note in repository-workflows evaluation_note"
+            )
+
+        if suite_name in {
+            "software-architecture",
+            "automated-testing",
+            "repository-workflows",
+        } and EXPECTED_FINDINGS_NOTE_PATTERN.search(note):
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): misplaced 'expected findings' note in {suite_name}; reference the suite contract instead"
+            )
+
+        if kind == "routing":
+            routing_scenarios.append(item)
+        elif prompt.strip():
+            non_routing_prompts.add(prompt.strip())
+
+    for r_item in routing_scenarios:
+        sid = str(r_item.get("id", ""))
+        r_prompt = str(r_item.get("prompt", "")).strip()
+        sibling = r_item.get("sibling_skill")
+        r_note = str(r_item.get("evaluation_note", ""))
+        r_behaviors = " ".join(
+            str(b) for b in r_item.get("expected_behavior", []) if isinstance(b, str)
+        )
+        if not isinstance(sibling, str) or not sibling.strip():
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): routing scenario requires sibling_skill"
+            )
+            continue
+        if sibling == skill_name:
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): sibling_skill '{sibling}' must differ from '{skill_name}'"
+            )
+        elif siblings and sibling not in siblings:
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): sibling_skill '{sibling}' is not a member of suite '{suite_name}'"
+            )
+        if r_prompt in non_routing_prompts:
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): routing prompt must target a sibling boundary rather than repeating the skill's own prompt"
+            )
+        if sibling not in r_note and sibling not in r_behaviors:
+            problems.append(
+                f"references/evaluation-scenarios.json ({sid}): routing evaluation_note or expected_behavior must reference sibling_skill '{sibling}'"
+            )
+
+    return problems
+
 
 _SCENARIO_SCHEMA: dict | None = None
 
@@ -178,6 +313,16 @@ def validate_skill(package: Path, scenario_schema: dict | None = None) -> list[s
                         errors.append(
                             "references/evaluation-scenarios.json must include failure, safe, and routing scenarios"
                         )
+                if isinstance(scenarios_data, dict) and isinstance(
+                    scenarios_data.get("scenarios"), list
+                ):
+                    errors.extend(
+                        _validate_scenario_semantics(
+                            package,
+                            name if isinstance(name, str) else package.name,
+                            scenarios_data["scenarios"],
+                        )
+                    )
         except (OSError, ValueError):
             pass  # Malformed JSON or read error is caught during package file traversal below
     for path in package.rglob("*"):
