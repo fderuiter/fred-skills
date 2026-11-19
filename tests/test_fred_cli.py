@@ -52,35 +52,43 @@ class FredCLITests(unittest.TestCase):
         if pty is None:
             self.skipTest("pty module is not available on this platform")
         master, slave = pty.openpty()
-        run_env = dict(os.environ if env is None else env)
-        if columns is not None:
-            run_env["COLUMNS"] = str(columns)
-            if fcntl is not None and termios is not None:
-                winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
-        proc = subprocess.run(
-            [sys.executable, str(FRED_PY), *args],
-            stdin=subprocess.DEVNULL,
-            stdout=slave,
-            stderr=slave,
-            check=False,
-            cwd=cwd,
-            env=run_env,
-        )
-        os.close(slave)
-        output = b""
-        while True:
+        slave_open = True
+        output = bytearray()
+        try:
+            run_env = dict(os.environ if env is None else env)
+            if columns is not None:
+                run_env["COLUMNS"] = str(columns)
+                if fcntl is not None and termios is not None:
+                    winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
+            proc = subprocess.Popen(
+                [sys.executable, str(FRED_PY), *args],
+                stdin=subprocess.DEVNULL,
+                stdout=slave,
+                stderr=slave,
+                cwd=cwd,
+                env=run_env,
+            )
+            os.close(slave)
+            slave_open = False
             try:
-                chunk = os.read(master, 4096)
-                if not chunk:
-                    break
-                output += chunk
-            except OSError:
-                break
-        os.close(master)
+                while True:
+                    try:
+                        chunk = os.read(master, 4096)
+                        if not chunk:
+                            break
+                        output.extend(chunk)
+                    except OSError:
+                        break
+            finally:
+                returncode = proc.wait()
+        finally:
+            if slave_open:
+                os.close(slave)
+            os.close(master)
         return subprocess.CompletedProcess(
             args=[sys.executable, str(FRED_PY), *args],
-            returncode=proc.returncode,
+            returncode=returncode,
             stdout=output.decode("utf-8", errors="replace"),
             stderr="",
         )
