@@ -1,6 +1,6 @@
 ---
 name: repo-audit-boundary-conditions
-description: "Audit off-by-one limits, empty inputs, and overflow. Use when checking edges. Do not use for tests."
+description: "Audit off-by-one limits, empty inputs, and overflow. Use when checking numeric edges. Do not use for tests."
 ---
 
 # Boundary-Condition Correctness

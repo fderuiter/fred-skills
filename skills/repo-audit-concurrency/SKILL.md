@@ -1,6 +1,6 @@
 ---
 name: repo-audit-concurrency
-description: "Audit race conditions, locks, and stale async state. Use when tracing races. Do not use for fixes."
+description: "Audit race conditions, locks, and stale async state. Use when tracing thread races. Do not use for fixes."
 ---
 
 # Concurrency and Race Conditions

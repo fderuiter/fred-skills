@@ -1,6 +1,6 @@
 {
   "name": "spec-interview",
-  "description": "Run pre-code Socratic scope interviews. Use when clarifying requirements. Do not use for coding.",
+  "description": "Run pre-code Socratic scope interviews. Use when clarifying feature requirements. Do not use for debugging.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

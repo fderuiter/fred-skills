@@ -1,6 +1,6 @@
 ---
 name: repo-audit-lifecycle
-description: "Audit resource ownership, disposal, and leaks. Use when checking teardown. Do not use for sizing."
+description: "Audit resource ownership, disposal, and leaks. Use when checking handle teardown. Do not use for sizing."
 ---
 
 # Ownership and Lifecycle Boundaries

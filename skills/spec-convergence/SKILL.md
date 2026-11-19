@@ -23,5 +23,5 @@ Verify that planned tasks and modified repository files honor `SPEC.md` and `spe
 
 ## Deliver
 
-Update `spec.json` with `convergence_checks` validated against the [spec schema](assets/spec.schema.json) via the [spec validator](scripts/validate_spec.py), and report drift against the [spec template](assets/spec-template.md) checklist.
+Update `spec.json` with `convergence_checks` validated against the [spec schema](assets/spec.schema.json) via the [spec validator](scripts/validate_spec.py), report drift against the [spec template](assets/spec-template.md) checklist, and load the [invocation prompt](assets/prompt.md) when running standalone convergence checks.
 Cite exact file paths, requirement IDs, and command exit statuses for every `aligned`, `missing`, `out-of-scope`, or `unverified` check.

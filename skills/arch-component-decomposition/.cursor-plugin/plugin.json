@@ -1,6 +1,6 @@
 {
   "name": "arch-component-decomposition",
-  "description": "Decompose capabilities into clean services. Use when structuring subsystems. Do not use for audits.",
+  "description": "Decompose capabilities into clean services. Use when structuring modular subsystems. Do not use for audits.",
   "version": "0.2.0",
   "author": {
     "name": "fderuiter"

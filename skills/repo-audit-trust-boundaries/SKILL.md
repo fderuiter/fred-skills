@@ -1,6 +1,6 @@
 ---
 name: repo-audit-trust-boundaries
-description: "Audit untrusted inputs, authz, and isolation. Use when tracing bypasses. Do not use for blueprints."
+description: "Audit untrusted inputs, authz, and isolation. Use when tracing privilege bypasses. Do not use for blueprints."
 ---
 
 # Trust and Authorization Boundaries

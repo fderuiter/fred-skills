@@ -84,6 +84,7 @@ python scripts/check_doc_links.py
 python scripts/verify_doc_snippets.py
 python scripts/check_workflow_pins.py --check
 python scripts/verify_workflow_actions.py --check
+python scripts/package_skills.py --output /tmp/release-verify
 python -m unittest discover -s tests -v
 
 # Regenerate shared copies and indexes

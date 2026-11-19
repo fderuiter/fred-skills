@@ -31,7 +31,7 @@
     {
       "name": "arch-component-decomposition",
       "title": "Component Decomposition",
-      "description": "Decompose capabilities into clean services. Use when structuring subsystems. Do not use for audits.",
+      "description": "Decompose capabilities into clean services. Use when structuring modular subsystems. Do not use for audits.",
       "path": "skills/arch-component-decomposition/SKILL.md",
       "suite": "software-architecture",
       "phase": 2,
@@ -244,7 +244,7 @@
     {
       "name": "repo-audit-boundary-conditions",
       "title": "Boundary-Condition Correctness",
-      "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking edges. Do not use for tests.",
+      "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking numeric edges. Do not use for tests.",
       "path": "skills/repo-audit-boundary-conditions/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -353,7 +353,7 @@
     {
       "name": "repo-audit-capacity",
       "title": "Resource Bounds and Backpressure",
-      "description": "Audit unbounded queues, memory, and backpressure. Use when checking limits. Do not use for leaks.",
+      "description": "Audit unbounded queues, memory, and backpressure. Use when checking load limits. Do not use for leaks.",
       "path": "skills/repo-audit-capacity/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -464,7 +464,7 @@
     {
       "name": "repo-audit-concurrency",
       "title": "Concurrency and Race Conditions",
-      "description": "Audit race conditions, locks, and stale async state. Use when tracing races. Do not use for fixes.",
+      "description": "Audit race conditions, locks, and stale async state. Use when tracing thread races. Do not use for fixes.",
       "path": "skills/repo-audit-concurrency/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -735,7 +735,7 @@
     {
       "name": "repo-audit-lifecycle",
       "title": "Ownership and Lifecycle Boundaries",
-      "description": "Audit resource ownership, disposal, and leaks. Use when checking teardown. Do not use for sizing.",
+      "description": "Audit resource ownership, disposal, and leaks. Use when checking handle teardown. Do not use for sizing.",
       "path": "skills/repo-audit-lifecycle/SKILL.md",
       "suite": "repository-audits",
       "phase": 1,
@@ -871,7 +871,7 @@
     {
       "name": "repo-audit-side-effects",
       "title": "Hidden Side Effects",
-      "description": "Audit hidden mutations and impure getters. Use when checking surprise I/O. Do not use for commits.",
+      "description": "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits.",
       "path": "skills/repo-audit-side-effects/SKILL.md",
       "suite": "repository-audits",
       "phase": 3,
@@ -952,7 +952,7 @@
     {
       "name": "repo-audit-synthesis",
       "title": "Audit Findings and Issue Planning",
-      "description": "Consolidate audit ledgers into issue drafts. Use when publishing findings. Do not use for plans.",
+      "description": "Consolidate audit ledgers into issue drafts. Use when publishing audit findings. Do not use for plans.",
       "path": "skills/repo-audit-synthesis/SKILL.md",
       "suite": "repository-audits",
       "phase": 4,
@@ -1089,7 +1089,7 @@
     {
       "name": "repo-audit-trust-boundaries",
       "title": "Trust and Authorization Boundaries",
-      "description": "Audit untrusted inputs, authz, and isolation. Use when tracing bypasses. Do not use for blueprints.",
+      "description": "Audit untrusted inputs, authz, and isolation. Use when tracing privilege bypasses. Do not use for blueprints.",
       "path": "skills/repo-audit-trust-boundaries/SKILL.md",
       "suite": "repository-audits",
       "phase": 2,
@@ -1118,7 +1118,7 @@
     {
       "name": "repo-plan-fix",
       "title": "Scoped Implementation Planning",
-      "description": "Sequence verified bugs into bounded tasks. Use when planning remediation. Do not use for synthesis.",
+      "description": "Sequence verified bugs into bounded tasks. Use when planning safe remediation. Do not use for synthesis.",
       "path": "skills/repo-plan-fix/SKILL.md",
       "suite": "repository-workflows",
       "phase": 2,
@@ -1300,7 +1300,7 @@
     },
     {
       "name": "review-invariant-violations",
-      "title": "Invariant Verification",
+      "title": "Invariant Violations",
       "description": "Inspect PR diff hunks for broken contracts. Use when reviewing code changes. Do not use for audits.",
       "path": "skills/review-invariant-violations/SKILL.md",
       "suite": "code-review",
@@ -1405,7 +1405,7 @@
     {
       "name": "spec-interview",
       "title": "Pre-Code Specification Interview",
-      "description": "Run pre-code Socratic scope interviews. Use when clarifying requirements. Do not use for coding.",
+      "description": "Run pre-code Socratic scope interviews. Use when clarifying feature requirements. Do not use for debugging.",
       "path": "skills/spec-interview/SKILL.md",
       "suite": "spec-driven-development",
       "phase": 0,

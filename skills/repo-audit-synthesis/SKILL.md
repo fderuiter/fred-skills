@@ -1,6 +1,6 @@
 ---
 name: repo-audit-synthesis
-description: "Consolidate audit ledgers into issue drafts. Use when publishing findings. Do not use for plans."
+description: "Consolidate audit ledgers into issue drafts. Use when publishing audit findings. Do not use for plans."
 disable-model-invocation: true
 ---
 
@@ -30,6 +30,8 @@ Search open and relevant closed issues and PRs by behavior, symbol, contract, an
 Read candidate matches before deciding equivalence. Link/extend existing work only where
 scope matches; a similarly titled issue or merged PR does not prove current code is fixed.
 If issue access is unavailable, say duplicate checking is incomplete and produce local drafts.
+Load [research references](references/sources.md) only when comparing variant-analysis or
+deduplication methodology across external audit frameworks.
 
 ## Plan implementation
 
@@ -46,11 +48,12 @@ effort estimates, repository labels, assignees, or fake issue numbers.
 
 ## Produce and optionally publish
 
-Draft each issue with [issue template](assets/issue-template.md), then provide a concise
-implementation-agent prompt with exact snapshot, scope, ordered tasks, acceptance criteria,
-tests to run, known safe controls, and completion evidence. Include [handoff](assets/handoff-template.md).
+Summarize the consolidated executive synthesis with [report template](assets/report-template.md)
+when generating a unified Markdown report, draft each issue with [issue template](assets/issue-template.md),
+then provide a concise implementation-agent prompt with exact snapshot, scope, ordered tasks,
+acceptance criteria, tests to run, known safe controls, and completion evidence. Include [handoff](assets/handoff-template.md).
 
-Generate structured GitHub REST API issue payloads using `python scripts/fred.py issues <audit.json> --output <dir> --format json` (or Markdown drafts with `--format markdown`). Each generated JSON payload includes `title`, `body`, `labels`, and `assignees` conforming to GitHub REST API issue creation requirements.
+Generate structured GitHub REST API issue payloads using `python scripts/fred.py issues <audit.json> --output <dir> --format json` (or Markdown drafts with `--format markdown`). Each generated JSON payload includes `title`, `body`, `labels`, and `assignees` conforming to GitHub REST API issue creation requirements. When code-scanning integration or SARIF 2.1.0 output is requested, run the [SARIF exporter](scripts/audit_to_sarif.py) (`python3 <this-skill>/scripts/audit_to_sarif.py <audit.json> <audit.sarif>`).
 
 Create/update actual issues only when the user's current or earlier applicable instruction
 authorizes those mutations. Authorization already given does not require reconfirmation.
@@ -62,6 +65,6 @@ security details or sensitive source payloads into public records. Verify return
 partial failures; distinguish drafted, created, and linked records. Translate this workflow
 to available capabilities; do not fabricate tool names or labels.
 
-Keep audit.json consistent with [schema](assets/audit.schema.json) and run `python3 <this-skill>/scripts/validate_audit.py <audit.json>` when Python 3 and `jsonschema` are available; see [worked examples](references/examples.md) for consolidation samples. Report consolidation
+Keep audit.json consistent with [schema](assets/audit.schema.json) and run the [audit validator](scripts/validate_audit.py) (`python3 <this-skill>/scripts/validate_audit.py <audit.json>`) when Python 3 and `jsonschema` are available; load [worked examples](references/examples.md) when reviewing consolidation samples. Report consolidation
 decisions, retained uncertainty, issue mappings, dependency order, and actual publication
 state. Use [invocation prompt](assets/prompt.md) to run this skill independently.

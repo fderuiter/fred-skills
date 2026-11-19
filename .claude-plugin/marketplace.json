@@ -394,7 +394,7 @@
     },
     {
       "name": "arch-component-decomposition",
-      "description": "Decompose capabilities into clean services. Use when structuring subsystems. Do not use for audits.",
+      "description": "Decompose capabilities into clean services. Use when structuring modular subsystems. Do not use for audits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -490,7 +490,7 @@
     },
     {
       "name": "repo-audit-boundary-conditions",
-      "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking edges. Do not use for tests.",
+      "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking numeric edges. Do not use for tests.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -538,7 +538,7 @@
     },
     {
       "name": "repo-audit-capacity",
-      "description": "Audit unbounded queues, memory, and backpressure. Use when checking limits. Do not use for leaks.",
+      "description": "Audit unbounded queues, memory, and backpressure. Use when checking load limits. Do not use for leaks.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -586,7 +586,7 @@
     },
     {
       "name": "repo-audit-concurrency",
-      "description": "Audit race conditions, locks, and stale async state. Use when tracing races. Do not use for fixes.",
+      "description": "Audit race conditions, locks, and stale async state. Use when tracing thread races. Do not use for fixes.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -706,7 +706,7 @@
     },
     {
       "name": "repo-audit-lifecycle",
-      "description": "Audit resource ownership, disposal, and leaks. Use when checking teardown. Do not use for sizing.",
+      "description": "Audit resource ownership, disposal, and leaks. Use when checking handle teardown. Do not use for sizing.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -766,7 +766,7 @@
     },
     {
       "name": "repo-audit-side-effects",
-      "description": "Audit hidden mutations and impure getters. Use when checking surprise I/O. Do not use for commits.",
+      "description": "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -802,7 +802,7 @@
     },
     {
       "name": "repo-audit-synthesis",
-      "description": "Consolidate audit ledgers into issue drafts. Use when publishing findings. Do not use for plans.",
+      "description": "Consolidate audit ledgers into issue drafts. Use when publishing audit findings. Do not use for plans.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -862,7 +862,7 @@
     },
     {
       "name": "repo-audit-trust-boundaries",
-      "description": "Audit untrusted inputs, authz, and isolation. Use when tracing bypasses. Do not use for blueprints.",
+      "description": "Audit untrusted inputs, authz, and isolation. Use when tracing privilege bypasses. Do not use for blueprints.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -874,7 +874,7 @@
     },
     {
       "name": "repo-plan-fix",
-      "description": "Sequence verified bugs into bounded tasks. Use when planning remediation. Do not use for synthesis.",
+      "description": "Sequence verified bugs into bounded tasks. Use when planning safe remediation. Do not use for synthesis.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"
@@ -1006,7 +1006,7 @@
     },
     {
       "name": "spec-interview",
-      "description": "Run pre-code Socratic scope interviews. Use when clarifying requirements. Do not use for coding.",
+      "description": "Run pre-code Socratic scope interviews. Use when clarifying feature requirements. Do not use for debugging.",
       "version": "0.2.0",
       "author": {
         "name": "fderuiter"

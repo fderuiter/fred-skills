@@ -9,5 +9,11 @@
   "scripts": [
     "scripts/audit_to_sarif.py",
     "scripts/validate_audit.py"
-  ]
+  ],
+  "exclude": {
+    "repo-audit-diagnostics": [
+      "assets/report-template.md",
+      "assets/handoff-template.md"
+    ]
+  }
 }

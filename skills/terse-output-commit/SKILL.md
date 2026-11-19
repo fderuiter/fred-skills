@@ -28,5 +28,5 @@ Read the actual diff and preserve every symbol, command, path, and safety warnin
 Use the [handoff](assets/handoff.md) and [starting prompt](assets/prompt.md). Return
 terse prose with exact technical spans and a diff-verified 50-character Conventional Commit
 draft. Resolve related workflow skills by name, without assuming a host API.
-Validate structured output artifacts using [terse output and commit schema](assets/terse-output-commit.schema.json), [worked examples](references/examples.md), and `python3 <this-skill>/scripts/validate_workflow.py <artifact.json>`.
+Validate structured output artifacts using [terse output and commit schema](assets/terse-output-commit.schema.json), [worked examples](references/examples.md), and the [workflow validator](scripts/validate_workflow.py) (`python3 <this-skill>/scripts/validate_workflow.py <artifact.json>`).
 Do not abbreviate code or identifiers, modify application source files, or run mutating git commit commands without explicit user authorization.

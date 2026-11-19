@@ -1,6 +1,6 @@
 ---
 name: repo-audit-capacity
-description: "Audit unbounded queues, memory, and backpressure. Use when checking limits. Do not use for leaks."
+description: "Audit unbounded queues, memory, and backpressure. Use when checking load limits. Do not use for leaks."
 ---
 
 # Resource Bounds and Backpressure

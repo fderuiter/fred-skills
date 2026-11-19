@@ -67,7 +67,7 @@ independently fixable defects into a vague architectural epic.
 
 ## Validate and deliver
 
-Run `python3 <this-skill>/scripts/validate_audit.py <audit.json>` after producing the ledger.
+Run the [audit validator](scripts/validate_audit.py) (`python3 <this-skill>/scripts/validate_audit.py <audit.json>`) after producing the ledger.
 The checker needs Python 3 and jsonschema; use an approved existing environment. If absent,
 report the blocked check and review against the schema manually. This validates shape,
 references, and issue-dependency cycles, not evidence truth or audit completeness.

@@ -14,7 +14,7 @@ import shlex
 import sys
 from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path, PurePath, PureWindowsPath
-from typing import Any
+from typing import Any, NamedTuple, NoReturn
 
 REDACTION_TIERS: tuple[str, ...] = ("skeleton", "evidence", "full")
 OMITTED_TOOL_OUTPUT_PLACEHOLDER = "[OMITTED_TOOL_OUTPUT]"
@@ -482,6 +482,134 @@ def _suite_for_skill_list(
     return suites[0] if suites else "repository-audits"
 
 
+def _phase_sort_key(item: tuple[int, Any]) -> tuple[int, int]:
+    idx, phase = item
+    if isinstance(phase, dict) and isinstance(phase.get("id"), int):
+        return (0, phase["id"])
+    return (1, idx)
+
+
+def _append_unique_str_skills(members: list[str], raw_skills: object) -> None:
+    if not isinstance(raw_skills, list):
+        return
+    for sk in raw_skills:
+        if isinstance(sk, str) and sk and sk not in members:
+            members.append(sk)
+
+
+def _extract_suite_phase_members(phases: object) -> tuple[str, ...] | None:
+    if not isinstance(phases, list):
+        return None
+    members: list[str] = []
+    for _, phase in sorted(enumerate(phases), key=_phase_sort_key):
+        if isinstance(phase, dict):
+            _append_unique_str_skills(members, phase.get("skills", []))
+    return tuple(members)
+
+
+def _extract_suite_artifact_pair(artifact: object) -> tuple[str, str] | None:
+    if not isinstance(artifact, dict):
+        return None
+    filename = artifact.get("filename")
+    schema = artifact.get("schema")
+    if isinstance(filename, str) and isinstance(schema, str):
+        return (filename, schema)
+    return None
+
+
+def _apply_suite_entry(
+    suite: object,
+    suite_skills: dict[str, tuple[str, ...]],
+    suite_artifacts: dict[str, tuple[str, str]],
+) -> None:
+    if not isinstance(suite, dict):
+        return
+    sname = suite.get("name")
+    if not isinstance(sname, str) or not sname:
+        return
+    artifact_pair = _extract_suite_artifact_pair(suite.get("artifact"))
+    if artifact_pair is not None:
+        suite_artifacts[sname] = artifact_pair
+    phase_members = _extract_suite_phase_members(suite.get("phases"))
+    if phase_members is not None:
+        suite_skills[sname] = phase_members
+
+
+def _parse_suites_doc(
+    suites_doc: object,
+    suite_skills: dict[str, tuple[str, ...]],
+    suite_artifacts: dict[str, tuple[str, str]],
+) -> None:
+    if not isinstance(suites_doc, dict):
+        return
+    suites = suites_doc.get("suites")
+    if not isinstance(suites, list):
+        return
+    for suite in suites:
+        _apply_suite_entry(suite, suite_skills, suite_artifacts)
+
+
+def _resolve_recipe_suite(
+    robj: dict[str, Any], skill_to_suite: Mapping[str, str]
+) -> str:
+    explicit_suite = robj.get("suite")
+    if isinstance(explicit_suite, str) and explicit_suite:
+        return explicit_suite
+    raw_skills = robj.get("skills", [])
+    str_skills = (
+        [s for s in raw_skills if isinstance(s, str)]
+        if isinstance(raw_skills, list)
+        else []
+    )
+    return _suite_for_skill_list(str_skills, skill_to_suite)
+
+
+def _apply_recipe_entry(
+    rname: object,
+    robj: object,
+    skill_to_suite: Mapping[str, str],
+    live_tasks: dict[str, str],
+) -> None:
+    if not isinstance(rname, str) or not isinstance(robj, dict):
+        return
+    rsuite = _resolve_recipe_suite(robj, skill_to_suite)
+    live_tasks[rname] = rsuite
+    raw_aliases = robj.get("aliases", [])
+    if not isinstance(raw_aliases, list):
+        return
+    for alias in raw_aliases:
+        if isinstance(alias, str) and alias and alias not in live_tasks:
+            live_tasks[alias] = rsuite
+
+
+def _apply_top_recipe_aliases(top_aliases: object, live_tasks: dict[str, str]) -> None:
+    if not isinstance(top_aliases, dict):
+        return
+    for alias, target in top_aliases.items():
+        if not isinstance(alias, str) or not alias or alias in live_tasks:
+            continue
+        if isinstance(target, str) and target in live_tasks:
+            live_tasks[alias] = live_tasks[target]
+
+
+def _parse_recipes_doc(
+    recipes_doc: object,
+    skill_to_suite: Mapping[str, str],
+    task_to_suite: dict[str, str],
+) -> None:
+    if not isinstance(recipes_doc, dict):
+        return
+    recipes = recipes_doc.get("recipes")
+    if not isinstance(recipes, dict):
+        return
+    live_tasks: dict[str, str] = {}
+    for rname, robj in recipes.items():
+        _apply_recipe_entry(rname, robj, skill_to_suite, live_tasks)
+    _apply_top_recipe_aliases(recipes_doc.get("aliases"), live_tasks)
+    if live_tasks:
+        task_to_suite.update(live_tasks)
+
+
 def _load_catalog_metadata(
     catalog_dir: Path | None = _CATALOG_DIR,
 ) -> tuple[
@@ -499,46 +627,7 @@ def _load_catalog_metadata(
     if suites_path.is_file():
         with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
             suites_doc = json.loads(suites_path.read_text(encoding="utf-8"))
-            if isinstance(suites_doc, dict) and isinstance(
-                suites_doc.get("suites"), list
-            ):
-                for suite in suites_doc["suites"]:
-                    if not isinstance(suite, dict):
-                        continue
-                    sname = suite.get("name")
-                    if not isinstance(sname, str) or not sname:
-                        continue
-                    artifact = suite.get("artifact")
-                    if (
-                        isinstance(artifact, dict)
-                        and isinstance(artifact.get("filename"), str)
-                        and isinstance(artifact.get("schema"), str)
-                    ):
-                        suite_artifacts[sname] = (
-                            artifact["filename"],
-                            artifact["schema"],
-                        )
-                    phases = suite.get("phases")
-                    if isinstance(phases, list):
-                        ordered = sorted(
-                            enumerate(phases),
-                            key=lambda item: (
-                                (0, item[1]["id"])
-                                if isinstance(item[1], dict)
-                                and isinstance(item[1].get("id"), int)
-                                else (1, item[0])
-                            ),
-                        )
-                        members: list[str] = []
-                        for _, phase in ordered:
-                            if not isinstance(phase, dict):
-                                continue
-                            raw_skills = phase.get("skills", [])
-                            if isinstance(raw_skills, list):
-                                for sk in raw_skills:
-                                    if isinstance(sk, str) and sk and sk not in members:
-                                        members.append(sk)
-                        suite_skills[sname] = tuple(members)
+            _parse_suites_doc(suites_doc, suite_skills, suite_artifacts)
 
     skill_to_suite = {
         skill: sname for sname, skills in suite_skills.items() for skill in skills
@@ -548,47 +637,7 @@ def _load_catalog_metadata(
     if recipes_path.is_file():
         with contextlib.suppress(OSError, ValueError, TypeError, KeyError):
             recipes_doc = json.loads(recipes_path.read_text(encoding="utf-8"))
-            if isinstance(recipes_doc, dict) and isinstance(
-                recipes_doc.get("recipes"), dict
-            ):
-                live_tasks: dict[str, str] = {}
-                for rname, robj in recipes_doc["recipes"].items():
-                    if not isinstance(rname, str) or not isinstance(robj, dict):
-                        continue
-                    explicit_suite = robj.get("suite")
-                    if isinstance(explicit_suite, str) and explicit_suite:
-                        rsuite = explicit_suite
-                    else:
-                        raw_skills = robj.get("skills", [])
-                        str_skills = (
-                            [s for s in raw_skills if isinstance(s, str)]
-                            if isinstance(raw_skills, list)
-                            else []
-                        )
-                        rsuite = _suite_for_skill_list(str_skills, skill_to_suite)
-                    live_tasks[rname] = rsuite
-                    raw_aliases = robj.get("aliases", [])
-                    if isinstance(raw_aliases, list):
-                        for alias in raw_aliases:
-                            if (
-                                isinstance(alias, str)
-                                and alias
-                                and alias not in live_tasks
-                            ):
-                                live_tasks[alias] = rsuite
-                top_aliases = recipes_doc.get("aliases")
-                if isinstance(top_aliases, dict):
-                    for alias, target in top_aliases.items():
-                        if (
-                            isinstance(alias, str)
-                            and alias
-                            and isinstance(target, str)
-                            and target in live_tasks
-                            and alias not in live_tasks
-                        ):
-                            live_tasks[alias] = live_tasks[target]
-                if live_tasks:
-                    task_to_suite.update(live_tasks)
+            _parse_recipes_doc(recipes_doc, skill_to_suite, task_to_suite)
 
     return suite_skills, suite_artifacts, task_to_suite
 
@@ -699,6 +748,140 @@ def _try_parse_json_container(text: str) -> dict[str, Any] | list[Any] | None:
     return None
 
 
+_CODEX_TOOL_OUTPUT_TYPES = frozenset(
+    {
+        "function_call_output",
+        "custom_tool_call_output",
+        "local_shell_call_output",
+    }
+)
+_EXEC_END_OUTPUT_KEYS = frozenset(
+    {"stdout", "stderr", "output", "aggregated_output", "formatted_output"}
+)
+_TOOL_USE_RESULT_KEYS = frozenset({"stdout", "stderr", "output", "content"})
+_TOOL_ROLES = frozenset({"tool", "function", "tool_result"})
+_ROLE_TOOL_OUTPUT_KEYS = frozenset({"content", "output", "result"})
+_STRUCTURED_TURN_KEYS: tuple[str, ...] = ("messages", "turns", "events", "transcript")
+_PLAIN_TOOL_LINE_RE = re.compile(
+    r"(?i)^(?:\[[^\]]+\]\s*)?(?:tool[_ ]?(?:output|result)|stdout|stderr)\s*:"
+)
+
+
+def _is_nonempty_exec_or_result_field(
+    obj_type: Any, parent_key: str | None, key: str, val: Any
+) -> bool:
+    if not val:
+        return False
+    if obj_type == "exec_command_end":
+        return key in _EXEC_END_OUTPUT_KEYS
+    if parent_key == "toolUseResult":
+        return key in _TOOL_USE_RESULT_KEYS
+    return False
+
+
+def _should_omit_dict_field(
+    container: dict[str, Any], key: str, val: Any, parent_key: str | None
+) -> bool:
+    obj_type = container.get("type")
+    if obj_type == "tool_result" and key == "content":
+        return True
+    if obj_type in _CODEX_TOOL_OUTPUT_TYPES and key == "output":
+        return True
+    if container.get("role") in _TOOL_ROLES and key in _ROLE_TOOL_OUTPUT_KEYS:
+        return True
+    if _is_nonempty_exec_or_result_field(obj_type, parent_key, key, val):
+        return True
+    return key == "toolUseResult" and isinstance(val, (str, list))
+
+
+def _omit_tool_value(val: Any, omitted_counter: list[int] | None) -> str:
+    if val != OMITTED_TOOL_OUTPUT_PLACEHOLDER and omitted_counter is not None:
+        omitted_counter[0] += 1
+    return OMITTED_TOOL_OUTPUT_PLACEHOLDER
+
+
+def _scrub_json_dict(
+    value: dict[str, Any],
+    stats: dict[str, int],
+    *,
+    parent_key: str | None,
+    omit_tool_outputs: bool,
+    omitted_counter: list[int] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for k, v in value.items():
+        if omit_tool_outputs and _should_omit_dict_field(value, k, v, parent_key):
+            result[k] = _omit_tool_value(v, omitted_counter)
+            continue
+        result[k] = _scrub_json_value(
+            v,
+            stats,
+            parent_key=k,
+            omit_tool_outputs=omit_tool_outputs,
+            omitted_counter=omitted_counter,
+        )
+    return result
+
+
+def _needs_key_based_redaction(
+    parent_key: str | None,
+    scrubbed_str: str,
+    stats: dict[str, int],
+    before_total: int,
+) -> bool:
+    if not parent_key or not _is_sensitive_json_key(parent_key):
+        return False
+    stripped = scrubbed_str.strip()
+    if not stripped or stripped.startswith("[REDACTED_"):
+        return False
+    return sum(stats.values()) == before_total
+
+
+def _redact_sensitive_key_value(
+    parent_key: str, scrubbed_str: str, stats: dict[str, int]
+) -> str:
+    norm_key = re.sub(r"[^a-z0-9]+", "_", parent_key.lower()).strip("_")
+    if norm_key in {"authorization", "proxy_authorization"}:
+        prefix_match = re.match(
+            r"(?i)^((?:bearer|basic|token)\s+)(.+)$", scrubbed_str.strip()
+        )
+        stats["auth_token"] = stats.get("auth_token", 0) + 1
+        if prefix_match:
+            return f"{prefix_match.group(1)}[REDACTED_AUTH_TOKEN]"
+        return "[REDACTED_AUTH_TOKEN]"
+    stats["json_secret"] = stats.get("json_secret", 0) + 1
+    return "[REDACTED_SECRET]"
+
+
+def _scrub_json_string(
+    value: str,
+    stats: dict[str, int],
+    *,
+    parent_key: str | None,
+    omit_tool_outputs: bool,
+    omitted_counter: list[int] | None,
+) -> str:
+    nested = _try_parse_json_container(value)
+    if nested is not None:
+        scrubbed_nested = _scrub_json_value(
+            nested,
+            stats,
+            parent_key=None,
+            omit_tool_outputs=omit_tool_outputs,
+            omitted_counter=omitted_counter,
+        )
+        serialized = json.dumps(scrubbed_nested, ensure_ascii=False)
+        return _scrub_string_patterns(serialized, stats)
+
+    before_total = sum(stats.values())
+    scrubbed_str = _scrub_string_patterns(value, stats)
+    if parent_key and _needs_key_based_redaction(
+        parent_key, scrubbed_str, stats, before_total
+    ):
+        return _redact_sensitive_key_value(parent_key, scrubbed_str, stats)
+    return scrubbed_str
+
+
 def _scrub_json_value(
     value: Any,
     stats: dict[str, int],
@@ -708,70 +891,13 @@ def _scrub_json_value(
     omitted_counter: list[int] | None = None,
 ) -> Any:
     if isinstance(value, dict):
-        obj_type = value.get("type")
-        obj_role = value.get("role")
-        result: dict[str, Any] = {}
-
-        # Detect tool output containers for skeleton/evidence omission
-        is_claude_tool_result = obj_type == "tool_result"
-        is_codex_tool_output = obj_type in {
-            "function_call_output",
-            "custom_tool_call_output",
-            "local_shell_call_output",
-        }
-        is_codex_exec_end = obj_type == "exec_command_end"
-        is_role_tool = obj_role in {"tool", "function", "tool_result"}
-
-        for k, v in value.items():
-            # Apply tool output body omission when requested
-            if omit_tool_outputs:
-                if (
-                    (is_claude_tool_result and k == "content")
-                    or (is_codex_tool_output and k == "output")
-                    or (is_role_tool and k in {"content", "output", "result"})
-                    or (
-                        is_codex_exec_end
-                        and k
-                        in {
-                            "stdout",
-                            "stderr",
-                            "output",
-                            "aggregated_output",
-                            "formatted_output",
-                        }
-                        and v
-                    )
-                    or (
-                        parent_key == "toolUseResult"
-                        and k in {"stdout", "stderr", "output", "content"}
-                        and v
-                    )
-                ):
-                    if (
-                        v != OMITTED_TOOL_OUTPUT_PLACEHOLDER
-                        and omitted_counter is not None
-                    ):
-                        omitted_counter[0] += 1
-                    result[k] = OMITTED_TOOL_OUTPUT_PLACEHOLDER
-                    continue
-                if k == "toolUseResult" and isinstance(v, (str, list)):
-                    if (
-                        v != OMITTED_TOOL_OUTPUT_PLACEHOLDER
-                        and omitted_counter is not None
-                    ):
-                        omitted_counter[0] += 1
-                    result[k] = OMITTED_TOOL_OUTPUT_PLACEHOLDER
-                    continue
-
-            result[k] = _scrub_json_value(
-                v,
-                stats,
-                parent_key=k,
-                omit_tool_outputs=omit_tool_outputs,
-                omitted_counter=omitted_counter,
-            )
-        return result
-
+        return _scrub_json_dict(
+            value,
+            stats,
+            parent_key=parent_key,
+            omit_tool_outputs=omit_tool_outputs,
+            omitted_counter=omitted_counter,
+        )
     if isinstance(value, list):
         return [
             _scrub_json_value(
@@ -783,45 +909,14 @@ def _scrub_json_value(
             )
             for item in value
         ]
-
     if isinstance(value, str):
-        # First check if string itself is an embedded/escaped JSON object or array
-        nested = _try_parse_json_container(value)
-        if nested is not None:
-            scrubbed_nested = _scrub_json_value(
-                nested,
-                stats,
-                parent_key=None,
-                omit_tool_outputs=omit_tool_outputs,
-                omitted_counter=omitted_counter,
-            )
-            serialized = json.dumps(scrubbed_nested, ensure_ascii=False)
-            return _scrub_string_patterns(serialized, stats)
-
-        before_total = sum(stats.values())
-        scrubbed_str = _scrub_string_patterns(value, stats)
-
-        if (
-            parent_key
-            and _is_sensitive_json_key(parent_key)
-            and scrubbed_str.strip()
-            and not scrubbed_str.strip().startswith("[REDACTED_")
-            and sum(stats.values()) == before_total
-        ):
-            norm_key = re.sub(r"[^a-z0-9]+", "_", parent_key.lower()).strip("_")
-            if norm_key in {"authorization", "proxy_authorization"}:
-                prefix_match = re.match(
-                    r"(?i)^((?:bearer|basic|token)\s+)(.+)$", scrubbed_str.strip()
-                )
-                stats["auth_token"] = stats.get("auth_token", 0) + 1
-                if prefix_match:
-                    return f"{prefix_match.group(1)}[REDACTED_AUTH_TOKEN]"
-                return "[REDACTED_AUTH_TOKEN]"
-            stats["json_secret"] = stats.get("json_secret", 0) + 1
-            return "[REDACTED_SECRET]"
-
-        return scrubbed_str
-
+        return _scrub_json_string(
+            value,
+            stats,
+            parent_key=parent_key,
+            omit_tool_outputs=omit_tool_outputs,
+            omitted_counter=omitted_counter,
+        )
     return value
 
 
@@ -829,6 +924,182 @@ def _compute_default_cited_lines(text: str) -> set[int]:
     failure = detect_failures(text)
     line_no = failure.get("line_number")
     return {line_no} if isinstance(line_no, int) and line_no >= 1 else set()
+
+
+def _line_ending(raw_line: str) -> str:
+    if raw_line.endswith("\r\n"):
+        return "\r\n"
+    return "\n" if raw_line.endswith("\n") else ""
+
+
+def _should_omit_line_tools(tier: str, idx: int, resolved_cited: set[int]) -> bool:
+    if tier == "skeleton":
+        return True
+    return tier == "evidence" and idx not in resolved_cited
+
+
+def _parse_jsonl_records(
+    lines: list[str],
+) -> list[tuple[int, str, dict[str, Any] | None]] | None:
+    if not any(ln.strip() for ln in lines):
+        return None
+    records: list[tuple[int, str, dict[str, Any] | None]] = []
+    for idx, raw_line in enumerate(lines, start=1):
+        stripped = raw_line.strip()
+        if not stripped:
+            records.append((idx, raw_line, None))
+            continue
+        parsed_line = _try_parse_json_container(stripped)
+        if not isinstance(parsed_line, dict):
+            return None
+        records.append((idx, raw_line, parsed_line))
+    return records
+
+
+def _scrub_jsonl_records(
+    records: list[tuple[int, str, dict[str, Any] | None]],
+    tier: str,
+    resolved_cited: set[int],
+    stats: dict[str, int],
+    omitted_counter: list[int],
+) -> str:
+    out_lines: list[str] = []
+    for idx, raw_line, parsed_obj in records:
+        if parsed_obj is None:
+            out_lines.append(raw_line)
+            continue
+        omit_line_tools = _should_omit_line_tools(tier, idx, resolved_cited)
+        scrubbed_obj = _scrub_json_value(
+            parsed_obj,
+            stats,
+            omit_tool_outputs=omit_line_tools,
+            omitted_counter=omitted_counter,
+        )
+        serialized_line = _scrub_string_patterns(
+            json.dumps(scrubbed_obj, ensure_ascii=False), stats
+        )
+        out_lines.append(serialized_line + _line_ending(raw_line))
+    return "".join(out_lines)
+
+
+def _has_structured_turn_array(whole_json: object) -> bool:
+    if not isinstance(whole_json, dict):
+        return False
+    return any(isinstance(whole_json.get(k), list) for k in _STRUCTURED_TURN_KEYS)
+
+
+def _scrub_evidence_json_dict(
+    whole_json: dict[str, Any],
+    resolved_cited: set[int],
+    stats: dict[str, int],
+    omitted_counter: list[int],
+) -> dict[str, Any]:
+    copied = dict(whole_json)
+    for key in _STRUCTURED_TURN_KEYS:
+        items = copied.get(key)
+        if isinstance(items, list):
+            copied[key] = [
+                _scrub_json_value(
+                    item,
+                    stats,
+                    omit_tool_outputs=item_idx not in resolved_cited,
+                    omitted_counter=omitted_counter,
+                )
+                for item_idx, item in enumerate(items, start=1)
+            ]
+    for k, v in copied.items():
+        if k not in _STRUCTURED_TURN_KEYS:
+            copied[k] = _scrub_json_value(
+                v,
+                stats,
+                parent_key=k,
+                omit_tool_outputs=False,
+                omitted_counter=omitted_counter,
+            )
+    return copied
+
+
+def _scrub_structured_json_document(
+    text: str,
+    whole_json: dict[str, Any] | list[Any],
+    tier: str,
+    resolved_cited: set[int],
+    stats: dict[str, int],
+    omitted_counter: list[int],
+) -> str:
+    if (
+        tier == "evidence"
+        and resolved_cited
+        and isinstance(whole_json, dict)
+        and _has_structured_turn_array(whole_json)
+    ):
+        scrubbed_obj: Any = _scrub_evidence_json_dict(
+            whole_json, resolved_cited, stats, omitted_counter
+        )
+    else:
+        omit_tools = tier == "skeleton" or (tier == "evidence" and not resolved_cited)
+        scrubbed_obj = _scrub_json_value(
+            whole_json,
+            stats,
+            omit_tool_outputs=omit_tools,
+            omitted_counter=omitted_counter,
+        )
+    trailing_nl = "\n" if text.endswith("\n") else ""
+    return _scrub_string_patterns(
+        json.dumps(scrubbed_obj, indent=2, ensure_ascii=False) + trailing_nl,
+        stats,
+    )
+
+
+def _scrub_plain_text_line(
+    raw_line: str,
+    omit_line_tools: bool,
+    stats: dict[str, int],
+    omitted_counter: list[int],
+) -> str:
+    stripped = raw_line.strip()
+    parsed_inline = _try_parse_json_container(stripped)
+    if isinstance(parsed_inline, dict):
+        scrubbed_inline = _scrub_json_value(
+            parsed_inline,
+            stats,
+            omit_tool_outputs=omit_line_tools,
+            omitted_counter=omitted_counter,
+        )
+        serialized = _scrub_string_patterns(
+            json.dumps(scrubbed_inline, ensure_ascii=False), stats
+        )
+        return serialized + _line_ending(raw_line)
+    if omit_line_tools and _PLAIN_TOOL_LINE_RE.match(stripped):
+        prefix = raw_line.split(":", 1)[0]
+        omitted_counter[0] += 1
+        return (
+            f"{_scrub_string_patterns(prefix, stats)}: "
+            f"{OMITTED_TOOL_OUTPUT_PLACEHOLDER}{_line_ending(raw_line)}"
+        )
+    return _scrub_string_patterns(raw_line, stats)
+
+
+def _scrub_plain_text_transcript(
+    text: str,
+    lines: list[str],
+    tier: str,
+    resolved_cited: set[int],
+    stats: dict[str, int],
+    omitted_counter: list[int],
+) -> str:
+    if not lines:
+        return _scrub_string_patterns(text, stats)
+    out_plain = [
+        _scrub_plain_text_line(
+            raw_line,
+            _should_omit_line_tools(tier, idx, resolved_cited),
+            stats,
+            omitted_counter,
+        )
+        for idx, raw_line in enumerate(lines, start=1)
+    ]
+    return _scrub_string_patterns("".join(out_plain), stats)
 
 
 def scrub_credentials_with_stats(
@@ -850,152 +1121,19 @@ def scrub_credentials_with_stats(
         )
 
     lines = text.splitlines(keepends=True)
-    non_empty = [ln.strip() for ln in lines if ln.strip()]
-
-    # Case 1: Single-line-per-record JSONL (1 or more lines where non-empty lines parse as JSON dicts)
-    jsonl_records: list[tuple[int, str, Any]] = []
-    is_jsonl = bool(non_empty)
-    if is_jsonl:
-        for idx, raw_line in enumerate(lines, start=1):
-            stripped = raw_line.strip()
-            if not stripped:
-                jsonl_records.append((idx, raw_line, None))
-                continue
-            parsed_line = _try_parse_json_container(stripped)
-            if isinstance(parsed_line, dict):
-                jsonl_records.append((idx, raw_line, parsed_line))
-            else:
-                is_jsonl = False
-                break
-
-    if is_jsonl and jsonl_records:
-        out_lines: list[str] = []
-        for idx, raw_line, parsed_obj in jsonl_records:
-            if parsed_obj is None:
-                out_lines.append(raw_line)
-                continue
-            omit_line_tools = tier == "skeleton" or (
-                tier == "evidence" and idx not in resolved_cited
-            )
-            newline = (
-                "\r\n"
-                if raw_line.endswith("\r\n")
-                else ("\n" if raw_line.endswith("\n") else "")
-            )
-            scrubbed_obj = _scrub_json_value(
-                parsed_obj,
-                stats,
-                omit_tool_outputs=omit_line_tools,
-                omitted_counter=omitted_counter,
-            )
-            serialized_line = json.dumps(scrubbed_obj, ensure_ascii=False)
-            serialized_line = _scrub_string_patterns(serialized_line, stats)
-            out_lines.append(serialized_line + newline)
-        scrubbed_text = "".join(out_lines)
+    jsonl_records = _parse_jsonl_records(lines)
+    if jsonl_records is not None:
+        scrubbed_text = _scrub_jsonl_records(
+            jsonl_records, tier, resolved_cited, stats, omitted_counter
+        )
+    elif (whole_json := _try_parse_json_container(text)) is not None:
+        scrubbed_text = _scrub_structured_json_document(
+            text, whole_json, tier, resolved_cited, stats, omitted_counter
+        )
     else:
-        # Case 2: Multi-line standalone JSON document
-        whole_json = _try_parse_json_container(text)
-        if whole_json is not None:
-            omit_tools = tier == "skeleton" or (
-                tier == "evidence" and not resolved_cited
-            )
-            if (
-                tier == "evidence"
-                and resolved_cited
-                and isinstance(whole_json, dict)
-                and any(
-                    isinstance(whole_json.get(k), list)
-                    for k in ("messages", "turns", "events", "transcript")
-                )
-            ):
-                # Apply per-turn omission on structured JSON arrays
-                copied = dict(whole_json)
-                for key in ("messages", "turns", "events", "transcript"):
-                    items = copied.get(key)
-                    if isinstance(items, list):
-                        new_items = []
-                        for item_idx, item in enumerate(items, start=1):
-                            item_omit = item_idx not in resolved_cited
-                            new_items.append(
-                                _scrub_json_value(
-                                    item,
-                                    stats,
-                                    omit_tool_outputs=item_omit,
-                                    omitted_counter=omitted_counter,
-                                )
-                            )
-                        copied[key] = new_items
-                for k, v in copied.items():
-                    if k not in {"messages", "turns", "events", "transcript"}:
-                        copied[k] = _scrub_json_value(
-                            v,
-                            stats,
-                            parent_key=k,
-                            omit_tool_outputs=False,
-                            omitted_counter=omitted_counter,
-                        )
-                scrubbed_obj = copied
-            else:
-                scrubbed_obj = _scrub_json_value(
-                    whole_json,
-                    stats,
-                    omit_tool_outputs=omit_tools,
-                    omitted_counter=omitted_counter,
-                )
-            trailing_nl = "\n" if text.endswith("\n") else ""
-            scrubbed_text = _scrub_string_patterns(
-                json.dumps(scrubbed_obj, indent=2, ensure_ascii=False) + trailing_nl,
-                stats,
-            )
-        else:
-            # Case 3: Plain-text or mixed log transcript
-            out_plain: list[str] = []
-            for idx, raw_line in enumerate(lines, start=1):
-                stripped = raw_line.strip()
-                parsed_inline = _try_parse_json_container(stripped)
-                omit_line_tools = tier == "skeleton" or (
-                    tier == "evidence" and idx not in resolved_cited
-                )
-                if isinstance(parsed_inline, dict):
-                    newline = (
-                        "\r\n"
-                        if raw_line.endswith("\r\n")
-                        else ("\n" if raw_line.endswith("\n") else "")
-                    )
-                    scrubbed_inline = _scrub_json_value(
-                        parsed_inline,
-                        stats,
-                        omit_tool_outputs=omit_line_tools,
-                        omitted_counter=omitted_counter,
-                    )
-                    out_plain.append(
-                        _scrub_string_patterns(
-                            json.dumps(scrubbed_inline, ensure_ascii=False), stats
-                        )
-                        + newline
-                    )
-                else:
-                    if omit_line_tools and re.match(
-                        r"(?i)^(?:\[[^\]]+\]\s*)?(?:tool[_ ]?(?:output|result)|stdout|stderr)\s*:",
-                        stripped,
-                    ):
-                        newline = (
-                            "\r\n"
-                            if raw_line.endswith("\r\n")
-                            else ("\n" if raw_line.endswith("\n") else "")
-                        )
-                        prefix = raw_line.split(":", 1)[0]
-                        omitted_counter[0] += 1
-                        out_plain.append(
-                            f"{_scrub_string_patterns(prefix, stats)}: {OMITTED_TOOL_OUTPUT_PLACEHOLDER}{newline}"
-                        )
-                    else:
-                        out_plain.append(_scrub_string_patterns(raw_line, stats))
-            scrubbed_text = (
-                _scrub_string_patterns("".join(out_plain), stats)
-                if lines
-                else _scrub_string_patterns(text, stats)
-            )
+        scrubbed_text = _scrub_plain_text_transcript(
+            text, lines, tier, resolved_cited, stats, omitted_counter
+        )
 
     credentials_redacted = sum(stats.values())
     tool_outputs_omitted = omitted_counter[0]
@@ -1019,366 +1157,480 @@ def scrub_credentials(
     return scrubbed
 
 
+_NESTED_STR_KEYS: tuple[str, ...] = (
+    "output",
+    "stderr",
+    "stdout",
+    "error",
+    "message",
+    "text",
+    "result",
+)
+_DICT_CONTENT_KEYS: tuple[str, ...] = (
+    "message",
+    "error",
+    "stderr",
+    "stdout",
+    "output",
+    "text",
+    "content",
+    "result",
+)
+
+
+def _extract_nested_str_field(val: Any) -> str | None:
+    if isinstance(val, str) and val.strip():
+        return val
+    if isinstance(val, dict):
+        sub = _stringify_content_value(val)
+        return sub if sub else None
+    return None
+
+
+def _stringify_nested_json_str(content: str) -> str:
+    nested = _try_parse_json_container(content)
+    if not isinstance(nested, dict):
+        return content
+    parts: list[str] = []
+    for key in _NESTED_STR_KEYS:
+        part = _extract_nested_str_field(nested.get(key))
+        if part is not None:
+            parts.append(part)
+    return "\n".join(parts) if parts else content
+
+
+def _extract_list_item_text(item: dict[str, Any]) -> str:
+    text = (
+        item.get("text")
+        or item.get("content")
+        or item.get("output")
+        or item.get("message")
+    )
+    return _stringify_content_value(text) if text is not None else ""
+
+
+def _stringify_content_list(content: list[Any]) -> str:
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            rendered = _extract_list_item_text(item)
+            if rendered:
+                parts.append(rendered)
+    return "\n".join(parts)
+
+
+def _stringify_content_dict(content: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in _DICT_CONTENT_KEYS:
+        if key in content and content[key] is not None:
+            rendered = _stringify_content_value(content[key])
+            if rendered:
+                parts.append(rendered)
+    if parts:
+        return "\n".join(parts)
+    return json.dumps(content, ensure_ascii=False)
+
+
 def _stringify_content_value(content: Any) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
-        nested = _try_parse_json_container(content)
-        if isinstance(nested, dict):
-            parts: list[str] = []
-            for key in (
-                "output",
-                "stderr",
-                "stdout",
-                "error",
-                "message",
-                "text",
-                "result",
-            ):
-                val = nested.get(key)
-                if isinstance(val, str) and val.strip():
-                    parts.append(val)
-                elif isinstance(val, dict):
-                    sub = _stringify_content_value(val)
-                    if sub:
-                        parts.append(sub)
-            if parts:
-                return "\n".join(parts)
-        return content
+        return _stringify_nested_json_str(content)
     if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = (
-                    item.get("text")
-                    or item.get("content")
-                    or item.get("output")
-                    or item.get("message")
-                )
-                if text is not None:
-                    rendered = _stringify_content_value(text)
-                    if rendered:
-                        parts.append(rendered)
-        return "\n".join(parts)
+        return _stringify_content_list(content)
     if isinstance(content, dict):
-        parts = []
-        for key in (
-            "message",
-            "error",
-            "stderr",
-            "stdout",
-            "output",
-            "text",
-            "content",
-            "result",
-        ):
-            if key in content and content[key] is not None:
-                rendered = _stringify_content_value(content[key])
-                if rendered:
-                    parts.append(rendered)
-        if parts:
-            return "\n".join(parts)
-        return json.dumps(content, ensure_ascii=False)
+        return _stringify_content_dict(content)
     return str(content)
+
+
+def _has_nonzero_exit_code(value: dict[str, Any]) -> bool:
+    for code_key in ("exit_code", "returncode", "exitCode", "return_code"):
+        code = value.get(code_key)
+        if isinstance(code, int) and code != 0:
+            return True
+    return False
+
+
+def _check_dict_tool_failure(value: dict[str, Any]) -> bool:
+    if value.get("is_error") is True or value.get("timed_out") is True:
+        return True
+    if str(value.get("status", "")).lower() in {
+        "error",
+        "failed",
+        "timeout",
+        "timed_out",
+    }:
+        return True
+    if _has_nonzero_exit_code(value):
+        return True
+    meta = value.get("metadata")
+    if isinstance(meta, dict) and _check_nested_tool_failure(meta):
+        return True
+    return value.get("error") not in (None, False, "", {})
 
 
 def _check_nested_tool_failure(value: Any) -> bool:
     if isinstance(value, dict):
-        if value.get("is_error") is True or value.get("timed_out") is True:
-            return True
-        status = str(value.get("status", "")).lower()
-        if status in {"error", "failed", "timeout", "timed_out"}:
-            return True
-        for code_key in ("exit_code", "returncode", "exitCode", "return_code"):
-            code = value.get(code_key)
-            if isinstance(code, int) and code != 0:
-                return True
-        meta = value.get("metadata")
-        if isinstance(meta, dict) and _check_nested_tool_failure(meta):
-            return True
-        err = value.get("error")
-        if err not in (None, False, "", {}):
-            return True
-    elif isinstance(value, str):
+        return _check_dict_tool_failure(value)
+    if isinstance(value, str):
         nested = _try_parse_json_container(value)
         if isinstance(nested, dict):
-            return _check_nested_tool_failure(nested)
+            return _check_dict_tool_failure(nested)
     return False
 
 
-def _extract_turns_from_record(obj: dict[str, Any], line_no: int) -> list[ParsedTurn]:
-    """Extract normalized role-separated turns from a single JSON/JSONL record."""
-    turns: list[ParsedTurn] = []
-    rec_type = str(obj.get("type", "")).lower()
+_EXPLICIT_ERROR_TYPES = frozenset({"error", "api_error", "stream_error", "exception"})
+_EXPLICIT_ERROR_LEVELS = frozenset({"error", "fatal"})
+_SKIPPED_RECORD_TYPES = frozenset(
+    {"session_meta", "turn_context", "summary", "file-history-snapshot"}
+)
+_USER_LIKE_ROLES = frozenset({"user", "human", "system", "developer"})
 
-    # 1. Explicit error events (Claude Code, Codex, generic)
-    if rec_type in {"error", "api_error", "stream_error", "exception"} or str(
-        obj.get("level", "")
-    ).lower() in {"error", "fatal"}:
-        err_text = _stringify_content_value(
-            obj.get("error") or obj.get("message") or obj.get("payload") or obj
-        )
-        turns.append(ParsedTurn(line_no, "error", err_text, is_failed=True))
-        return turns
 
-    # 2. Codex event_msg wrapper
-    if rec_type == "event_msg" and isinstance(obj.get("payload"), dict):
-        payload = obj["payload"]
-        ptype = str(payload.get("type", "")).lower()
-        if ptype in {"error", "stream_error", "api_error"}:
-            err_text = _stringify_content_value(
-                payload.get("message") or payload.get("error") or payload
-            )
-            turns.append(ParsedTurn(line_no, "error", err_text, is_failed=True))
-            return turns
-        if ptype == "exec_command_end":
-            failed = _check_nested_tool_failure(payload)
-            out_text = _stringify_content_value(
-                payload.get("stderr")
-                or payload.get("aggregated_output")
-                or payload.get("formatted_output")
-                or payload.get("stdout")
-                or ""
-            )
-            cmd = payload.get("command")
-            if isinstance(cmd, list):
-                cmd_str = " ".join(str(c) for c in cmd)
-                out_text = f"{cmd_str}: {out_text}".strip(": ")
-            turns.append(ParsedTurn(line_no, "tool_output", out_text, is_failed=failed))
-            return turns
-        if ptype == "user_message":
-            turns.append(
-                ParsedTurn(
-                    line_no,
-                    "user",
-                    _stringify_content_value(
-                        payload.get("message") or payload.get("text")
-                    ),
-                )
-            )
-            return turns
-        if ptype in {"agent_message", "assistant_message"}:
-            turns.append(
-                ParsedTurn(
-                    line_no,
-                    "assistant",
-                    _stringify_content_value(
-                        payload.get("message") or payload.get("text")
-                    ),
-                )
-            )
-            return turns
-        return turns
+def _is_explicit_error_record(obj: dict[str, Any], rec_type: str) -> bool:
+    if rec_type in _EXPLICIT_ERROR_TYPES:
+        return True
+    return str(obj.get("level", "")).lower() in _EXPLICIT_ERROR_LEVELS
 
-    # 3. Codex response_item wrapper
-    if rec_type == "response_item" and isinstance(obj.get("payload"), dict):
-        payload = obj["payload"]
-        ptype = str(payload.get("type", "")).lower()
-        if ptype == "message":
-            role = str(payload.get("role", "assistant")).lower()
-            norm_role = (
-                "user"
-                if role in {"user", "developer", "system", "human"}
-                else "assistant"
-            )
-            text = _stringify_content_value(payload.get("content"))
-            turns.append(ParsedTurn(line_no, norm_role, text, is_failed=False))
-            return turns
-        if ptype in {"function_call", "custom_tool_call", "local_shell_call"}:
-            name = payload.get("name") or payload.get("tool_name") or ""
-            args = _stringify_content_value(
-                payload.get("arguments")
-                or payload.get("input")
-                or payload.get("action")
-            )
-            turns.append(
-                ParsedTurn(
-                    line_no, "tool_use", f"{name} {args}".strip(), is_failed=False
-                )
-            )
-            return turns
-        if ptype in {
-            "function_call_output",
-            "custom_tool_call_output",
-            "local_shell_call_output",
-        }:
-            raw_output = payload.get("output")
-            failed = _check_nested_tool_failure(payload) or _check_nested_tool_failure(
-                raw_output
-            )
-            turns.append(
-                ParsedTurn(
-                    line_no,
-                    "tool_output",
-                    _stringify_content_value(raw_output),
-                    is_failed=failed,
-                )
-            )
-            return turns
-        return turns
 
-    # Skip pure session/turn metadata records
-    if rec_type in {"session_meta", "turn_context", "summary", "file-history-snapshot"}:
-        return turns
-
-    # 4. Claude Code system / result records
-    if rec_type == "system":
-        subtype = str(obj.get("subtype", "")).lower()
-        if "error" in subtype or obj.get("is_error") is True or obj.get("error"):
-            err_text = _stringify_content_value(
-                obj.get("error") or obj.get("message") or obj.get("content")
-            )
-            turns.append(ParsedTurn(line_no, "error", err_text, is_failed=True))
-        return turns
-
-    if rec_type == "result":
-        is_err = (
-            bool(obj.get("is_error")) or "error" in str(obj.get("subtype", "")).lower()
-        )
-        res_text = _stringify_content_value(
-            obj.get("result") or obj.get("error") or obj.get("message")
-        )
-        if is_err:
-            turns.append(ParsedTurn(line_no, "error", res_text, is_failed=True))
-        elif res_text:
-            turns.append(ParsedTurn(line_no, "assistant", res_text, is_failed=False))
-        return turns
-
-    # 5. Claude Code / Anthropic / OpenAI message envelopes
-    raw_msg = obj.get("message")
-    msg: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else obj
-    role = str(msg.get("role") or rec_type or "").lower()
-    is_api_error = bool(
-        obj.get("isApiErrorMessage")
-        or obj.get("is_error")
-        or msg.get("is_error")
-        or (obj.get("error") not in (None, False, "", {}))
-        or str(msg.get("stop_reason", "")).lower() == "model_context_window_exceeded"
+def _extract_explicit_error_turns(
+    obj: dict[str, Any], line_no: int
+) -> list[ParsedTurn]:
+    err_text = _stringify_content_value(
+        obj.get("error") or obj.get("message") or obj.get("payload") or obj
     )
+    return [ParsedTurn(line_no, "error", err_text, is_failed=True)]
 
-    content = msg.get("content")
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict):
-                btype = str(block.get("type", "")).lower()
-                if btype == "tool_result":
-                    failed = bool(block.get("is_error")) or _check_nested_tool_failure(
-                        obj.get("toolUseResult")
-                    )
-                    btext = _stringify_content_value(block.get("content"))
-                    if not btext and obj.get("toolUseResult"):
-                        btext = _stringify_content_value(obj.get("toolUseResult"))
-                    turns.append(
-                        ParsedTurn(line_no, "tool_output", btext, is_failed=failed)
-                    )
-                elif btype in {"tool_use", "function_call"}:
-                    name = block.get("name", "")
-                    inp = _stringify_content_value(
-                        block.get("input") or block.get("arguments")
-                    )
-                    turns.append(
-                        ParsedTurn(
-                            line_no,
-                            "tool_use",
-                            f"{name} {inp}".strip(),
-                            is_failed=False,
-                        )
-                    )
-                elif btype in {"text", "input_text", "output_text"}:
-                    btext = _stringify_content_value(block.get("text"))
-                    if is_api_error:
-                        turns.append(
-                            ParsedTurn(line_no, "error", btext, is_failed=True)
-                        )
-                    elif role in {"user", "human", "system", "developer"}:
-                        turns.append(
-                            ParsedTurn(line_no, "user", btext, is_failed=False)
-                        )
-                    else:
-                        turns.append(
-                            ParsedTurn(line_no, "assistant", btext, is_failed=False)
-                        )
-            elif isinstance(block, str):
-                target_role = (
-                    "error"
-                    if is_api_error
-                    else (
-                        "user" if role in {"user", "human", "system"} else "assistant"
-                    )
-                )
-                turns.append(
-                    ParsedTurn(line_no, target_role, block, is_failed=is_api_error)
-                )
-        if turns:
-            return turns
 
-    # Direct tool_result / tool role records
+def _build_exec_command_end_turn(payload: dict[str, Any], line_no: int) -> ParsedTurn:
+    failed = _check_nested_tool_failure(payload)
+    raw_out = (
+        payload.get("stderr")
+        or payload.get("aggregated_output")
+        or payload.get("formatted_output")
+        or payload.get("stdout")
+        or ""
+    )
+    out_text = _stringify_content_value(raw_out)
+    cmd = payload.get("command")
+    if isinstance(cmd, list):
+        cmd_str = " ".join(str(c) for c in cmd)
+        out_text = f"{cmd_str}: {out_text}".strip(": ")
+    return ParsedTurn(line_no, "tool_output", out_text, is_failed=failed)
+
+
+def _extract_codex_event_msg_turns(
+    payload: dict[str, Any], line_no: int
+) -> list[ParsedTurn]:
+    ptype = str(payload.get("type", "")).lower()
+    if ptype in {"error", "stream_error", "api_error"}:
+        err_text = _stringify_content_value(
+            payload.get("message") or payload.get("error") or payload
+        )
+        return [ParsedTurn(line_no, "error", err_text, is_failed=True)]
+    if ptype == "exec_command_end":
+        return [_build_exec_command_end_turn(payload, line_no)]
+    if ptype == "user_message":
+        msg_text = _stringify_content_value(
+            payload.get("message") or payload.get("text")
+        )
+        return [ParsedTurn(line_no, "user", msg_text)]
+    if ptype in {"agent_message", "assistant_message"}:
+        msg_text = _stringify_content_value(
+            payload.get("message") or payload.get("text")
+        )
+        return [ParsedTurn(line_no, "assistant", msg_text)]
+    return []
+
+
+def _extract_codex_response_item_turns(
+    payload: dict[str, Any], line_no: int
+) -> list[ParsedTurn]:
+    ptype = str(payload.get("type", "")).lower()
+    if ptype == "message":
+        role = str(payload.get("role", "assistant")).lower()
+        norm_role = "user" if role in _USER_LIKE_ROLES else "assistant"
+        text = _stringify_content_value(payload.get("content"))
+        return [ParsedTurn(line_no, norm_role, text, is_failed=False)]
+    if ptype in {"function_call", "custom_tool_call", "local_shell_call"}:
+        name = payload.get("name") or payload.get("tool_name") or ""
+        args = _stringify_content_value(
+            payload.get("arguments") or payload.get("input") or payload.get("action")
+        )
+        return [
+            ParsedTurn(line_no, "tool_use", f"{name} {args}".strip(), is_failed=False)
+        ]
+    if ptype in _CODEX_TOOL_OUTPUT_TYPES:
+        raw_output = payload.get("output")
+        failed = _check_nested_tool_failure(payload) or _check_nested_tool_failure(
+            raw_output
+        )
+        return [
+            ParsedTurn(
+                line_no,
+                "tool_output",
+                _stringify_content_value(raw_output),
+                is_failed=failed,
+            )
+        ]
+    return []
+
+
+def _extract_claude_system_turns(obj: dict[str, Any], line_no: int) -> list[ParsedTurn]:
+    subtype = str(obj.get("subtype", "")).lower()
+    if "error" in subtype or obj.get("is_error") is True or obj.get("error"):
+        err_text = _stringify_content_value(
+            obj.get("error") or obj.get("message") or obj.get("content")
+        )
+        return [ParsedTurn(line_no, "error", err_text, is_failed=True)]
+    return []
+
+
+def _extract_claude_result_turns(obj: dict[str, Any], line_no: int) -> list[ParsedTurn]:
+    is_err = bool(obj.get("is_error")) or "error" in str(obj.get("subtype", "")).lower()
+    res_text = _stringify_content_value(
+        obj.get("result") or obj.get("error") or obj.get("message")
+    )
+    if is_err:
+        return [ParsedTurn(line_no, "error", res_text, is_failed=True)]
+    if res_text:
+        return [ParsedTurn(line_no, "assistant", res_text, is_failed=False)]
+    return []
+
+
+def _is_envelope_api_error(obj: dict[str, Any], msg: dict[str, Any]) -> bool:
+    if obj.get("isApiErrorMessage") or obj.get("is_error") or msg.get("is_error"):
+        return True
+    if obj.get("error") not in (None, False, "", {}):
+        return True
+    return str(msg.get("stop_reason", "")).lower() == "model_context_window_exceeded"
+
+
+def _extract_dict_content_block(
+    block: dict[str, Any],
+    obj: dict[str, Any],
+    role: str,
+    is_api_error: bool,
+    line_no: int,
+) -> ParsedTurn | None:
+    btype = str(block.get("type", "")).lower()
+    if btype == "tool_result":
+        failed = bool(block.get("is_error")) or _check_nested_tool_failure(
+            obj.get("toolUseResult")
+        )
+        btext = _stringify_content_value(block.get("content"))
+        if not btext and obj.get("toolUseResult"):
+            btext = _stringify_content_value(obj.get("toolUseResult"))
+        return ParsedTurn(line_no, "tool_output", btext, is_failed=failed)
+    if btype in {"tool_use", "function_call"}:
+        name = block.get("name", "")
+        inp = _stringify_content_value(block.get("input") or block.get("arguments"))
+        return ParsedTurn(line_no, "tool_use", f"{name} {inp}".strip(), is_failed=False)
+    if btype in {"text", "input_text", "output_text"}:
+        btext = _stringify_content_value(block.get("text"))
+        if is_api_error:
+            return ParsedTurn(line_no, "error", btext, is_failed=True)
+        target_role = "user" if role in _USER_LIKE_ROLES else "assistant"
+        return ParsedTurn(line_no, target_role, btext, is_failed=False)
+    return None
+
+
+def _extract_str_content_block(
+    block: str, role: str, is_api_error: bool, line_no: int
+) -> ParsedTurn:
+    if is_api_error:
+        return ParsedTurn(line_no, "error", block, is_failed=True)
+    target_role = "user" if role in {"user", "human", "system"} else "assistant"
+    return ParsedTurn(line_no, target_role, block, is_failed=False)
+
+
+def _extract_content_block_turns(
+    content: list[Any],
+    obj: dict[str, Any],
+    role: str,
+    is_api_error: bool,
+    line_no: int,
+) -> list[ParsedTurn]:
+    turns: list[ParsedTurn] = []
+    for block in content:
+        if isinstance(block, dict):
+            parsed_turn = _extract_dict_content_block(
+                block, obj, role, is_api_error, line_no
+            )
+            if parsed_turn is not None:
+                turns.append(parsed_turn)
+        elif isinstance(block, str):
+            turns.append(_extract_str_content_block(block, role, is_api_error, line_no))
+    return turns
+
+
+def _resolve_direct_tool_output(obj: dict[str, Any], msg: dict[str, Any]) -> Any:
+    if msg.get("content") is not None:
+        return msg.get("content")
+    if obj.get("output") is not None:
+        return obj.get("output")
+    return obj.get("result")
+
+
+def _extract_direct_tool_turns(
+    obj: dict[str, Any],
+    msg: dict[str, Any],
+    rec_type: str,
+    role: str,
+    line_no: int,
+) -> list[ParsedTurn] | None:
     if rec_type in {"tool_result", "tool_output", "function_call_output"} or role in {
         "tool",
         "function",
         "tool_result",
     }:
-        raw_out = (
-            msg.get("content")
-            if msg.get("content") is not None
-            else (
-                obj.get("output")
-                if obj.get("output") is not None
-                else obj.get("result")
-            )
-        )
+        raw_out = _resolve_direct_tool_output(obj, msg)
         failed = _check_nested_tool_failure(obj) or _check_nested_tool_failure(msg)
-        turns.append(
+        return [
             ParsedTurn(
                 line_no,
                 "tool_output",
                 _stringify_content_value(raw_out),
                 is_failed=failed,
             )
-        )
-        return turns
-
+        ]
     if rec_type in {"tool_use", "function_call"}:
         name = obj.get("name") or msg.get("name") or ""
         inp = _stringify_content_value(
             obj.get("input") or obj.get("arguments") or msg.get("input")
         )
-        turns.append(
+        return [
             ParsedTurn(line_no, "tool_use", f"{name} {inp}".strip(), is_failed=False)
-        )
-        return turns
+        ]
+    return None
 
-    # Scalar content on user / assistant / error record
-    text_val = _stringify_content_value(
-        content
-        if content is not None
-        else (obj.get("error") or obj.get("text") or obj.get("output"))
-    )
+
+def _extract_openai_tool_calls(tool_calls: object, line_no: int) -> list[ParsedTurn]:
+    if not isinstance(tool_calls, list):
+        return []
+    turns: list[ParsedTurn] = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        raw_fn = tc.get("function")
+        fn: dict[str, Any] = raw_fn if isinstance(raw_fn, dict) else tc
+        call_text = (
+            f"{fn.get('name', '')} {_stringify_content_value(fn.get('arguments'))}"
+        ).strip()
+        turns.append(ParsedTurn(line_no, "tool_use", call_text, is_failed=False))
+    return turns
+
+
+def _extract_scalar_and_openai_turns(
+    obj: dict[str, Any],
+    msg: dict[str, Any],
+    content: Any,
+    role: str,
+    is_api_error: bool,
+    line_no: int,
+) -> list[ParsedTurn]:
+    fallback = obj.get("error") or obj.get("text") or obj.get("output")
+    text_val = _stringify_content_value(content if content is not None else fallback)
     if is_api_error:
-        turns.append(ParsedTurn(line_no, "error", text_val, is_failed=True))
-    elif role in {"user", "human", "system", "developer"}:
-        turns.append(ParsedTurn(line_no, "user", text_val, is_failed=False))
-    elif role in {"assistant", "model", "agent"}:
-        # Also extract OpenAI-style tool_calls if present
-        tool_calls = msg.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tc in tool_calls:
-                if isinstance(tc, dict):
-                    raw_fn = tc.get("function")
-                    fn: dict[str, Any] = raw_fn if isinstance(raw_fn, dict) else tc
-                    turns.append(
-                        ParsedTurn(
-                            line_no,
-                            "tool_use",
-                            f"{fn.get('name', '')} {_stringify_content_value(fn.get('arguments'))}".strip(),
-                            is_failed=False,
-                        )
-                    )
+        return [ParsedTurn(line_no, "error", text_val, is_failed=True)]
+    if role in _USER_LIKE_ROLES:
+        return [ParsedTurn(line_no, "user", text_val, is_failed=False)]
+    if role in {"assistant", "model", "agent"}:
+        turns = _extract_openai_tool_calls(msg.get("tool_calls"), line_no)
         if text_val:
             turns.append(ParsedTurn(line_no, "assistant", text_val, is_failed=False))
-    return turns
+        return turns
+    return []
+
+
+def _extract_message_envelope_turns(
+    obj: dict[str, Any], rec_type: str, line_no: int
+) -> list[ParsedTurn]:
+    raw_msg = obj.get("message")
+    msg: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else obj
+    role = str(msg.get("role") or rec_type or "").lower()
+    is_api_error = _is_envelope_api_error(obj, msg)
+
+    content = msg.get("content")
+    if isinstance(content, list):
+        block_turns = _extract_content_block_turns(
+            content, obj, role, is_api_error, line_no
+        )
+        if block_turns:
+            return block_turns
+
+    direct_turns = _extract_direct_tool_turns(obj, msg, rec_type, role, line_no)
+    if direct_turns is not None:
+        return direct_turns
+
+    return _extract_scalar_and_openai_turns(
+        obj, msg, content, role, is_api_error, line_no
+    )
+
+
+def _extract_turns_from_record(obj: dict[str, Any], line_no: int) -> list[ParsedTurn]:
+    """Extract normalized role-separated turns from a single JSON/JSONL record."""
+    rec_type = str(obj.get("type", "")).lower()
+    if _is_explicit_error_record(obj, rec_type):
+        return _extract_explicit_error_turns(obj, line_no)
+    payload = obj.get("payload")
+    if rec_type == "event_msg" and isinstance(payload, dict):
+        return _extract_codex_event_msg_turns(payload, line_no)
+    if rec_type == "response_item" and isinstance(payload, dict):
+        return _extract_codex_response_item_turns(payload, line_no)
+    if rec_type in _SKIPPED_RECORD_TYPES:
+        return []
+    if rec_type == "system":
+        return _extract_claude_system_turns(obj, line_no)
+    if rec_type == "result":
+        return _extract_claude_result_turns(obj, line_no)
+    return _extract_message_envelope_turns(obj, rec_type, line_no)
+
+
+def _try_parse_jsonl_turns(non_empty: list[tuple[int, str]]) -> list[ParsedTurn] | None:
+    jsonl_turns: list[ParsedTurn] = []
+    json_line_count = 0
+    for idx, stripped in non_empty:
+        parsed = _try_parse_json_container(stripped)
+        if isinstance(parsed, dict):
+            json_line_count += 1
+            jsonl_turns.extend(_extract_turns_from_record(parsed, idx))
+        elif json_line_count > 0:
+            jsonl_turns.append(ParsedTurn(idx, "error", stripped, is_failed=False))
+    if json_line_count > 0 and json_line_count >= len(non_empty) // 2:
+        return jsonl_turns
+    return None
+
+
+def _extract_document_records(
+    whole: dict[str, Any] | list[Any],
+) -> list[dict[str, Any]]:
+    if isinstance(whole, list):
+        return [item for item in whole if isinstance(item, dict)]
+    for key in ("messages", "turns", "events", "transcript", "items"):
+        items = whole.get(key)
+        if isinstance(items, list):
+            records = [item for item in items if isinstance(item, dict)]
+            if records:
+                return records
+            break
+    return [whole]
+
+
+def _parse_whole_json_turns(
+    transcript_text: str, lines: list[str]
+) -> list[ParsedTurn] | None:
+    whole = _try_parse_json_container(transcript_text)
+    if whole is None:
+        return None
+    doc_turns: list[ParsedTurn] = []
+    for rec in _extract_document_records(whole):
+        for turn in _extract_turns_from_record(rec, 1):
+            turn.line_number = _locate_snippet_line(lines, turn.text) or len(lines) or 1
+            doc_turns.append(turn)
+    return doc_turns
 
 
 def parse_transcript_turns(transcript_text: str) -> tuple[list[ParsedTurn], bool]:
@@ -1394,44 +1646,12 @@ def parse_transcript_turns(transcript_text: str) -> tuple[list[ParsedTurn], bool
     if not non_empty:
         return [], False
 
-    # Check JSONL (each non-empty line is a JSON object, or majority structured JSONL)
-    jsonl_turns: list[ParsedTurn] = []
-    json_line_count = 0
-    for idx, stripped in non_empty:
-        parsed = _try_parse_json_container(stripped)
-        if isinstance(parsed, dict):
-            json_line_count += 1
-            jsonl_turns.extend(_extract_turns_from_record(parsed, idx))
-        elif json_line_count > 0:
-            # Trailing truncated/raw line in an otherwise JSONL session
-            jsonl_turns.append(ParsedTurn(idx, "error", stripped, is_failed=False))
-
-    if json_line_count > 0 and json_line_count >= len(non_empty) // 2:
+    jsonl_turns = _try_parse_jsonl_turns(non_empty)
+    if jsonl_turns is not None:
         return jsonl_turns, True
 
-    # Check multi-line JSON document
-    whole = _try_parse_json_container(transcript_text)
-    if whole is not None:
-        records: list[dict[str, Any]] = []
-        if isinstance(whole, list):
-            records = [item for item in whole if isinstance(item, dict)]
-        elif isinstance(whole, dict):
-            for key in ("messages", "turns", "events", "transcript", "items"):
-                if isinstance(whole.get(key), list):
-                    records = [item for item in whole[key] if isinstance(item, dict)]
-                    break
-            if not records:
-                records = [whole]
-
-        doc_turns: list[ParsedTurn] = []
-        for rec in records:
-            extracted = _extract_turns_from_record(rec, 1)
-            for turn in extracted:
-                resolved_line = (
-                    _locate_snippet_line(lines, turn.text) or len(lines) or 1
-                )
-                turn.line_number = resolved_line
-                doc_turns.append(turn)
+    doc_turns = _parse_whole_json_turns(transcript_text, lines)
+    if doc_turns is not None:
         return doc_turns, True
 
     return [], False
@@ -1448,37 +1668,34 @@ def _locate_snippet_line(lines: list[str], snippet: str) -> int | None:
     return None
 
 
+_SIGNATURE_RULES: tuple[tuple[list[re.Pattern[str]], str, str], ...] = (
+    (TIMEOUT_PATTERNS, "tool_timeout", "Tool execution timed out"),
+    (SCHEMA_PATTERNS, "schema_validation_error", "Audit schema validation error"),
+    (CONTEXT_PATTERNS, "context_limit", "Context window token limit exceeded"),
+)
+
+
+def _match_subline_signature(sub: str, line_no: int) -> dict[str, Any] | None:
+    for patterns, failure_type, prefix in _SIGNATURE_RULES:
+        for pattern in patterns:
+            if pattern.search(sub):
+                return {
+                    "failure_type": failure_type,
+                    "summary": f"{prefix}: {sub}",
+                    "line_number": line_no,
+                    "matched_line": sub,
+                    "details": {"pattern": pattern.pattern},
+                }
+    return None
+
+
 def _match_known_signature(text: str, line_no: int) -> dict[str, Any] | None:
     """Match text against context, schema, or timeout failure signatures."""
     sublines = [ln.strip() for ln in text.splitlines() if ln.strip()] or [text.strip()]
     for sub in sublines:
-        for pattern in TIMEOUT_PATTERNS:
-            if pattern.search(sub):
-                return {
-                    "failure_type": "tool_timeout",
-                    "summary": f"Tool execution timed out: {sub}",
-                    "line_number": line_no,
-                    "matched_line": sub,
-                    "details": {"pattern": pattern.pattern},
-                }
-        for pattern in SCHEMA_PATTERNS:
-            if pattern.search(sub):
-                return {
-                    "failure_type": "schema_validation_error",
-                    "summary": f"Audit schema validation error: {sub}",
-                    "line_number": line_no,
-                    "matched_line": sub,
-                    "details": {"pattern": pattern.pattern},
-                }
-        for pattern in CONTEXT_PATTERNS:
-            if pattern.search(sub):
-                return {
-                    "failure_type": "context_limit",
-                    "summary": f"Context window token limit exceeded: {sub}",
-                    "line_number": line_no,
-                    "matched_line": sub,
-                    "details": {"pattern": pattern.pattern},
-                }
+        matched = _match_subline_signature(sub, line_no)
+        if matched is not None:
+            return matched
     return None
 
 
@@ -1498,92 +1715,112 @@ def _build_unclassified_from_turn(turn: ParsedTurn) -> dict[str, Any]:
     }
 
 
-def detect_failures(transcript_text: str) -> dict[str, Any]:
-    """Detect timeouts, schema errors, context limits, or unclassified failures."""
-    lines = transcript_text.splitlines()
-    turns, is_structured = parse_transcript_turns(transcript_text)
+def _is_normal_progress_turn(turn: ParsedTurn) -> bool:
+    if turn.role in {"user", "tool_use"}:
+        return True
+    return turn.role in {"assistant", "tool_output"} and not turn.is_failed
 
-    if is_structured and turns:
-        # Identify the terminal cluster of turns after the last normal progress turn
-        # so recovered earlier tool errors do not overshadow a terminal crash.
-        last_recovery_idx = -1
-        for idx, turn in enumerate(turns):
-            if idx < len(turns) - 1 and (
-                turn.role in {"user", "tool_use"}
-                or (turn.role in {"assistant", "tool_output"} and not turn.is_failed)
-            ):
-                last_recovery_idx = idx
 
-        terminal_turns = turns[last_recovery_idx + 1 :]
-        earlier_turns = turns[: last_recovery_idx + 1]
+def _split_terminal_turns(
+    turns: list[ParsedTurn],
+) -> tuple[list[ParsedTurn], list[ParsedTurn]]:
+    last_recovery_idx = -1
+    for idx, turn in enumerate(turns):
+        if idx < len(turns) - 1 and _is_normal_progress_turn(turn):
+            last_recovery_idx = idx
+    return turns[last_recovery_idx + 1 :], turns[: last_recovery_idx + 1]
 
-        # 1. Terminal structured error events & failed tool outputs (backward)
-        terminal_failed = [t for t in terminal_turns if t.is_failed]
-        for turn in reversed(terminal_failed):
+
+def _match_turns_backward(turns: Iterable[ParsedTurn]) -> dict[str, Any] | None:
+    for turn in turns:
+        matched = _match_known_signature(turn.text, turn.line_number)
+        if matched is not None:
+            matched["details"]["role"] = turn.role
+            return matched
+    return None
+
+
+def _match_terminal_assistant_turn(turns: list[ParsedTurn]) -> dict[str, Any] | None:
+    for turn in reversed(turns):
+        if turn.role == "user":
+            return None
+        if turn.role == "assistant":
             matched = _match_known_signature(turn.text, turn.line_number)
-            if matched:
+            if matched is not None:
                 matched["details"]["role"] = turn.role
-                return matched
-        if terminal_failed:
-            return _build_unclassified_from_turn(terminal_failed[-1])
+            return matched
+    return None
 
-        # 2. Earlier structured error events & failed tool outputs (backward)
-        earlier_failed = [t for t in earlier_turns if t.is_failed]
-        for turn in reversed(earlier_failed):
-            matched = _match_known_signature(turn.text, turn.line_number)
-            if matched:
-                matched["details"]["role"] = turn.role
-                return matched
 
-        # 3. Unflagged tool outputs backward (harnesses that omit is_error=true)
-        for turn in reversed(turns):
-            if turn.role == "tool_output":
-                matched = _match_known_signature(turn.text, turn.line_number)
-                if matched:
-                    matched["details"]["role"] = turn.role
-                    return matched
-
-        # 4. Terminal assistant turn reporting provider/context/schema/timeout failure
-        for turn in reversed(turns):
-            if turn.role == "user":
-                break
-            if turn.role == "assistant":
-                matched = _match_known_signature(turn.text, turn.line_number)
-                if matched:
-                    matched["details"]["role"] = turn.role
-                    return matched
-                break
-
-        # 5. Any earlier structured failed turn without known signature
-        if earlier_failed:
-            return _build_unclassified_from_turn(earlier_failed[-1])
-
-        # 6. Check terminal tool_output for explicit traceback/fatal lines
-        for turn in reversed(turns):
-            if turn.role == "tool_output" and GENERAL_ERROR_RE.search(turn.text):
+def _match_terminal_tool_general_error(
+    turns: list[ParsedTurn],
+) -> dict[str, Any] | None:
+    for turn in reversed(turns):
+        if turn.role == "tool_output":
+            if GENERAL_ERROR_RE.search(turn.text):
                 return _build_unclassified_from_turn(turn)
-            if turn.role == "tool_output":
-                break
+            return None
+    return None
 
-        last_turn = turns[-1]
-        last_line_text = next(
-            (ln.strip() for ln in reversed(last_turn.text.splitlines()) if ln.strip()),
-            "",
-        ) or (lines[-1].strip() if lines else "")
-        return {
-            "failure_type": "unclassified_failure",
-            "summary": "Session ended unexpectedly without an explicit error signature",
-            "line_number": len(lines) if lines else 1,
-            "matched_line": last_line_text,
-            "details": {},
-        }
 
-    # Plain-text fallback: scan line by line
+def _unexpected_end_failure(lines: list[str], matched_line: str) -> dict[str, Any]:
+    return {
+        "failure_type": "unclassified_failure",
+        "summary": "Session ended unexpectedly without an explicit error signature",
+        "line_number": len(lines) if lines else 1,
+        "matched_line": matched_line,
+        "details": {},
+    }
+
+
+def _fallback_structured_end_failure(
+    turns: list[ParsedTurn], lines: list[str]
+) -> dict[str, Any]:
+    last_turn_line = next(
+        (ln.strip() for ln in reversed(turns[-1].text.splitlines()) if ln.strip()),
+        "",
+    )
+    matched_line = last_turn_line or (lines[-1].strip() if lines else "")
+    return _unexpected_end_failure(lines, matched_line)
+
+
+def _failed_turns(turns: list[ParsedTurn]) -> list[ParsedTurn]:
+    return [t for t in turns if t.is_failed]
+
+
+def _detect_structured_failure(
+    turns: list[ParsedTurn], lines: list[str]
+) -> dict[str, Any]:
+    terminal_turns, earlier_turns = _split_terminal_turns(turns)
+    terminal_failed = _failed_turns(terminal_turns)
+    if matched := _match_turns_backward(reversed(terminal_failed)):
+        return matched
+    if terminal_failed:
+        return _build_unclassified_from_turn(terminal_failed[-1])
+
+    earlier_failed = _failed_turns(earlier_turns)
+    if matched := _match_turns_backward(reversed(earlier_failed)):
+        return matched
+
+    tool_outputs = (t for t in reversed(turns) if t.role == "tool_output")
+    if matched := _match_turns_backward(tool_outputs):
+        return matched
+
+    if matched := _match_terminal_assistant_turn(turns):
+        return matched
+    if earlier_failed:
+        return _build_unclassified_from_turn(earlier_failed[-1])
+    if matched := _match_terminal_tool_general_error(turns):
+        return matched
+
+    return _fallback_structured_end_failure(turns, lines)
+
+
+def _detect_plaintext_failure(lines: list[str]) -> dict[str, Any]:
     for idx, line in enumerate(lines, start=1):
         matched = _match_known_signature(line, idx)
-        if matched:
+        if matched is not None:
             return matched
-
     for idx, line in enumerate(lines, start=1):
         if GENERAL_ERROR_RE.search(line):
             return {
@@ -1593,14 +1830,16 @@ def detect_failures(transcript_text: str) -> dict[str, Any]:
                 "matched_line": line.strip(),
                 "details": {},
             }
+    return _unexpected_end_failure(lines, lines[-1].strip() if lines else "")
 
-    return {
-        "failure_type": "unclassified_failure",
-        "summary": "Session ended unexpectedly without an explicit error signature",
-        "line_number": len(lines) if lines else 1,
-        "matched_line": lines[-1].strip() if lines else "",
-        "details": {},
-    }
+
+def detect_failures(transcript_text: str) -> dict[str, Any]:
+    """Detect timeouts, schema errors, context limits, or unclassified failures."""
+    lines = transcript_text.splitlines()
+    turns, is_structured = parse_transcript_turns(transcript_text)
+    if is_structured and turns:
+        return _detect_structured_failure(turns, lines)
+    return _detect_plaintext_failure(lines)
 
 
 def _topic_for_specialist(specialist: str) -> str:
@@ -1656,6 +1895,16 @@ def _is_audit_ledger_shape(data: Mapping[str, Any]) -> bool:
     )
 
 
+def _classify_fallback_payload(data: dict[str, Any]) -> str | None:
+    if "summary" in data and "findings" in data:
+        return "review"
+    if "component" in data and "framework" in data:
+        return "testing"
+    if "title" in data and "status" in data and "findings" not in data:
+        return "architecture"
+    return "run" if "run_id" in data else None
+
+
 def _classify_domain_payload(data: object) -> str | None:
     if not isinstance(data, dict) or _is_audit_ledger_shape(data):
         return None
@@ -1663,15 +1912,7 @@ def _classify_domain_payload(data: object) -> str | None:
     for kind, markers in _DOMAIN_KIND_KEY_SETS:
         if keys & markers:
             return kind
-    if "summary" in data and "findings" in data:
-        return "review"
-    if "component" in data and "framework" in data:
-        return "testing"
-    if "title" in data and "status" in data and "findings" not in data:
-        return "architecture"
-    if "run_id" in data:
-        return "run"
-    return None
+    return _classify_fallback_payload(data)
 
 
 def _detect_artifact_suite(audit_data: object) -> str | None:
@@ -1681,6 +1922,28 @@ def _detect_artifact_suite(audit_data: object) -> str | None:
     return _DOMAIN_KIND_TO_SUITE.get(kind)
 
 
+def _suite_from_expected_outputs(outputs: object) -> str | None:
+    if not isinstance(outputs, list):
+        return None
+    for fname, (sname, _) in _DOMAIN_ARTIFACTS.items():
+        if fname in outputs:
+            return sname
+    return None
+
+
+def _suite_from_plan_skills(skills: object) -> str | None:
+    if not isinstance(skills, list):
+        return None
+    suites = [
+        _SKILL_TO_SUITE[s]
+        for s in skills
+        if isinstance(s, str) and s in _SKILL_TO_SUITE
+    ]
+    if "repository-audits" in suites:
+        return "repository-audits"
+    return suites[0] if suites else None
+
+
 def _suite_from_run_data(run_data: dict[str, Any] | None) -> str | None:
     if not isinstance(run_data, dict):
         return None
@@ -1688,21 +1951,10 @@ def _suite_from_run_data(run_data: dict[str, Any] | None) -> str | None:
     if not isinstance(plan_data, dict):
         return None
     outputs = plan_data.get("expected_outputs")
-    if isinstance(outputs, list):
-        for fname, (sname, _) in _DOMAIN_ARTIFACTS.items():
-            if fname in outputs:
-                return sname
-    skills = plan_data.get("skills")
-    if isinstance(skills, list):
-        suites = [
-            _SKILL_TO_SUITE[s]
-            for s in skills
-            if isinstance(s, str) and s in _SKILL_TO_SUITE
-        ]
-        if "repository-audits" in suites:
-            return "repository-audits"
-        if suites:
-            return suites[0]
+    if suite := _suite_from_expected_outputs(outputs):
+        return suite
+    if suite := _suite_from_plan_skills(plan_data.get("skills")):
+        return suite
     task = plan_data.get("task")
     if isinstance(task, str) and task in _TASK_TO_SUITE:
         return _TASK_TO_SUITE[task]
@@ -1711,70 +1963,221 @@ def _suite_from_run_data(run_data: dict[str, Any] | None) -> str | None:
     return None
 
 
+_TRANSCRIPT_DOMAIN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\barchitecture\.(?:json|schema\.json)\b"), "software-architecture"),
+    (re.compile(r"\breview\.(?:json|schema\.json)\b"), "code-review"),
+    (re.compile(r"\btesting\.(?:json|schema\.json)\b"), "automated-testing"),
+    (re.compile(r"\bspec\.(?:json|schema\.json)\b"), "spec-driven-development"),
+)
+
+
 def _detect_transcript_domain_suite(transcript_text: str) -> str | None:
     if re.search(r"\baudit\.(?:json|schema\.json)\b", transcript_text):
         return None
-    if re.search(r"\barchitecture\.(?:json|schema\.json)\b", transcript_text):
-        return "software-architecture"
-    if re.search(r"\breview\.(?:json|schema\.json)\b", transcript_text):
-        return "code-review"
-    if re.search(r"\btesting\.(?:json|schema\.json)\b", transcript_text):
-        return "automated-testing"
-    if re.search(r"\bspec\.(?:json|schema\.json)\b", transcript_text):
-        return "spec-driven-development"
+    for pattern, suite_name in _TRANSCRIPT_DOMAIN_PATTERNS:
+        if pattern.search(transcript_text):
+            return suite_name
     return None
+
+
+_ARTIFACT_ID_RE = re.compile(
+    r"\b((?:ADR|REV|TC|GAP|SPEC|DEC|REQ|CHK|[FEICRT])-\d+|E-[a-z0-9_-]+)\b"
+)
+_ARTIFACT_ID_SECTIONS: tuple[str, ...] = (
+    "findings",
+    "evidence",
+    "contracts",
+    "issues",
+    "decisions",
+    "test_cases",
+    "interview_decisions",
+    "requirements",
+    "convergence_checks",
+)
+
+
+def _collect_section_id_refs(
+    transcript_text: str, section: str, items: object
+) -> tuple[list[str], bool]:
+    if not isinstance(items, list):
+        return [], False
+    refs: list[str] = []
+    has_candidates = False
+    for item in items:
+        item_id = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(item_id, str) or not item_id:
+            continue
+        has_candidates = True
+        token_re = re.compile(
+            rf"(?<![A-Za-z0-9_-]){re.escape(item_id)}(?![A-Za-z0-9_-])"
+        )
+        if token_re.search(transcript_text):
+            refs.append(f"{section}:{item_id}")
+    return refs, has_candidates
+
+
+def _collect_boundary_refs(
+    transcript_text: str, boundaries: object
+) -> tuple[list[str], bool]:
+    if not isinstance(boundaries, list):
+        return [], False
+    refs: list[str] = []
+    has_candidates = False
+    for boundary in boundaries:
+        bname = boundary.get("name") if isinstance(boundary, dict) else None
+        if not isinstance(bname, str) or not bname:
+            continue
+        has_candidates = True
+        if bname in transcript_text:
+            refs.append(f"boundaries:{bname}")
+    return refs, has_candidates
 
 
 def _extract_artifact_references(
     transcript_text: str, audit_data: dict[str, Any] | None
 ) -> list[str]:
-    id_pattern = re.compile(
-        r"\b((?:ADR|REV|TC|GAP|SPEC|DEC|REQ|CHK|[FEICRT])-\d+|E-[a-z0-9_-]+)\b"
-    )
     if not audit_data:
-        return sorted(set(id_pattern.findall(transcript_text)))
+        return sorted(set(_ARTIFACT_ID_RE.findall(transcript_text)))
 
     ledger_refs: list[str] = []
     has_candidates = False
-    for section in (
-        "findings",
-        "evidence",
-        "contracts",
-        "issues",
-        "decisions",
-        "test_cases",
-        "interview_decisions",
-        "requirements",
-        "convergence_checks",
-    ):
-        items = audit_data.get(section)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            item_id = item.get("id")
-            if isinstance(item_id, str) and item_id:
-                has_candidates = True
-                token_re = re.compile(
-                    rf"(?<![A-Za-z0-9_-]){re.escape(item_id)}(?![A-Za-z0-9_-])"
-                )
-                if token_re.search(transcript_text):
-                    ledger_refs.append(f"{section}:{item_id}")
-    boundaries = audit_data.get("boundaries")
-    if isinstance(boundaries, list):
-        for boundary in boundaries:
-            if not isinstance(boundary, dict):
-                continue
-            bname = boundary.get("name")
-            if isinstance(bname, str) and bname:
-                has_candidates = True
-                if bname in transcript_text:
-                    ledger_refs.append(f"boundaries:{bname}")
+    for section in _ARTIFACT_ID_SECTIONS:
+        sec_refs, sec_cands = _collect_section_id_refs(
+            transcript_text, section, audit_data.get(section)
+        )
+        ledger_refs.extend(sec_refs)
+        has_candidates = has_candidates or sec_cands
+
+    bound_refs, bound_cands = _collect_boundary_refs(
+        transcript_text, audit_data.get("boundaries")
+    )
+    ledger_refs.extend(bound_refs)
+    has_candidates = has_candidates or bound_cands
 
     if not ledger_refs and not has_candidates:
-        return sorted(set(id_pattern.findall(transcript_text)))
+        return sorted(set(_ARTIFACT_ID_RE.findall(transcript_text)))
     return ledger_refs
+
+
+_CORRELATED_DOMAIN_SUITES = frozenset(
+    {
+        "software-architecture",
+        "code-review",
+        "automated-testing",
+        "spec-driven-development",
+    }
+)
+
+
+def _determine_correlation_mode(
+    transcript_text: str,
+    audit_data: dict[str, Any] | None,
+    run_suite: str | None,
+) -> tuple[str | None, bool]:
+    artifact_suite = _detect_artifact_suite(audit_data)
+    if artifact_suite is not None:
+        return artifact_suite, False
+    if isinstance(audit_data, dict) and "run_id" in audit_data:
+        return None, True
+    if run_suite is not None:
+        return None, run_suite == "repository-audits"
+    inferred_domain = _detect_transcript_domain_suite(transcript_text)
+    if inferred_domain is not None:
+        return inferred_domain, False
+    return None, True
+
+
+def _find_specialist_in_turns(turns: Iterable[ParsedTurn]) -> str | None:
+    for turn in turns:
+        cand = _find_specialist_in_segment(turn.text, prefer_first=False)
+        if cand:
+            return cand
+    return None
+
+
+def _find_specialist_in_user_turns(before_turns: list[ParsedTurn]) -> str | None:
+    for turn in reversed(before_turns):
+        if turn.role == "user":
+            prefer_first = "in order" in turn.text.lower()
+            cand = _find_specialist_in_segment(turn.text, prefer_first=prefer_first)
+            if cand:
+                return cand
+    return None
+
+
+def _find_topic_in_turns(turns: Iterable[ParsedTurn]) -> tuple[str, str] | None:
+    for turn in turns:
+        kw_match = _find_topic_keyword_in_segment(turn.text)
+        if kw_match:
+            return kw_match
+    return None
+
+
+def _find_topic_in_before_turns(
+    before_turns: list[ParsedTurn],
+) -> tuple[str, str] | None:
+    non_user_topics = (t for t in reversed(before_turns) if t.role != "user")
+    if kw_match := _find_topic_in_turns(non_user_topics):
+        return kw_match
+    return _find_topic_in_turns(reversed(before_turns))
+
+
+def _correlate_structured_turns(
+    turns: list[ParsedTurn], cutoff: int, is_audit_run: bool
+) -> tuple[str | None, str | None]:
+    before_turns = [t for t in turns if t.line_number <= cutoff]
+    after_turns = [t for t in turns if t.line_number > cutoff]
+
+    non_user_before = (t for t in reversed(before_turns) if t.role != "user")
+    if cand := _find_specialist_in_turns(non_user_before):
+        return cand, None
+    if cand := _find_specialist_in_user_turns(before_turns):
+        return cand, None
+    if cand := _find_specialist_in_turns(after_turns):
+        return cand, None
+    if is_audit_run and (kw_match := _find_topic_in_before_turns(before_turns)):
+        return kw_match
+    return None, None
+
+
+def _correlate_plaintext_lines(
+    lines: list[str], cutoff: int, is_audit_run: bool
+) -> tuple[str | None, str | None]:
+    for idx in range(cutoff, 0, -1):
+        if cand := _find_specialist_in_segment(lines[idx - 1], prefer_first=False):
+            return cand, None
+    for idx in range(cutoff + 1, len(lines) + 1):
+        if cand := _find_specialist_in_segment(lines[idx - 1], prefer_first=False):
+            return cand, None
+    if is_audit_run:
+        for idx in range(cutoff, 0, -1):
+            if kw_match := _find_topic_keyword_in_segment(lines[idx - 1]):
+                return kw_match
+    return None, None
+
+
+def _resolve_correlated_topic(
+    specialist_found: str | None,
+    topic_found: str | None,
+    artifact_suite: str | None,
+    run_suite: str | None,
+) -> str | None:
+    if topic_found:
+        return topic_found
+    if specialist_found:
+        return _topic_for_specialist(specialist_found)
+    effective_suite = (
+        artifact_suite
+        if artifact_suite in _CORRELATED_DOMAIN_SUITES
+        else (run_suite if run_suite in _CORRELATED_DOMAIN_SUITES else None)
+    )
+    if effective_suite is None:
+        return None
+    if effective_suite == "software-architecture":
+        return "architecture"
+    if effective_suite == "spec-driven-development":
+        return "spec"
+    return effective_suite
 
 
 def correlate_audit_domain(
@@ -1789,125 +2192,57 @@ def correlate_audit_domain(
         failure_line = detect_failures(transcript_text).get("line_number") or len(lines)
     cutoff = max(1, min(failure_line, len(lines))) if lines else 1
 
-    specialist_found: str | None = None
-    topic_found: str | None = None
-    artifact_suite = _detect_artifact_suite(audit_data)
     run_suite = _suite_from_run_data(run_data)
-    if artifact_suite is not None:
-        is_audit_run = False
-    elif isinstance(audit_data, dict) and "run_id" in audit_data:
-        is_audit_run = True
-    elif run_suite is not None:
-        is_audit_run = run_suite == "repository-audits"
-    else:
-        inferred_domain = _detect_transcript_domain_suite(transcript_text)
-        if inferred_domain is not None:
-            artifact_suite = inferred_domain
-            is_audit_run = False
-        else:
-            is_audit_run = True
+    artifact_suite, is_audit_run = _determine_correlation_mode(
+        transcript_text, audit_data, run_suite
+    )
 
     turns, is_structured = parse_transcript_turns(transcript_text)
     if is_structured and turns:
-        before_turns = [t for t in turns if t.line_number <= cutoff]
-        after_turns = [t for t in turns if t.line_number > cutoff]
-
-        # 1. Prefer non-user active turns (assistant, tool_use, tool_output, error) closest to failure_line
-        for turn in reversed(before_turns):
-            if turn.role != "user":
-                cand = _find_specialist_in_segment(turn.text, prefer_first=False)
-                if cand:
-                    specialist_found = cand
-                    break
-
-        # 2. Fall back to user prompt turns at or before failure_line
-        #    (if prompt says "Use these skills in order: A, B", first planned skill is starting)
-        if not specialist_found:
-            for turn in reversed(before_turns):
-                if turn.role == "user":
-                    prefer_first = "in order" in turn.text.lower()
-                    cand = _find_specialist_in_segment(
-                        turn.text, prefer_first=prefer_first
-                    )
-                    if cand:
-                        specialist_found = cand
-                        break
-
-        # 3. Fall back to turns after failure_line if none appeared before
-        if not specialist_found:
-            for turn in after_turns:
-                cand = _find_specialist_in_segment(turn.text, prefer_first=False)
-                if cand:
-                    specialist_found = cand
-                    break
-
-        # 4. Topic keyword fallback (backward from failure_line, audit runs only)
-        if not specialist_found and is_audit_run:
-            for turn in reversed(before_turns):
-                if turn.role != "user":
-                    kw_match = _find_topic_keyword_in_segment(turn.text)
-                    if kw_match:
-                        specialist_found, topic_found = kw_match
-                        break
-            if not specialist_found:
-                for turn in reversed(before_turns):
-                    kw_match = _find_topic_keyword_in_segment(turn.text)
-                    if kw_match:
-                        specialist_found, topic_found = kw_match
-                        break
+        specialist_found, topic_found = _correlate_structured_turns(
+            turns, cutoff, is_audit_run
+        )
     else:
-        # Plain-text transcript: scan backward from cutoff to line 1
-        for idx in range(cutoff, 0, -1):
-            cand = _find_specialist_in_segment(lines[idx - 1], prefer_first=False)
-            if cand:
-                specialist_found = cand
-                break
-
-        if not specialist_found:
-            for idx in range(cutoff + 1, len(lines) + 1):
-                cand = _find_specialist_in_segment(lines[idx - 1], prefer_first=False)
-                if cand:
-                    specialist_found = cand
-                    break
-
-        if not specialist_found and is_audit_run:
-            for idx in range(cutoff, 0, -1):
-                kw_match = _find_topic_keyword_in_segment(lines[idx - 1])
-                if kw_match:
-                    specialist_found, topic_found = kw_match
-                    break
-
-    _domain_suites = {
-        "software-architecture",
-        "code-review",
-        "automated-testing",
-        "spec-driven-development",
-    }
-    effective_domain_suite = (
-        artifact_suite
-        if artifact_suite in _domain_suites
-        else (run_suite if run_suite in _domain_suites else None)
-    )
-    if specialist_found and not topic_found:
-        topic_found = _topic_for_specialist(specialist_found)
-    elif not topic_found and effective_domain_suite is not None:
-        topic_found = (
-            "architecture"
-            if effective_domain_suite == "software-architecture"
-            else (
-                "spec"
-                if effective_domain_suite == "spec-driven-development"
-                else effective_domain_suite
-            )
+        specialist_found, topic_found = _correlate_plaintext_lines(
+            lines, cutoff, is_audit_run
         )
 
+    resolved_topic = _resolve_correlated_topic(
+        specialist_found, topic_found, artifact_suite, run_suite
+    )
     ledger_refs = _extract_artifact_references(transcript_text, audit_data)
 
     return {
         "specialist_skill": specialist_found,
-        "topic": topic_found,
+        "topic": resolved_topic,
         "ledger_references": ledger_refs,
     }
+
+
+def _suite_artifact_triple(suite_name: str) -> tuple[str, str, str]:
+    fname, schema_rel = _SUITE_ARTIFACTS.get(
+        suite_name, _SUITE_ARTIFACTS["repository-audits"]
+    )
+    return suite_name, fname, schema_rel
+
+
+def _find_workspace_domain_suite(
+    workspace_dir: PurePath | None,
+) -> tuple[str, str, str] | None:
+    if not isinstance(workspace_dir, Path) or not workspace_dir.is_dir():
+        return None
+    for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
+        if (workspace_dir / fname).is_file():
+            return sname, fname, schema_rel
+    return None
+
+
+def _has_workspace_audit_ledger(workspace_dir: PurePath | None) -> bool:
+    return (
+        isinstance(workspace_dir, Path)
+        and workspace_dir.is_dir()
+        and (workspace_dir / "audit.json").is_file()
+    )
 
 
 def _resolve_recovery_suite(
@@ -1915,34 +2250,18 @@ def _resolve_recovery_suite(
     workspace_dir: PurePath | None,
     specialist_skill: str | None,
 ) -> tuple[str, str, str]:
-    if workspace_dir is None and run_data is None:
-        fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
-        return "repository-audits", fname, schema_rel
-    if (
-        isinstance(workspace_dir, Path)
-        and workspace_dir.is_dir()
-        and (workspace_dir / "audit.json").is_file()
+    if (workspace_dir is None and run_data is None) or _has_workspace_audit_ledger(
+        workspace_dir
     ):
-        fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
-        return "repository-audits", fname, schema_rel
+        return _suite_artifact_triple("repository-audits")
     run_suite = _suite_from_run_data(run_data)
     if run_suite is not None:
-        fname, schema_rel = _SUITE_ARTIFACTS.get(
-            run_suite, _SUITE_ARTIFACTS["repository-audits"]
-        )
-        return run_suite, fname, schema_rel
-    if isinstance(workspace_dir, Path) and workspace_dir.is_dir():
-        for fname, (sname, schema_rel) in _DOMAIN_ARTIFACTS.items():
-            if (workspace_dir / fname).is_file():
-                return sname, fname, schema_rel
+        return _suite_artifact_triple(run_suite)
+    if ws_suite := _find_workspace_domain_suite(workspace_dir):
+        return ws_suite
     if specialist_skill and specialist_skill in _SKILL_TO_SUITE:
-        sname = _SKILL_TO_SUITE[specialist_skill]
-        fname, schema_rel = _SUITE_ARTIFACTS.get(
-            sname, _SUITE_ARTIFACTS["repository-audits"]
-        )
-        return sname, fname, schema_rel
-    fname, schema_rel = _SUITE_ARTIFACTS["repository-audits"]
-    return "repository-audits", fname, schema_rel
+        return _suite_artifact_triple(_SKILL_TO_SUITE[specialist_skill])
+    return _suite_artifact_triple("repository-audits")
 
 
 def _escape_inline_char(ch: str) -> str:
@@ -2022,6 +2341,109 @@ def _format_workspace_arg(
     return shlex.quote(raw)
 
 
+class _RecoveryContext(NamedTuple):
+    suite_name: str
+    deliverable: str
+    schema_rel: str
+    is_domain_suite: bool
+    dir_str: str
+    deliverable_arg: str
+    audit_arg: str
+    run_json_arg: str
+    matched_span: str
+    line_number: Any
+
+
+def _format_last_checkpoint(run_data: dict[str, Any] | None) -> str | None:
+    if not run_data:
+        return None
+    checkpoints = run_data.get("checkpoints")
+    if checkpoints:
+        last_ckpt = checkpoints[-1]
+        return (
+            f"{last_ckpt.get('state', 'unknown')}: "
+            f"{last_ckpt.get('note', '')} (at {last_ckpt.get('at', '')})"
+        )
+    if run_data.get("state"):
+        return f"Run state: {run_data['state']}"
+    return None
+
+
+def _recovery_steps_timeout(ctx: _RecoveryContext) -> list[str]:
+    step4 = (
+        f"4. Validate {ctx.deliverable} and resume {ctx.suite_name} workflow: python scripts/fred.py validate-run {ctx.dir_str} && python scripts/fred.py resume {ctx.dir_str}"
+        if ctx.is_domain_suite
+        else f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {ctx.dir_str}"
+    )
+    return [
+        f"1. Check the command that timed out at line {ctx.line_number}: {ctx.matched_span}.",
+        "2. Add file exclusion patterns or narrow the target scope in the tool arguments.",
+        f"3. Mark current state paused: python scripts/fred.py checkpoint {ctx.dir_str} --state paused --note 'Paused after tool timeout triage'.",
+        step4,
+    ]
+
+
+def _recovery_steps_schema(ctx: _RecoveryContext) -> list[str]:
+    step1 = f"1. Inspect the schema validation error at line {ctx.line_number}: {ctx.matched_span}."
+    if ctx.is_domain_suite:
+        return [
+            step1,
+            f"2. Validate {ctx.deliverable} against {ctx.schema_rel}: python scripts/fred.py validate-run {ctx.dir_str}",
+            f"3. Correct missing required properties, invalid enum values, duplicate IDs, unsafe relative paths, or undeclared keys in {ctx.deliverable_arg} (additionalProperties is false).",
+            f"4. Re-verify {ctx.deliverable} conformance, then resume {ctx.suite_name} run: python scripts/fred.py resume {ctx.dir_str}",
+        ]
+    return [
+        step1,
+        f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {ctx.audit_arg}",
+        "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json.",
+        f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {ctx.dir_str}",
+    ]
+
+
+def _recovery_steps_context_limit(ctx: _RecoveryContext) -> list[str]:
+    step3 = (
+        f"3. Persist completed entries in {ctx.deliverable_arg} and split remaining {ctx.suite_name} phases into smaller slices."
+        if ctx.is_domain_suite
+        else "3. Split the specialist analysis into smaller bounded workflow slices."
+    )
+    return [
+        f"1. Context limit reached at line {ctx.line_number}.",
+        f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {ctx.dir_str} --state paused --note 'Context limit reached; clearing context'.",
+        step3,
+        f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {ctx.dir_str}",
+    ]
+
+
+def _recovery_steps_unclassified(ctx: _RecoveryContext) -> list[str]:
+    step1 = f"1. Review the unclassified error at line {ctx.line_number}: {ctx.matched_span}."
+    if not ctx.is_domain_suite:
+        return [
+            step1,
+            f"2. Inspect {ctx.run_json_arg} and {ctx.audit_arg} for partial progress.",
+            f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {ctx.dir_str}",
+        ]
+    step3 = (
+        f"3. Confirm `--allow-fixes` authority in {ctx.run_json_arg} if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {ctx.dir_str} && python scripts/fred.py resume {ctx.dir_str}"
+        if ctx.suite_name == "automated-testing"
+        else f"3. Validate {ctx.deliverable} and resume {ctx.suite_name} run from the last valid checkpoint: python scripts/fred.py validate-run {ctx.dir_str} && python scripts/fred.py resume {ctx.dir_str}"
+    )
+    return [
+        step1,
+        f"2. Inspect {ctx.run_json_arg} and {ctx.deliverable_arg} (schema: {ctx.schema_rel}) for partial progress.",
+        step3,
+    ]
+
+
+def _build_recovery_steps(ftype: Any, ctx: _RecoveryContext) -> list[str]:
+    if ftype == "tool_timeout":
+        return _recovery_steps_timeout(ctx)
+    if ftype == "schema_validation_error":
+        return _recovery_steps_schema(ctx)
+    if ftype == "context_limit":
+        return _recovery_steps_context_limit(ctx)
+    return _recovery_steps_unclassified(ctx)
+
+
 def formulate_recovery_instructions(
     failure: dict[str, Any],
     run_data: dict[str, Any] | None = None,
@@ -2029,123 +2451,34 @@ def formulate_recovery_instructions(
     specialist_skill: str | None = None,
 ) -> dict[str, Any]:
     """Generate concrete recovery steps to resume a run from the last valid checkpoint."""
-    last_checkpoint = None
-    instructions = []
-
     suite_name, deliverable, schema_rel = _resolve_recovery_suite(
         run_data, workspace_dir, specialist_skill
     )
     is_domain_suite = deliverable != "audit.json"
     placeholder = "<run-dir>" if is_domain_suite else "<audit-run-dir>"
-    dir_str = _format_workspace_arg(workspace_dir, placeholder)
-    deliverable_arg = _format_workspace_arg(workspace_dir, placeholder, deliverable)
-    audit_arg = _format_workspace_arg(workspace_dir, placeholder, "audit.json")
-    run_json_arg = _format_workspace_arg(workspace_dir, placeholder, "run.json")
-    matched_span = _inline_code_span(failure.get("matched_line", ""))
+    ctx = _RecoveryContext(
+        suite_name=suite_name,
+        deliverable=deliverable,
+        schema_rel=schema_rel,
+        is_domain_suite=is_domain_suite,
+        dir_str=_format_workspace_arg(workspace_dir, placeholder),
+        deliverable_arg=_format_workspace_arg(workspace_dir, placeholder, deliverable),
+        audit_arg=_format_workspace_arg(workspace_dir, placeholder, "audit.json"),
+        run_json_arg=_format_workspace_arg(workspace_dir, placeholder, "run.json"),
+        matched_span=_inline_code_span(failure.get("matched_line", "")),
+        line_number=failure.get("line_number"),
+    )
 
-    if run_data and run_data.get("checkpoints"):
-        last_ckpt = run_data["checkpoints"][-1]
-        last_checkpoint = f"{last_ckpt.get('state', 'unknown')}: {last_ckpt.get('note', '')} (at {last_ckpt.get('at', '')})"
-    elif run_data and run_data.get("state"):
-        last_checkpoint = f"Run state: {run_data['state']}"
-
-    ftype = failure.get("failure_type")
-    if ftype == "tool_timeout":
-        instructions.append(
-            f"1. Check the command that timed out at line {failure.get('line_number')}: {matched_span}."
-        )
-        instructions.append(
-            "2. Add file exclusion patterns or narrow the target scope in the tool arguments."
-        )
-        instructions.append(
-            f"3. Mark current state paused: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Paused after tool timeout triage'."
-        )
-        if is_domain_suite:
-            instructions.append(
-                f"4. Validate {deliverable} and resume {suite_name} workflow: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
-            )
-        else:
-            instructions.append(
-                f"4. Re-run specialist with bounded scope or resume: python scripts/fred.py resume {dir_str}"
-            )
-
-    elif ftype == "schema_validation_error":
-        instructions.append(
-            f"1. Inspect the schema validation error at line {failure.get('line_number')}: {matched_span}."
-        )
-        if is_domain_suite:
-            instructions.append(
-                f"2. Validate {deliverable} against {schema_rel}: python scripts/fred.py validate-run {dir_str}"
-            )
-            instructions.append(
-                f"3. Correct missing required properties, invalid enum values, duplicate IDs, unsafe relative paths, or undeclared keys in {deliverable_arg} (additionalProperties is false)."
-            )
-            instructions.append(
-                f"4. Re-verify {deliverable} conformance, then resume {suite_name} run: python scripts/fred.py resume {dir_str}"
-            )
-        else:
-            instructions.append(
-                f"2. Validate current audit.json ledger: python skills/repo-audit-program/scripts/validate_audit.py {audit_arg}"
-            )
-            instructions.append(
-                "3. Correct duplicate IDs, reversed line ranges, or missing required fields in audit.json."
-            )
-            instructions.append(
-                f"4. Re-verify ledger validity, then resume audit coordination: python scripts/fred.py resume {dir_str}"
-            )
-
-    elif ftype == "context_limit":
-        instructions.append(
-            f"1. Context limit reached at line {failure.get('line_number')}."
-        )
-        instructions.append(
-            f"2. Save current progress to checkpoint: python scripts/fred.py checkpoint {dir_str} --state paused --note 'Context limit reached; clearing context'."
-        )
-        if is_domain_suite:
-            instructions.append(
-                f"3. Persist completed entries in {deliverable_arg} and split remaining {suite_name} phases into smaller slices."
-            )
-        else:
-            instructions.append(
-                "3. Split the specialist analysis into smaller bounded workflow slices."
-            )
-        instructions.append(
-            f"4. Start fresh agent session and resume from checkpoint: python scripts/fred.py resume {dir_str}"
-        )
-
-    else:
-        instructions.append(
-            f"1. Review the unclassified error at line {failure.get('line_number')}: {matched_span}."
-        )
-        if is_domain_suite:
-            instructions.append(
-                f"2. Inspect {run_json_arg} and {deliverable_arg} (schema: {schema_rel}) for partial progress."
-            )
-            if suite_name == "automated-testing":
-                instructions.append(
-                    f"3. Confirm `--allow-fixes` authority in {run_json_arg} if writing runnable test files, then validate and resume: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
-                )
-            else:
-                instructions.append(
-                    f"3. Validate {deliverable} and resume {suite_name} run from the last valid checkpoint: python scripts/fred.py validate-run {dir_str} && python scripts/fred.py resume {dir_str}"
-                )
-        else:
-            instructions.append(
-                f"2. Inspect {run_json_arg} and {audit_arg} for partial progress."
-            )
-            instructions.append(
-                f"3. Resume audit run from the last valid checkpoint: python scripts/fred.py resume {dir_str}"
-            )
-
+    instructions = _build_recovery_steps(failure.get("failure_type"), ctx)
     if suite_name == "automated-testing" and not any(
         "--allow-fixes" in step for step in instructions
     ):
         instructions.append(
-            f"{len(instructions) + 1}. Confirm `--allow-fixes` authority in {run_json_arg} (`application_changes: true`) before writing runnable test files to the repository."
+            f"{len(instructions) + 1}. Confirm `--allow-fixes` authority in {ctx.run_json_arg} (`application_changes: true`) before writing runnable test files to the repository."
         )
 
     return {
-        "last_checkpoint": last_checkpoint,
+        "last_checkpoint": _format_last_checkpoint(run_data),
         "instructions": instructions,
     }
 
@@ -2205,6 +2538,95 @@ def _read_workspace_json_dict(
     return loaded, None
 
 
+def _load_first_workspace_artifact(
+    workspace_dir: Path, expected_artifact: str, warnings: list[str]
+) -> dict[str, Any] | None:
+    candidate_files = [expected_artifact] + [
+        name for name in ("audit.json", *_DOMAIN_ARTIFACTS) if name != expected_artifact
+    ]
+    for fname in candidate_files:
+        artifact_file = workspace_dir / fname
+        if not artifact_file.is_file():
+            continue
+        loaded_artifact, art_warn = _read_workspace_json_dict(artifact_file, fname)
+        if loaded_artifact is not None:
+            return loaded_artifact
+        if art_warn:
+            warnings.append(art_warn)
+    return None
+
+
+def _load_workspace_bundle_inputs(
+    workspace_dir: Path | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str]]:
+    if not workspace_dir:
+        return None, None, []
+    warnings: list[str] = []
+    run_data: dict[str, Any] | None = None
+    run_file = workspace_dir / "run.json"
+    if run_file.is_file():
+        run_data, run_warn = _read_workspace_json_dict(run_file, "run.json")
+        if run_warn:
+            warnings.append(run_warn)
+    _, expected_artifact, _ = _resolve_recovery_suite(run_data, workspace_dir, None)
+    audit_data = _load_first_workspace_artifact(
+        workspace_dir, expected_artifact, warnings
+    )
+    return run_data, audit_data, warnings
+
+
+def _normalize_discovery_metadata(
+    transcript_path: Path, discovery_metadata: dict[str, Any] | None
+) -> dict[str, Any]:
+    if discovery_metadata is None:
+        return {
+            "source": _infer_transcript_source(transcript_path),
+            "selected_transcript": scrub_credentials(str(transcript_path)),
+            "selection_reason": "Explicit transcript path supplied",
+            "rejected_candidates": [],
+        }
+    return {
+        "source": str(discovery_metadata.get("source", "workspace")),
+        "selected_transcript": scrub_credentials(
+            str(discovery_metadata.get("selected_transcript", transcript_path))
+        ),
+        "selection_reason": scrub_credentials(
+            str(discovery_metadata.get("selection_reason", "matched transcript"))
+        ),
+        "rejected_candidates": [
+            {
+                "path": scrub_credentials(str(item.get("path", ""))),
+                "reason": scrub_credentials(str(item.get("reason", ""))),
+            }
+            for item in discovery_metadata.get("rejected_candidates", [])
+        ],
+    }
+
+
+def _extract_run_repo_path(run_data: dict[str, Any] | None) -> str | None:
+    if not isinstance(run_data, dict):
+        return None
+    repo = run_data.get("repository")
+    if isinstance(repo, dict) and isinstance(repo.get("path"), str):
+        return repo["path"]
+    return None
+
+
+def _finalize_recovery_with_warnings(
+    recovery: dict[str, Any], workspace_warnings: list[str]
+) -> dict[str, Any]:
+    for warn in workspace_warnings:
+        recovery["instructions"].append(
+            f"{len(recovery['instructions']) + 1}. Repair corrupted workspace metadata before resuming ({warn})."
+        )
+    recovery["instructions"] = [
+        scrub_credentials(inst) for inst in recovery.get("instructions", [])
+    ]
+    if recovery.get("last_checkpoint"):
+        recovery["last_checkpoint"] = scrub_credentials(recovery["last_checkpoint"])
+    return recovery
+
+
 def generate_diagnostic_bundle(
     transcript_path: Path,
     workspace_dir: Path | None = None,
@@ -2215,47 +2637,14 @@ def generate_diagnostic_bundle(
     """Generate a scrubbed diagnostic bundle from a session transcript."""
     _validate_redaction_tier(redaction_tier)
     raw_text = transcript_path.read_text(encoding="utf-8", errors="replace")
-
-    # Read workspace state if available
-    run_data = None
-    audit_data = None
-    workspace_warnings: list[str] = []
-    if workspace_dir:
-        run_file = workspace_dir / "run.json"
-        if run_file.is_file():
-            loaded_run, run_warn = _read_workspace_json_dict(run_file, "run.json")
-            if loaded_run is not None:
-                run_data = loaded_run
-            elif run_warn:
-                workspace_warnings.append(run_warn)
-        _, expected_artifact, _ = _resolve_recovery_suite(run_data, workspace_dir, None)
-        candidate_files = [expected_artifact] + [
-            name
-            for name in ("audit.json", *_DOMAIN_ARTIFACTS)
-            if name != expected_artifact
-        ]
-        for fname in candidate_files:
-            artifact_file = workspace_dir / fname
-            if artifact_file.is_file():
-                loaded_artifact, art_warn = _read_workspace_json_dict(
-                    artifact_file, fname
-                )
-                if loaded_artifact is not None:
-                    audit_data = loaded_artifact
-                    break
-                if art_warn:
-                    workspace_warnings.append(art_warn)
-
-    resolved_session_id = (
-        session_id
-        or (run_data.get("run_id") if isinstance(run_data, dict) else None)
-        or transcript_path.stem
+    run_data, audit_data, workspace_warnings = _load_workspace_bundle_inputs(
+        workspace_dir
     )
 
-    # Detect failures first on raw text
-    failure = detect_failures(raw_text)
+    run_id = run_data.get("run_id") if isinstance(run_data, dict) else None
+    resolved_session_id = session_id or run_id or transcript_path.stem
 
-    # Correlate domain and ledger entries relative to the failure line
+    failure = detect_failures(raw_text)
     correlated = correlate_audit_domain(
         raw_text,
         audit_data,
@@ -2263,58 +2652,23 @@ def generate_diagnostic_bundle(
         run_data=run_data,
     )
 
-    # Scrub sensitive credentials from failure fields before building recovery commands
     failure["matched_line"] = scrub_credentials(failure.get("matched_line", ""))
     failure["summary"] = scrub_credentials(failure.get("summary", ""))
 
-    # Generate actionable recovery steps
     recovery = formulate_recovery_instructions(
         failure,
         run_data,
         workspace_dir,
         specialist_skill=correlated.get("specialist_skill"),
     )
-    for warn in workspace_warnings:
-        recovery["instructions"].append(
-            f"{len(recovery['instructions']) + 1}. Repair corrupted workspace metadata before resuming ({warn})."
-        )
-    recovery["instructions"] = [
-        scrub_credentials(inst) for inst in recovery.get("instructions", [])
-    ]
-    if recovery.get("last_checkpoint"):
-        recovery["last_checkpoint"] = scrub_credentials(recovery["last_checkpoint"])
+    recovery = _finalize_recovery_with_warnings(recovery, workspace_warnings)
 
     cited_lines = _find_cited_lines_for_bundle(raw_text, failure, correlated)
     scrubbed_transcript, redaction_info = scrub_credentials_with_stats(
         raw_text, tier=redaction_tier, cited_lines=cited_lines
     )
 
-    if discovery_metadata is not None:
-        normalized_discovery = {
-            "source": str(discovery_metadata.get("source", "workspace")),
-            "selected_transcript": scrub_credentials(
-                str(discovery_metadata.get("selected_transcript", transcript_path))
-            ),
-            "selection_reason": scrub_credentials(
-                str(discovery_metadata.get("selection_reason", "matched transcript"))
-            ),
-            "rejected_candidates": [
-                {
-                    "path": scrub_credentials(str(item.get("path", ""))),
-                    "reason": scrub_credentials(str(item.get("reason", ""))),
-                }
-                for item in discovery_metadata.get("rejected_candidates", [])
-            ],
-        }
-    else:
-        normalized_discovery = {
-            "source": _infer_transcript_source(transcript_path),
-            "selected_transcript": scrub_credentials(str(transcript_path)),
-            "selection_reason": "Explicit transcript path supplied",
-            "rejected_candidates": [],
-        }
-
-    bundle: dict[str, Any] = {
+    return {
         "schema_version": "1.0",
         "session_id": resolved_session_id,
         "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -2323,19 +2677,16 @@ def generate_diagnostic_bundle(
         "environment": {
             "platform": f"{platform.system()} {platform.release()}",
             "python_version": sys.version.split()[0],
-            "repository_path": run_data.get("repository", {}).get("path")
-            if isinstance(run_data, dict)
-            and isinstance(run_data.get("repository"), dict)
-            else None,
-            "run_id": run_data.get("run_id") if isinstance(run_data, dict) else None,
+            "repository_path": _extract_run_repo_path(run_data),
+            "run_id": run_id,
         },
         "recovery": recovery,
         "scrubbed_transcript": scrubbed_transcript,
         "redaction": redaction_info,
-        "transcript_discovery": normalized_discovery,
+        "transcript_discovery": _normalize_discovery_metadata(
+            transcript_path, discovery_metadata
+        ),
     }
-
-    return bundle
 
 
 def render_report(bundle: dict[str, Any]) -> str:
@@ -2503,70 +2854,115 @@ def _claude_project_slugs(raw_path: str | Path) -> set[str]:
     return {s for s in slugs if s}
 
 
-def _inspect_transcript_metadata(path: Path) -> dict[str, Any]:
-    """Extract session IDs, working directories, sidechain flag, and text sample from a candidate."""
-    session_ids: set[str] = {path.stem}
-    cwds: list[str] = []
-    is_sidechain = "subagents" in {p.lower() for p in path.parts}
-    raw_text = ""
-    read_error: str | None = None
+class CandidateScore(NamedTuple):
+    """Comparable priority score for ranking workspace and host transcript candidates."""
 
+    match_tier: int
+    is_workspace: int
+    run_or_session_match: int
+    workspace_or_cwd_match: int
+    repo_or_slug_match: int
+    primary_session: int
+    mtime: float
+    name_rank: int
+    root_rank: int
+
+
+class _ScoredCandidate(NamedTuple):
+    score: CandidateScore
+    path: Path
+    source: str
+    reason: str
+
+
+class _HostMatchContext(NamedTuple):
+    workspace_dir: Path | None
+    session_id: str | None
+    resolved_home: Path
+    run_data: dict[str, Any]
+    run_parse_warning: str | None
+    run_id: str | None
+    repo_path: str | None
+    expected_slugs: set[str]
+    ws_variants: set[str]
+    repo_variants: set[str]
+    has_workspace_match: bool
+
+
+_METADATA_CWD_KEYS: tuple[str, ...] = (
+    "cwd",
+    "workdir",
+    "project_path",
+    "repository_path",
+)
+
+
+def _read_candidate_text(path: Path) -> tuple[str, str | None]:
     try:
-        raw_text = path.read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8", errors="replace"), None
     except OSError as exc:
-        read_error = str(exc)
         print(
             scrub_credentials(
                 f"Warning: unable to read candidate transcript '{path}': {exc}"
             ),
             file=sys.stderr,
         )
+        return "", str(exc)
+
+
+def _add_nonempty_str(target: set[str], value: object) -> None:
+    if isinstance(value, str) and value.strip():
+        target.add(value.strip())
+
+
+def _collect_record_session_ids(obj: dict[str, Any], session_ids: set[str]) -> None:
+    for id_key in ("sessionId", "session_id"):
+        _add_nonempty_str(session_ids, obj.get(id_key))
+    payload = obj.get("payload")
+    if obj.get("type") == "session_meta" and isinstance(payload, dict):
+        _add_nonempty_str(session_ids, payload.get("id"))
+    elif obj.get("type") in {"session", "metadata", "", None}:
+        _add_nonempty_str(session_ids, obj.get("id"))
+    meta = obj.get("metadata")
+    if isinstance(meta, dict):
+        _add_nonempty_str(session_ids, meta.get("session_id"))
+
+
+def _collect_mapping_cwds(mapping: dict[str, Any], cwds: list[str]) -> None:
+    for cwd_key in _METADATA_CWD_KEYS:
+        cval = mapping.get(cwd_key)
+        if isinstance(cval, str) and cval.strip() and cval.strip() not in cwds:
+            cwds.append(cval.strip())
+
+
+def _inspect_jsonl_record(
+    stripped: str, session_ids: set[str], cwds: list[str]
+) -> bool:
+    if not stripped.startswith("{"):
+        return False
+    obj: Any = None
+    with contextlib.suppress(ValueError, TypeError):
+        obj = json.loads(stripped)
+    if not isinstance(obj, dict):
+        return False
+    _collect_record_session_ids(obj, session_ids)
+    _collect_mapping_cwds(obj, cwds)
+    payload = obj.get("payload")
+    if isinstance(payload, dict):
+        _collect_mapping_cwds(payload, cwds)
+    return obj.get("isSidechain") is True
+
+
+def _inspect_transcript_metadata(path: Path) -> dict[str, Any]:
+    """Extract session IDs, working directories, sidechain flag, and text sample from a candidate."""
+    session_ids: set[str] = {path.stem}
+    cwds: list[str] = []
+    is_sidechain = "subagents" in {p.lower() for p in path.parts}
+    raw_text, read_error = _read_candidate_text(path)
 
     for line in raw_text.splitlines():
-        stripped = line.strip()
-        if not stripped or not stripped.startswith("{"):
-            continue
-        with contextlib.suppress(ValueError, TypeError):
-            obj = json.loads(stripped)
-            if not isinstance(obj, dict):
-                continue
-            if obj.get("isSidechain") is True:
-                is_sidechain = True
-            for id_key in ("sessionId", "session_id"):
-                val = obj.get(id_key)
-                if isinstance(val, str) and val.strip():
-                    session_ids.add(val.strip())
-            if obj.get("type") == "session_meta" and isinstance(
-                obj.get("payload"), dict
-            ):
-                sid = obj["payload"].get("id")
-                if isinstance(sid, str) and sid.strip():
-                    session_ids.add(sid.strip())
-            elif isinstance(obj.get("id"), str) and obj.get("type") in {
-                "session",
-                "metadata",
-                "",
-                None,
-            }:
-                session_ids.add(obj["id"].strip())
-            meta = obj.get("metadata")
-            if isinstance(meta, dict) and isinstance(meta.get("session_id"), str):
-                session_ids.add(meta["session_id"].strip())
-
-            for cwd_key in ("cwd", "workdir", "project_path", "repository_path"):
-                cval = obj.get(cwd_key)
-                if isinstance(cval, str) and cval.strip() and cval.strip() not in cwds:
-                    cwds.append(cval.strip())
-            payload = obj.get("payload")
-            if isinstance(payload, dict):
-                for cwd_key in ("cwd", "workdir", "project_path", "repository_path"):
-                    cval = payload.get(cwd_key)
-                    if (
-                        isinstance(cval, str)
-                        and cval.strip()
-                        and cval.strip() not in cwds
-                    ):
-                        cwds.append(cval.strip())
+        if _inspect_jsonl_record(line.strip(), session_ids, cwds):
+            is_sidechain = True
 
     return {
         "session_ids": session_ids,
@@ -2611,6 +3007,19 @@ def find_candidate_transcripts(workspace_dir: Path) -> list[Path]:
     return candidates
 
 
+def _iter_host_root_files(host_name: str, root: Path) -> list[tuple[str, Path]]:
+    if not root.is_dir():
+        return []
+    paths: list[Path] = []
+    with contextlib.suppress(OSError):
+        paths = sorted(root.rglob("*"))
+    return [
+        (host_name, path)
+        for path in paths
+        if path.is_file() and path.suffix.lower() in {".jsonl", ".json"}
+    ]
+
+
 def _find_host_transcript_files(home_dir: Path) -> list[tuple[str, Path]]:
     """Collect candidate JSONL/JSON session transcripts from Claude Code and Codex host directories."""
     results: list[tuple[str, Path]] = []
@@ -2619,13 +3028,387 @@ def _find_host_transcript_files(home_dir: Path) -> list[tuple[str, Path]]:
         ("codex", home_dir / ".codex" / "sessions"),
     )
     for host_name, root in host_roots:
-        if not root.is_dir():
-            continue
-        with contextlib.suppress(OSError):
-            for path in sorted(root.rglob("*")):
-                if path.is_file() and path.suffix.lower() in {".jsonl", ".json"}:
-                    results.append((host_name, path))
+        results.extend(_iter_host_root_files(host_name, root))
     return results
+
+
+def _append_session_named_candidates(
+    extra_dir: Path, session_id: str, candidates: list[Path]
+) -> None:
+    if not extra_dir.is_dir():
+        return
+    for ext in (".jsonl", ".json", ".txt"):
+        extra = extra_dir / f"{session_id}{ext}"
+        if extra.is_file() and extra not in candidates:
+            candidates.append(extra)
+
+
+def _collect_workspace_candidates(
+    workspace_dir: Path | None, session_id: str | None
+) -> list[Path]:
+    if not workspace_dir or not workspace_dir.is_dir():
+        return []
+    candidates = list(find_candidate_transcripts(workspace_dir))
+    if session_id:
+        _append_session_named_candidates(workspace_dir, session_id, candidates)
+        _append_session_named_candidates(workspace_dir / "logs", session_id, candidates)
+    return candidates
+
+
+def _stat_candidate_mtime(
+    cand: Path, meta: dict[str, Any], rejected: list[dict[str, str]]
+) -> float | None:
+    if meta.get("read_error"):
+        rejected.append(
+            {
+                "path": str(cand),
+                "reason": f"unreadable transcript ({meta['read_error']})",
+            }
+        )
+        return None
+    try:
+        return cand.stat().st_mtime
+    except OSError as exc:
+        print(
+            scrub_credentials(
+                f"Warning: unable to stat candidate transcript '{cand}': {exc}"
+            ),
+            file=sys.stderr,
+        )
+        rejected.append({"path": str(cand), "reason": f"unreadable transcript ({exc})"})
+        return None
+
+
+def _score_workspace_candidate(
+    cand: Path,
+    workspace_dir: Path | None,
+    session_id: str | None,
+    rejected: list[dict[str, str]],
+) -> _ScoredCandidate | None:
+    meta = _inspect_transcript_metadata(cand)
+    mtime = _stat_candidate_mtime(cand, meta, rejected)
+    if mtime is None:
+        return None
+
+    name_rank = (
+        -CANDIDATE_TRANSCRIPTS.index(cand.name)
+        if cand.name in CANDIDATE_TRANSCRIPTS
+        else -len(CANDIDATE_TRANSCRIPTS)
+    )
+    root_rank = 0 if (workspace_dir and cand.parent == workspace_dir) else -1
+
+    if session_id:
+        matched_sid, sid_reason = _matches_session_id(cand, meta, session_id)
+        if not matched_sid:
+            rejected.append(
+                {
+                    "path": str(cand),
+                    "reason": f"session_id mismatch (expected '{session_id}')",
+                }
+            )
+            return None
+        score = CandidateScore(3, 1, 1, 1, 1, 1, mtime, name_rank, root_rank)
+        return _ScoredCandidate(
+            score, cand, "workspace", sid_reason or "Matched session_id"
+        )
+
+    score = CandidateScore(2, 1, 1, 1, 1, 1, mtime, name_rank, root_rank)
+    return _ScoredCandidate(
+        score, cand, "workspace", f"Matched workspace candidate '{cand.name}'"
+    )
+
+
+def _matches_claude_project_slug(
+    host_name: str, hpath: Path, resolved_home: Path, expected_slugs: set[str]
+) -> bool:
+    if host_name != "claude-code" or not expected_slugs:
+        return False
+    projects_root = resolved_home / ".claude" / "projects"
+    with contextlib.suppress(ValueError):
+        rel_parts = hpath.relative_to(projects_root).parts
+        if rel_parts:
+            return rel_parts[0].strip("-").lower() in expected_slugs
+    return False
+
+
+def _text_mentions_any_variant(raw_text: str, variants: set[str]) -> bool:
+    if not variants:
+        return False
+    normalized_text = raw_text.replace("\\", "/")
+    return any(len(v) > 3 and v in normalized_text for v in variants)
+
+
+def _has_conflicting_host_cwd(
+    cwds: list[str],
+    has_repo_cwd: bool,
+    has_ws_cwd: bool,
+    has_ws_ref: bool,
+    repo_path: str | None,
+) -> bool:
+    if not cwds or has_repo_cwd or has_ws_cwd:
+        return False
+    return repo_path is not None or not has_ws_ref
+
+
+def _format_host_no_match_reason(ctx: _HostMatchContext) -> str:
+    if ctx.run_parse_warning:
+        return (
+            "no matching workspace reference and workspace run.json "
+            f"could not be parsed ({ctx.run_parse_warning})"
+        )
+    if not ctx.run_data:
+        return "no matching workspace reference and workspace lacks run.json metadata"
+    return (
+        f"no matching run_id ({ctx.run_id or 'none'}) or "
+        f"repository path ({ctx.repo_path or 'none'})"
+    )
+
+
+def _build_host_match_reasons(
+    ctx: _HostMatchContext,
+    *,
+    has_run_id: bool,
+    has_ws_ref: bool,
+    has_repo_cwd: bool,
+    slug_match: bool,
+    has_conflicting_cwd: bool,
+    has_repo_ref: bool,
+) -> list[str]:
+    reasons: list[str] = []
+    if has_run_id:
+        reasons.append(f"run_id '{ctx.run_id}'")
+    if has_ws_ref:
+        reasons.append(f"workspace '{ctx.workspace_dir}'")
+    if has_repo_cwd:
+        reasons.append(f"repository cwd '{ctx.repo_path}'")
+    elif slug_match and not has_conflicting_cwd:
+        reasons.append(
+            f"Claude project directory for '{ctx.repo_path or ctx.workspace_dir}'"
+        )
+    elif has_repo_ref:
+        reasons.append(f"repository path '{ctx.repo_path}'")
+    return reasons
+
+
+def _any_cwd_matches(cwds: list[str], target: str | Path | None) -> bool:
+    if target is None:
+        return False
+    return any(_paths_equal(c, target) for c in cwds)
+
+
+def _score_host_session_id_candidate(
+    hpath: Path,
+    host_name: str,
+    meta: dict[str, Any],
+    mtime: float,
+    primary_session: int,
+    session_id: str,
+    ctx: _HostMatchContext,
+    rejected: list[dict[str, str]],
+) -> _ScoredCandidate | None:
+    matched_sid, sid_reason = _matches_session_id(hpath, meta, session_id)
+    if not matched_sid:
+        rejected.append(
+            {
+                "path": str(hpath),
+                "reason": f"session_id mismatch (expected '{session_id}')",
+            }
+        )
+        return None
+    cwd_bonus = int(_any_cwd_matches(meta["cwds"], ctx.repo_path))
+    score = CandidateScore(3, 0, 1, cwd_bonus, 1, primary_session, mtime, 0, 0)
+    return _ScoredCandidate(
+        score,
+        hpath,
+        host_name,
+        f"{sid_reason} in {host_name} host transcripts",
+    )
+
+
+def _score_host_workspace_candidate(
+    hpath: Path,
+    host_name: str,
+    meta: dict[str, Any],
+    mtime: float,
+    primary_session: int,
+    workspace_dir: Path,
+    ctx: _HostMatchContext,
+    rejected: list[dict[str, str]],
+) -> _ScoredCandidate | None:
+    raw_text = meta["raw_text"]
+    has_run_id = bool(ctx.run_id and ctx.run_id in raw_text)
+    has_ws_cwd = _any_cwd_matches(meta["cwds"], workspace_dir)
+    has_ws_ref = has_ws_cwd or _text_mentions_any_variant(raw_text, ctx.ws_variants)
+    has_repo_cwd = _any_cwd_matches(meta["cwds"], ctx.repo_path)
+    has_conflicting_cwd = _has_conflicting_host_cwd(
+        meta["cwds"], has_repo_cwd, has_ws_cwd, has_ws_ref, ctx.repo_path
+    )
+    if has_conflicting_cwd and not has_run_id and not has_ws_ref:
+        target_label = ctx.repo_path or str(workspace_dir)
+        rejected.append(
+            {
+                "path": str(hpath),
+                "reason": f"cwd mismatch ({meta['cwds'][0]!r} does not match {target_label!r})",
+            }
+        )
+        return None
+
+    slug_match = _matches_claude_project_slug(
+        host_name, hpath, ctx.resolved_home, ctx.expected_slugs
+    )
+    has_repo_ref = not has_conflicting_cwd and _text_mentions_any_variant(
+        raw_text, ctx.repo_variants
+    )
+    reasons = _build_host_match_reasons(
+        ctx,
+        has_run_id=has_run_id,
+        has_ws_ref=has_ws_ref,
+        has_repo_cwd=has_repo_cwd,
+        slug_match=slug_match,
+        has_conflicting_cwd=has_conflicting_cwd,
+        has_repo_ref=has_repo_ref,
+    )
+    if not reasons:
+        rejected.append(
+            {"path": str(hpath), "reason": _format_host_no_match_reason(ctx)}
+        )
+        return None
+
+    score = CandidateScore(
+        1,
+        0,
+        int(has_run_id),
+        int(has_ws_ref),
+        int(has_repo_cwd or slug_match),
+        primary_session,
+        mtime,
+        0,
+        0,
+    )
+    return _ScoredCandidate(
+        score,
+        hpath,
+        host_name,
+        f"Matched {', '.join(reasons)} in {host_name} host transcripts",
+    )
+
+
+def _score_host_candidate(
+    host_name: str,
+    hpath: Path,
+    ctx: _HostMatchContext,
+    rejected: list[dict[str, str]],
+) -> _ScoredCandidate | None:
+    meta = _inspect_transcript_metadata(hpath)
+    mtime = _stat_candidate_mtime(hpath, meta, rejected)
+    if mtime is None:
+        return None
+    primary_session = 0 if meta["is_sidechain"] else 1
+
+    if ctx.session_id:
+        return _score_host_session_id_candidate(
+            hpath,
+            host_name,
+            meta,
+            mtime,
+            primary_session,
+            ctx.session_id,
+            ctx,
+            rejected,
+        )
+    if ctx.has_workspace_match:
+        rejected.append(
+            {
+                "path": str(hpath),
+                "reason": "superseded by workspace-local candidate transcript",
+            }
+        )
+        return None
+    if not ctx.workspace_dir:
+        rejected.append(
+            {
+                "path": str(hpath),
+                "reason": "no workspace or session_id supplied for host matching",
+            }
+        )
+        return None
+    return _score_host_workspace_candidate(
+        hpath, host_name, meta, mtime, primary_session, ctx.workspace_dir, ctx, rejected
+    )
+
+
+def _load_discovery_run_data(
+    workspace_dir: Path | None,
+) -> tuple[dict[str, Any], str | None]:
+    if not workspace_dir or not workspace_dir.is_dir():
+        return {}, None
+    run_file = workspace_dir / "run.json"
+    if not run_file.is_file():
+        return {}, None
+    loaded, run_parse_warning = _read_workspace_json_dict(run_file, "run.json")
+    return (loaded if loaded is not None else {}), run_parse_warning
+
+
+def _build_host_match_context(
+    workspace_dir: Path | None,
+    session_id: str | None,
+    resolved_home: Path,
+    has_workspace_match: bool,
+) -> _HostMatchContext:
+    run_data, run_parse_warning = _load_discovery_run_data(workspace_dir)
+    raw_run_id = run_data.get("run_id")
+    run_id = raw_run_id if isinstance(raw_run_id, str) else None
+    repo_path = _extract_run_repo_path(run_data)
+    expected_slugs: set[str] = set()
+    if repo_path:
+        expected_slugs |= _claude_project_slugs(repo_path)
+    if workspace_dir:
+        expected_slugs |= _claude_project_slugs(workspace_dir)
+    return _HostMatchContext(
+        workspace_dir=workspace_dir,
+        session_id=session_id,
+        resolved_home=resolved_home,
+        run_data=run_data,
+        run_parse_warning=run_parse_warning,
+        run_id=run_id,
+        repo_path=repo_path,
+        expected_slugs=expected_slugs,
+        ws_variants=_canonical_path_variants(workspace_dir) if workspace_dir else set(),
+        repo_variants=_canonical_path_variants(repo_path) if repo_path else set(),
+        has_workspace_match=has_workspace_match,
+    )
+
+
+def _raise_transcript_not_found(
+    workspace_dir: Path | None,
+    session_id: str | None,
+    rejected: list[dict[str, str]],
+) -> NoReturn:
+    patterns_str = ", ".join(CANDIDATE_TRANSCRIPTS)
+    if workspace_dir is not None:
+        msg = (
+            f"No candidate transcript found in workspace '{workspace_dir}' "
+            f"(searched patterns: {patterns_str} in workspace and logs/, "
+            "plus ~/.claude/projects/ and ~/.codex/sessions/). "
+            "Supply an explicit transcript file path via positional argument or --transcript."
+        )
+    else:
+        msg = (
+            f"No matching session transcript found for session_id '{session_id}' "
+            "in ~/.claude/projects/ or ~/.codex/sessions/. "
+            "Supply an explicit transcript file path via positional argument or --transcript."
+        )
+    raise TranscriptNotFoundError(msg, rejected_candidates=rejected)
+
+
+def _superseded_candidate_reason(
+    other_score: CandidateScore, best_score: CandidateScore, best_name: str
+) -> str:
+    if other_score.primary_session < best_score.primary_session:
+        return "subagent sidechain transcript superseded by primary session"
+    if other_score.mtime < best_score.mtime:
+        return f"older modification time than selected '{best_name}'"
+    return f"lower match or naming priority than selected '{best_name}'"
 
 
 def discover_transcript_details(
@@ -2636,307 +3419,40 @@ def discover_transcript_details(
     """Discover matching transcript across workspace and host directories with provenance."""
     resolved_home = _resolve_home_dir(home_dir)
     rejected: list[dict[str, str]] = []
-    scored_matches: list[tuple[tuple[Any, ...], Path, str, str]] = []
+    scored_matches: list[_ScoredCandidate] = []
 
-    run_data: dict[str, Any] = {}
-    run_parse_warning: str | None = None
-    if workspace_dir and workspace_dir.is_dir():
-        run_file = workspace_dir / "run.json"
-        if run_file.is_file():
-            loaded, run_parse_warning = _read_workspace_json_dict(run_file, "run.json")
-            if loaded is not None:
-                run_data = loaded
+    for cand in _collect_workspace_candidates(workspace_dir, session_id):
+        scored = _score_workspace_candidate(cand, workspace_dir, session_id, rejected)
+        if scored is not None:
+            scored_matches.append(scored)
 
-    run_id = run_data.get("run_id") if isinstance(run_data.get("run_id"), str) else None
-    repo_path = (
-        run_data.get("repository", {}).get("path")
-        if isinstance(run_data.get("repository"), dict)
-        and isinstance(run_data["repository"].get("path"), str)
-        else None
+    host_ctx = _build_host_match_context(
+        workspace_dir, session_id, resolved_home, bool(scored_matches)
     )
-
-    # 1. Inspect workspace candidates
-    ws_candidates: list[Path] = []
-    if workspace_dir and workspace_dir.is_dir():
-        ws_candidates = list(find_candidate_transcripts(workspace_dir))
-        if session_id:
-            for extra_dir in (workspace_dir, workspace_dir / "logs"):
-                if not extra_dir.is_dir():
-                    continue
-                for ext in (".jsonl", ".json", ".txt"):
-                    extra = extra_dir / f"{session_id}{ext}"
-                    if extra.is_file() and extra not in ws_candidates:
-                        ws_candidates.append(extra)
-
-    for cand in ws_candidates:
-        meta = _inspect_transcript_metadata(cand)
-        if meta.get("read_error"):
-            rejected.append(
-                {
-                    "path": str(cand),
-                    "reason": f"unreadable transcript ({meta['read_error']})",
-                }
-            )
-            continue
-        try:
-            mtime = cand.stat().st_mtime
-        except OSError as exc:
-            print(
-                scrub_credentials(
-                    f"Warning: unable to stat candidate transcript '{cand}': {exc}"
-                ),
-                file=sys.stderr,
-            )
-            rejected.append(
-                {
-                    "path": str(cand),
-                    "reason": f"unreadable transcript ({exc})",
-                }
-            )
-            continue
-        name_rank = (
-            -CANDIDATE_TRANSCRIPTS.index(cand.name)
-            if cand.name in CANDIDATE_TRANSCRIPTS
-            else -len(CANDIDATE_TRANSCRIPTS)
-        )
-        root_rank = 0 if (workspace_dir and cand.parent == workspace_dir) else -1
-
-        if session_id:
-            matched_sid, sid_reason = _matches_session_id(cand, meta, session_id)
-            if not matched_sid:
-                rejected.append(
-                    {
-                        "path": str(cand),
-                        "reason": f"session_id mismatch (expected '{session_id}')",
-                    }
-                )
-                continue
-            score = (3, 1, 1, 1, 1, 1, mtime, name_rank, root_rank)
-            scored_matches.append(
-                (score, cand, "workspace", sid_reason or "Matched session_id")
-            )
-        else:
-            score = (2, 1, 1, 1, 1, 1, mtime, name_rank, root_rank)
-            scored_matches.append(
-                (
-                    score,
-                    cand,
-                    "workspace",
-                    f"Matched workspace candidate '{cand.name}'",
-                )
-            )
-
-    # 2. Inspect Claude Code and Codex host session directories
-    expected_repo_slugs = _claude_project_slugs(repo_path) if repo_path else set()
-    expected_ws_slugs = _claude_project_slugs(workspace_dir) if workspace_dir else set()
-    ws_variants = _canonical_path_variants(workspace_dir) if workspace_dir else set()
-    repo_variants = _canonical_path_variants(repo_path) if repo_path else set()
-
     for host_name, hpath in _find_host_transcript_files(resolved_home):
-        meta = _inspect_transcript_metadata(hpath)
-        if meta.get("read_error"):
-            rejected.append(
-                {
-                    "path": str(hpath),
-                    "reason": f"unreadable transcript ({meta['read_error']})",
-                }
-            )
-            continue
-        try:
-            mtime = hpath.stat().st_mtime
-        except OSError as exc:
-            print(
-                scrub_credentials(
-                    f"Warning: unable to stat candidate transcript '{hpath}': {exc}"
-                ),
-                file=sys.stderr,
-            )
-            rejected.append(
-                {
-                    "path": str(hpath),
-                    "reason": f"unreadable transcript ({exc})",
-                }
-            )
-            continue
-        not_sidechain = 0 if meta["is_sidechain"] else 1
-
-        if session_id:
-            matched_sid, sid_reason = _matches_session_id(hpath, meta, session_id)
-            if not matched_sid:
-                rejected.append(
-                    {
-                        "path": str(hpath),
-                        "reason": f"session_id mismatch (expected '{session_id}')",
-                    }
-                )
-                continue
-            cwd_bonus = int(
-                bool(
-                    repo_path and any(_paths_equal(c, repo_path) for c in meta["cwds"])
-                )
-            )
-            score = (3, 0, 1, cwd_bonus, 1, not_sidechain, mtime, 0, 0)
-            scored_matches.append(
-                (
-                    score,
-                    hpath,
-                    host_name,
-                    f"{sid_reason} in {host_name} host transcripts",
-                )
-            )
-            continue
-
-        # When workspace already has a direct local transcript and no session_id filter was asked,
-        # record host sessions as superseded by the explicit workspace transcript.
-        if scored_matches and any(m[2] == "workspace" for m in scored_matches):
-            rejected.append(
-                {
-                    "path": str(hpath),
-                    "reason": "superseded by workspace-local candidate transcript",
-                }
-            )
-            continue
-
-        if not workspace_dir:
-            rejected.append(
-                {
-                    "path": str(hpath),
-                    "reason": "no workspace or session_id supplied for host matching",
-                }
-            )
-            continue
-
-        raw_text = meta["raw_text"]
-        has_run_id = bool(run_id and run_id in raw_text)
-        has_ws_cwd = any(_paths_equal(c, workspace_dir) for c in meta["cwds"])
-        has_ws_ref = has_ws_cwd or any(
-            len(v) > 3 and v in raw_text.replace("\\", "/") for v in ws_variants
-        )
-        has_repo_cwd = bool(
-            repo_path and any(_paths_equal(c, repo_path) for c in meta["cwds"])
-        )
-
-        # Check if candidate explicitly specifies a conflicting cwd
-        has_conflicting_cwd = bool(
-            meta["cwds"]
-            and not has_repo_cwd
-            and not has_ws_cwd
-            and (repo_path is not None or not has_ws_ref)
-        )
-
-        # Check Claude project directory slug
-        slug_match = False
-        if host_name == "claude-code":
-            projects_root = resolved_home / ".claude" / "projects"
-            with contextlib.suppress(ValueError):
-                rel_parts = hpath.relative_to(projects_root).parts
-                if rel_parts:
-                    cand_slug = rel_parts[0].strip("-").lower()
-                    slug_match = cand_slug in (expected_repo_slugs | expected_ws_slugs)
-
-        has_repo_ref = bool(
-            repo_variants
-            and not has_conflicting_cwd
-            and any(
-                len(v) > 3 and v in raw_text.replace("\\", "/") for v in repo_variants
-            )
-        )
-
-        if has_conflicting_cwd and not has_run_id and not has_ws_ref:
-            rejected.append(
-                {
-                    "path": str(hpath),
-                    "reason": f"cwd mismatch ({meta['cwds'][0]!r} does not match {repo_path or str(workspace_dir)!r})",
-                }
-            )
-            continue
-
-        reasons: list[str] = []
-        if has_run_id:
-            reasons.append(f"run_id '{run_id}'")
-        if has_ws_ref:
-            reasons.append(f"workspace '{workspace_dir}'")
-        if has_repo_cwd:
-            reasons.append(f"repository cwd '{repo_path}'")
-        elif slug_match and not has_conflicting_cwd:
-            reasons.append(
-                f"Claude project directory for '{repo_path or workspace_dir}'"
-            )
-        elif has_repo_ref:
-            reasons.append(f"repository path '{repo_path}'")
-
-        if not reasons:
-            if run_parse_warning:
-                reason = (
-                    "no matching workspace reference and workspace run.json "
-                    f"could not be parsed ({run_parse_warning})"
-                )
-            elif not run_data:
-                reason = "no matching workspace reference and workspace lacks run.json metadata"
-            else:
-                reason = f"no matching run_id ({run_id or 'none'}) or repository path ({repo_path or 'none'})"
-            rejected.append({"path": str(hpath), "reason": reason})
-            continue
-
-        score = (
-            1,
-            0,
-            int(has_run_id),
-            int(has_ws_ref),
-            int(has_repo_cwd or slug_match),
-            not_sidechain,
-            mtime,
-            0,
-            0,
-        )
-        scored_matches.append(
-            (
-                score,
-                hpath,
-                host_name,
-                f"Matched {', '.join(reasons)} in {host_name} host transcripts",
-            )
-        )
+        scored = _score_host_candidate(host_name, hpath, host_ctx, rejected)
+        if scored is not None:
+            scored_matches.append(scored)
 
     if not scored_matches:
-        patterns_str = ", ".join(CANDIDATE_TRANSCRIPTS)
-        if workspace_dir is not None:
-            msg = (
-                f"No candidate transcript found in workspace '{workspace_dir}' "
-                f"(searched patterns: {patterns_str} in workspace and logs/, "
-                "plus ~/.claude/projects/ and ~/.codex/sessions/). "
-                "Supply an explicit transcript file path via positional argument or --transcript."
-            )
-        else:
-            msg = (
-                f"No matching session transcript found for session_id '{session_id}' "
-                "in ~/.claude/projects/ or ~/.codex/sessions/. "
-                "Supply an explicit transcript file path via positional argument or --transcript."
-            )
-        raise TranscriptNotFoundError(msg, rejected_candidates=rejected)
+        _raise_transcript_not_found(workspace_dir, session_id, rejected)
 
-    scored_matches.sort(key=lambda item: item[0], reverse=True)
-    best_score, best_path, best_source, best_reason = scored_matches[0]
-
-    for other_score, other_path, _, _ in scored_matches[1:]:
-        if other_score[5] < best_score[5]:
-            superseded_reason = (
-                "subagent sidechain transcript superseded by primary session"
-            )
-        elif other_score[6] < best_score[6]:
-            superseded_reason = (
-                f"older modification time than selected '{best_path.name}'"
-            )
-        else:
-            superseded_reason = (
-                f"lower match or naming priority than selected '{best_path.name}'"
-            )
-        rejected.append({"path": str(other_path), "reason": superseded_reason})
+    scored_matches.sort(key=lambda item: item.score, reverse=True)
+    best = scored_matches[0]
+    for other in scored_matches[1:]:
+        rejected.append(
+            {
+                "path": str(other.path),
+                "reason": _superseded_candidate_reason(
+                    other.score, best.score, best.path.name
+                ),
+            }
+        )
 
     return {
-        "selected_transcript": best_path,
-        "source": best_source,
-        "selection_reason": best_reason,
+        "selected_transcript": best.path,
+        "source": best.source,
+        "selection_reason": best.reason,
         "rejected_candidates": rejected,
     }
 
@@ -2967,7 +3483,7 @@ def export_bundle(bundle: dict[str, Any], output_dir: Path) -> tuple[Path, Path]
     return json_path, report_path
 
 
-def main() -> int:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "transcript",
@@ -3021,48 +3537,57 @@ def main() -> int:
         action="store_true",
         help="Validate generated bundle against bundle.schema.json",
     )
+    return parser
 
-    args = parser.parse_args()
 
+def _discover_cli_transcript(
+    workspace: Path | None, session_id: str | None
+) -> tuple[Path | None, dict[str, Any] | None]:
+    try:
+        discovery_meta = discover_transcript_details(workspace, session_id=session_id)
+        transcript = Path(discovery_meta["selected_transcript"])
+        print(f"Discovered transcript: {transcript}", file=sys.stderr)
+        return transcript, discovery_meta
+    except TranscriptNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return None, None
+
+
+def _resolve_cli_transcript(
+    transcript: Path | None, workspace: Path | None, session_id: str | None
+) -> tuple[Path | None, dict[str, Any] | None]:
+    if transcript:
+        if not transcript.is_file():
+            print(f"Error: Transcript file not found: {transcript}", file=sys.stderr)
+            return None, None
+        return transcript, None
+
+    if workspace and workspace.is_dir():
+        return _discover_cli_transcript(workspace, session_id)
+    if workspace:
+        print(f"Error: Workspace directory not found: {workspace}", file=sys.stderr)
+        return None, None
+    if session_id:
+        return _discover_cli_transcript(None, session_id)
+
+    patterns_str = ", ".join(CANDIDATE_TRANSCRIPTS)
+    print(
+        f"Error: Transcript file path is required or specify --workspace <dir> containing a candidate transcript ({patterns_str})",
+        file=sys.stderr,
+    )
+    return None, None
+
+
+def main() -> int:
+    args = _build_arg_parser().parse_args()
     workspace = args.workspace or getattr(args, "workspace_dir", None)
     output_dir = args.output_dir or getattr(args, "output", None)
-    transcript = args.transcript or getattr(args, "transcript_opt", None)
-    discovery_meta: dict[str, Any] | None = None
+    raw_transcript = args.transcript or getattr(args, "transcript_opt", None)
 
-    if not transcript:
-        if workspace and workspace.is_dir():
-            try:
-                discovery_meta = discover_transcript_details(
-                    workspace, session_id=args.session_id
-                )
-                transcript = Path(discovery_meta["selected_transcript"])
-                print(f"Discovered transcript: {transcript}", file=sys.stderr)
-            except TranscriptNotFoundError as e:
-                print(f"Error: {e}", file=sys.stderr)
-                return 2
-        elif workspace:
-            print(f"Error: Workspace directory not found: {workspace}", file=sys.stderr)
-            return 2
-        elif args.session_id:
-            try:
-                discovery_meta = discover_transcript_details(
-                    None, session_id=args.session_id
-                )
-                transcript = Path(discovery_meta["selected_transcript"])
-                print(f"Discovered transcript: {transcript}", file=sys.stderr)
-            except TranscriptNotFoundError as e:
-                print(f"Error: {e}", file=sys.stderr)
-                return 2
-        else:
-            patterns_str = ", ".join(CANDIDATE_TRANSCRIPTS)
-            print(
-                f"Error: Transcript file path is required or specify --workspace <dir> containing a candidate transcript ({patterns_str})",
-                file=sys.stderr,
-            )
-            return 2
-
-    if not transcript.is_file():
-        print(f"Error: Transcript file not found: {transcript}", file=sys.stderr)
+    transcript, discovery_meta = _resolve_cli_transcript(
+        raw_transcript, workspace, args.session_id
+    )
+    if transcript is None or not transcript.is_file():
         return 2
 
     bundle = generate_diagnostic_bundle(

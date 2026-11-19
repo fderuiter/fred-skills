@@ -1,6 +1,6 @@
 ---
 name: repo-audit-side-effects
-description: "Audit hidden mutations and impure getters. Use when checking surprise I/O. Do not use for commits."
+description: "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits."
 ---
 
 # Hidden Side Effects

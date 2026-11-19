@@ -80,18 +80,25 @@ _SUITE_DESCRIPTION_TEMPLATES: dict[str, tuple[str, str, str]] = {
     "spec-driven-development": (
         "Draft {topic} specs pre-code",
         "aligning {slug} scope",
-        "debugging",
+        "live debugging",
     ),
 }
 
 
+def _lower_preserving_acronyms(text: str) -> str:
+    return " ".join(
+        word if (len(word) >= 2 and word.isupper()) else word.lower()
+        for word in text.split()
+    )
+
+
 def _clean_scaffold_topic(title: str) -> str:
-    lowered = title.lower()
+    cased = _lower_preserving_acronyms(title)
     for prefix in ("repo audit ", "repo ", "arch ", "review ", "test ", "spec "):
-        if lowered.startswith(prefix) and len(lowered) > len(prefix):
-            lowered = lowered[len(prefix) :]
+        if cased.lower().startswith(prefix) and len(cased) > len(prefix):
+            cased = cased[len(prefix) :]
             break
-    return lowered[:24].rstrip()
+    return cased[:24].rstrip()
 
 
 def _default_description(
@@ -178,16 +185,18 @@ def _resolve_suite_and_sibling(
     return target_suite, (secondary if name == primary else primary)
 
 
-def _discover_suite_synced_schemas(
+def _discover_suite_synced_companions(
     root: Path,
     suite_name: str,
+    skill_name: str,
     own_schema_filename: str,
-) -> list[str]:
-    """Return relative assets/*.schema.json paths synced into suite_name by shared manifests."""
+) -> tuple[list[str], list[str]]:
+    """Return (extra_schemas, extra_companions) synced into skill_name by shared manifests."""
     shared_dir = root / "shared"
     if not shared_dir.is_dir():
-        return []
-    synced: list[str] = []
+        return [], []
+    schemas: list[str] = []
+    companions: list[str] = []
     for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -195,15 +204,37 @@ def _discover_suite_synced_schemas(
             continue
         if manifest.get("suite", "repository-audits") != suite_name:
             continue
+        raw_exclude = manifest.get("exclude", {})
+        excluded = (
+            set(raw_exclude.get(skill_name, []))
+            if isinstance(raw_exclude, dict)
+            and isinstance(raw_exclude.get(skill_name), list)
+            else set()
+        )
         for rel in manifest.get("files", []):
+            if not isinstance(rel, str) or rel in excluded:
+                continue
             if (
-                isinstance(rel, str)
-                and rel.startswith("assets/")
+                rel.startswith("assets/")
                 and rel.endswith(".schema.json")
                 and Path(rel).name != own_schema_filename
             ):
-                synced.append(rel)
-    return sorted(set(synced))
+                schemas.append(rel)
+            elif rel.endswith(".md") and rel != "assets/prompt.md":
+                companions.append(rel)
+        scripts = manifest.get("scripts", [])
+        if isinstance(scripts, list):
+            for s_item in scripts:
+                if not isinstance(s_item, str) or s_item in excluded:
+                    continue
+                if (
+                    s_item == "scripts/audit_to_sarif.py"
+                    and skill_name != "repo-audit-synthesis"
+                ):
+                    continue
+                if s_item.startswith("scripts/") and s_item.endswith(".py"):
+                    companions.append(s_item)
+    return sorted(set(schemas)), sorted(set(companions))
 
 
 def _yaml_double_quoted(value: str) -> str:
@@ -223,6 +254,7 @@ def _render_skill_markdown(
     description: str,
     schema_filename: str,
     extra_schema_links: Sequence[str] = (),
+    extra_companion_links: Sequence[str] = (),
     disable_model_invocation: bool = False,
 ) -> str:
     extra_clause = ""
@@ -230,6 +262,12 @@ def _render_skill_markdown(
         formatted = ", ".join(f"[suite schema]({rel})" for rel in extra_schema_links)
         extra_clause = f" and {formatted}"
     guard_line = "disable-model-invocation: true\n" if disable_model_invocation else ""
+    companion_clause = ""
+    if extra_companion_links:
+        comp_formatted = ", ".join(
+            f"[suite resource]({rel})" for rel in extra_companion_links
+        )
+        companion_clause = f" Consult {comp_formatted} when applicable."
     return (
         "---\n"
         f"name: {name}\n"
@@ -239,7 +277,7 @@ def _render_skill_markdown(
         f"# {title}\n\n"
         f"Review the [starting prompt](assets/prompt.md), "
         f"[worked examples](references/examples.md), and "
-        f"[evaluation scenarios](references/evaluation-scenarios.json) when validating scope.\n"
+        f"[evaluation scenarios](references/evaluation-scenarios.json) when validating scope.{companion_clause}\n"
         "Ground every conclusion in observed repository evidence rather than unverified assumptions.\n\n"
         "## Workflow\n\n"
         "1. Establish the target scope, explicit user request, and concrete repository boundaries.\n"
@@ -808,10 +846,12 @@ def scaffold_skill(
         )
 
     schema_filename = f"{name}.schema.json"
-    extra_schema_links = (
-        _discover_suite_synced_schemas(resolved_root, effective_suite, schema_filename)
+    extra_schema_links, extra_companion_links = (
+        _discover_suite_synced_companions(
+            resolved_root, effective_suite, name, schema_filename
+        )
         if sync_catalog
-        else []
+        else ([], [])
     )
     explicit_only = name in EXPLICIT_INVOCATION_ONLY_SKILLS
     package_files: dict[str, str] = {
@@ -821,6 +861,7 @@ def scaffold_skill(
             description=effective_description,
             schema_filename=schema_filename,
             extra_schema_links=extra_schema_links,
+            extra_companion_links=extra_companion_links,
             disable_model_invocation=explicit_only,
         ),
         "assets/icon.svg": _render_icon_svg(

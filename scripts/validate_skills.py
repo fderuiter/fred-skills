@@ -15,6 +15,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import combinations, pairwise
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -147,6 +148,86 @@ WORKFLOW_MISPLACED_AUDIT_NOTE_PATTERN = re.compile(
 EXPECTED_FINDINGS_NOTE_PATTERN = re.compile(
     r"\bexpected\s+findings\b",
     re.IGNORECASE,
+)
+MIN_TRIGGER_CONTENT_WORDS = 4
+USE_WHEN_PATTERN = re.compile(r"\buse when\s+(.*\S)", re.IGNORECASE | re.DOTALL)
+VAGUE_DESCRIPTION_PATTERN = re.compile(
+    r"\b("
+    r"helps?\s+with\b|"
+    r"use(?:d)?\s+for\s+(?:general|various|common|everyday|productivity|coding|all|any)\b|"
+    r"(?:productivity|general|various|miscellaneous|everyday|all-purpose|general-purpose)\s+tasks?\b|"
+    r"general[- ]purpose\s+(?:helper|assistant|tool|skill|workflow)\b|"
+    r"(?:general|code|coding)\s+(?:helper|assistant)\b|"
+    r"catch[- ]all\b|"
+    r"anything\s+else\b|"
+    r"(?:when|as|whenever)\s+needed\b"
+    r")",
+    re.IGNORECASE,
+)
+HEADING_ACRONYM_PATTERN = re.compile(r"\b([A-Z]{2,})s?\b")
+STANDALONE_ALPHA_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_./$:-])[A-Za-z]{2,}(?![A-Za-z0-9_/$:-]|\.[A-Za-z0-9])"
+)
+WORD_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+")
+CLAUSE_SPLIT_PATTERN = re.compile(r"[.,;:!?()]+")
+DESCRIPTION_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "any",
+        "are",
+        "as",
+        "at",
+        "be",
+        "before",
+        "by",
+        "do",
+        "for",
+        "from",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "not",
+        "of",
+        "on",
+        "or",
+        "so",
+        "such",
+        "than",
+        "that",
+        "the",
+        "their",
+        "them",
+        "then",
+        "there",
+        "these",
+        "this",
+        "those",
+        "through",
+        "to",
+        "under",
+        "up",
+        "use",
+        "used",
+        "using",
+        "via",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "whether",
+        "which",
+        "while",
+        "who",
+        "with",
+        "within",
+        "without",
+    }
 )
 CURSOR_PLUGIN_NAME_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\Z")
 CURSOR_PLUGIN_SEMVER_PATTERN = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\Z")
@@ -1134,6 +1215,7 @@ class _ParsedSkillPackage:
         "has_boundary_sections",
         "has_output_schema",
         "has_prompt_constraints",
+        "has_routing_trigger",
         "has_validator_script",
         "has_worked_examples",
         "method_noncode_lines",
@@ -1154,6 +1236,8 @@ class _ParsedSkillPackage:
         has_validator_script: bool = False,
         has_prompt_constraints: bool = False,
         has_boundary_sections: bool = False,
+        has_linked_companions: bool = True,
+        has_routing_trigger: bool = False,
         description: str | None = None,
         short_description: str | None = None,
         prompt_body: str | None = None,
@@ -1167,8 +1251,12 @@ class _ParsedSkillPackage:
         self.has_validator_script = has_validator_script
         self.has_prompt_constraints = has_prompt_constraints
         self.has_boundary_sections = has_boundary_sections
+        self.has_routing_trigger = has_routing_trigger
         self.deterministic_constraint_coverage = (
-            has_output_schema and has_prompt_constraints and has_boundary_sections
+            has_output_schema
+            and has_prompt_constraints
+            and has_boundary_sections
+            and has_linked_companions
         )
         self.description = description
         self.short_description = short_description
@@ -1274,6 +1362,70 @@ def _validate_frontmatter_metadata(
     return errors, disable_model_flag
 
 
+def _extract_skill_heading(body: str) -> str:
+    return next(
+        (line[2:].strip() for line in body.splitlines() if line.startswith("# ")),
+        "",
+    )
+
+
+def _trigger_content_words(text: str) -> list[str]:
+    return [
+        tok.lower()
+        for tok in WORD_TOKEN_PATTERN.findall(text)
+        if len(tok) >= 2 and tok.lower() not in DESCRIPTION_STOPWORDS
+    ]
+
+
+def _is_lowercased_acronym(token: str, acronym: str) -> bool:
+    lower_acr = acronym.lower()
+    if token.lower() == lower_acr:
+        return token != acronym
+    if token.lower() == f"{lower_acr}s":
+        return not token.startswith(acronym)
+    return False
+
+
+def _check_heading_acronyms(description: str, heading: str) -> list[str]:
+    acronyms = dict.fromkeys(HEADING_ACRONYM_PATTERN.findall(heading))
+    if not acronyms:
+        return []
+    standalone_tokens = STANDALONE_ALPHA_PATTERN.findall(description)
+    return [
+        f"SKILL.md: description lowercases heading acronym '{acronym}'"
+        for acronym in acronyms
+        if any(_is_lowercased_acronym(tok, acronym) for tok in standalone_tokens)
+    ]
+
+
+def _validate_description_routing(
+    metadata: Mapping[str, Any], body: str
+) -> tuple[list[str], bool]:
+    description = metadata.get("description")
+    if not isinstance(description, str) or not 1 <= len(description.strip()) <= 1024:
+        return [], False
+    errors: list[str] = []
+    is_vague = bool(VAGUE_DESCRIPTION_PATTERN.search(description))
+    if is_vague:
+        errors.append(
+            "SKILL.md: description contains vague catch-all phrasing; "
+            "state concrete capabilities and triggers"
+        )
+    trigger_match = USE_WHEN_PATTERN.search(description)
+    has_trigger = (
+        trigger_match is not None
+        and len(_trigger_content_words(trigger_match.group(1)))
+        >= MIN_TRIGGER_CONTENT_WORDS
+    )
+    if not has_trigger:
+        errors.append(
+            "SKILL.md: description must include a 'Use when' trigger clause "
+            f"with at least {MIN_TRIGGER_CONTENT_WORDS} content words"
+        )
+    errors.extend(_check_heading_acronyms(description, _extract_skill_heading(body)))
+    return errors, (has_trigger and not is_vague)
+
+
 def _validate_skill_body(body: str) -> tuple[list[str], bool]:
     errors: list[str] = []
     if not body.strip() or len(body.splitlines()) >= 500:
@@ -1314,6 +1466,46 @@ def _validate_schema_links(
             errors.append(
                 f"SKILL.md: missing markdown link to output schema "
                 f"{schema_file.relative_to(package).as_posix()}"
+            )
+    return errors
+
+
+_EXEMPT_COMPANION_RELS = frozenset(
+    {
+        "references/method.md",
+        "references/examples.md",
+        "references/evaluation-scenarios.json",
+    }
+)
+
+
+def _iter_companion_candidates(package: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for sub, pattern in (
+        ("references", "*.md"),
+        ("assets", "*.md"),
+        ("scripts", "*.py"),
+    ):
+        sub_dir = package / sub
+        if sub_dir.is_dir() and not sub_dir.is_symlink():
+            candidates.extend(sorted(sub_dir.rglob(pattern)))
+    return candidates
+
+
+def _validate_companion_links(
+    package: Path, resolved_skill_links: set[Path]
+) -> list[str]:
+    """Require package-local markdown templates/references and bundled scripts to be linked from SKILL.md."""
+    errors: list[str] = []
+    for candidate in _iter_companion_candidates(package):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        rel_posix = candidate.relative_to(package).as_posix()
+        if rel_posix in _EXEMPT_COMPANION_RELS:
+            continue
+        if candidate.resolve() not in resolved_skill_links:
+            errors.append(
+                f"SKILL.md: missing markdown link to companion file {rel_posix}"
             )
     return errors
 
@@ -1909,6 +2101,8 @@ def _inspect_skill_package(
         package.name, metadata
     )
     errors.extend(fm_errors)
+    routing_errors, has_routing_trigger = _validate_description_routing(metadata, body)
+    errors.extend(routing_errors)
     body_errors, has_boundary_sections = _validate_skill_body(body)
     errors.extend(body_errors)
 
@@ -1918,6 +2112,8 @@ def _inspect_skill_package(
         package, resolved_skill_links, assets_schemas, output_schemas
     )
     errors.extend(schema_link_errors)
+    companion_link_errors = _validate_companion_links(package, resolved_skill_links)
+    errors.extend(companion_link_errors)
 
     prompt_errors, has_prompt_constraints, prompt_body = _validate_prompt_template(
         package, output_schemas, cached_texts
@@ -1979,6 +2175,8 @@ def _inspect_skill_package(
         has_validator_script=has_validator_script,
         has_prompt_constraints=has_prompt_constraints,
         has_boundary_sections=has_boundary_sections,
+        has_linked_companions=not companion_link_errors,
+        has_routing_trigger=has_routing_trigger,
         description=raw_description if isinstance(raw_description, str) else None,
         short_description=short_description,
         prompt_body=prompt_body,
@@ -2322,6 +2520,54 @@ def _record_unique_descriptions(
         else:
             short_descriptions[parsed.short_description] = pkg_name
     return problems
+
+
+def _extract_description_bigrams(description: str) -> set[tuple[str, str]]:
+    bigrams: set[tuple[str, str]] = set()
+    for clause in CLAUSE_SPLIT_PATTERN.split(description):
+        words = _trigger_content_words(clause)
+        bigrams.update(pairwise(words))
+    return bigrams
+
+
+def _pair_bigram_collision(
+    pkg_a: str,
+    pkg_b: str,
+    suite_a: str | None,
+    suite_b: str | None,
+    bg_a: set[tuple[str, str]],
+    bg_b: set[tuple[str, str]],
+) -> str | None:
+    if not suite_a or not suite_b or suite_a == suite_b:
+        return None
+    shared = sorted(f"{w1} {w2}" for w1, w2 in (bg_a & bg_b))
+    if not shared:
+        return None
+    return (
+        f"Cross-suite description bigram collision between {pkg_a} "
+        f"({suite_a}) and {pkg_b} ({suite_b}): {', '.join(shared)}"
+    )
+
+
+def _check_cross_suite_bigram_collisions(
+    root: Path, description_by_pkg: Mapping[str, str]
+) -> list[str]:
+    skill_suites = skill_to_suite_map(root)
+    if not skill_suites:
+        return []
+    bigrams_by_pkg = [
+        (pkg, _extract_description_bigrams(desc))
+        for pkg, desc in sorted(description_by_pkg.items())
+        if pkg in skill_suites
+    ]
+    collisions: list[str] = []
+    for (pkg_a, bg_a), (pkg_b, bg_b) in combinations(bigrams_by_pkg, 2):
+        err = _pair_bigram_collision(
+            pkg_a, pkg_b, skill_suites.get(pkg_a), skill_suites.get(pkg_b), bg_a, bg_b
+        )
+        if err is not None:
+            collisions.append(err)
+    return collisions
 
 
 def _record_unique_prompt_body(
@@ -3114,6 +3360,7 @@ def _validate_contributing_doc(
         *_require_doc_tokens(
             rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
         ),
+        *_require_doc_tokens(rel_path, text, ("--phase format",), "check phase"),
     ]
 
 
@@ -3125,7 +3372,6 @@ def _validate_agents_doc(rel_path: str, text: str, _exp: _DocExpectations) -> li
         *_require_doc_tokens(
             rel_path, text, (_ACTION_PINS_DOC_TOKEN,), "workflow pin lockfile"
         ),
-        *_require_doc_tokens(rel_path, text, ("--phase format",), "check phase"),
     ]
 
 
@@ -3273,22 +3519,24 @@ def _build_telemetry_summary(
     diff_scope: str,
     diff_base: str | None,
     package_telemetry: list[dict[str, Any]],
-    method_dup_rate: float,
-    method_dup_pct: float,
+    routing_trigger_count: int = 0,
+    method_dup_rate: float = 0.0,
+    method_dup_pct: float = 0.0,
     duration: float,
 ) -> dict[str, Any]:
     total_pkgs = len(package_telemetry)
-    passed_pkgs = sum(1 for p in package_telemetry if p["valid"])
+    passed_pkgs = sum(bool(p["valid"]) for p in package_telemetry)
     covered_pkgs = sum(
-        1 for p in package_telemetry if p["deterministic_constraint_coverage"]
+        bool(p["deterministic_constraint_coverage"]) for p in package_telemetry
     )
-    schema_pkgs = sum(1 for p in package_telemetry if p["has_output_schema"])
-    example_pkgs = sum(1 for p in package_telemetry if p["has_worked_examples"])
-    validator_pkgs = sum(1 for p in package_telemetry if p["has_validator_script"])
+    schema_pkgs = sum(bool(p["has_output_schema"]) for p in package_telemetry)
+    example_pkgs = sum(bool(p["has_worked_examples"]) for p in package_telemetry)
+    validator_pkgs = sum(bool(p["has_validator_script"]) for p in package_telemetry)
 
     repo_rate, repo_pct = _rate_pair(passed_pkgs, total_pkgs)
     constraint_rate, constraint_pct = _rate_pair(covered_pkgs, total_pkgs)
     schema_rate, schema_pct = _rate_pair(schema_pkgs, total_pkgs)
+    trigger_rate, trigger_pct = _rate_pair(routing_trigger_count, total_pkgs)
     worked_example_rate, worked_example_pct = _rate_pair(example_pkgs, total_pkgs)
     validator_script_rate, validator_script_pct = _rate_pair(validator_pkgs, total_pkgs)
 
@@ -3323,6 +3571,8 @@ def _build_telemetry_summary(
         "deterministic_constraint_coverage_percentage": constraint_pct,
         "output_schema_coverage": schema_rate,
         "output_schema_coverage_percentage": schema_pct,
+        "routing_trigger_coverage": trigger_rate,
+        "routing_trigger_coverage_percentage": trigger_pct,
         "skill_worked_example_coverage": worked_example_rate,
         "skill_worked_example_coverage_percentage": worked_example_pct,
         "validator_script_coverage": validator_script_rate,
@@ -3371,6 +3621,7 @@ def validate_with_telemetry(
     prompt_bodies: dict[str, str] = {}
     method_lines_by_pkg: dict[str, list[str]] = {}
     package_telemetry: list[dict[str, Any]] = []
+    routing_trigger_count = 0
     ledger_dirty = False
 
     for package in packages:
@@ -3378,6 +3629,7 @@ def validate_with_telemetry(
         if parsed.method_noncode_lines is not None:
             method_lines_by_pkg[package.name] = parsed.method_noncode_lines
         problems.extend(f"{package.name}: {error}" for error in parsed.errors)
+        routing_trigger_count += int(parsed.has_routing_trigger)
         is_new = package.name in new_skill_names
         first_pass_valid, attempts_count, updated = _record_package_attempt(
             package.name,
@@ -3412,6 +3664,7 @@ def validate_with_telemetry(
     if record_attempts and ledger_dirty:
         _save_attempt_ledger(effective_ledger_path, ledger_entries)
 
+    problems.extend(_check_cross_suite_bigram_collisions(root, descriptions_by_pkg))
     problems.extend(_validate_suite_manifest(root))
     problems.extend(_validate_routing_and_budget_gates(root, descriptions_by_pkg))
     problems.extend(_validate_documentation_invariants(root))
@@ -3425,6 +3678,7 @@ def validate_with_telemetry(
         diff_scope=diff_scope,
         diff_base=diff_base,
         package_telemetry=package_telemetry,
+        routing_trigger_count=routing_trigger_count,
         method_dup_rate=method_dup_rate,
         method_dup_pct=method_dup_pct,
         duration=duration,
