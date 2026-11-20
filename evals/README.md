@@ -1,40 +1,50 @@
 # Executable evaluation harness
 
-`cases.json` selects 69 raw cases across 23 skills spanning all six suites
+`cases.json` selects 171 raw cases across all 57 skills spanning all six suites
 (`repository-audits`, `software-architecture`, `code-review`, `automated-testing`,
 `spec-driven-development`, and `repository-workflows`): relevant failure, safe control,
-and routing tasks per skill. The 162 skill scenario specifications in
-`references/evaluation-scenarios.json` remain separate authoring inputs, not 162
+and routing tasks per skill. The 171 skill scenario specifications in
+`references/evaluation-scenarios.json` remain separate authoring inputs, not 171
 completed model evaluations.
 
 The harness creates a fresh case directory for each configuration/repeat, copies only
 raw `source/` and (for `with_skill`) one standalone `skill/` (excluding `__pycache__`),
-writes a contract-specific user request, executes an explicit adapter argv without a
-shell, then grades outside that workdir. Expected keys, expected assertions, and
-`writable_paths` rules are never placed in `prompt.md` or the copied workspace. `./source`
-is read-only by default and permits modifications only inside declared `writable_paths`
-globs for source-mutating skills. This reduces accidental answer leakage; the process
-still has normal filesystem/network access. Use an external sandbox for untrusted
-adapters and never grant them access to private data unnecessarily.
+writes a blind user request without schema filenames or required-field hints, executes an
+explicit adapter argv without a shell, then grades outside that workdir. Expected anchors,
+expected assertions, and `writable_paths` rules are never placed in `prompt.md` or the
+copied workspace. `./source` is read-only by default and permits modifications only inside
+declared `writable_paths` globs for source-mutating skills. This reduces accidental answer
+leakage; the process still has normal filesystem/network access. Use an external sandbox
+for untrusted adapters and never grant them access to private data unnecessarily.
 
 ## Adapter contract
 
 Your adapter receives placeholders `{prompt_file}`, `{output_file}`, and `{case_dir}`.
 It should invoke your chosen agent in a fresh session, preserve its actual output/trace,
-and write JSON at the output file:
+and write a suite-valid JSON deliverable (either unwrapped alongside optional `actor` and
+`usage`, or nested under `deliverable`) at the output file:
 
 ```json
 {
   "actor": {"kind": "agent", "model": "actual-model", "host": "actual-host", "version": "actual-version"},
-  "findings": [{"key": "candidate-contract", "status": "supported", "evidence": "source path, trace, and relevant safeguard"}],
+  "deliverable": {
+    "schema_version": "1.0"
+  },
   "usage": {"tokens": 1234}
 }
 ```
 
-Use actual model/host identifiers and measured usage; omit unknown tokens. Allowed status
-values: `confirmed`, `supported`, `needs-validation`, `hardening`, `refuted`, `grouped`.
-Only confirmed/supported/grouped keys are actionable for the bounded rubric. An empty
-array is valid. Do not give expected answers or other case results to the agent.
+Use actual model/host identifiers and measured usage; omit unknown tokens. Deliverables
+are validated against canonical suite and workflow schemas (`audit.schema.json`,
+`architecture.schema.json`, `review.schema.json`, `testing.schema.json`,
+`spec.schema.json`, and workflow companion schemas) plus all six suite semantic
+validators (`validate_audit.py` through `validate_workflow.py`). Allowed audit finding
+statuses are `confirmed`, `supported`, `needs-validation`, `hardening`, and `refuted`;
+only `confirmed` and `supported` audit findings are actionable. Grading matches structural
+property anchors (such as `(topic, root_cause, locations)` fingerprints on audit ledgers)
+rather than arbitrary run-local IDs. Pass `--max-tokens` on `fred.py evaluate` (or
+`max_tokens` in Python) to fail runs whose reported `usage.tokens` exceeds your budget.
+Do not give expected answers or other case results to the agent.
 
 For a cross-platform harness self-check from the repository root:
 

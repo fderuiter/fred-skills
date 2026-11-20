@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import os
 import re
 import shutil
@@ -9,16 +10,23 @@ import statistics
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
-import jsonschema
+from types import ModuleType
+from typing import Any, Protocol, cast
 
 from .common import (
     ROOT,
+    SUITE_DELIVERABLES,
+    WORKFLOW_DELIVERABLE_SCHEMAS,
+    WORKFLOW_PHASE_SCHEMAS,
+    WORKFLOW_SKILL_DELIVERABLES,
     _infer_suite_name,
+    _load_suite_contracts,
+    _load_workflow_companions,
     _skill_to_suite_map,
+    _workflow_phase_order_map,
     atomic_json,
     digest,
     package_files,
@@ -36,6 +44,10 @@ _SUITE_TO_CONTRACT: dict[str, str] = {
     "repository-workflows": "workflow",
 }
 
+_CONTRACT_TO_SUITE: dict[str, str] = {
+    contract: suite for suite, contract in _SUITE_TO_CONTRACT.items()
+}
+
 _VALID_CONTRACTS: frozenset[str] = frozenset(_SUITE_TO_CONTRACT.values())
 
 _AUDIT_STATUSES: frozenset[str] = frozenset(
@@ -45,13 +57,26 @@ _AUDIT_STATUSES: frozenset[str] = frozenset(
         "needs-validation",
         "hardening",
         "refuted",
-        "grouped",
     }
 )
 
-_ACTIONABLE_AUDIT_STATUSES: frozenset[str] = frozenset(
-    {"confirmed", "supported", "grouped"}
-)
+_ACTIONABLE_AUDIT_STATUSES: frozenset[str] = frozenset({"confirmed", "supported"})
+
+_CONTRACT_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
+    "audit": ("fred_audit_validator", "scripts/validate_audit.py"),
+    "architecture": (
+        "fred_architecture_validator",
+        "scripts/validate_architecture.py",
+    ),
+    "review": ("fred_review_validator", "scripts/validate_review.py"),
+    "testing": ("fred_testing_validator", "scripts/validate_testing.py"),
+    "spec": ("fred_spec_validator", "scripts/validate_spec.py"),
+    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
+}
+
+
+class _SuiteValidator(Protocol):
+    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
 
 
 @dataclass
@@ -63,6 +88,32 @@ class _GradeOutcome:
     assertions_ok: bool
     normalized_records: list[dict[str, str]] = field(default_factory=list)
     malformed_error: str | None = None
+
+
+def _load_suite_validator(contract: str) -> _SuiteValidator:
+    entry = _CONTRACT_VALIDATOR_SCRIPTS.get(contract)
+    if entry is None:
+        raise ValueError(f"Unsupported evaluation contract: {contract!r}")
+    module_name, script_rel = entry
+    cached = sys.modules.get(module_name)
+    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
+        return cast(_SuiteValidator, cached)
+    script = ROOT / script_rel
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load suite validator from {script}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    sys.modules[spec.name] = module
+    try:
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = previous
+    return cast(_SuiteValidator, module)
 
 
 def _resolve_case_contract(case: dict[str, Any], suite_map: dict[str, str]) -> str:
@@ -78,9 +129,24 @@ def _resolve_case_contract(case: dict[str, Any], suite_map: dict[str, str]) -> s
     return _SUITE_TO_CONTRACT.get(suite_name, "audit")
 
 
-def _resolve_case_schema(
-    case: dict[str, Any], contract: str, root: Path
-) -> Path | None:
+def _resolve_workflow_phase_schema_rel(skill_name: str, root: Path) -> str | None:
+    deliverables = WORKFLOW_SKILL_DELIVERABLES.get(skill_name)
+    companions = _load_workflow_companions(root)
+    if deliverables:
+        for deliverable_name in deliverables:
+            schema_rel = companions.get(
+                deliverable_name
+            ) or WORKFLOW_DELIVERABLE_SCHEMAS.get(deliverable_name)
+            if isinstance(schema_rel, str):
+                return schema_rel
+    phase_id = _workflow_phase_order_map(root).get(skill_name)
+    if phase_id is not None and phase_id in WORKFLOW_PHASE_SCHEMAS:
+        phase_deliverable, default_rel = WORKFLOW_PHASE_SCHEMAS[phase_id]
+        return companions.get(phase_deliverable, default_rel)
+    return None
+
+
+def _resolve_case_schema(case: dict[str, Any], contract: str, root: Path) -> Path:
     explicit = case.get("schema")
     if explicit is not None:
         if not isinstance(explicit, str):
@@ -89,76 +155,69 @@ def _resolve_case_schema(
         if schema_path.is_symlink() or not schema_path.is_file():
             raise ValueError(f"Missing evaluation schema: {explicit}")
         return schema_path
-    if contract == "audit":
-        return None
-    skill_dir = root / "skills" / relative_path(case["skill"])
+
+    skill_name = str(case.get("skill", ""))
+    skill_dir = root / "skills" / relative_path(skill_name)
+
+    if contract != "workflow":
+        suite_name = _CONTRACT_TO_SUITE[contract]
+        suite_contracts = _load_suite_contracts(root)
+        _, default_schema = SUITE_DELIVERABLES[suite_name]
+        schema_rel = str(
+            suite_contracts.get(suite_name, {}).get("schema", default_schema)
+        )
+        canonical = root / relative_path(schema_rel)
+        if canonical.is_file() and not canonical.is_symlink():
+            return canonical
+        local_copy = skill_dir / "assets" / Path(schema_rel).name
+        if local_copy.is_file() and not local_copy.is_symlink():
+            return local_copy
+        raise ValueError(f"Missing output schema for skill: {skill_name}")
+
+    wf_schema_rel = _resolve_workflow_phase_schema_rel(skill_name, root)
+    if wf_schema_rel is not None:
+        wf_canonical = root / relative_path(wf_schema_rel)
+        if wf_canonical.is_file() and not wf_canonical.is_symlink():
+            return wf_canonical
+        wf_local = skill_dir / "assets" / Path(wf_schema_rel).name
+        if wf_local.is_file() and not wf_local.is_symlink():
+            return wf_local
+
+    exact_skill_schema = skill_dir / "assets" / f"{skill_name}.schema.json"
+    if exact_skill_schema.is_file() and not exact_skill_schema.is_symlink():
+        return exact_skill_schema
+
     candidates = sorted(
         p
         for p in (skill_dir / "assets").glob("*.schema.json")
         if not p.name.startswith("evaluation-scenarios") and not p.is_symlink()
     )
     if not candidates:
-        raise ValueError(f"Missing output schema for skill: {case['skill']}")
+        raise ValueError(f"Missing output schema for skill: {skill_name}")
     return candidates[0]
 
 
 def _build_prompt_request(
     case: dict[str, Any],
-    contract: str,
-    schema_path: Path | None,
     configuration: str,
 ) -> str:
-    if contract == "audit":
-        contract_instruction = (
-            "Inspect ./source. Return result.json with a findings array of "
-            "{key, status, evidence} records."
+    lines = [
+        str(case["prompt"]).strip(),
+        "",
+        "Inspect ./source and write your structured JSON deliverable to result.json.",
+    ]
+    if configuration == "with_skill":
+        lines.append(
+            "A skill is available at ./skill/SKILL.md. Use it only if it applies to the user's request."
         )
-    elif contract == "architecture":
-        schema_label = schema_path.name if schema_path else "architecture.schema.json"
-        contract_instruction = (
-            f"Inspect ./source. Return result.json conforming to {schema_label} "
-            "(schema_version, title, status, boundaries, and decisions)."
-        )
-    elif contract == "review":
-        schema_label = schema_path.name if schema_path else "review.schema.json"
-        contract_instruction = (
-            f"Inspect ./source. Return result.json conforming to {schema_label} "
-            "(schema_version, verdict, summary, and findings)."
-        )
-    elif contract == "testing":
-        schema_label = schema_path.name if schema_path else "testing.schema.json"
-        contract_instruction = (
-            f"Inspect ./source. Return result.json conforming to {schema_label} "
-            "(schema_version, component, framework, and test_cases)."
-        )
-    elif contract == "spec":
-        schema_label = schema_path.name if schema_path else "spec.schema.json"
-        contract_instruction = (
-            f"Inspect ./source. Return result.json conforming to {schema_label} "
-            "(schema_version, title, status, interview_decisions, new_file_scopes, out_of_scope, and verification_commands)."
+        lines.append(
+            "Inspect only this case's source and optional skill; do not inspect grading data, parent workspaces, or other cases."
         )
     else:
-        schema_label = schema_path.name if schema_path else "workflow.schema.json"
-        required_fields: list[str] = []
-        if schema_path is not None:
-            try:
-                schema_doc = read_json(schema_path)
-                if isinstance(schema_doc, dict) and isinstance(
-                    schema_doc.get("required"), list
-                ):
-                    required_fields = [
-                        str(f) for f in schema_doc["required"] if isinstance(f, str)
-                    ]
-            except (OSError, ValueError):
-                required_fields = []
-        fields_hint = f" ({', '.join(required_fields)})" if required_fields else ""
-        contract_instruction = f"Inspect ./source. Return result.json conforming to {schema_label}{fields_hint}."
-
-    request = f"{case['prompt']}\n\n{contract_instruction}"
-    if configuration == "with_skill":
-        request += "\nA skill is available at ./skill/SKILL.md. Use it only if it applies to the user's request."
-    request += "\nInspect only this case's source and optional skill; do not inspect grading data, parent workspaces, or other cases."
-    return request
+        lines.append(
+            "Inspect only this case's source; do not inspect grading data, parent workspaces, or other cases."
+        )
+    return "\n".join(lines)
 
 
 def _unwrap_adapter_result(raw: Any) -> tuple[dict[str, Any], dict[str, Any], Any]:
@@ -184,31 +243,16 @@ def _unwrap_adapter_result(raw: Any) -> tuple[dict[str, Any], dict[str, Any], An
 def _validate_contract_payload(
     payload: dict[str, Any], contract: str, schema_path: Path | None
 ) -> None:
-    if contract == "audit":
-        if not isinstance(payload.get("findings"), list):
-            raise ValueError("Adapter result must be an object with a findings array")
-        if schema_path is not None:
-            schema_doc = read_json(schema_path)
-            errors = sorted(
-                jsonschema.Draft202012Validator(schema_doc).iter_errors(payload),
-                key=lambda err: [str(p) for p in err.path],
-            )
-            if errors:
-                raise ValueError(
-                    f"Adapter result failed {schema_path.name} validation: {errors[0].message}"
-                )
-        return
-
     if schema_path is None:
         raise ValueError(f"Missing schema path for {contract} contract")
     schema_doc = read_json(schema_path)
-    errors = sorted(
-        jsonschema.Draft202012Validator(schema_doc).iter_errors(payload),
-        key=lambda err: [str(p) for p in err.path],
-    )
+    if not isinstance(schema_doc, Mapping):
+        raise TypeError(f"Invalid schema document: {schema_path.name}")
+    validator = _load_suite_validator(contract)
+    errors = validator.validate(payload, schema_doc)
     if errors:
         raise ValueError(
-            f"Adapter result failed {schema_path.name} validation: {errors[0].message}"
+            f"Adapter result failed {schema_path.name} validation: {errors[0]}"
         )
 
 
@@ -302,22 +346,52 @@ def _evaluate_source_changes(
     return True, changed, None
 
 
+def _case_anchors(case: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(case, dict):
+        return []
+    raw = case.get("expected_anchors")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _anchor_label(index: int, anchor: dict[str, Any]) -> str:
+    explicit = anchor.get("anchor_id")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    return f"anchor-{index + 1}"
+
+
+def _claim_anchor(
+    anchors: list[dict[str, Any]],
+    claimed: set[int],
+    matcher: Callable[..., bool],
+    *args: Any,
+) -> str | None:
+    for idx, anchor in enumerate(anchors):
+        if idx not in claimed and matcher(*args, anchor):
+            claimed.add(idx)
+            return _anchor_label(idx, anchor)
+    return None
+
+
+def _value_matches_expected(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, list):
+        return actual in expected
+    return bool(actual == expected)
+
+
 def _expected_keys_from_case(case: dict[str, Any]) -> set[str]:
+    if "expected_anchors" in case:
+        return {
+            _anchor_label(idx, anchor) for idx, anchor in enumerate(_case_anchors(case))
+        }
     base = {str(k) for k in case.get("expected_keys", [])}
     assertions = case.get("expected_assertions")
     if isinstance(assertions, dict):
-        for list_field in (
-            "boundary_names",
-            "decision_ids",
-            "finding_ids",
-            "test_case_ids",
-            "interview_decision_ids",
-            "convergence_check_ids",
-            "changed_files",
-        ):
-            vals = assertions.get(list_field)
-            if isinstance(vals, list):
-                base.update(str(v) for v in vals)
+        vals = assertions.get("changed_files")
+        if isinstance(vals, list):
+            base.update(str(v) for v in vals)
     return base
 
 
@@ -330,47 +404,230 @@ def _make_normalized_record(key: str, status: str, evidence: str) -> dict[str, s
     }
 
 
-def _project_audit_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _audit_finding_locations(
+    finding: dict[str, Any], evidence_map: dict[str, dict[str, Any]]
+) -> list[tuple[str, str]]:
+    raw_ids = finding.get("evidence_ids")
+    if not isinstance(raw_ids, list):
+        return []
+    return sorted(
+        {
+            (str(evidence_map[eid]["path"]), str(evidence_map[eid]["symbol"]))
+            for eid in raw_ids
+            if isinstance(eid, str) and eid in evidence_map
+        }
+    )
+
+
+def _audit_anchor_matches(
+    finding: dict[str, Any],
+    locations: list[tuple[str, str]],
+    anchor: dict[str, Any],
+) -> bool:
+    if "topic" in anchor and not _value_matches_expected(
+        finding.get("topic"), anchor["topic"]
+    ):
+        return False
+    if "root_cause" in anchor and not _value_matches_expected(
+        finding.get("root_cause"), anchor["root_cause"]
+    ):
+        return False
+    if "locations" in anchor:
+        raw_locs = anchor["locations"]
+        if not isinstance(raw_locs, list):
+            return False
+        expected_locs = sorted(
+            {
+                (str(pair[0]), str(pair[1]))
+                for pair in raw_locs
+                if isinstance(pair, list | tuple) and len(pair) == 2
+            }
+        )
+        if anchor.get("locations_subset"):
+            if not set(expected_locs).issubset(set(locations)):
+                return False
+        elif locations != expected_locs:
+            return False
+    return True
+
+
+def _project_audit_records(
+    payload: dict[str, Any], case: dict[str, Any] | None = None
+) -> list[dict[str, str]]:
     items = payload.get("findings")
-    if not isinstance(items, list):
-        raise TypeError("Malformed findings response")
+    raw_evidence = payload.get("evidence")
+    raw_contracts = payload.get("contracts")
+    if (
+        not isinstance(items, list)
+        or not isinstance(raw_evidence, list)
+        or not isinstance(raw_contracts, list)
+    ):
+        raise TypeError("Malformed audit ledger response")
+
+    evidence_map: dict[str, dict[str, Any]] = {}
+    for ev in raw_evidence:
+        if (
+            not isinstance(ev, dict)
+            or not isinstance(ev.get("id"), str)
+            or not isinstance(ev.get("path"), str)
+            or not isinstance(ev.get("symbol"), str)
+        ):
+            raise TypeError("Malformed audit evidence record")
+        evidence_map[ev["id"]] = ev
+
+    known_contracts = {
+        str(c["id"])
+        for c in raw_contracts
+        if isinstance(c, dict) and isinstance(c.get("id"), str)
+    }
+
+    anchors = _case_anchors(case)
+    use_anchors = isinstance(case, dict) and "expected_anchors" in case
+    claimed: set[int] = set()
+    seen_fingerprints: dict[str, int] = {}
     records: list[dict[str, str]] = []
-    for item in items:
+
+    for idx, item in enumerate(items):
         if not isinstance(item, dict):
-            raise TypeError("Malformed findings response")
+            raise TypeError("Malformed audit finding record")
+        if "key" in item or "category" in item:
+            raise ValueError("Audit findings must not include non-schema key/category")
         raw_status = item.get("status")
         if not isinstance(raw_status, str) or raw_status not in _AUDIT_STATUSES:
-            raise ValueError("Malformed findings response")
-        raw_key = item.get("key")
-        if not isinstance(raw_key, str) or not raw_key:
-            if "schema_version" in payload and isinstance(item.get("id"), str):
-                raw_key = str(item.get("category") or item["id"])
-            else:
-                raise ValueError("Malformed findings response")
-        raw_ev = item.get("evidence")
-        if isinstance(raw_ev, str):
-            evidence = raw_ev
-        elif isinstance(item.get("evidence_ids"), list):
-            evidence = "; ".join(
-                str(eid).strip() for eid in item["evidence_ids"] if str(eid).strip()
+            raise ValueError("Malformed audit finding status")
+        topic = item.get("topic")
+        root_cause = item.get("root_cause")
+        fid = item.get("id")
+        if (
+            not isinstance(topic, str)
+            or not topic.strip()
+            or not isinstance(root_cause, str)
+            or not root_cause.strip()
+            or not isinstance(fid, str)
+            or not fid.strip()
+        ):
+            raise ValueError("Malformed audit finding identity")
+
+        locations = _audit_finding_locations(item, evidence_map)
+        fp = digest(
+            {
+                "topic": topic,
+                "root_cause": root_cause,
+                "locations": locations,
+            }
+        )
+        seen_count = seen_fingerprints.get(fp, 0) + 1
+        seen_fingerprints[fp] = seen_count
+
+        matched_key: str | None = None
+        if use_anchors and raw_status in _ACTIONABLE_AUDIT_STATUSES:
+            matched_key = _claim_anchor(
+                anchors,
+                claimed,
+                _audit_anchor_matches,
+                item,
+                locations,
+            )
+        if matched_key is not None:
+            record_key = matched_key
+        elif not use_anchors:
+            base_key = root_cause if seen_count == 1 else f"{root_cause}:{seen_count}"
+            record_key = base_key
+        else:
+            record_key = f"audit:{idx + 1}:{fp[:12]}"
+
+        ev_ids = item.get("evidence_ids")
+        contract_ids = item.get("contract_ids")
+        resolved_ev = (
+            [
+                evidence_map[eid]
+                for eid in ev_ids
+                if isinstance(eid, str) and eid in evidence_map
+            ]
+            if isinstance(ev_ids, list)
+            else []
+        )
+        contracts_ok = (
+            isinstance(contract_ids, list)
+            and bool(contract_ids)
+            and all(
+                isinstance(cid, str) and cid in known_contracts for cid in contract_ids
+            )
+        )
+        ev_snippets = [
+            f"{ev['path']}:{ev['symbol']} ({str(ev.get('context', '')).strip()})"
+            for ev in resolved_ev
+            if str(ev.get("path", "")).strip() and str(ev.get("context", "")).strip()
+        ]
+        if raw_status in _ACTIONABLE_AUDIT_STATUSES:
+            evidence_text = (
+                "; ".join(ev_snippets) if (ev_snippets and contracts_ok) else ""
             )
         else:
-            evidence = ""
-        records.append(_make_normalized_record(raw_key, raw_status, evidence))
+            fallback_note = str(
+                item.get("counterevidence") or item.get("actual") or ""
+            ).strip()
+            evidence_text = "; ".join(ev_snippets) or fallback_note
+        records.append(_make_normalized_record(record_key, raw_status, evidence_text))
     return records
 
 
-def _project_architecture_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _architecture_boundary_matches(
+    boundary: dict[str, Any], anchor: dict[str, Any]
+) -> bool:
+    if anchor.get("kind") not in {None, "boundary"}:
+        return False
+    if "type" in anchor and not _value_matches_expected(
+        boundary.get("type"), anchor["type"]
+    ):
+        return False
+    if "min_invariants" in anchor:
+        invs = boundary.get("invariants")
+        count = len(invs) if isinstance(invs, list) else 0
+        if count < int(anchor["min_invariants"]):
+            return False
+    if "paths" in anchor and isinstance(anchor["paths"], list):
+        b_paths = boundary.get("paths")
+        actual_paths = {str(p) for p in b_paths} if isinstance(b_paths, list) else set()
+        if not {str(p) for p in anchor["paths"]}.issubset(actual_paths):
+            return False
+    return True
+
+
+def _architecture_decision_matches(
+    decision: dict[str, Any], anchor: dict[str, Any]
+) -> bool:
+    if anchor.get("kind") != "decision":
+        return False
+    if "min_consequences" in anchor:
+        cons = decision.get("consequences")
+        count = len(cons) if isinstance(cons, list) else 0
+        if count < int(anchor["min_consequences"]):
+            return False
+    if "paths" in anchor and isinstance(anchor["paths"], list):
+        d_paths = decision.get("paths")
+        actual_paths = {str(p) for p in d_paths} if isinstance(d_paths, list) else set()
+        if not {str(p) for p in anchor["paths"]}.issubset(actual_paths):
+            return False
+    return True
+
+
+def _project_architecture_records(
+    payload: dict[str, Any], case: dict[str, Any] | None = None
+) -> list[dict[str, str]]:
     doc_status = payload.get("status")
-    record_status = (
-        "needs-validation"
-        if doc_status == "draft"
-        else "supported"
+    record_status = "needs-validation" if doc_status == "draft" else "supported"
+    decision_status = (
+        "confirmed"
         if doc_status == "accepted"
-        else "grouped"
+        else ("needs-validation" if doc_status == "draft" else "supported")
     )
+    anchors = _case_anchors(case)
+    use_anchors = isinstance(case, dict) and "expected_anchors" in case
+    claimed: set[int] = set()
     records: list[dict[str, str]] = []
-    for boundary in payload.get("boundaries", []):
+
+    for idx, boundary in enumerate(payload.get("boundaries", [])):
         if not isinstance(boundary, dict) or not isinstance(boundary.get("name"), str):
             continue
         desc = (
@@ -388,11 +645,28 @@ def _project_architecture_records(payload: dict[str, Any]) -> list[dict[str, str
             else []
         )
         evidence = desc or "; ".join(inv_parts)
-        records.append(
-            _make_normalized_record(str(boundary["name"]), record_status, evidence)
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _architecture_boundary_matches,
+                boundary,
+            )
+            if use_anchors
+            else None
         )
-    decision_status = "confirmed" if doc_status == "accepted" else record_status
-    for decision in payload.get("decisions", []):
+        key = (
+            matched_key
+            if matched_key is not None
+            else (
+                f"boundary:{idx + 1}:{boundary['name']}"
+                if use_anchors
+                else str(boundary["name"])
+            )
+        )
+        records.append(_make_normalized_record(key, record_status, evidence))
+
+    for idx, decision in enumerate(payload.get("decisions", [])):
         if not isinstance(decision, dict) or not isinstance(decision.get("id"), str):
             continue
         dec_text = (
@@ -416,15 +690,49 @@ def _project_architecture_records(payload: dict[str, Any]) -> list[dict[str, str
         )
         rationale = ctx_text or "; ".join(cons_parts)
         evidence = f"{dec_text} ({rationale})" if (dec_text and rationale) else ""
-        records.append(
-            _make_normalized_record(str(decision["id"]), decision_status, evidence)
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _architecture_decision_matches,
+                decision,
+            )
+            if use_anchors
+            else None
         )
+        key = (
+            matched_key
+            if matched_key is not None
+            else (
+                f"decision:{idx + 1}:{decision['id']}"
+                if use_anchors
+                else str(decision["id"])
+            )
+        )
+        records.append(_make_normalized_record(key, decision_status, evidence))
     return records
 
 
-def _project_review_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _review_finding_matches(finding: dict[str, Any], anchor: dict[str, Any]) -> bool:
+    if "file" in anchor and not _value_matches_expected(
+        finding.get("file"), anchor["file"]
+    ):
+        return False
+    if "severity" in anchor and not _value_matches_expected(
+        finding.get("severity"), anchor["severity"]
+    ):
+        return False
+    return not ("line" in anchor and finding.get("line") != anchor["line"])
+
+
+def _project_review_records(
+    payload: dict[str, Any], case: dict[str, Any] | None = None
+) -> list[dict[str, str]]:
+    anchors = _case_anchors(case)
+    use_anchors = isinstance(case, dict) and "expected_anchors" in case
+    claimed: set[int] = set()
     records: list[dict[str, str]] = []
-    for finding in payload.get("findings", []):
+    for idx, finding in enumerate(payload.get("findings", [])):
         if not isinstance(finding, dict) or not isinstance(finding.get("id"), str):
             continue
         sev = finding.get("severity")
@@ -444,14 +752,50 @@ def _project_review_records(payload: dict[str, Any]) -> list[dict[str, str]]:
             else ""
         )
         evidence = f"{file_ref}: {desc}" if (file_ref and desc) else ""
-        records.append(_make_normalized_record(str(finding["id"]), status, evidence))
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _review_finding_matches,
+                finding,
+            )
+            if use_anchors
+            else None
+        )
+        key = (
+            matched_key
+            if matched_key is not None
+            else (
+                f"review:{idx + 1}:{finding['id']}"
+                if use_anchors
+                else str(finding["id"])
+            )
+        )
+        records.append(_make_normalized_record(key, status, evidence))
     return records
 
 
-def _project_testing_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _testing_case_matches(tc: dict[str, Any], anchor: dict[str, Any]) -> bool:
+    if "oracle_type" in anchor and not _value_matches_expected(
+        tc.get("oracle_type"), anchor["oracle_type"]
+    ):
+        return False
+    if "verified" in anchor and tc.get("verified") is not anchor["verified"]:
+        return False
+    return not (
+        "file" in anchor and not _value_matches_expected(tc.get("file"), anchor["file"])
+    )
+
+
+def _project_testing_records(
+    payload: dict[str, Any], case: dict[str, Any] | None = None
+) -> list[dict[str, str]]:
+    anchors = _case_anchors(case)
+    use_anchors = isinstance(case, dict) and "expected_anchors" in case
+    claimed: set[int] = set()
     records: list[dict[str, str]] = []
     valid_oracles = {"state", "exception", "output", "boundary"}
-    for tc in payload.get("test_cases", []):
+    for idx, tc in enumerate(payload.get("test_cases", [])):
         if not isinstance(tc, dict) or not isinstance(tc.get("id"), str):
             continue
         verified = tc.get("verified")
@@ -467,15 +811,61 @@ def _project_testing_records(payload: dict[str, Any]) -> list[dict[str, str]]:
         )
         oracle = tc.get("oracle_type")
         evidence = f"{oracle}: {desc}" if (desc and oracle in valid_oracles) else ""
-        records.append(_make_normalized_record(str(tc["id"]), status, evidence))
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _testing_case_matches,
+                tc,
+            )
+            if use_anchors
+            else None
+        )
+        key = (
+            matched_key
+            if matched_key is not None
+            else (f"test:{idx + 1}:{tc['id']}" if use_anchors else str(tc["id"]))
+        )
+        records.append(_make_normalized_record(key, status, evidence))
     return records
 
 
-def _project_spec_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _spec_item_matches(kind: str, item: dict[str, Any], anchor: dict[str, Any]) -> bool:
+    if anchor.get("kind") != kind:
+        return False
+    if kind == "interview_decision":
+        if "category" in anchor and not _value_matches_expected(
+            item.get("category"), anchor["category"]
+        ):
+            return False
+    elif kind == "requirement":
+        if "priority" in anchor and not _value_matches_expected(
+            item.get("priority"), anchor["priority"]
+        ):
+            return False
+    elif kind == "convergence_check":
+        if "status" in anchor and not _value_matches_expected(
+            item.get("status"), anchor["status"]
+        ):
+            return False
+        if "target" in anchor and not _value_matches_expected(
+            item.get("target"), anchor["target"]
+        ):
+            return False
+    return True
+
+
+def _project_spec_records(
+    payload: dict[str, Any], case: dict[str, Any] | None = None
+) -> list[dict[str, str]]:
     doc_status = payload.get("status")
     in_progress = doc_status in {"draft", "interviewing"}
+    anchors = _case_anchors(case)
+    use_anchors = isinstance(case, dict) and "expected_anchors" in case
+    claimed: set[int] = set()
     records: list[dict[str, str]] = []
-    for decision in payload.get("interview_decisions", []):
+
+    for idx, decision in enumerate(payload.get("interview_decisions", [])):
         if not isinstance(decision, dict) or not isinstance(decision.get("id"), str):
             continue
         question = (
@@ -490,8 +880,64 @@ def _project_spec_records(payload: dict[str, Any]) -> list[dict[str, str]]:
         )
         evidence = f"{question} -> {chosen}" if (question and chosen) else ""
         status = "needs-validation" if in_progress else "confirmed"
-        records.append(_make_normalized_record(str(decision["id"]), status, evidence))
-    for check in payload.get("convergence_checks", []):
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _spec_item_matches,
+                "interview_decision",
+                decision,
+            )
+            if use_anchors
+            else None
+        )
+        key = (
+            matched_key
+            if matched_key is not None
+            else (
+                f"interview_decision:{idx + 1}:{decision['id']}"
+                if use_anchors
+                else str(decision["id"])
+            )
+        )
+        records.append(_make_normalized_record(key, status, evidence))
+
+    for idx, req in enumerate(payload.get("requirements", [])):
+        if not isinstance(req, dict) or not isinstance(req.get("id"), str):
+            continue
+        desc = (
+            req["description"].strip()
+            if isinstance(req.get("description"), str)
+            else ""
+        )
+        prio = req.get("priority")
+        evidence = (
+            f"[{prio}] {desc}"
+            if (desc and isinstance(prio, str) and prio.strip())
+            else desc
+        )
+        status = "needs-validation" if in_progress else "confirmed"
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _spec_item_matches,
+                "requirement",
+                req,
+            )
+            if use_anchors
+            else None
+        )
+        key = (
+            matched_key
+            if matched_key is not None
+            else (
+                f"requirement:{idx + 1}:{req['id']}" if use_anchors else str(req["id"])
+            )
+        )
+        records.append(_make_normalized_record(key, status, evidence))
+
+    for idx, check in enumerate(payload.get("convergence_checks", [])):
         if not isinstance(check, dict) or not isinstance(check.get("id"), str):
             continue
         target = check["target"].strip() if isinstance(check.get("target"), str) else ""
@@ -504,12 +950,99 @@ def _project_spec_records(payload: dict[str, Any]) -> list[dict[str, str]]:
             if in_progress
             else ("confirmed" if check.get("status") == "aligned" else "supported")
         )
-        records.append(_make_normalized_record(str(check["id"]), status, evidence))
+        matched_key = (
+            _claim_anchor(
+                anchors,
+                claimed,
+                _spec_item_matches,
+                "convergence_check",
+                check,
+            )
+            if use_anchors
+            else None
+        )
+        key = (
+            matched_key
+            if matched_key is not None
+            else (
+                f"convergence_check:{idx + 1}:{check['id']}"
+                if use_anchors
+                else str(check["id"])
+            )
+        )
+        records.append(_make_normalized_record(key, status, evidence))
     return records
 
 
-def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
+def _workflow_anchor_matches(
+    kind: str, props: dict[str, Any], anchor: dict[str, Any]
+) -> bool:
+    if anchor.get("kind") != kind:
+        return False
+    if kind == "finding_verification":
+        if "reproduction_status" in anchor and not _value_matches_expected(
+            props.get("reproduction_status"), anchor["reproduction_status"]
+        ):
+            return False
+    elif kind == "regression":
+        test_file = str(props.get("test_file", ""))
+        if "test_file" in anchor and test_file != anchor["test_file"]:
+            return False
+        if "test_glob" in anchor and (
+            not test_file
+            or not _matches_writable_glob(test_file, str(anchor["test_glob"]))
+        ):
+            return False
+    elif kind == "task":
+        if "file_scopes" in anchor and list(props.get("file_scopes", [])) != list(
+            anchor["file_scopes"]
+        ):
+            return False
+        if "has_blockers" in anchor and bool(props.get("has_blockers")) is not bool(
+            anchor["has_blockers"]
+        ):
+            return False
+    elif kind == "file_change":
+        if "path" in anchor and props.get("path") != anchor["path"]:
+            return False
+    elif kind == "verification":
+        if "result" in anchor and props.get("result") != anchor["result"]:
+            return False
+    elif kind == "transition":
+        if (
+            "fingerprint" in anchor
+            and props.get("fingerprint") != anchor["fingerprint"]
+        ):
+            return False
+        if (
+            "previous_state" in anchor
+            and props.get("previous_state") != anchor["previous_state"]
+        ):
+            return False
+        if "new_state" in anchor and props.get("new_state") != anchor["new_state"]:
+            return False
+    elif kind == "handoff_file":
+        if "path" in anchor and props.get("path") != anchor["path"]:
+            return False
+    elif kind == "handoff_untouched":
+        return True
+    elif (
+        kind == "commit"
+        and "commit_type" in anchor
+        and props.get("commit_type") != anchor["commit_type"]
+    ):
+        return False
+    return True
+
+
+def _project_workflow_records(
+    payload: dict[str, Any], case: dict[str, Any] | None = None
+) -> list[dict[str, str]]:
+    anchors = _case_anchors(case)
+    use_anchors = isinstance(case, dict) and "expected_anchors" in case
+    claimed: set[int] = set()
     records: list[dict[str, str]] = []
+
     if "reproduction_status" in payload:
         fid = str(payload.get("finding_id", ""))
         raw_status = str(payload.get("reproduction_status", "needs-validation"))
@@ -523,12 +1056,29 @@ def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
         if not ev_parts and payload.get("safe_control_outcomes"):
             ev_parts.append("safe_control_outcomes recorded")
         if fid and fid != "none":
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "finding_verification",
+                    {"reproduction_status": raw_status},
+                )
+                if (use_anchors and raw_status in _ACTIONABLE_AUDIT_STATUSES)
+                else None
+            )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (f"verify:{fid}" if use_anchors else fid)
+            )
             records.append(
-                _make_normalized_record(fid, raw_status, "; ".join(ev_parts))
+                _make_normalized_record(key, raw_status, "; ".join(ev_parts))
             )
     elif "failure_boundaries" in payload:
         fid = str(payload.get("finding_id", ""))
         if fid and fid != "none":
+            test_file = str(payload.get("test_file", ""))
             grounded_ok = (
                 bool(payload.get("failure_boundaries"))
                 and bool(payload.get("test_command_traces"))
@@ -539,9 +1089,25 @@ def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
                 if grounded_ok
                 else ""
             )
-            records.append(_make_normalized_record(fid, "confirmed", ev))
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "regression",
+                    {"test_file": test_file},
+                )
+                if use_anchors
+                else None
+            )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (f"regression:{fid}" if use_anchors else fid)
+            )
+            records.append(_make_normalized_record(key, "confirmed", ev))
     elif "task_breakdowns" in payload:
-        for task in payload.get("task_breakdowns", []):
+        for idx, task in enumerate(payload.get("task_breakdowns", [])):
             if (
                 not isinstance(task, dict)
                 or not isinstance(task.get("task_id"), str)
@@ -550,47 +1116,109 @@ def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
                 continue
             scopes = task.get("file_scopes")
             criteria = task.get("acceptance_criteria")
+            has_blockers = bool(task.get("blocked_by") or task.get("dependencies"))
             ev = (
                 f"scopes={scopes}; criteria={criteria}" if (scopes and criteria) else ""
             )
-            records.append(
-                _make_normalized_record(str(task["task_id"]), "supported", ev)
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "task",
+                    {
+                        "file_scopes": scopes if isinstance(scopes, list) else [],
+                        "has_blockers": has_blockers,
+                    },
+                )
+                if use_anchors
+                else None
             )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (
+                    f"task:{idx + 1}:{task['task_id']}"
+                    if use_anchors
+                    else str(task["task_id"])
+                )
+            )
+            records.append(_make_normalized_record(key, "supported", ev))
     elif "file_changes" in payload:
         exec_ok = any(
             isinstance(er, dict) and er.get("passed") is True
             for er in payload.get("execution_results", [])
         )
         has_diffs = bool(payload.get("diff_summaries"))
-        for item in payload.get("file_changes", []):
+        for idx, item in enumerate(payload.get("file_changes", [])):
             if not isinstance(item, str | dict):
                 continue
             path_val = item if isinstance(item, str) else str(item.get("path", ""))
             if not path_val or path_val == "none":
                 continue
             ev = f"{path_val}: verified diff" if (has_diffs and exec_ok) else ""
-            records.append(_make_normalized_record(path_val, "confirmed", ev))
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "file_change",
+                    {"path": path_val},
+                )
+                if use_anchors
+                else None
+            )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (f"change:{idx + 1}:{path_val}" if use_anchors else path_val)
+            )
+            records.append(_make_normalized_record(key, "confirmed", ev))
     elif "original_reproduced" in payload and "safe_controls_passed" in payload:
         res_label = str(payload.get("result", ""))
         if res_label and res_label != "abstained":
             cmds = payload.get("commands")
             ev = "; ".join(str(c) for c in cmds) if cmds else ""
             status = "confirmed" if res_label == "verified-fixed" else "supported"
-            records.append(_make_normalized_record(res_label, status, ev))
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "verification",
+                    {"result": res_label},
+                )
+                if use_anchors
+                else None
+            )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (f"verification:{res_label}" if use_anchors else res_label)
+            )
+            records.append(_make_normalized_record(key, status, ev))
     elif "remediation_state_transitions" in payload:
         matched_ids = {
             m.get("finding_id")
             for m in payload.get("finding_fingerprint_matches", [])
             if isinstance(m, dict)
         }
-        for trans in payload.get("remediation_state_transitions", []):
+        fp_by_fid = {
+            str(m["finding_id"]): str(m["fingerprint"])
+            for m in payload.get("finding_fingerprint_matches", [])
+            if isinstance(m, dict)
+            and isinstance(m.get("finding_id"), str)
+            and isinstance(m.get("fingerprint"), str)
+        }
+        for idx, trans in enumerate(payload.get("remediation_state_transitions", [])):
             if not isinstance(trans, dict):
                 continue
             fid = str(trans.get("finding_id", ""))
             new_state = str(trans.get("new_state", ""))
+            prev_state = str(trans.get("previous_state", ""))
             if not fid or not new_state:
                 continue
-            key = f"{fid}:{new_state}"
+            fp = str(trans.get("fingerprint") or fp_by_fid.get(fid, ""))
             proof = (
                 trans["verification_proof"].strip()
                 if isinstance(trans.get("verification_proof"), str)
@@ -605,20 +1233,82 @@ def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
             else:
                 ev = proof or reason or (f"matched:{fid}" if fid in matched_ids else "")
                 status = "supported"
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "transition",
+                    {
+                        "fingerprint": fp,
+                        "previous_state": prev_state,
+                        "new_state": new_state,
+                    },
+                )
+                if use_anchors
+                else None
+            )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (
+                    f"transition:{idx + 1}:{fid}:{new_state}"
+                    if use_anchors
+                    else f"{fid}:{new_state}"
+                )
+            )
             records.append(_make_normalized_record(key, status, ev))
     elif "dead_ends" in payload and "verified_facts" in payload:
         next_act = payload.get("next_action")
+        action_text = next_act.strip() if isinstance(next_act, str) else ""
+        abstained = not action_text or action_text.lower() == "abstained"
         grounded_ok = (
             bool(payload.get("verified_facts"))
             and bool(payload.get("commands_run"))
-            and isinstance(next_act, str)
-            and bool(next_act.strip())
+            and not abstained
         )
-        action_text = next_act.strip() if isinstance(next_act, str) else ""
-        for p in payload.get("touched_files", []):
-            if isinstance(p, str) and p and p != "none":
+        touched = [
+            p
+            for p in payload.get("touched_files", [])
+            if isinstance(p, str) and p and p != "none"
+        ]
+        if touched:
+            for idx, p in enumerate(touched):
                 ev = f"{p}: {action_text}" if grounded_ok else ""
-                records.append(_make_normalized_record(p, "confirmed", ev))
+                matched_key = (
+                    _claim_anchor(
+                        anchors,
+                        claimed,
+                        _workflow_anchor_matches,
+                        "handoff_file",
+                        {"path": p},
+                    )
+                    if use_anchors
+                    else None
+                )
+                key = (
+                    matched_key
+                    if matched_key is not None
+                    else (f"handoff:{idx + 1}:{p}" if use_anchors else p)
+                )
+                records.append(_make_normalized_record(key, "confirmed", ev))
+        elif not abstained:
+            ev = f"untouched: {action_text}" if grounded_ok else ""
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "handoff_untouched",
+                    {},
+                )
+                if use_anchors
+                else None
+            )
+            if matched_key is not None:
+                records.append(_make_normalized_record(matched_key, "supported", ev))
+            else:
+                records.append(_make_normalized_record("untouched", "refuted", ev))
     elif "commit_subject" in payload and "compression_level" in payload:
         subj = str(payload.get("commit_subject", ""))
         ctype = str(payload.get("commit_type", ""))
@@ -629,24 +1319,40 @@ def _project_workflow_records(payload: dict[str, Any]) -> list[dict[str, str]]:
                 and payload.get("git_mutated") is False
             )
             ev = subj if grounded_ok else ""
-            records.append(_make_normalized_record(ctype, "confirmed", ev))
+            matched_key = (
+                _claim_anchor(
+                    anchors,
+                    claimed,
+                    _workflow_anchor_matches,
+                    "commit",
+                    {"commit_type": ctype},
+                )
+                if use_anchors
+                else None
+            )
+            key = (
+                matched_key
+                if matched_key is not None
+                else (f"commit:{ctype}" if use_anchors else ctype)
+            )
+            records.append(_make_normalized_record(key, "confirmed", ev))
     return records
 
 
 def _project_normalized_records(
-    contract: str, payload: dict[str, Any]
+    contract: str, payload: dict[str, Any], case: dict[str, Any] | None = None
 ) -> list[dict[str, str]]:
     if contract == "architecture":
-        return _project_architecture_records(payload)
+        return _project_architecture_records(payload, case)
     if contract == "review":
-        return _project_review_records(payload)
+        return _project_review_records(payload, case)
     if contract == "testing":
-        return _project_testing_records(payload)
+        return _project_testing_records(payload, case)
     if contract == "spec":
-        return _project_spec_records(payload)
+        return _project_spec_records(payload, case)
     if contract == "workflow":
-        return _project_workflow_records(payload)
-    return _project_audit_records(payload)
+        return _project_workflow_records(payload, case)
+    return _project_audit_records(payload, case)
 
 
 def _score_normalized_records(
@@ -669,9 +1375,9 @@ def _score_normalized_records(
 
 
 def _grade_audit(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome:
-    expected = set(case.get("expected_keys", []))
+    expected = _expected_keys_from_case(case)
     try:
-        records = _project_audit_records(payload)
+        records = _project_audit_records(payload, case)
     except (ValueError, TypeError):
         return _GradeOutcome(
             reported=set(),
@@ -693,16 +1399,12 @@ def _grade_audit(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome
 
 
 def _grade_architecture(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome:
-    records = _project_architecture_records(payload)
+    records = _project_architecture_records(payload, case)
     reported, grounded, uncertain = _score_normalized_records(
         records, report_needs_validation=True, cap_uncertain_at_one=True
     )
     boundaries = [b for b in payload.get("boundaries", []) if isinstance(b, dict)]
     decisions = [d for d in payload.get("decisions", []) if isinstance(d, dict)]
-    boundary_keys = {
-        str(b["name"]) for b in boundaries if isinstance(b.get("name"), str)
-    }
-    decision_keys = {str(d["id"]) for d in decisions if isinstance(d.get("id"), str)}
 
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
@@ -710,19 +1412,6 @@ def _grade_architecture(payload: dict[str, Any], case: dict[str, Any]) -> _Grade
     if isinstance(assertions, dict):
         if "status" in assertions and payload.get("status") != assertions["status"]:
             assertions_ok = False
-        if "boundary_names" in assertions and boundary_keys != set(
-            assertions["boundary_names"]
-        ):
-            assertions_ok = False
-        if "decision_ids" in assertions and decision_keys != set(
-            assertions["decision_ids"]
-        ):
-            assertions_ok = False
-        if isinstance(assertions.get("boundary_types"), dict):
-            by_name = {b.get("name"): b.get("type") for b in boundaries}
-            for bname, expected_type in assertions["boundary_types"].items():
-                if by_name.get(bname) != expected_type:
-                    assertions_ok = False
         if "min_invariants" in assertions:
             inv_total = sum(
                 len(b.get("invariants", []))
@@ -751,7 +1440,7 @@ def _grade_architecture(payload: dict[str, Any], case: dict[str, Any]) -> _Grade
 
 
 def _grade_review(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcome:
-    records = _project_review_records(payload)
+    records = _project_review_records(payload, case)
     reported, grounded, uncertain = _score_normalized_records(
         records, report_needs_validation=True
     )
@@ -762,16 +1451,6 @@ def _grade_review(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcom
     if isinstance(assertions, dict):
         if "verdict" in assertions and payload.get("verdict") != assertions["verdict"]:
             assertions_ok = False
-        if "finding_ids" in assertions and reported != set(assertions["finding_ids"]):
-            assertions_ok = False
-        if isinstance(assertions.get("severities"), dict):
-            by_id = {f.get("id"): f.get("severity") for f in findings}
-            for fid, expected_sev in assertions["severities"].items():
-                if isinstance(expected_sev, list):
-                    if by_id.get(fid) not in expected_sev:
-                        assertions_ok = False
-                elif by_id.get(fid) != expected_sev:
-                    assertions_ok = False
         if isinstance(assertions.get("files"), list):
             reported_files = {f.get("file") for f in findings}
             if not set(assertions["files"]).issubset(reported_files):
@@ -793,13 +1472,36 @@ def _grade_review(payload: dict[str, Any], case: dict[str, Any]) -> _GradeOutcom
     )
 
 
+def _check_generated_paths(
+    assertions: Mapping[str, Any], changed_paths: set[str], source_dir: Path
+) -> bool:
+    gen_files = assertions.get("generated_files")
+    if isinstance(gen_files, list):
+        for rel in gen_files:
+            if (
+                not isinstance(rel, str)
+                or rel not in changed_paths
+                or not (source_dir / rel).is_file()
+            ):
+                return False
+    gen_globs = assertions.get("generated_globs")
+    if isinstance(gen_globs, list):
+        for pat in gen_globs:
+            if not isinstance(pat, str) or not any(
+                _matches_writable_glob(rel, pat) and (source_dir / rel).is_file()
+                for rel in changed_paths
+            ):
+                return False
+    return True
+
+
 def _grade_testing(
     payload: dict[str, Any],
     case: dict[str, Any],
     changed_paths: set[str],
     source_dir: Path,
 ) -> _GradeOutcome:
-    records = _project_testing_records(payload)
+    records = _project_testing_records(payload, case)
     reported, grounded, uncertain = _score_normalized_records(
         records, report_needs_validation=True
     )
@@ -818,23 +1520,12 @@ def _grade_testing(
             and payload.get("framework") != assertions["framework"]
         ):
             assertions_ok = False
-        if "test_case_ids" in assertions and reported != set(
-            assertions["test_case_ids"]
-        ):
-            assertions_ok = False
-        if isinstance(assertions.get("oracle_types"), dict):
-            by_id = {tc.get("id"): tc.get("oracle_type") for tc in test_cases}
-            for tcid, expected_oracle in assertions["oracle_types"].items():
-                if by_id.get(tcid) != expected_oracle:
-                    assertions_ok = False
         if "verified" in assertions and any(
             tc.get("verified") is not assertions["verified"] for tc in test_cases
         ):
             assertions_ok = False
-        if isinstance(assertions.get("generated_files"), list):
-            for rel in assertions["generated_files"]:
-                if rel not in changed_paths or not (source_dir / rel).is_file():
-                    assertions_ok = False
+        if not _check_generated_paths(assertions, changed_paths, source_dir):
+            assertions_ok = False
 
     return _GradeOutcome(
         reported=reported,
@@ -852,39 +1543,22 @@ def _grade_spec(
     changed_paths: set[str],
     source_dir: Path,
 ) -> _GradeOutcome:
-    records = _project_spec_records(payload)
+    records = _project_spec_records(payload, case)
     reported, grounded, uncertain = _score_normalized_records(
         records, report_needs_validation=True, cap_uncertain_at_one=True
     )
-    decisions = [
-        d for d in payload.get("interview_decisions", []) if isinstance(d, dict)
-    ]
-    checks = [c for c in payload.get("convergence_checks", []) if isinstance(c, dict)]
-    decision_ids = {str(d["id"]) for d in decisions if isinstance(d.get("id"), str)}
-    check_ids = {str(c["id"]) for c in checks if isinstance(c.get("id"), str)}
-
     assertions = case.get("expected_assertions") or {}
     expected = _expected_keys_from_case(case)
     assertions_ok = True
     if isinstance(assertions, dict):
         if "status" in assertions and payload.get("status") != assertions["status"]:
             assertions_ok = False
-        if "interview_decision_ids" in assertions and decision_ids != set(
-            assertions["interview_decision_ids"]
-        ):
-            assertions_ok = False
-        if "convergence_check_ids" in assertions and check_ids != set(
-            assertions["convergence_check_ids"]
-        ):
-            assertions_ok = False
         if "new_file_scopes" in assertions and payload.get("new_file_scopes") != list(
             assertions["new_file_scopes"]
         ):
             assertions_ok = False
-        if isinstance(assertions.get("generated_files"), list):
-            for rel in assertions["generated_files"]:
-                if rel not in changed_paths or not (source_dir / rel).is_file():
-                    assertions_ok = False
+        if not _check_generated_paths(assertions, changed_paths, source_dir):
+            assertions_ok = False
 
     return _GradeOutcome(
         reported=reported,
@@ -934,13 +1608,44 @@ def _tasks_are_acyclic(tasks: list[dict[str, Any]]) -> bool:
     return all(visit(tid) for tid in graph)
 
 
+def _dependency_order_matches_scopes(
+    payload: dict[str, Any], expected_scopes: list[Any]
+) -> bool:
+    raw_tasks = [
+        t
+        for t in payload.get("task_breakdowns", [])
+        if isinstance(t, dict)
+        and isinstance(t.get("task_id"), str)
+        and t["task_id"] != "noop"
+    ]
+    dep_order = payload.get("dependency_order")
+    if not isinstance(dep_order, list) or len(dep_order) != len(raw_tasks):
+        return False
+    order_index = {str(tid): idx for idx, tid in enumerate(dep_order)}
+    if len(order_index) != len(raw_tasks):
+        return False
+    scopes_by_tid: dict[str, list[Any]] = {}
+    for task in raw_tasks:
+        tid = str(task["task_id"])
+        if tid not in order_index:
+            return False
+        scopes_by_tid[tid] = list(task.get("file_scopes", []))
+        for dep_key in ("blocked_by", "dependencies"):
+            for dep in task.get(dep_key, []):
+                dep_id = str(dep)
+                if dep_id not in order_index or order_index[dep_id] >= order_index[tid]:
+                    return False
+    ordered_actual = [scopes_by_tid[str(tid)] for tid in dep_order]
+    return ordered_actual == expected_scopes
+
+
 def _grade_workflow(
     payload: dict[str, Any],
     case: dict[str, Any],
     changed_paths: set[str],
     source_dir: Path,
 ) -> _GradeOutcome:
-    records = _project_workflow_records(payload)
+    records = _project_workflow_records(payload, case)
     reported, grounded, uncertain = _score_normalized_records(records)
     if (
         "reproduction_status" in payload
@@ -964,7 +1669,6 @@ def _grade_workflow(
             "reproduction_status",
             "confidence_rating",
             "test_file",
-            "dependency_order",
             "original_reproduced",
             "regression_passed",
             "safe_controls_passed",
@@ -978,6 +1682,29 @@ def _grade_workflow(
                 direct_field in assertions
                 and payload.get(direct_field) != assertions[direct_field]
             ):
+                assertions_ok = False
+        if (
+            "ordered_file_scopes" in assertions
+            and isinstance(assertions["ordered_file_scopes"], list)
+            and not _dependency_order_matches_scopes(
+                payload, assertions["ordered_file_scopes"]
+            )
+        ):
+            assertions_ok = False
+        if "touched_files" in assertions and list(
+            payload.get("touched_files", [])
+        ) != list(assertions["touched_files"]):
+            assertions_ok = False
+        if "repository_dirty" in assertions:
+            repo_obj = payload.get("repository")
+            dirty_val = repo_obj.get("dirty") if isinstance(repo_obj, dict) else None
+            if dirty_val is not assertions["repository_dirty"]:
+                assertions_ok = False
+        if "abstained" in assertions:
+            is_abstained = (
+                str(payload.get("next_action", "")).strip().lower() == "abstained"
+            )
+            if is_abstained is not bool(assertions["abstained"]):
                 assertions_ok = False
         if "dead_end_count" in assertions and len(payload.get("dead_ends", [])) != int(
             assertions["dead_end_count"]
@@ -996,12 +1723,15 @@ def _grade_workflow(
                 assertions_ok = False
         if isinstance(assertions.get("changed_files"), list):
             expected_changed = set(assertions["changed_files"])
-            if changed_paths != expected_changed or reported != expected_changed:
+            payload_changed = {
+                item if isinstance(item, str) else str(item.get("path", ""))
+                for item in payload.get("file_changes", [])
+                if isinstance(item, str | dict)
+            } - {"", "none"}
+            if changed_paths != expected_changed or payload_changed != expected_changed:
                 assertions_ok = False
-        if isinstance(assertions.get("generated_files"), list):
-            for rel in assertions["generated_files"]:
-                if rel not in changed_paths or not (source_dir / rel).is_file():
-                    assertions_ok = False
+        if not _check_generated_paths(assertions, changed_paths, source_dir):
+            assertions_ok = False
         if assertions.get("all_executions_passed"):
             exec_results = payload.get("execution_results", [])
             if not exec_results or not all(
@@ -1141,11 +1871,26 @@ def evaluate(
     repeats: int = 1,
     timeout: int = 120,
     root: Path = ROOT,
+    max_tokens: int | None = None,
 ) -> dict:
     """Run a user-supplied adapter without a shell; never pass grader answers to it."""
-    if not command or not 1 <= repeats <= 10 or not 1 <= timeout <= 3600:
+    if (
+        not command
+        or isinstance(repeats, bool)
+        or not 1 <= repeats <= 10
+        or isinstance(timeout, bool)
+        or not 1 <= timeout <= 3600
+        or (
+            max_tokens is not None
+            and (
+                isinstance(max_tokens, bool)
+                or not isinstance(max_tokens, int)
+                or max_tokens < 1
+            )
+        )
+    ):
         raise ValueError(
-            "Evaluation requires an explicit JSON argv adapter, 1–10 repeats, and a bounded timeout"
+            "Evaluation requires an explicit JSON argv adapter, 1–10 repeats, a bounded timeout, and a positive max_tokens limit when set"
         )
     output = output.resolve()
     if output.exists() and any(output.iterdir()):
@@ -1175,9 +1920,7 @@ def evaluate(
                         work / "skill",
                         ignore=ignore_bytecode,
                     )
-                request = _build_prompt_request(
-                    case, contract, schema_path, configuration
-                )
+                request = _build_prompt_request(case, configuration)
                 prompt = work / "prompt.md"
                 prompt.write_text(request + "\n", encoding="utf-8")
                 inputs_before = package_files(source_dir)
@@ -1256,11 +1999,20 @@ def evaluate(
                         assertions_ok=False,
                     )
 
+                tokens = _extract_tokens(usage)
+                if (
+                    max_tokens is not None
+                    and tokens is not None
+                    and tokens > max_tokens
+                    and state == "executed"
+                ):
+                    state = "failed"
+                    error = f"Adapter token usage ({tokens}) exceeded max_tokens ({max_tokens})"
+
                 reported = outcome.reported
                 grounded = outcome.grounded
                 expected = outcome.expected
                 true = reported & expected
-                tokens = _extract_tokens(usage)
                 record = {
                     "case": case["id"],
                     "configuration": configuration,
@@ -1297,7 +2049,7 @@ def evaluate(
         "runs": results,
         "summary": summary,
         "limitations": [
-            "Key matching is a bounded deterministic rubric, not semantic proof; review raw evidence and traces.",
+            "Property-anchor matching is a bounded deterministic rubric, not semantic proof; review raw evidence and traces.",
             "The adapter has normal process access. A fresh directory prevents accidental expected-answer leakage, not a security sandbox.",
             "Log files are streamed without a disk quota. POSIX timeouts kill the process group; Windows stops the direct child only. Run untrusted adapters in an external sandbox with resource limits.",
             "The provided deterministic reference adapter tests this harness, not an LLM. Label model/host versions in real adapter output.",

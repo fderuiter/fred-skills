@@ -1266,6 +1266,12 @@ def parser() -> argparse.ArgumentParser:
         default=120,
         help="Execution timeout in seconds per evaluation run",
     )
+    sub_eval.add_argument(
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="Maximum allowed adapter token usage per evaluation run",
+    )
 
     sub_rel = commands.add_parser(
         "release",
@@ -1656,7 +1662,14 @@ def _validate_adapter_argv(adapter_argv: Any) -> list[str]:
 def handle_release(a: argparse.Namespace) -> Any:
     if a.command == "evaluate":
         argv = _validate_adapter_argv(a.adapter_argv)
-        return evaluations.evaluate(a.output, argv, a.case, a.repeats, a.timeout)
+        return evaluations.evaluate(
+            a.output,
+            argv,
+            a.case,
+            a.repeats,
+            a.timeout,
+            max_tokens=a.max_tokens,
+        )
     if a.command == "release":
         return releases.build(a.output, a.pack, all_packs=a.all)
     if a.command == "verify-release":

@@ -676,10 +676,11 @@ def evaluate(
     repeats: int = 1,
     timeout: int = 120,
     root: Path = ROOT,
+    max_tokens: int | None = None,
 ) -> dict
 ```
 
-Runs a user-supplied adapter executable over evaluation test cases across all six suites (`audit`, `architecture`, `review`, `spec`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating non-audit deliverables with `jsonschema.Draft202012Validator` against `skills/<skill>/assets/*.schema.json` (after stripping top-level `actor`/`usage` metadata or unwrapping `deliverable`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, and grading outputs against suite rubrics.
+Runs a user-supplied adapter executable over blind evaluation test cases across all six suites (`audit`, `architecture`, `review`, `spec`, `testing`, and `workflow` contracts), executing both baseline (`without_skill`) and skill-assisted (`with_skill`) configurations, streaming stdout/stderr to disk logs, validating deliverables against canonical suite and workflow schemas plus all six semantic suite validators (`validate_audit`, `validate_architecture`, `validate_review`, `validate_spec`, `validate_testing`, and `validate_workflow`), enforcing read-only `./source` isolation unless matched by declared `writable_paths` globs, enforcing optional `max_tokens` budgets, and grading outputs against structural property anchors.
 
 - **Parameters:**
   - `output` (`Path`): Output directory for evaluation logs and `benchmark.json`. Must be a new or empty directory.
@@ -688,6 +689,7 @@ Runs a user-supplied adapter executable over evaluation test cases across all si
   - `repeats` (`int`, default: `1`): Number of repetitions per case and configuration (bounded between 1 and 10).
   - `timeout` (`int`, default: `120`): Per-execution timeout limit in seconds (bounded between 1 and 3600).
   - `root` (`Path`, default: repository root): Toolkit root containing evaluation cases and skill packages.
+  - `max_tokens` (`int | None`, default: `None`): Optional positive per-run token cap; runs reporting `usage.tokens` above `max_tokens` fail `exact_match` with a token budget error.
 - **Returns:** `dict` — Benchmark results dictionary containing:
   - `"schema_version"`: `"1.0"`
   - `"toolkit_version"`: Version string
@@ -697,7 +699,7 @@ Runs a user-supplied adapter executable over evaluation test cases across all si
   - `"summary"`: Statistical aggregate by configuration (`"runs"`, `"exact_match_rate"`, `"mean_seconds"`, `"failures"`, `"tokens_reported_runs"`, `"total_tokens"`, `"mean_tokens"`) plus paired `"skill_lift"` deltas across `without_skill` and `with_skill` (`"paired_runs"`, `"exact_match_rate_delta"`, `"mean_seconds_delta"`, `"failures_delta"`, `"true_positives_delta"`, `"false_positives_delta"`, `"false_negatives_delta"`, `"paired_token_runs"`, `"total_tokens_delta"`, `"mean_tokens_delta"`, preserving `None` when token usage is omitted)
   - `"limitations"`: Evaluation boundary notices
 - **Exceptions:**
-  - `ValueError`: Raised if `command` is missing or empty; if `repeats` or `timeout` is outside valid ranges; if `output` exists and is non-empty; or if unknown case IDs are specified.
+  - `ValueError`: Raised if `command` is missing or empty; if `repeats`, `timeout`, or `max_tokens` is outside valid ranges; if `output` exists and is non-empty; or if unknown case IDs are specified.
 
 ---
 

@@ -5,7 +5,7 @@ locations, managed updates/removal/rollback, bounded run plans, source-freshness
 offline reports, issue drafts, comparison, SARIF observations, and 8 correction workflows.
 Original 35 audit package names and audit schema 1.0 remain compatible. Total: 57 skills.
 
-Includes 75 executable evaluation cases, a deterministic harness adapter, and a runnable
+Includes 171 executable evaluation cases, a deterministic harness adapter, and a runnable
 synthetic original/corrected walkthrough. Fixture scores do not establish LLM quality.
 Real host behavior and broad model effectiveness remain unverified. See validation.md
 and implementation-status.md for actual evidence and limits.
