@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-diagnostics",
   "description": "Triage a stalled audit log and scrub secrets. Use when fixing a stalled audit. Do not use for code.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

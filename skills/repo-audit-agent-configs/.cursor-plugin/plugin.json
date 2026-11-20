@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-agent-configs",
   "description": "Audit skill bundles, AGENTS.md, and MCPs. Use when vetting agent setups. Do not use for app authz.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

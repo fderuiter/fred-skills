@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-dead-code",
   "description": "Audit unreachable branches and stale flags. Use when finding dead code. Do not use for refactors.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

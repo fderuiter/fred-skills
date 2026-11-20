@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-sources-of-truth",
   "description": "Audit split authorities and drifted views. Use when checking dual state. Do not use for cache TTLs.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

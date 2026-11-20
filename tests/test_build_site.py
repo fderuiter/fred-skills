@@ -72,7 +72,11 @@ class BuildSiteTests(unittest.TestCase):
         self.assertIn('href="docs/catalog.html"', index_html)
 
         source_guides = sorted((ROOT / "docs").glob("*.md"))
-        self.assertEqual(14, len(source_guides))
+        non_release_guides = [
+            g for g in source_guides if not g.name.startswith("release-notes-")
+        ]
+        self.assertEqual(13, len(non_release_guides))
+        self.assertGreaterEqual(len(source_guides), 15)
         for guide_md in source_guides:
             guide_html_path = self.site_dir / "docs" / f"{guide_md.stem}.html"
             self.assertTrue(guide_html_path.is_file(), guide_md.name)
@@ -325,9 +329,15 @@ class BuildSiteTests(unittest.TestCase):
                 (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
             )
         )
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        active_release_stem = f"release-notes-{active_version}"
         self.assertIn("release-notes-0.2.0.md", releasing_links)
+        self.assertIn(f"{active_release_stem}.md", releasing_links)
         for guide_md in sorted((ROOT / "docs").glob("*.md")):
             stem = guide_md.stem
+            if stem.startswith("release-notes-") and stem != active_release_stem:
+                self.assertIn(f"{stem}.md", releasing_links)
+                continue
             self.assertIn(f"docs/{stem}.md", readme_links)
             self.assertIn(f"{stem}.md", offline_exp_links)
             self.assertIn(f"{stem}.html", web_exp_links)

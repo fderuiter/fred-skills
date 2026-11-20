@@ -101,11 +101,11 @@ remains supported; Python is unnecessary for instruction-only use.
 
 ## Release archives and supply chain verification
 
-Official releases provide versioned curated pack archives led by the 6-skill `starter` pack (`fred-skills-0.2.0-starter.tar`),
+Official releases provide versioned curated pack archives led by the 6-skill `starter` pack (`fred-skills-0.3.0-starter.tar`),
 standalone tarball archives for each of the 57 skills (e.g., `repo-audit-concurrency.tar.gz`), and a consolidated suite archive
 (`fred-skills-suite.tar.gz`), accompanied by SHA-256 checksum manifests (`SHA256SUMS` and `checksums.sha256`) and signed SLSA provenance attestations.
 **Stage-1 context budget warning (`fred-skills-suite.tar.gz`):** Extracting `fred-skills-suite.tar.gz` installs all 57 skills at once, which can crowd or exceed Stage-1 skill-listing budgets on smaller context windows in [OpenAI Codex](https://developers.openai.com/codex/skills) (`2%` of context or `8,000`-character fallback) and [Claude Code](https://code.claude.com/docs/en/skills) (`1%` of context, `skillListingBudgetFraction = 0.01`);
-prefer `fred-skills-0.2.0-starter.tar` (`6` skills, `<= 1,500` raw characters) or individual skill tarballs by default.
+prefer `fred-skills-0.3.0-starter.tar` (`6` skills, `<= 1,500` raw characters) or individual skill tarballs by default.
 
 ### Download release artifacts
 
@@ -113,15 +113,15 @@ Download the `starter` pack archive, an individual specialist package, or the fu
 
 ```sh
 # Recommended 6-skill starter pack archive and checksum manifest
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-starter.tar
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/SHA256SUMS
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-starter.tar
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/SHA256SUMS
 
 # Single skill archive and tarball checksum manifest
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/repo-audit-concurrency.tar.gz
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/checksums.sha256
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/repo-audit-concurrency.tar.gz
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/checksums.sha256
 
 # Complete audit suite archive (loads all 57 skills; see Stage-1 budget warning above)
-curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-suite.tar.gz
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-suite.tar.gz
 ```
 
 ### Verify integrity and build provenance
@@ -134,7 +134,7 @@ sha256sum --ignore-missing -c SHA256SUMS
 sha256sum --ignore-missing -c checksums.sha256
 
 # Verify SLSA build provenance attestation using GitHub CLI
-gh attestation verify fred-skills-0.2.0-starter.tar --repo fderuiter/fred-skills
+gh attestation verify fred-skills-0.3.0-starter.tar --repo fderuiter/fred-skills
 gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills
 gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
 ```
@@ -147,7 +147,7 @@ Extract the verified archive directly into your agent's skills directory:
 mkdir -p /path/to/project/.agents/skills/
 
 # Extract recommended 6-skill starter pack
-tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/
+tar -xf fred-skills-0.3.0-starter.tar -C /path/to/project/.agents/skills/
 
 # Or extract a single specialist (creates repo-audit-concurrency/ directory)
 tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/
@@ -190,4 +190,4 @@ For maintenance, see [CONTRIBUTING.md](CONTRIBUTING.md),
 [research](docs/research.md). Distributed under the MIT [LICENSE](LICENSE) (see
 [licensing](docs/licensing.md)); pushes to `main` automatically tag and publish verified
 `VERSION` releases as documented in [releasing](docs/releasing.md) (see the
-[0.2.0 release notes](docs/release-notes-0.2.0.md)).
+[0.3.0 release notes](docs/release-notes-0.3.0.md)).

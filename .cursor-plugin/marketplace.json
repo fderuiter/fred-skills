@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "fred-skills",
       "source": "./",
       "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -22,7 +22,7 @@
       "name": "arch-boundary-specification",
       "source": "./skills/arch-boundary-specification",
       "description": "Define service APIs, ownership, and schemas. Use when designing modules. Do not use for authz audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -32,7 +32,7 @@
       "name": "arch-component-decomposition",
       "source": "./skills/arch-component-decomposition",
       "description": "Decompose capabilities into clean services. Use when structuring modular subsystems. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -42,7 +42,7 @@
       "name": "arch-decision-record",
       "source": "./skills/arch-decision-record",
       "description": "Author structured ADRs weighing trade-offs. Use when recording design choices. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -52,7 +52,7 @@
       "name": "repo-apply-fix",
       "source": "./skills/repo-apply-fix",
       "description": "Implement an authorized, minimal source fix. Use when applying approved code. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -62,7 +62,7 @@
       "name": "repo-audit-accessibility-state",
       "source": "./skills/repo-audit-accessibility-state",
       "description": "Audit ARIA state, focus, and keyboard parity. Use when checking UI a11y. Do not use for CSS style.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -72,7 +72,7 @@
       "name": "repo-audit-agent-configs",
       "source": "./skills/repo-audit-agent-configs",
       "description": "Audit skill bundles, AGENTS.md, and MCPs. Use when vetting agent setups. Do not use for app authz.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -82,7 +82,7 @@
       "name": "repo-audit-api-consistency",
       "source": "./skills/repo-audit-api-consistency",
       "description": "Audit endpoint verbs, paging, and shapes. Use when checking API uniformity. Do not use for wire.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -92,7 +92,7 @@
       "name": "repo-audit-architecture",
       "source": "./skills/repo-audit-architecture",
       "description": "Audit dependency cycles and layer leaks. Use when checking package coupling. Do not use for ADRs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -102,7 +102,7 @@
       "name": "repo-audit-behavioral-contracts",
       "source": "./skills/repo-audit-behavioral-contracts",
       "description": "Reconstruct hidden subsystem promises. Use when mapping implicit rules. Do not use for fix plans.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -112,7 +112,7 @@
       "name": "repo-audit-boundary-conditions",
       "source": "./skills/repo-audit-boundary-conditions",
       "description": "Audit off-by-one limits, empty inputs, and overflow. Use when checking numeric edges. Do not use for tests.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -122,7 +122,7 @@
       "name": "repo-audit-cache-coherence",
       "source": "./skills/repo-audit-cache-coherence",
       "description": "Audit stale caches, keys, and invalidation. Use when checking cache drift. Do not use for schemas.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -132,7 +132,7 @@
       "name": "repo-audit-cancellation",
       "source": "./skills/repo-audit-cancellation",
       "description": "Audit abort propagation and post-cancel work. Use when checking task aborts. Do not use for locks.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -142,7 +142,7 @@
       "name": "repo-audit-canonicalization",
       "source": "./skills/repo-audit-canonicalization",
       "description": "Audit path, URL, and Unicode bypasses. Use when checking parser allowlists. Do not use for casts.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -152,7 +152,7 @@
       "name": "repo-audit-capacity",
       "source": "./skills/repo-audit-capacity",
       "description": "Audit unbounded queues, memory, and backpressure. Use when checking load limits. Do not use for leaks.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -162,7 +162,7 @@
       "name": "repo-audit-cohesion",
       "source": "./skills/repo-audit-cohesion",
       "description": "Audit god objects and mixed module duties. Use when checking low cohesion. Do not use for design.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -172,7 +172,7 @@
       "name": "repo-audit-compatibility",
       "source": "./skills/repo-audit-compatibility",
       "description": "Audit breaking schema changes and rollouts. Use when checking migrations. Do not use for wire skew.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -182,7 +182,7 @@
       "name": "repo-audit-complexity",
       "source": "./skills/repo-audit-complexity",
       "description": "Audit quadratic hot paths, ReDoS, and N+1s. Use when checking slow paths. Do not use for queues.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -192,7 +192,7 @@
       "name": "repo-audit-concurrency",
       "source": "./skills/repo-audit-concurrency",
       "description": "Audit race conditions, locks, and stale async state. Use when tracing thread races. Do not use for fixes.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -202,7 +202,7 @@
       "name": "repo-audit-configuration",
       "source": "./skills/repo-audit-configuration",
       "description": "Audit flag conflicts, env order, and reloads. Use when checking config drift. Do not use for logs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -212,7 +212,7 @@
       "name": "repo-audit-data-integrity",
       "source": "./skills/repo-audit-data-integrity",
       "description": "Audit lossy serialization and precision casts. Use when tracing corrupt data. Do not use for URLs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -222,7 +222,7 @@
       "name": "repo-audit-dead-code",
       "source": "./skills/repo-audit-dead-code",
       "description": "Audit unreachable branches and stale flags. Use when finding dead code. Do not use for refactors.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -232,7 +232,7 @@
       "name": "repo-audit-diagnostics",
       "source": "./skills/repo-audit-diagnostics",
       "description": "Triage a stalled audit log and scrub secrets. Use when fixing a stalled audit. Do not use for code.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -242,7 +242,7 @@
       "name": "repo-audit-domain-models",
       "source": "./skills/repo-audit-domain-models",
       "description": "Audit primitive obsession and unit mixups. Use when checking value types. Do not use for greenfield.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -252,7 +252,7 @@
       "name": "repo-audit-error-semantics",
       "source": "./skills/repo-audit-error-semantics",
       "description": "Audit swallowed exceptions and fault types. Use when checking error flow. Do not use for metrics.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -262,7 +262,7 @@
       "name": "repo-audit-failure-modes",
       "source": "./skills/repo-audit-failure-modes",
       "description": "Audit partial failures, timeouts, and recovery. Use when checking fault paths. Do not use for logs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -272,7 +272,7 @@
       "name": "repo-audit-idempotency",
       "source": "./skills/repo-audit-idempotency",
       "description": "Audit duplicate delivery and replay safety. Use when checking dedup keys. Do not use for locks.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -282,7 +282,7 @@
       "name": "repo-audit-invariants",
       "source": "./skills/repo-audit-invariants",
       "description": "Audit unenforced domain rules and bad states. Use when hunting invariant bugs. Do not use for PRs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -292,7 +292,7 @@
       "name": "repo-audit-lifecycle",
       "source": "./skills/repo-audit-lifecycle",
       "description": "Audit resource ownership, disposal, and leaks. Use when checking handle teardown. Do not use for sizing.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -302,7 +302,7 @@
       "name": "repo-audit-nondeterminism",
       "source": "./skills/repo-audit-nondeterminism",
       "description": "Audit clock, random, and order flakiness. Use when tracing non-determinism. Do not use for runners.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -312,7 +312,7 @@
       "name": "repo-audit-observability",
       "source": "./skills/repo-audit-observability",
       "description": "Audit missing trace IDs and blind telemetry. Use when checking blind spots. Do not use for errors.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -322,7 +322,7 @@
       "name": "repo-audit-program",
       "source": "./skills/repo-audit-program",
       "description": "Coordinate multi-pass codebase audits. Use when running a broad audit. Do not use for code edits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -332,7 +332,7 @@
       "name": "repo-audit-protocol-drift",
       "source": "./skills/repo-audit-protocol-drift",
       "description": "Audit wire-format skew and version drift. Use when checking message payloads. Do not use for DBs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -342,7 +342,7 @@
       "name": "repo-audit-side-effects",
       "source": "./skills/repo-audit-side-effects",
       "description": "Audit hidden mutations and impure getters. Use when checking surprise helper I/O. Do not use for commits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -352,7 +352,7 @@
       "name": "repo-audit-sources-of-truth",
       "source": "./skills/repo-audit-sources-of-truth",
       "description": "Audit split authorities and drifted views. Use when checking dual state. Do not use for cache TTLs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -362,7 +362,7 @@
       "name": "repo-audit-state-machines",
       "source": "./skills/repo-audit-state-machines",
       "description": "Audit implicit state transitions and stuck flows. Use when tracing bad states. Do not use for PRs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -372,7 +372,7 @@
       "name": "repo-audit-synthesis",
       "source": "./skills/repo-audit-synthesis",
       "description": "Consolidate audit ledgers into issue drafts. Use when publishing audit findings. Do not use for plans.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -382,7 +382,7 @@
       "name": "repo-audit-temporal-coupling",
       "source": "./skills/repo-audit-temporal-coupling",
       "description": "Audit call-order and init sequencing rules. Use when tracing typestate bugs. Do not use for locks.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -392,7 +392,7 @@
       "name": "repo-audit-test-contracts",
       "source": "./skills/repo-audit-test-contracts",
       "description": "Audit untested promises in existing suites. Use when auditing missing checks. Do not use for edits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -402,7 +402,7 @@
       "name": "repo-audit-test-oracles",
       "source": "./skills/repo-audit-test-oracles",
       "description": "Audit tautological mocks and weak asserts. Use when checking surviving bugs. Do not use for gaps.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -412,7 +412,7 @@
       "name": "repo-audit-transactions",
       "source": "./skills/repo-audit-transactions",
       "description": "Audit atomic write scopes and dual writes. Use when checking partial commits. Do not use for retries.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -422,7 +422,7 @@
       "name": "repo-audit-trust-boundaries",
       "source": "./skills/repo-audit-trust-boundaries",
       "description": "Audit untrusted inputs, authz, and isolation. Use when tracing privilege bypasses. Do not use for blueprints.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -432,7 +432,7 @@
       "name": "repo-plan-fix",
       "source": "./skills/repo-plan-fix",
       "description": "Sequence verified bugs into bounded tasks. Use when planning safe remediation. Do not use for synthesis.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -442,7 +442,7 @@
       "name": "repo-reconcile-findings",
       "source": "./skills/repo-reconcile-findings",
       "description": "Reconcile ledger statuses across run history. Use when syncing issue state. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -452,7 +452,7 @@
       "name": "repo-specify-regression",
       "source": "./skills/repo-specify-regression",
       "description": "Specify a minimal failing check for one bug. Use when locking bug criteria. Do not use for suites.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -462,7 +462,7 @@
       "name": "repo-verify-finding",
       "source": "./skills/repo-verify-finding",
       "description": "Reproduce, narrow, or refute one finding. Use when validating a bug claim. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -472,7 +472,7 @@
       "name": "repo-verify-fix",
       "source": "./skills/repo-verify-fix",
       "description": "Verify a proposed patch fixes its bug safely. Use when checking patch safety. Do not use for triage.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -482,7 +482,7 @@
       "name": "review-actionable-feedback",
       "source": "./skills/review-actionable-feedback",
       "description": "Turn PR review notes into ranked comments. Use when drafting PR feedback. Do not use for patches.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -492,7 +492,7 @@
       "name": "review-diff-analysis",
       "source": "./skills/review-diff-analysis",
       "description": "Analyze pull request hunks and blast radius. Use when triaging PR changes. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -502,7 +502,7 @@
       "name": "review-invariant-violations",
       "source": "./skills/review-invariant-violations",
       "description": "Inspect PR diff hunks for broken contracts. Use when reviewing code changes. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -512,7 +512,7 @@
       "name": "session-handoff",
       "source": "./skills/session-handoff",
       "description": "Compact session state into a clean handoff. Use when rotating context windows. Do not use for logs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -522,7 +522,7 @@
       "name": "spec-authoring",
       "source": "./skills/spec-authoring",
       "description": "Compile settled decisions into SPEC.md files. Use when authoring specs. Do not use for ADR history.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -532,7 +532,7 @@
       "name": "spec-convergence",
       "source": "./skills/spec-convergence",
       "description": "Verify plans and diffs match SPEC.md scope. Use when checking spec drift. Do not use for PR style.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -542,7 +542,7 @@
       "name": "spec-interview",
       "source": "./skills/spec-interview",
       "description": "Run pre-code Socratic scope interviews. Use when clarifying feature requirements. Do not use for debugging.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -552,7 +552,7 @@
       "name": "terse-output-commit",
       "source": "./skills/terse-output-commit",
       "description": "Format terse code replies and 50-char commits. Use when cutting token output. Do not use for docs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -562,7 +562,7 @@
       "name": "test-case-generation",
       "source": "./skills/test-case-generation",
       "description": "Write executable unit and property test files. Use when generating suites. Do not use for bug specs.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -572,7 +572,7 @@
       "name": "test-gap-analysis",
       "source": "./skills/test-gap-analysis",
       "description": "Identify uncovered branches and edge cases. Use when planning unit tests. Do not use for audits.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },
@@ -582,7 +582,7 @@
       "name": "test-suite-verification",
       "source": "./skills/test-suite-verification",
       "description": "Execute test runners and check pass health. Use when validating test suites. Do not use for flakes.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": {
         "name": "fderuiter"
       },

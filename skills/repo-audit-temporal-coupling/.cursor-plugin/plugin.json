@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-temporal-coupling",
   "description": "Audit call-order and init sequencing rules. Use when tracing typestate bugs. Do not use for locks.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-canonicalization",
   "description": "Audit path, URL, and Unicode bypasses. Use when checking parser allowlists. Do not use for casts.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

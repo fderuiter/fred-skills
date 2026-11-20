@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-concurrency",
   "description": "Audit race conditions, locks, and stale async state. Use when tracing thread races. Do not use for fixes.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

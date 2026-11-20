@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-program",
   "description": "Coordinate multi-pass codebase audits. Use when running a broad audit. Do not use for code edits.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

@@ -1,0 +1,17 @@
+# 0.3.0 — Automated SemVer release and verified skill catalog
+
+Publishes task-based discovery across 6 suites, 13 purpose packs, 9 explicit host installation
+locations, managed updates/removal/rollback, bounded run plans, source-freshness checks,
+offline reports, issue drafts, comparison, SARIF observations, and 8 correction workflows.
+Original 35 audit package names and audit schema 1.0 remain compatible. Total: 57 skills.
+
+Includes 75 executable evaluation cases, a deterministic harness adapter, and a runnable
+synthetic original/corrected walkthrough. Fixture scores do not establish LLM quality.
+Real host behavior and broad model effectiveness remain unverified. See validation.md
+and implementation-status.md for actual evidence and limits.
+
+Update only after inspecting the new source; use installer dry runs and retain receipts
+and backups. Modified/unmanaged packages are refused. A later missing finding is not
+proof of a fix. Checksums establish integrity against the included manifest, not identity.
+
+This document is release-note source; committing it does not publish a release.

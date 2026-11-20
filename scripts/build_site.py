@@ -18,11 +18,11 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from build_experience import (
-    _EXPLORER_DOC_GUIDES,
     SITE_DIRECTORIES,
     SITE_ROOT_FILES,
     _ignore_site_entries,
     _render_explorer_html,
+    explorer_doc_guides,
 )
 from build_experience import (
     outputs as experience_outputs,
@@ -137,11 +137,15 @@ def _rel_prefix_to_site_root(page_rel_path: str) -> str:
     return "../" * depth
 
 
-def _site_header_html(page_rel_path: str, subtitle: str = "documentation") -> str:
+def _site_header_html(
+    page_rel_path: str,
+    subtitle: str = "documentation",
+    root: Path = ROOT,
+) -> str:
     root_prefix = _rel_prefix_to_site_root(page_rel_path)
     guide_links = "".join(
         f'<a href="{root_prefix}docs/{slug}.html">{escape(label)}</a>'
-        for slug, label in _EXPLORER_DOC_GUIDES
+        for slug, label in explorer_doc_guides(root)
     )
     return (
         f'<header><p class="muted">fred-skills · {escape(subtitle)}</p>'
@@ -758,7 +762,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
             )
             page_title = f"{escape(heading_title or skill_name)} — fred-skills"
             full_body = (
-                f"{_site_header_html(rel_html, subtitle='skill package')}\n"
+                f"{_site_header_html(rel_html, subtitle='skill package', root=resolved_root)}\n"
                 f"{meta_section}\n"
                 f"<section>{body_content}</section>"
             )
@@ -779,9 +783,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
                 if rel_md == "README.md"
                 else f"{escape(heading_title or Path(rel_md).stem)} — fred-skills"
             )
-            full_body = (
-                f"{_site_header_html(rel_html)}\n<section>{body_content}</section>"
-            )
+            full_body = f"{_site_header_html(rel_html, root=resolved_root)}\n<section>{body_content}</section>"
 
         rendered_page = _page_shell(page_title, full_body)
         dst_html = resolved_out / rel_html
@@ -801,6 +803,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
         root_prefix="../",
         docs_prefix="",
         web_mode=True,
+        root=resolved_root,
     )
     explorer_target = resolved_out / "docs/explorer.html"
     explorer_target.parent.mkdir(parents=True, exist_ok=True)

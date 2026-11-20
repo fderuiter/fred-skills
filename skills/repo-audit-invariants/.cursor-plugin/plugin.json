@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-invariants",
   "description": "Audit unenforced domain rules and bad states. Use when hunting invariant bugs. Do not use for PRs.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

@@ -1,7 +1,7 @@
 {
   "name": "repo-audit-cohesion",
   "description": "Audit god objects and mixed module duties. Use when checking low cohesion. Do not use for design.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "fderuiter"
   },

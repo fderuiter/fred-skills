@@ -1765,6 +1765,16 @@ def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
     if script_arg.endswith("run_checks.py"):
         return _validate_run_checks_script(parts, script_path, root)
 
+    if script_arg.endswith("bump_version.py"):
+        extra_args = [
+            normalize_cli_token(arg) for arg in parts[2:] if arg != "--dry-run"
+        ]
+        return _run_readonly_check(
+            [sys.executable, str(script_path), "--dry-run", *extra_args],
+            root,
+            "bump_version.py",
+        )
+
     direct = _try_direct_readonly_script(script_path, script_arg, parts[2:], root)
     if direct is not None:
         return direct
@@ -2538,11 +2548,28 @@ _TOTAL_COUNT_PATTERNS: tuple[re.Pattern[str], ...] = (
 _STARTER_COUNT_PATTERN = re.compile(r"`starter`\s+for\s+(\d+)\s+core audit skills")
 
 
-def _is_release_count_doc(rel_path: str) -> bool:
-    """Return True if rel_path is a release or onboarding guide checked for skill counts."""
+def _git_tag_exists(root: Path, tag: str) -> bool:
+    """Return True if refs/tags/<tag> exists in the git repository at root."""
+    if not (root / ".git").exists():
+        return False
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
+def _is_release_count_doc(rel_path: str, root: Path = ROOT) -> bool:
+    """Return True if rel_path is an onboarding guide or untagged active release note."""
     if rel_path in RELEASE_COUNT_DOCS:
         return True
-    return rel_path.startswith("docs/release-notes-") and rel_path.endswith(".md")
+    ver = _read_expected_version(root)
+    if not ver or rel_path != f"docs/release-notes-{ver}.md":
+        return False
+    return not _git_tag_exists(root, f"v{ver}")
 
 
 def _check_line_count_patterns(
@@ -2571,7 +2598,7 @@ def _check_line_count_patterns(
 
 def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
     """Verify documented total and starter pack skill counts against catalog/packs.json."""
-    if not _is_release_count_doc(rel_path):
+    if not _is_release_count_doc(rel_path, root):
         return []
     doc_path = root / rel_path
     packs = _load_known_packs(root)
