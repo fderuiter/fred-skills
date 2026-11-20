@@ -117,10 +117,10 @@ class PackageSkillsTests(unittest.TestCase):
             names = tar.getnames()
             self.assertIn("repo-audit-concurrency/SKILL.md", names)
             self.assertIn("repo-audit-concurrency/references/method.md", names)
+            self.assertIn("repo-audit-concurrency/.cursor-plugin/plugin.json", names)
             for name in names:
                 self.assertTrue(name.startswith("repo-audit-concurrency/"))
                 self.assertNotIn("__pycache__", name)
-                self.assertNotIn(".cursor-plugin", name)
                 self.assertFalse(name.endswith(".pyc"))
                 self.assertFalse(name.endswith(".pyo"))
 
@@ -131,8 +131,7 @@ class PackageSkillsTests(unittest.TestCase):
             names = set(tar.getnames())
             for skill in get_suite_skills(ROOT):
                 self.assertIn(f"{skill}/SKILL.md", names)
-            for name in names:
-                self.assertNotIn(".cursor-plugin", name)
+                self.assertIn(f"{skill}/.cursor-plugin/plugin.json", names)
 
     def test_package_skills_raises_on_empty_suite(self):
         empty_root = self.output_dir / "empty_repo"
@@ -173,15 +172,14 @@ class PackageSkillsTests(unittest.TestCase):
         files = collect_skill_files(skill_dir)
         paths = [rel for rel, _ in files]
         self.assertIn("SKILL.md", paths)
+        self.assertIn(".cursor-plugin/plugin.json", paths)
         for rel in paths:
             self.assertNotIn("__pycache__", rel)
-            self.assertNotIn(".cursor-plugin", rel)
             self.assertFalse(rel.endswith(".pyc"))
             self.assertFalse(rel.endswith(".pyo"))
 
         pkg_map = package_files(skill_dir)
-        for rel in pkg_map:
-            self.assertNotIn(".cursor-plugin", rel)
+        self.assertIn(".cursor-plugin/plugin.json", pkg_map)
 
     def test_get_suite_skills_fallback_to_packs(self):
         repo_root = self.output_dir / "repo_packs_fallback"
@@ -515,7 +513,7 @@ class PackageSkillsTests(unittest.TestCase):
         last_apply_fix_idx = len(prefixes) - 1 - prefixes[::-1].index("repo-apply-fix")
         self.assertLess(last_apply_fix_idx, first_concurrency_idx)
 
-    def test_release_pack_archives_exclude_cursor_plugin_manifests(self):
+    def test_release_pack_archives_preserve_cursor_plugin_manifests(self):
         rel_out = self.output_dir / "release-pack"
         manifest = releases.build(
             output=rel_out,
@@ -526,11 +524,13 @@ class PackageSkillsTests(unittest.TestCase):
         tar_name = next(f for f in files if f.endswith(".tar"))
         zip_name = next(f for f in files if f.endswith(".zip"))
         with tarfile.open(rel_out / tar_name, "r:*") as tf:
-            for member_name in tf.getnames():
-                self.assertNotIn(".cursor-plugin", member_name)
+            self.assertIn(
+                "repo-audit-concurrency/.cursor-plugin/plugin.json", tf.getnames()
+            )
         with zipfile.ZipFile(rel_out / zip_name, "r") as zf:
-            for member_name in zf.namelist():
-                self.assertNotIn(".cursor-plugin", member_name)
+            self.assertIn(
+                "repo-audit-concurrency/.cursor-plugin/plugin.json", zf.namelist()
+            )
 
     def test_release_packaging_rejects_binaries_clutter_and_non_python_executables(
         self,

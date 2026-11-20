@@ -21,6 +21,8 @@ def _pack_plugins(
     known_skills: set[str],
     version: str,
     author: dict[str, str],
+    *,
+    cursor: bool = False,
 ) -> list[dict[str, object]]:
     packs_path = root / "catalog/packs.json"
     if not packs_path.exists():
@@ -38,17 +40,31 @@ def _pack_plugins(
             raise ValueError(
                 f"Invalid skill selection in pack '{pack_name}': {sorted(missing)}"
             )
-        bundles.append(
-            {
-                "name": pack_name,
-                "description": pack_data["description"],
-                "version": version,
-                "author": dict(author),
-                "source": "./",
-                "strict": False,
-                "skills": [f"./skills/{skill_name}" for skill_name in pack_skills],
-            }
-        )
+        skills_list = [f"./skills/{skill_name}" for skill_name in pack_skills]
+        if cursor:
+            bundles.append(
+                {
+                    "name": pack_name,
+                    "source": "./",
+                    "description": pack_data["description"],
+                    "version": version,
+                    "author": dict(author),
+                    "license": "MIT",
+                    "skills": skills_list,
+                }
+            )
+        else:
+            bundles.append(
+                {
+                    "name": pack_name,
+                    "description": pack_data["description"],
+                    "version": version,
+                    "author": dict(author),
+                    "source": "./",
+                    "strict": False,
+                    "skills": skills_list,
+                }
+            )
     return bundles
 
 
@@ -186,14 +202,6 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         },
         "plugins": claude_plugins,
     }
-    cursor_root_plugin: dict[str, object] = {
-        "name": "fred-skills",
-        "description": description,
-        "version": marketplace_version,
-        "author": dict(author),
-        "license": "MIT",
-        "skills": [f"./skills/{name}" for name in sorted_member_names],
-    }
     cursor_skill_manifests: dict[str, str] = {
         f"skills/{entry['name']}/.cursor-plugin/plugin.json": _json_text(
             {
@@ -215,7 +223,9 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
             "version": marketplace_version,
             "author": dict(author),
             "license": "MIT",
+            "skills": [f"./skills/{name}" for name in sorted_member_names],
         },
+        *_pack_plugins(root, set(membership), marketplace_version, author, cursor=True),
         *[
             {
                 "name": entry["name"],
@@ -224,6 +234,7 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
                 "version": marketplace_version,
                 "author": dict(author),
                 "license": "MIT",
+                "skills": ["."],
             }
             for entry in member_entries
         ],
@@ -257,7 +268,6 @@ def rendered_catalog(root: Path = ROOT) -> dict[str, str]:
         "docs/catalog.md": markdown,
         ".claude-plugin/marketplace.json": _json_text(claude_marketplace),
         ".cursor-plugin/marketplace.json": _json_text(cursor_marketplace),
-        ".cursor-plugin/plugin.json": _json_text(cursor_root_plugin),
         **cursor_skill_manifests,
         "gemini-extension.json": _json_text(gemini_extension),
     }

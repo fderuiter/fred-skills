@@ -1511,7 +1511,6 @@ class DocSnippetVerificationTests(unittest.TestCase):
             for rel in (
                 ".claude-plugin/marketplace.json",
                 ".cursor-plugin/marketplace.json",
-                ".cursor-plugin/plugin.json",
             ):
                 dst = tmp_root / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)

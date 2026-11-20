@@ -545,7 +545,6 @@ def relative_path(value: str) -> Path:
 _IGNORED_SKILL_DIR_NAMES = frozenset(
     {
         "__pycache__",
-        ".cursor-plugin",
         ".git",
         ".github",
         ".venv",
@@ -700,7 +699,6 @@ def package_files(package: Path) -> dict[str, str]:
         if (
             not path.is_file()
             or "__pycache__" in rel.parts
-            or ".cursor-plugin" in rel.parts
             or path.suffix in {".pyc", ".pyo"}
         ):
             continue

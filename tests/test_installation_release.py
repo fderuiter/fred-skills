@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 import tempfile
@@ -9,7 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 from fredlib import installation, releases
-from fredlib.common import FredCliError, atomic_json, read_json
+from fredlib.common import (
+    FredCliError,
+    atomic_json,
+    digest,
+    package_files,
+    read_json,
+)
 
 
 class InstallationTests(unittest.TestCase):
@@ -1471,6 +1478,141 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaises(FredCliError) as struct_ctx:
             releases._get_suite_skills(synth)
         self.assertEqual("invalid_catalog", struct_ctx.exception.code)
+
+    def test_cursor_install_preserves_plugin_manifest_and_accepts_legacy_receipt_hash(
+        self,
+    ) -> None:
+        cursor_dir = self.source / "skills/sample/.cursor-plugin"
+        cursor_dir.mkdir(parents=True, exist_ok=True)
+        (cursor_dir / "plugin.json").write_text(
+            json.dumps({"name": "sample", "skills": ["."]}), encoding="utf-8"
+        )
+        dest = self.root / "cursor_legacy_ws"
+        res = installation.install(
+            dest, host="cursor", skills=["sample"], root=self.source
+        )
+        installed_pkg = Path(res["target"]) / "sample"
+        self.assertTrue((installed_pkg / ".cursor-plugin/plugin.json").is_file())
+        _, state = installation.locations(dest, "cursor", "project", self.source)
+        rec = installation.receipt(state)
+        self.assertEqual("1.0", rec["schema_version"])
+        self.assertIn(".cursor-plugin/plugin.json", rec["skills"]["sample"]["files"])
+
+        # Simulate legacy receipt computed without .cursor-plugin/plugin.json
+        full_files = package_files(installed_pkg)
+        legacy_files = {
+            k: v for k, v in full_files.items() if not k.startswith(".cursor-plugin/")
+        }
+        legacy_hash = digest(legacy_files)
+        self.assertNotEqual(legacy_hash, rec["skills"]["sample"]["content_hash"])
+        rec["skills"]["sample"]["files"] = legacy_files
+        rec["skills"]["sample"]["content_hash"] = legacy_hash
+        atomic_json(state / "receipt.json", rec)
+
+        queried = installation.query_installed(
+            dest, "cursor", "project", root=self.source
+        )
+        self.assertTrue(queried["healthy"])
+        self.assertEqual("tracked", queried["skills"]["sample"]["status"])
+        installation.require_unmodified(installed_pkg, rec["skills"]["sample"])
+
+        # Updating refreshes receipt hash to include .cursor-plugin/plugin.json without --force
+        (self.source / "skills/sample/SKILL.md").write_text(
+            "Updated Cursor skill\n", encoding="utf-8"
+        )
+        installation.install(dest, host="cursor", update=True, root=self.source)
+        refreshed = installation.receipt(state)
+        self.assertEqual(
+            digest(package_files(installed_pkg)),
+            refreshed["skills"]["sample"]["content_hash"],
+        )
+        self.assertIn(
+            ".cursor-plugin/plugin.json", refreshed["skills"]["sample"]["files"]
+        )
+
+    def test_multi_host_update_isolates_per_host_receipts_and_ignores_unmanaged_markers(
+        self,
+    ) -> None:
+        ws = self.root / "isolated_multihost_ws"
+        (ws / ".claude").mkdir(parents=True)
+        (ws / ".cursor").mkdir(parents=True)
+        (ws / ".gemini").mkdir(parents=True)
+
+        # Update without any receipts refuses to install onto unmanaged markers
+        with self.assertRaises(ValueError) as no_rec_ctx:
+            installation.install(ws, update=True, root=self.source)
+        self.assertIn("--host", str(no_rec_ctx.exception))
+        self.assertFalse((ws / ".gemini/skills").exists())
+
+        # Install distinct skill subsets on claude-code and cursor while leaving .gemini unmanaged
+        installation.install(
+            ws, host="claude-code", skills=["sample"], root=self.source
+        )
+        installation.install(ws, host="cursor", skills=["other"], root=self.source)
+
+        (self.source / "skills/sample/SKILL.md").write_text(
+            "Sample v2\n", encoding="utf-8"
+        )
+        (self.source / "skills/other/SKILL.md").write_text(
+            "Other v2\n", encoding="utf-8"
+        )
+
+        upd = installation.install(ws, update=True, root=self.source)
+        self.assertEqual("update", upd["action"])
+        by_host = {h["host"]: h["skills"] for h in upd["hosts"]}
+        self.assertEqual({"claude-code": ["sample"], "cursor": ["other"]}, by_host)
+        self.assertEqual(
+            "Sample v2\n",
+            (ws / ".claude/skills/sample/SKILL.md").read_text(encoding="utf-8"),
+        )
+        self.assertFalse((ws / ".claude/skills/other").exists())
+        self.assertEqual(
+            "Other v2\n",
+            (ws / ".cursor/skills/other/SKILL.md").read_text(encoding="utf-8"),
+        )
+        self.assertFalse((ws / ".cursor/skills/sample").exists())
+        self.assertFalse((ws / ".gemini/skills").exists())
+        self.assertFalse((ws / ".fred-skills/gemini-cli-project").exists())
+
+    def test_antigravity_user_scope_longest_prefix_marker_detection(self) -> None:
+        home_antigravity = self.root / "home_antigravity"
+        (home_antigravity / ".gemini/antigravity").mkdir(parents=True)
+        self.assertEqual(
+            "antigravity",
+            installation.detect_host(home_antigravity, scope="user"),
+        )
+        target, state = installation.locations(
+            home_antigravity, scope="user", root=ROOT
+        )
+        self.assertEqual(
+            (home_antigravity / ".gemini/antigravity/skills").resolve(), target
+        )
+        self.assertEqual(
+            (home_antigravity / ".fred-skills/antigravity-user").resolve(), state
+        )
+
+        home_gemini = self.root / "home_gemini"
+        (home_gemini / ".gemini").mkdir(parents=True)
+        self.assertEqual(
+            "gemini-cli",
+            installation.detect_host(home_gemini, scope="user"),
+        )
+
+        # Explicit gemini-cli user receipt alongside .gemini/antigravity preserves ambiguity guard
+        gemini_state = home_antigravity / ".fred-skills/gemini-cli-user"
+        gemini_state.mkdir(parents=True)
+        atomic_json(
+            gemini_state / "receipt.json",
+            {
+                "schema_version": "1.0",
+                "host": "gemini-cli",
+                "skills": {},
+                "history": [],
+            },
+        )
+        with self.assertRaises(ValueError) as ambig_ctx:
+            installation.detect_host(home_antigravity, scope="user")
+        self.assertIn("--host", str(ambig_ctx.exception))
 
 
 if __name__ == "__main__":

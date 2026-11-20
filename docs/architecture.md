@@ -32,8 +32,8 @@ separately edited protocol/schema copies cannot silently diverge.
 `catalog/suites.json` defines membership and ordered passes across 6 suites, paired with 13
 packs in `catalog/packs.json` and 9 host adapters in `catalog/hosts.json`.
 `scripts/build_catalog.py` reads actual skill metadata and emits `catalog/skills.json`,
-`docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`,
-`.cursor-plugin/plugin.json` (plus `skills/*/.cursor-plugin/plugin.json`), and
+`docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`
+(plus `skills/*/.cursor-plugin/plugin.json`), and
 `gemini-extension.json`.
 These outputs contain stable relative paths and no generation timestamps or personal
 installation IDs. The generator rejects missing or multiply assigned suite members.

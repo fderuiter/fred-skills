@@ -5,7 +5,7 @@ import shutil
 import uuid
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import vetting
@@ -201,6 +201,25 @@ def _conflicting_fallback_receipt(
     )
 
 
+def _is_shadowed_ancestor(path: str, kept: list[str]) -> bool:
+    target = PurePosixPath(path)
+    return any(PurePosixPath(longer).is_relative_to(target) for longer in kept)
+
+
+def _prune_ancestor_markers(
+    dest: Path, scope: str, markers: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    ordered = sorted(markers, key=lambda p: (-len(PurePosixPath(p).parts), p))
+    kept: list[str] = []
+    for path in ordered:
+        has_receipt = any(
+            _receipt_identifies_host(dest, h, scope) for h in markers[path]
+        )
+        if not _is_shadowed_ancestor(path, kept) or has_receipt:
+            kept.append(path)
+    return {p: markers[p] for p in markers if p in kept}
+
+
 def _select_active_markers(
     dest: Path,
     scope: str,
@@ -214,7 +233,7 @@ def _select_active_markers(
         for marker_path, marker_hosts in fallback.items():
             if any(_receipt_identifies_host(dest, h, scope) for h in marker_hosts):
                 active[marker_path] = marker_hosts
-        return active
+        return _prune_ancestor_markers(dest, scope, active)
     if not fallback:
         return {}
     fallback_hosts = {h for hs in fallback.values() for h in hs}
@@ -222,7 +241,7 @@ def _select_active_markers(
         raise ValueError(
             f"Conflicting host receipt found alongside fallback marker in destination '{dest}'; please specify --host"
         )
-    return fallback
+    return _prune_ancestor_markers(dest, scope, fallback)
 
 
 def _resolve_marker_host(dest: Path, scope: str, candidates: list[str]) -> str:
@@ -392,13 +411,24 @@ def _normalize_target_env(
     )
 
 
+def _matches_content_hash(files_map: dict[str, str], expected_hash: str | None) -> bool:
+    if not expected_hash:
+        return False
+    if digest(files_map) == expected_hash:
+        return True
+    legacy = {k: v for k, v in files_map.items() if not k.startswith(".cursor-plugin/")}
+    return len(legacy) != len(files_map) and digest(legacy) == expected_hash
+
+
+def _dir_matches_hash(path: Path, expected_hash: str | None) -> bool:
+    return path.is_dir() and _matches_content_hash(package_files(path), expected_hash)
+
+
 def _skill_disk_status(target: Path, name: str, record: dict) -> str:
     path = checked_target(target, name)
     if not path.exists():
         return "missing"
-    if not path.is_dir():
-        return "modified"
-    if digest(package_files(path)) != record.get("content_hash"):
+    if not _dir_matches_hash(path, record.get("content_hash")):
         return "modified"
     return "tracked"
 
@@ -733,7 +763,7 @@ def require_unmodified(path: Path, record: dict | None):
     if path.exists():
         if not record:
             raise ValueError(f"Refusing to replace unmanaged skill: {path.name}")
-        if not path.is_dir() or digest(package_files(path)) != record["content_hash"]:
+        if not _dir_matches_hash(path, record.get("content_hash")):
             raise ValueError(
                 f"Locally modified skill: {path.name}; pass --force for managed recovery or preserve/move it before updating/removing"
             )
@@ -965,33 +995,49 @@ def _normalize_install_args(
     return tgt, opt
 
 
-def _resolve_install_hosts(env: TargetEnvironment, update: bool) -> list[str]:
+def _resolve_update_hosts(
+    dest: Path, scope: str, root: Path, explicit_selection: bool
+) -> list[str]:
+    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    receipt_hosts = _find_receipt_hosts(dest, scope, hosts)
+    _check_shared_target_receipts(dest, scope, hosts, receipt_hosts)
+    ordered = [h for h in hosts if h in receipt_hosts]
+    if ordered and not explicit_selection:
+        ordered = [
+            h for h in ordered if receipt(locations(dest, h, scope, root)[1])["skills"]
+        ]
+    if ordered:
+        return ordered
+    _check_host_markers(dest, scope, root)
+    raise ValueError(
+        f"No installation receipt found in destination '{dest}'; run install first or specify --host"
+    )
+
+
+def _resolve_install_hosts(env: TargetEnvironment, opt: InstallOptions) -> list[str]:
     if env.scope not in {"project", "user"}:
         raise ValueError("Unknown installation scope")
     if env.host is not None:
         return [env.host]
     dest = _coalesce(env.destination, _default_destination(env.scope)).resolve()
+    if opt.update:
+        return _resolve_update_hosts(
+            dest, env.scope, env.root, bool(opt.pack or opt.skills)
+        )
     detected = _detect_workspace_hosts(dest, env.scope, env.root)
-    if detected:
-        return detected
-    if not update:
-        return ["codex"]
-    _check_host_markers(dest, env.scope, env.root)
-    return []
+    return detected if detected else ["codex"]
 
 
 def _select_install_skills(
-    env: TargetEnvironment, opt: InstallOptions, resolved_hosts: list[str]
+    env: TargetEnvironment, opt: InstallOptions, host_name: str
 ) -> list[str]:
     if opt.pack or opt.skills:
         return choose_skills(env.root, opt.pack, opt.skills)
     if opt.update:
-        managed: list[str] = []
-        for host_name in resolved_hosts:
-            _, state_path = locations(env.destination, host_name, env.scope, env.root)
-            managed.extend(receipt(state_path)["skills"].keys())
-        if managed:
-            return choose_skills(env.root, None, list(dict.fromkeys(managed)))
+        _, state_path = locations(env.destination, host_name, env.scope, env.root)
+        tracked = list(receipt(state_path)["skills"].keys())
+        if tracked:
+            return choose_skills(env.root, None, tracked)
     return choose_skills(env.root, "starter", None)
 
 
@@ -999,8 +1045,8 @@ def _prepare_host_plan(
     env: TargetEnvironment,
     opt: InstallOptions,
     host_name: str,
-    selected: list[str],
 ) -> tuple[Path, Path, dict[str, Any]]:
+    selected = _select_install_skills(env, opt, host_name)
     target_path, state_path = locations(env.destination, host_name, env.scope, env.root)
     current = receipt(state_path)
     flags = (opt.update, opt.force)
@@ -1031,7 +1077,6 @@ def _rollback_committed_hosts(committed: list[tuple[Path, Path]]) -> None:
 
 def _commit_host_plans(
     plans: list[tuple[str, Path, Path, dict[str, Any]]],
-    selected: list[str],
     flags: tuple[bool, bool],
     root: Path,
 ) -> None:
@@ -1039,16 +1084,16 @@ def _commit_host_plans(
     with ExitStack() as stack:
         for _, _, state_path, _ in plans:
             stack.enter_context(lock(state_path))
-        for _, target_path, state_path, _ in plans:
+        for _, target_path, state_path, preview in plans:
             _validate_install_under_lock(
-                target_path, selected, receipt(state_path), flags
+                target_path, preview["skills"], receipt(state_path), flags
             )
         try:
             for host_name, target_path, state_path, preview in plans:
                 _execute_install(
                     target_path,
                     state_path,
-                    selected,
+                    preview["skills"],
                     (flags, root, host_name, preview),
                 )
                 committed.append((target_path, state_path))
@@ -1059,12 +1104,16 @@ def _commit_host_plans(
 
 def _format_install_result(
     plans: list[tuple[str, Path, Path, dict[str, Any]]],
-    selected: list[str],
     env: TargetEnvironment,
     opt: InstallOptions,
 ) -> dict[str, Any]:
     if len(plans) == 1:
         return plans[0][3]
+    selected = list(
+        dict.fromkeys(
+            skill for _, _, _, preview in plans for skill in preview["skills"]
+        )
+    )
     return {
         "action": "update" if opt.update else "install",
         "skills": selected,
@@ -1107,13 +1156,12 @@ def install(
         force=force,
         root=root,
     )
-    resolved_hosts = _resolve_install_hosts(env, opt.update)
-    selected = _select_install_skills(env, opt, resolved_hosts)
-    plans = [(h, *_prepare_host_plan(env, opt, h, selected)) for h in resolved_hosts]
-    result = _format_install_result(plans, selected, env, opt)
+    resolved_hosts = _resolve_install_hosts(env, opt)
+    plans = [(h, *_prepare_host_plan(env, opt, h)) for h in resolved_hosts]
+    result = _format_install_result(plans, env, opt)
     if opt.dry_run:
         return result
-    _commit_host_plans(plans, selected, (opt.update, opt.force), env.root)
+    _commit_host_plans(plans, (opt.update, opt.force), env.root)
     return result
 
 
@@ -1283,10 +1331,7 @@ def _validate_rollback_backup_skill(
     require_unmodified(path, current["skills"].get(name))
     if name in before:
         saved = backups / name
-        if (
-            not saved.is_dir()
-            or digest(package_files(saved)) != before[name]["content_hash"]
-        ):
+        if not _dir_matches_hash(saved, before[name].get("content_hash")):
             raise ValueError(f"Missing or modified rollback backup: {name}")
 
 
@@ -1441,11 +1486,11 @@ def _check_already_committed_recovery(
 
 
 def _path_has_hash(path: Path, expected_hash: str) -> bool:
-    return path.exists() and digest(package_files(path)) == expected_hash
+    return path.exists() and _dir_matches_hash(path, expected_hash)
 
 
 def _backup_has_hash(backup_dir: Path, expected_hash: str) -> bool:
-    return backup_dir.is_dir() and digest(package_files(backup_dir)) == expected_hash
+    return _dir_matches_hash(backup_dir, expected_hash)
 
 
 def _validate_recovery_skill(
@@ -1455,7 +1500,7 @@ def _validate_recovery_skill(
     context: tuple[dict | None, set[str]],
 ) -> None:
     before, allowed = context
-    if path.exists() and digest(package_files(path)) not in allowed:
+    if path.exists() and not any(_dir_matches_hash(path, h) for h in allowed):
         raise ValueError(
             f"Modified recovery destination: {name}; no recovery changes made"
         )
@@ -1495,11 +1540,7 @@ def _restore_single_skill(
 ) -> None:
     preserved, before = context
     path = target / name
-    if (
-        before
-        and path.exists()
-        and digest(package_files(path)) == before["content_hash"]
-    ):
+    if before and path.exists() and _dir_matches_hash(path, before.get("content_hash")):
         return
     if path.exists():
         os.replace(path, preserved / name)

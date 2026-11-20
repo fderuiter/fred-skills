@@ -113,6 +113,10 @@
         "./skills/repo-audit-lifecycle",
         "./skills/repo-audit-temporal-coupling",
         "./skills/repo-audit-state-machines",
+        "./skills/repo-audit-capacity",
+        "./skills/repo-audit-complexity",
+        "./skills/repo-audit-nondeterminism",
+        "./skills/repo-audit-side-effects",
         "./skills/repo-audit-synthesis"
       ]
     },
@@ -131,6 +135,10 @@
         "./skills/repo-audit-idempotency",
         "./skills/repo-audit-trust-boundaries",
         "./skills/repo-audit-data-integrity",
+        "./skills/repo-audit-boundary-conditions",
+        "./skills/repo-audit-domain-models",
+        "./skills/repo-audit-error-semantics",
+        "./skills/repo-audit-sources-of-truth",
         "./skills/repo-audit-synthesis"
       ]
     },
@@ -149,6 +157,10 @@
         "./skills/repo-audit-concurrency",
         "./skills/repo-audit-cache-coherence",
         "./skills/repo-audit-accessibility-state",
+        "./skills/repo-audit-api-consistency",
+        "./skills/repo-audit-architecture",
+        "./skills/repo-audit-cohesion",
+        "./skills/repo-audit-dead-code",
         "./skills/repo-audit-synthesis"
       ]
     },
@@ -167,6 +179,10 @@
         "./skills/repo-audit-protocol-drift",
         "./skills/repo-audit-failure-modes",
         "./skills/repo-audit-test-contracts",
+        "./skills/repo-audit-agent-configs",
+        "./skills/repo-audit-diagnostics",
+        "./skills/repo-audit-observability",
+        "./skills/repo-audit-test-oracles",
         "./skills/repo-audit-synthesis"
       ]
     },
