@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 sys.dont_write_bytecode = True
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from _doc_invariants import git_tag_exists
+from _markdown_utils import parse_frontmatter_scalars
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -112,19 +118,6 @@ def _write_lf_text(path: Path, content: str) -> None:
 
 def _has_git_repo(root: Path) -> bool:
     return (root / ".git").exists()
-
-
-def _tag_exists(root: Path, tag: str) -> bool:
-    if not _has_git_repo(root):
-        return False
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
 
 
 def _git_blob_bytes(root: Path, rev_path: str) -> bytes | None:
@@ -254,37 +247,15 @@ def advance_semver(version: str, bump_kind: Literal["minor", "patch"]) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
-def _unquote_yaml_value(raw: str) -> str:
-    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
-        inner = raw[1:-1]
-        return inner.replace("''", "'") if raw[0] == "'" else inner
-    return raw
-
-
 def _parse_frontmatter_description(skill_md: Path) -> str:
-    lines = skill_md.read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0].strip() != "---":
-        raise ValueError(f"Missing YAML frontmatter delimiter in {skill_md}")
-    end_idx = next(
-        (idx for idx in range(1, len(lines)) if lines[idx].strip() == "---"),
-        None,
+    pairs, _ = parse_frontmatter_scalars(
+        skill_md.read_text(encoding="utf-8"),
+        label=skill_md,
+        require=True,
     )
-    if end_idx is None:
-        raise ValueError(f"Unterminated YAML frontmatter in {skill_md}")
-    fm_lines = lines[1:end_idx]
-    for idx, line in enumerate(fm_lines):
-        if not line.startswith("description:"):
-            continue
-        raw_val = line.partition(":")[2].strip()
-        if raw_val not in ("", ">", ">-", "|", "|-"):
-            return _unquote_yaml_value(raw_val)
-        block: list[str] = []
-        for sub in fm_lines[idx + 1 :]:
-            if sub.strip() and not sub.startswith((" ", "\t")):
-                break
-            block.append(sub.strip())
-        joiner = "\n" if raw_val.startswith("|") else " "
-        return joiner.join(part for part in block if part).strip()
+    for key, value in pairs:
+        if key == "description":
+            return value
     raise ValueError(f"Missing description field in {skill_md}")
 
 
@@ -688,7 +659,7 @@ def bump_repository_version(
     parse_semver(current_version)
     tag = f"v{current_version}"
 
-    if not _tag_exists(root, tag):
+    if not git_tag_exists(root, tag):
         return BumpResult(
             bumped=False,
             previous_version=current_version,

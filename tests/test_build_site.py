@@ -343,6 +343,98 @@ class BuildSiteTests(unittest.TestCase):
             self.assertIn(f"{stem}.html", web_exp_links)
             self.assertIn(f"docs/{stem}.html", index_links)
 
+    def test_shared_markdown_heading_slugs_fences_and_titled_reference_links(
+        self,
+    ) -> None:
+        from _markdown_utils import parse_frontmatter_scalars, split_frontmatter_block
+        from skill_tools import extract_document_anchors
+
+        sample_md = (
+            "---\n"
+            "name: sample-doc\n"
+            "description: >\n"
+            "  Folded summary\n"
+            "  across lines.\n"
+            "notes: |\n"
+            "  line one\n"
+            "  line two\n"
+            "---\n"
+            "# Icon ![](icon.svg) Guide\n\n"
+            "## Empty [](target.md) Heading\n\n"
+            "## Icon ![](other.svg) Guide\n\n"
+            "Jump to [Icon Guide](#icon--guide), [Duplicate](#icon--guide-1), "
+            "and [Empty](#empty--heading).\n\n"
+            "Reference links: [API][api-ref], [Usage][usage-ref], [Arch][arch-ref].\n\n"
+            "````markdown\n"
+            "Nested fence example:\n"
+            "```json\n"
+            '{"broken_link": "[ignored](missing.md)"}\n'
+            "```\n"
+            "````\n\n"
+            "~~~sh\n"
+            "echo '[ignored-tilde](missing-tilde.md)'\n"
+            "~~~\n\n"
+            '[api-ref]: docs/api.md "API Reference"\n'
+            "[usage-ref]: <docs/usage.md> 'Usage Guide'\n"
+            "[arch-ref]: docs/architecture.md (Architecture)\n"
+        )
+
+        pairs, body = parse_frontmatter_scalars(sample_md, require=True)
+        fm_map = dict(pairs)
+        self.assertEqual("sample-doc", fm_map["name"])
+        self.assertEqual("Folded summary across lines.", fm_map["description"])
+        self.assertEqual("line one\nline two", fm_map["notes"])
+        raw_fm, split_body = split_frontmatter_block(sample_md, require=True)
+        self.assertIsNotNone(raw_fm)
+        self.assertEqual(body, split_body)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            (tmp_root / "docs").mkdir()
+            for doc_name in ("api.md", "usage.md", "architecture.md"):
+                (tmp_root / "docs" / doc_name).write_text("# Doc\n", encoding="utf-8")
+            (tmp_root / "target.md").write_text("# Target\n", encoding="utf-8")
+            (tmp_root / "icon.svg").write_text("<svg/>", encoding="utf-8")
+            (tmp_root / "other.svg").write_text("<svg/>", encoding="utf-8")
+            guide_path = tmp_root / "guide.md"
+            guide_path.write_text(sample_md, encoding="utf-8")
+
+            anchors = extract_document_anchors(sample_md)
+            self.assertIn("icon--guide", anchors)
+            self.assertIn("icon--guide-1", anchors)
+            self.assertIn("empty--heading", anchors)
+            self.assertEqual([], check_file_links(guide_path, tmp_root))
+
+            rel_links = extract_relative_links(body)
+            self.assertIn("docs/api.md", rel_links)
+            self.assertIn("docs/usage.md", rel_links)
+            self.assertIn("docs/architecture.md", rel_links)
+
+            first_title, rendered_html = build_site.compile_markdown(
+                sample_md,
+                "guide.md",
+                frozenset(
+                    {
+                        "guide.md",
+                        "target.md",
+                        "docs/api.md",
+                        "docs/usage.md",
+                        "docs/architecture.md",
+                    }
+                ),
+                root=tmp_root,
+            )
+            self.assertIn("Icon", first_title)
+            self.assertIn('id="icon--guide"', rendered_html)
+            self.assertIn('id="icon--guide-1"', rendered_html)
+            self.assertIn('id="empty--heading"', rendered_html)
+            self.assertIn('href="docs/api.html"', rendered_html)
+            self.assertIn('href="docs/usage.html"', rendered_html)
+            self.assertIn('href="docs/architecture.html"', rendered_html)
+            self.assertNotIn("[api-ref]:", rendered_html)
+            # Inner ```json fence inside ````markdown remains literal code rather than closing early
+            self.assertIn("```json", rendered_html)
+
 
 if __name__ == "__main__":
     unittest.main()

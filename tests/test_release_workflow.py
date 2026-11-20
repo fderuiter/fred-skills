@@ -1827,10 +1827,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         _git(repo, "remote", "add", "origin", origin.as_posix())
 
         (repo / "scripts").mkdir(parents=True, exist_ok=True)
-        _write_lf(
-            repo / "scripts/bump_version.py",
-            (ROOT / "scripts/bump_version.py").read_text(encoding="utf-8"),
-        )
+        for script_rel in (
+            "scripts/bump_version.py",
+            "scripts/_markdown_utils.py",
+            "scripts/_doc_invariants.py",
+        ):
+            _write_lf(
+                repo / script_rel,
+                (ROOT / script_rel).read_text(encoding="utf-8"),
+            )
         (repo / "scripts/fredlib").mkdir(parents=True, exist_ok=True)
         _write_lf(repo / "scripts/fredlib/__init__.py", '"""Toolkit library."""\n')
         (repo / "shared/repo-audit").mkdir(parents=True, exist_ok=True)

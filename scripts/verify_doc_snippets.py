@@ -27,6 +27,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from _doc_invariants import (
+    CORE_INVARIANT_DOCS,
+    DocCountExpectations,
+    build_prose_count_rules,
+    discover_untagged_release_notes,
+    find_prose_count_mismatches,
+)
+from _markdown_utils import match_atx_heading, scan_markdown_fences
+
 fred: ModuleType | None
 try:
     import fred as _fred_module
@@ -273,44 +282,26 @@ def _parse_fenced_blocks(
     lines: list[str],
 ) -> list[tuple[int, int, str, list[tuple[int, str]]]]:
     """Extract raw fenced code block boundaries and lines from markdown text lines."""
-    blocks: list[tuple[int, int, str, list[tuple[int, str]]]] = []
-    in_block = False
-    block_lang = ""
-    block_lines: list[tuple[int, str]] = []
-    block_start = 0
-
-    for idx, line in enumerate(lines, start=1):
-        stripped = line.strip()
-        if not stripped.startswith("```"):
-            if in_block:
-                block_lines.append((idx, line))
-            continue
-
-        if in_block:
-            blocks.append((block_start, idx, block_lang, block_lines))
-            in_block = False
-            block_lines = []
-        else:
-            block_lang = stripped[3:].strip()
-            block_start = idx
-            in_block = True
-
-    return blocks
+    _, scanned = scan_markdown_fences(lines)
+    return [
+        (block.start_line, block.end_line, block.fence.info.strip(), list(block.lines))
+        for block in scanned
+        if block.closed
+    ]
 
 
-_ATX_SECTION_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _CURSOR_HEADING_RE = re.compile(r"\bcursor\b", re.IGNORECASE)
 
 
 def _update_heading_stack(active: dict[int, str], line: str) -> None:
     """Update active ATX heading hierarchy when line is a Markdown heading."""
-    match = _ATX_SECTION_HEADING_RE.match(line)
-    if not match:
+    heading = match_atx_heading(line)
+    if heading is None:
         return
-    level = len(match.group(1))
+    level, title = heading
     for deeper in [k for k in active if k >= level]:
         del active[deeper]
-    active[level] = match.group(2).strip()
+    active[level] = title
 
 
 def _headings_by_block_start(
@@ -2536,64 +2527,26 @@ def _verify_shell_block(
     return errors
 
 
-RELEASE_COUNT_DOCS: frozenset[str] = frozenset({"README.md", "docs/usage.md"})
-_TOTAL_COUNT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\*\*(\d+)\s+standalone skills\*\*"),
-    re.compile(r"`complete`\s+for all\s+(\d+)\s+(?:skills|packages)"),
-    re.compile(r"each of the\s+(\d+)\s+skills"),
-    re.compile(r"complete\s+(\d+)-package pack"),
-    re.compile(r"creates all\s+(\d+)\s+skill directories"),
-    re.compile(r"Total:\s*(\d+)\s+skills"),
-)
-_STARTER_COUNT_PATTERN = re.compile(r"`starter`\s+for\s+(\d+)\s+core audit skills")
-
-
-def _git_tag_exists(root: Path, tag: str) -> bool:
-    """Return True if refs/tags/<tag> exists in the git repository at root."""
-    if not (root / ".git").exists():
-        return False
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
+RELEASE_COUNT_DOCS: frozenset[str] = frozenset(CORE_INVARIANT_DOCS)
 
 
 def _is_release_count_doc(rel_path: str, root: Path = ROOT) -> bool:
-    """Return True if rel_path is an onboarding guide or untagged active release note."""
+    """Return True if rel_path is a core guide or untagged active release note."""
     if rel_path in RELEASE_COUNT_DOCS:
         return True
-    ver = _read_expected_version(root)
-    if not ver or rel_path != f"docs/release-notes-{ver}.md":
-        return False
-    return not _git_tag_exists(root, f"v{ver}")
+    return rel_path in discover_untagged_release_notes(root, fallback_root=ROOT)
 
 
-def _check_line_count_patterns(
-    rel_path: str,
-    line_no: int,
-    line: str,
-    expected_total: int,
-    expected_starter: int,
-) -> list[str]:
-    """Return count mismatch errors found on a single documentation line."""
-    errors: list[str] = []
-    for pat in _TOTAL_COUNT_PATTERNS:
-        for match in pat.finditer(line):
-            found = int(match.group(1))
-            if found != expected_total:
-                errors.append(
-                    f"{rel_path}:L{line_no}: Documented skill count {found} does not match catalog total {expected_total}"
-                )
-    starter_match = _STARTER_COUNT_PATTERN.search(line)
-    if starter_match and int(starter_match.group(1)) != expected_starter:
-        errors.append(
-            f"{rel_path}:L{line_no}: Documented starter pack count {starter_match.group(1)} does not match catalog count {expected_starter}"
+def _format_release_count_mismatch(rel_path: str, mismatch: Any) -> str:
+    if mismatch.label == "starter pack":
+        return (
+            f"{rel_path}:L{mismatch.line_no}: Documented starter pack count "
+            f"{mismatch.found} does not match catalog count {mismatch.expected}"
         )
-    return errors
+    return (
+        f"{rel_path}:L{mismatch.line_no}: Documented skill count "
+        f"{mismatch.found} does not match catalog total {mismatch.expected}"
+    )
 
 
 def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
@@ -2604,18 +2557,17 @@ def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
     packs = _load_known_packs(root)
     if not doc_path.is_file() or "complete" not in packs:
         return []
-    expected_total = len(packs["complete"])
-    expected_starter = len(packs.get("starter", []))
-    errors: list[str] = []
-    for line_no, line in enumerate(
-        doc_path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
-        errors.extend(
-            _check_line_count_patterns(
-                rel_path, line_no, line, expected_total, expected_starter
-            )
+    rules = build_prose_count_rules(
+        DocCountExpectations(
+            total_skills=len(packs["complete"]),
+            starter_skills=len(packs.get("starter", [])),
         )
-    return errors
+    )
+    mismatches = find_prose_count_mismatches(
+        doc_path.read_text(encoding="utf-8"),
+        rules,
+    )
+    return [_format_release_count_mismatch(rel_path, m) for m in mismatches]
 
 
 _NON_AUDIT_SCHEMA_V1_KEYS: frozenset[str] = frozenset(
