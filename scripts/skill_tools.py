@@ -20,6 +20,11 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _markdown_utils import (
+    count_fenced_code_blocks,
+    extract_markdown_headings,
+    extract_markdown_preamble,
+    extract_markdown_section,
+    extract_markdown_tables,
     extract_reference_link_targets,
     match_atx_heading,
     non_fenced_lines,
@@ -37,11 +42,16 @@ __all__ = [
     "FredCliError",
     "build_outputs",
     "classify_domain_payload",
+    "count_fenced_code_blocks",
     "detect_artifact_suite",
     "detect_domain_artifact",
     "estimate_tokens",
     "extract_document_anchors",
     "extract_link_fragment",
+    "extract_markdown_headings",
+    "extract_markdown_preamble",
+    "extract_markdown_section",
+    "extract_markdown_tables",
     "extract_relative_links",
     "find_deep_reference_chains",
     "git_blob_bytes",
@@ -824,6 +834,7 @@ DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
         ),
     ),
     ("architecture", frozenset({"boundaries", "decisions", "components"})),
+    ("observations", frozenset({"observations"})),
     ("run", frozenset({"plan", "authority", "checkpoints"})),
 )
 
@@ -839,6 +850,7 @@ DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "plan": "repository-workflows",
     "fix": "repository-workflows",
     "verification": "repository-workflows",
+    "observations": "repository-workflows",
 }
 
 

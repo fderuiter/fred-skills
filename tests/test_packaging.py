@@ -12,6 +12,8 @@ from unittest.mock import patch
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_catalog import build
 from package_skills import get_suite_skills
@@ -30,6 +32,16 @@ from validate_skills import (
     _validate_documentation_invariants,
     validate_skill,
     validate_with_telemetry,
+)
+
+from tests.catalog_oracles import (
+    expected_audit_domain_count,
+    expected_host_count,
+    expected_non_audit_skill_count,
+    expected_pack_skill_count,
+    expected_suite_count,
+    expected_suite_names,
+    expected_total_skills,
 )
 
 
@@ -1303,19 +1315,26 @@ class PackageTests(unittest.TestCase):
             for phase in suite["phases"]
             for skill in phase["skills"]
         ]
-        self.assertEqual(57, len(suite_skills))
+        expected_skills = expected_total_skills(ROOT)
+        expected_specs = expected_skills * 3
+        expected_starter_count = expected_pack_skill_count("starter", ROOT)
+        expected_complete_count = expected_pack_skill_count("complete", ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertGreaterEqual(expected_starter_count, 1)
+        self.assertGreaterEqual(expected_complete_count, 1)
+        self.assertEqual(expected_skills, len(suite_skills))
 
         arch_text = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
-        self.assertIn("57 total packages", arch_text)
+        self.assertIn(f"{expected_skills} total packages", arch_text)
 
         val_text = (ROOT / "docs/validation.md").read_text(encoding="utf-8")
-        self.assertIn("57 total packages", val_text)
+        self.assertIn(f"{expected_skills} total packages", val_text)
         self.assertIn(
-            "Each of the 57 skills in the suite includes three scenario specifications",
+            f"Each of the {expected_skills} skills in the suite includes three scenario specifications",
             val_text,
         )
         self.assertIn(
-            "These 171 specifications are not 171 executed evaluations",
+            f"These {expected_specs} specifications are not {expected_specs} executed evaluations",
             val_text,
         )
         self.assertNotIn("42 skills in the suite", val_text)
@@ -1324,11 +1343,11 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn("105 specifications", val_text)
 
         impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
-        self.assertIn("57 total packages", impl_text)
+        self.assertIn(f"{expected_skills} total packages", impl_text)
 
         active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         usage_text = (ROOT / "docs/usage.md").read_text(encoding="utf-8")
-        self.assertIn("complete 57-package pack", usage_text)
+        self.assertIn(f"complete {expected_complete_count}-package pack", usage_text)
         self.assertIn(f"fred-skills-{active_version}-starter.tar", usage_text)
         self.assertIn(f"fred-skills-{active_version}-complete.tar", usage_text)
         self.assertLess(
@@ -1336,7 +1355,7 @@ class PackageTests(unittest.TestCase):
             usage_text.index(f"fred-skills-{active_version}-complete.tar"),
         )
         self.assertIn(
-            "Register the marketplace catalog and install `starter` for 6 core audit skills (`<= 1,500` raw characters)",
+            f"Register the marketplace catalog and install `starter` for {expected_starter_count} core audit skills (`<= 1,500` raw characters)",
             usage_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", usage_text)
@@ -1364,7 +1383,7 @@ class PackageTests(unittest.TestCase):
 
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "Register the marketplace catalog, then install `starter` for 6 core audit skills (`<= 1,500` raw characters)",
+            f"Register the marketplace catalog, then install `starter` for {expected_starter_count} core audit skills (`<= 1,500` raw characters)",
             readme_text,
         )
         self.assertIn("/plugin marketplace add fderuiter/fred-skills", readme_text)
@@ -1476,6 +1495,9 @@ class PackageTests(unittest.TestCase):
         expected_hosts = len(hosts_doc["hosts"])
         expected_packs = len(packs_doc["packs"])
         expected_skills = len(suite_skills)
+        self.assertGreaterEqual(expected_suites, 1)
+        self.assertGreaterEqual(expected_hosts, 1)
+        self.assertGreaterEqual(expected_packs, 1)
         shared_dirs = [
             f"shared/{m.parent.name}/"
             for m in sorted((ROOT / "shared").glob("*/manifest.json"))
@@ -1551,13 +1573,17 @@ class PackageTests(unittest.TestCase):
         self.assertEqual([], _validate_documentation_invariants(ROOT))
 
         exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
+        full_audit_pack = packs_doc["packs"]["full-audit"]
+        complete_pack = packs_doc["packs"]["complete"]
+        self.assertGreaterEqual(len(full_audit_pack["skills"]), 1)
+        self.assertGreaterEqual(len(complete_pack["skills"]), 1)
         self.assertIn(
-            "| `full-audit` | All 34 specialist audits plus coordinator, diagnostics, and synthesis. | 37 |",
+            f"| `full-audit` | {full_audit_pack['description']} | {len(full_audit_pack['skills'])} |",
             exp_text,
         )
         self.assertNotIn("| `architecture` |", exp_text)
         self.assertIn(
-            "| `complete` | Every audit and engineering workflow (57 skills; prefer starter for bounded Stage-1 discovery within Codex and Claude Code context budgets). | 57 |",
+            f"| `complete` | {complete_pack['description']} | {len(complete_pack['skills'])} |",
             exp_text,
         )
 
@@ -1620,17 +1646,24 @@ class PackageTests(unittest.TestCase):
             0, clean_proc.returncode, clean_proc.stdout + clean_proc.stderr
         )
 
+        expected_hosts = expected_host_count(ROOT)
+        expected_skills = expected_total_skills(ROOT)
+        expected_domains = expected_audit_domain_count(ROOT)
+        self.assertGreaterEqual(expected_hosts, 1)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertGreaterEqual(expected_domains, 1)
+
         rel_notes = f"docs/release-notes-{active_version}.md"
         mutations: list[tuple[str, str, str, str]] = [
             (
                 rel_notes,
-                "9 explicit host installation\nlocations",
+                f"{expected_hosts} explicit host installation\nlocations",
                 "four explicit host installation\nlocations",
                 "stale host count 4",
             ),
             (
                 rel_notes,
-                "Total: 57 skills.",
+                f"Total: {expected_skills} skills.",
                 "Total: 42 skills.",
                 "stale skill count 42",
             ),
@@ -1642,9 +1675,9 @@ class PackageTests(unittest.TestCase):
             ),
             (
                 "README.md",
-                "34 audit\ndomains",
-                "33 audit\ndomains",
-                "itemized skill sum 56",
+                f"{expected_domains} audit\ndomains",
+                f"{expected_domains - 1} audit\ndomains",
+                f"itemized skill sum {expected_skills - 1}",
             ),
             (
                 "README.md",
@@ -1684,7 +1717,7 @@ class PackageTests(unittest.TestCase):
             ),
             (
                 "docs/validation.md",
-                "Copy-path tests cover 9 host layouts",
+                f"Copy-path tests cover {expected_hosts} host layouts",
                 "Copy-path tests cover four host layouts",
                 "stale host count 4",
             ),
@@ -1696,9 +1729,9 @@ class PackageTests(unittest.TestCase):
             ),
             (
                 "docs/implementation-status.md",
-                "Explicit copy adapters for 9 host layouts",
-                "Explicit copy adapters for 8 host layouts",
-                "stale host count 8",
+                f"Explicit copy adapters for {expected_hosts} host layouts",
+                f"Explicit copy adapters for {expected_hosts - 1} host layouts",
+                f"stale host count {expected_hosts - 1}",
             ),
             (
                 "docs/research.md",
@@ -1733,8 +1766,13 @@ class PackageTests(unittest.TestCase):
                     )
 
         # Also verify CLI exit code 1 when stale count is injected into release notes
+        stale_count = expected_skills - 6
         (fixture_root / rel_notes).write_text(
-            originals[rel_notes].replace("Total: 57 skills.", "Total: 51 skills.", 1),
+            originals[rel_notes].replace(
+                f"Total: {expected_skills} skills.",
+                f"Total: {stale_count} skills.",
+                1,
+            ),
             encoding="utf-8",
         )
         stale_proc = subprocess.run(
@@ -1750,7 +1788,7 @@ class PackageTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(1, stale_proc.returncode)
-        self.assertIn("stale skill count 51", stale_proc.stdout)
+        self.assertIn(f"stale skill count {stale_count}", stale_proc.stdout)
 
     def test_tagged_release_notes_immutability_enforced_by_validate_and_run_checks(
         self,
@@ -1854,8 +1892,13 @@ class PackageTests(unittest.TestCase):
         self.assertEqual([], _validate_documentation_invariants(git_fixture))
 
         # Editing docs/release-notes-0.2.0.md after refs/tags/v0.2.0 exists fails immutability
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         (git_fixture / "docs/release-notes-0.2.0.md").write_bytes(
-            v020_bytes.replace(b"Total: 42 skills.", b"Total: 57 skills.")
+            v020_bytes.replace(
+                b"Total: 42 skills.",
+                f"Total: {expected_skills} skills.".encode(),
+            )
         )
         edited_errs = _validate_documentation_invariants(git_fixture)
         self.assertTrue(
@@ -2261,18 +2304,14 @@ class PackageTests(unittest.TestCase):
             suite_to_skills[suite["name"]] = skills_in_suite
             all_suite_skills.extend(skills_in_suite)
 
-        self.assertEqual(57, len(all_suite_skills))
-        self.assertEqual(
-            {
-                "repository-audits",
-                "repository-workflows",
-                "software-architecture",
-                "code-review",
-                "automated-testing",
-                "spec-driven-development",
-            },
-            set(suite_to_skills),
-        )
+        expected_skills = expected_total_skills(ROOT)
+        expected_suites = expected_suite_count(ROOT)
+        expected_names = expected_suite_names(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertGreaterEqual(expected_suites, 1)
+        self.assertGreaterEqual(len(expected_names), 1)
+        self.assertEqual(expected_skills, len(all_suite_skills))
+        self.assertEqual(expected_names, set(suite_to_skills))
 
         explicit_only = {
             "repo-apply-fix",
@@ -2362,7 +2401,7 @@ class PackageTests(unittest.TestCase):
                 self.assertIsNone(heading_re.search(prompt_text), skill_name)
 
         # Every skill has a distinct SVG and each suite uses one distinct palette color
-        self.assertEqual(57, len(svg_hashes))
+        self.assertEqual(expected_skills, len(svg_hashes))
         for suite_name, colors in suite_bg_colors.items():
             self.assertEqual(
                 1,
@@ -2370,7 +2409,7 @@ class PackageTests(unittest.TestCase):
                 f"{suite_name} must use a single suite palette: {colors}",
             )
         distinct_suite_colors = {next(iter(c)) for c in suite_bg_colors.values()}
-        self.assertEqual(6, len(distinct_suite_colors))
+        self.assertEqual(expected_suites, len(distinct_suite_colors))
 
         diagnostics_prompt = (
             ROOT / "skills/repo-audit-diagnostics/assets/prompt.md"
@@ -2799,10 +2838,12 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(0.0, tel_empty["deterministic_constraint_coverage_percentage"])
 
     def test_validation_telemetry_metrics_and_export(self):
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         errors, telemetry = validate_with_telemetry(ROOT)
         self.assertEqual([], errors)
-        self.assertEqual(57, telemetry["total_packages"])
-        self.assertEqual(57, telemetry["passed_packages"])
+        self.assertEqual(expected_skills, telemetry["total_packages"])
+        self.assertEqual(expected_skills, telemetry["passed_packages"])
         self.assertEqual(0, telemetry["failed_packages"])
         self.assertEqual(1.0, telemetry["first_pass_guardrail_pass_rate"])
         self.assertEqual(100.0, telemetry["first_pass_guardrail_pass_rate_percentage"])
@@ -2829,17 +2870,19 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Deterministic Constraint Coverage: 100.0%", res.stdout)
         self.assertTrue(telemetry_file.is_file())
         exported = json.loads(telemetry_file.read_text(encoding="utf-8"))
-        self.assertEqual(57, exported["total_packages"])
+        self.assertEqual(expected_skills, exported["total_packages"])
         self.assertEqual(1.0, exported["first_pass_guardrail_pass_rate"])
         self.assertEqual(1.0, exported["routing_trigger_coverage"])
         self.assertEqual(100.0, exported["routing_trigger_coverage_percentage"])
 
     def test_all_skills_have_output_format_schemas(self):
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         skills_dir = ROOT / "skills"
         packages = sorted(
             p for p in skills_dir.iterdir() if p.is_dir() and (p / "SKILL.md").is_file()
         )
-        self.assertEqual(len(packages), 57)
+        self.assertEqual(len(packages), expected_skills)
         for package in packages:
             schemas = sorted(package.glob("assets/*.schema.json"))
             self.assertGreater(
@@ -3366,9 +3409,11 @@ class PackageTests(unittest.TestCase):
             (self.skill / "SKILL.md").write_text(original_skill_md, encoding="utf-8")
 
     def test_all_repository_skill_prompt_bodies_are_unique_after_line_one(self) -> None:
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)
-        self.assertEqual(57, telemetry["total_packages"])
+        self.assertEqual(expected_skills, telemetry["total_packages"])
 
         bodies_by_skill: dict[str, str] = {}
         for prompt_path in sorted((ROOT / "skills").glob("*/assets/prompt.md")):
@@ -3380,7 +3425,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(normalized, f"{prompt_path} body after line 1 is empty")
             bodies_by_skill[prompt_path.parent.parent.name] = normalized
 
-        self.assertEqual(57, len(bodies_by_skill))
+        self.assertEqual(expected_skills, len(bodies_by_skill))
         self.assertEqual(
             len(bodies_by_skill),
             len(set(bodies_by_skill.values())),
@@ -3465,9 +3510,11 @@ class PackageTests(unittest.TestCase):
 
         from skill_tools import read_frontmatter
 
-        # 1. All 57 repository skills include an explicit 'Use when' trigger clause.
+        # 1. All cataloged repository skills include an explicit 'Use when' trigger clause.
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         repo_skills = sorted((ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(57, len(repo_skills))
+        self.assertEqual(expected_skills, len(repo_skills))
         for skill_md in repo_skills:
             meta, _ = read_frontmatter(skill_md)
             self.assertRegex(
@@ -3849,9 +3896,13 @@ class PackageTests(unittest.TestCase):
         import re
         import tomllib
 
+        expected_skills = expected_total_skills(ROOT)
+        expected_non_audit = expected_non_audit_skill_count(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertGreaterEqual(expected_non_audit, 1)
         errors, telemetry = validate_with_telemetry(ROOT, record_attempts=False)
         self.assertEqual([], errors)
-        self.assertEqual(57, telemetry["total_packages"])
+        self.assertEqual(expected_skills, telemetry["total_packages"])
         self.assertEqual(100.0, telemetry["skill_worked_example_coverage_percentage"])
         self.assertEqual(100.0, telemetry["validator_script_coverage_percentage"])
         self.assertEqual(0.0, telemetry["method_boilerplate_duplication_percentage"])
@@ -3866,7 +3917,7 @@ class PackageTests(unittest.TestCase):
             members = [sk for p in s_obj["phases"] for sk in p["skills"]]
             if s_obj["name"] != "repository-audits":
                 non_audit_skills.extend(members)
-        self.assertEqual(20, len(non_audit_skills))
+        self.assertEqual(expected_non_audit, len(non_audit_skills))
 
         for skill_name in non_audit_skills:
             pkg = ROOT / "skills" / skill_name
@@ -4230,8 +4281,10 @@ class PackageTests(unittest.TestCase):
         import yaml
         from skill_tools import _parse_frontmatter_stdlib, read_frontmatter
 
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(57, len(skill_files))
+        self.assertEqual(expected_skills, len(skill_files))
         for skill_md in skill_files:
             raw_text = skill_md.read_text(encoding="utf-8")
             _, rest = raw_text.split("---\n", 1)
@@ -4358,8 +4411,9 @@ class PackageTests(unittest.TestCase):
     def test_validate_skill_executes_bundled_validator_under_isolated_stdlib(
         self,
     ) -> None:
-        import re
         import shutil
+
+        from _markdown_utils import scan_markdown_fences
 
         # 1. Verify bundled validator runs with -B and -S (no_site=1, dont_write_bytecode=1)
         self.validator_script.write_text(
@@ -4381,21 +4435,23 @@ class PackageTests(unittest.TestCase):
         self.assertEqual([], validate_skill(review_pkg))
 
         examples_path = review_pkg / "references/method.md"
-        orig_examples = examples_path.read_text(encoding="utf-8")
-        match = re.search(r"```json\s*\n(.*?)\n```", orig_examples, re.DOTALL)
-        assert match is not None
+        orig_lines = examples_path.read_text(encoding="utf-8").splitlines()
+        _, blocks = scan_markdown_fences(orig_lines)
+        json_block = next(
+            b for b in blocks if b.fence.language.lower() == "json" and b.closed
+        )
         domain_invalid = {
             "schema_version": "1.0",
             "verdict": "request_changes",
             "summary": "Schema-valid payload that violates review verdict invariant.",
             "findings": [],
         }
-        mutated_examples = (
-            orig_examples[: match.start(1)]
-            + json.dumps(domain_invalid, indent=2)
-            + orig_examples[match.end(1) :]
-        )
-        examples_path.write_text(mutated_examples, encoding="utf-8")
+        mutated_lines = [
+            *orig_lines[: json_block.start_line],
+            *json.dumps(domain_invalid, indent=2).splitlines(),
+            *orig_lines[json_block.end_line - 1 :],
+        ]
+        examples_path.write_text("\n".join(mutated_lines) + "\n", encoding="utf-8")
         errs = validate_skill(review_pkg)
         self.assertTrue(
             any("validate_review.py" in e and "request_changes" in e for e in errs),

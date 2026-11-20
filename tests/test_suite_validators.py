@@ -13,6 +13,8 @@ from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import validate_architecture
@@ -22,6 +24,8 @@ import validate_skills
 import validate_spec
 import validate_testing
 import validate_workflow
+
+from tests.catalog_oracles import expected_total_skills
 
 
 class SuiteValidatorsTests(unittest.TestCase):
@@ -585,15 +589,19 @@ class SuiteValidatorsTests(unittest.TestCase):
             self.assertEqual(2, proc.returncode, proc.stderr)
             self.assertIn("Unsupported JSON Schema keyword", proc.stderr)
 
-    def test_stdlib_evaluator_parity_with_jsonschema_across_all_58_schemas(
+    def test_stdlib_evaluator_parity_with_jsonschema_across_all_package_schemas(
         self,
     ) -> None:
         import copy
 
         import jsonschema
 
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         schema_paths = sorted((ROOT / "skills").glob("*/assets/*.schema.json"))
-        self.assertEqual(58, len(schema_paths))
+        self.assertEqual(expected_skills + 1, len(schema_paths))
+        obs_schema_path = ROOT / "schemas/observations.schema.json"
+        self.assertTrue(obs_schema_path.is_file())
 
         expected_keys = {
             "$defs",
@@ -631,7 +639,7 @@ class SuiteValidatorsTests(unittest.TestCase):
                     for sub in v:
                         collect_keys(sub)
 
-        for sp in schema_paths:
+        for sp in [*schema_paths, obs_schema_path]:
             schema = json.loads(sp.read_text(encoding="utf-8"))
             collect_keys(schema)
         self.assertEqual(expected_keys, observed_keys)
@@ -742,13 +750,59 @@ class SuiteValidatorsTests(unittest.TestCase):
             bad_bundle_entry, bundle_schema, "bundle:additionalProperties-subschema"
         )
 
-    def test_all_57_synced_validators_run_under_python_S_and_omit_dev_deps(
+        obs_schema = json.loads(obs_schema_path.read_text(encoding="utf-8"))
+        obs_entry: dict[str, Any] = {
+            "id": "OBS-1",
+            "tool": "semgrep",
+            "tool_version": "1.90.0",
+            "rule": "rule/check",
+            "kind": "review",
+            "reported_level": "warning",
+            "message": "Needs review",
+            "locations": [{"path": "src/app.py", "line": None}],
+            "evidence_state": "scanner-reported; agent verification not performed",
+            "fingerprints": {"fred-skills/v1": "abc123"},
+            "suppressions": [{"kind": "external", "status": "underReview"}],
+            "properties": {"findingId": "F-1", "severity": "medium"},
+        }
+        valid_obs: dict[str, Any] = {
+            "schema_version": "1.0",
+            "observations": [obs_entry],
+            "limitations": ["Scanner claims require verification."],
+        }
+        assert_parity(valid_obs, obs_schema, "observations:valid-nullable-line")
+        assert_parity(
+            {
+                **valid_obs,
+                "observations": [{**obs_entry, "fingerprints": {"k": ""}}],
+            },
+            obs_schema,
+            "observations:additionalProperties-empty-string",
+        )
+        self.assertEqual([], validate_workflow.validate(valid_obs, obs_schema))
+        for bad_obs_path in ("../escape.py", ".git/config"):
+            bad_obs_doc = {
+                **valid_obs,
+                "observations": [
+                    {
+                        **obs_entry,
+                        "locations": [{"path": bad_obs_path, "line": 1}],
+                    }
+                ],
+            }
+            self.assertTrue(
+                validate_workflow.validate(bad_obs_doc, obs_schema), bad_obs_path
+            )
+
+    def test_all_synced_validators_run_under_python_S_and_omit_dev_deps(
         self,
     ) -> None:
         from concurrent.futures import ThreadPoolExecutor
 
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(57, len(synced_validators))
+        self.assertEqual(expected_skills, len(synced_validators))
         for script_path in synced_validators:
             src = script_path.read_text(encoding="utf-8")
             self.assertNotIn("jsonschema", src, str(script_path))
@@ -808,8 +862,10 @@ class SuiteValidatorsTests(unittest.TestCase):
             ROOT / "scripts/validate_testing.py",
             ROOT / "scripts/validate_spec.py",
         ]
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(57, len(synced_validators))
+        self.assertEqual(expected_skills, len(synced_validators))
 
         for path in canonical_targets:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

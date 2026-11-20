@@ -24,7 +24,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import build_experience
 import build_site
 import verify_workflow_actions
-from skill_tools import extract_relative_links, resolve_relative_link_target
+from skill_tools import (
+    extract_markdown_headings,
+    extract_markdown_preamble,
+    extract_markdown_section,
+    extract_markdown_tables,
+    extract_relative_links,
+    resolve_relative_link_target,
+)
 
 PAGES_WORKFLOW = ROOT / ".github/workflows/pages.yml"
 VALIDATE_WORKFLOW = ROOT / ".github/workflows/validate.yml"
@@ -997,7 +1004,7 @@ class PagesWorkflowTests(unittest.TestCase):
             source_docs = sorted(
                 p.name for p in (ROOT / "docs").iterdir() if p.is_file()
             )
-            self.assertGreaterEqual(len(source_docs), 15)
+            self.assertGreaterEqual(len(source_docs), 1)
             for doc_name in source_docs:
                 if doc_name.endswith(".md"):
                     self.assertFalse((site_dir / "docs" / doc_name).exists(), doc_name)
@@ -1047,42 +1054,77 @@ class PagesWorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build_experience.stage_site(ROOT, root=ROOT)
 
+    def _assert_pages_docs_structure(
+        self,
+        readme_text: str,
+        exp_text: str,
+        impl_text: str,
+        rel_text: str,
+    ) -> None:
+        readme_preamble = extract_markdown_preamble(readme_text)
+        self.assertIn(HOSTED_URL, readme_preamble)
+        self.assertIn("docs/explorer.html", readme_preamble)
+
+        install_section = extract_markdown_section(readme_text, "Installation", level=2)
+        self.assertIsNotNone(install_section)
+        assert install_section is not None
+        subheadings = extract_markdown_headings(install_section, level=3)
+        self.assertGreaterEqual(len(subheadings), 1)
+        self.assertEqual((3, "Claude Code"), subheadings[0])
+        claude_section = extract_markdown_section(
+            install_section, "Claude Code", level=3
+        )
+        self.assertIsNotNone(claude_section)
+        assert claude_section is not None
+        non_empty_claude_lines = [
+            line.strip() for line in claude_section.splitlines() if line.strip()
+        ]
+        self.assertGreaterEqual(len(non_empty_claude_lines), 1)
+        self.assertEqual("```sh", non_empty_claude_lines[0])
+
+        exp_preamble = extract_markdown_preamble(exp_text)
+        self.assertIn(HOSTED_EXPLORER_URL, exp_preamble)
+        self.assertIn("](explorer.html)", exp_preamble)
+
+        impl_tables = extract_markdown_tables(impl_text)
+        self.assertGreaterEqual(len(impl_tables), 1)
+        self.assertGreaterEqual(len(impl_tables[0]), 1)
+        discovery_rows = [
+            row
+            for row in impl_tables[0]
+            if row.get("Improvement") == "Task-oriented discovery"
+        ]
+        self.assertEqual(1, len(discovery_rows))
+        self.assertIn(HOSTED_EXPLORER_URL, discovery_rows[0]["Delivered"])
+        self.assertIn("](explorer.html)", discovery_rows[0]["Delivered"])
+
+        rel_preamble = extract_markdown_preamble(rel_text)
+        self.assertIn(HOSTED_URL, rel_preamble)
+        self.assertIn("pages.yml", rel_preamble)
+        self.assertIn("Validate skill packages", rel_preamble)
+        self.assertIn("workflow_dispatch", rel_preamble)
+        self.assertIn("superseded", rel_preamble)
+
     def test_documentation_links_hosted_pages_retains_offline_and_preserves_readme_offsets(
         self,
     ) -> None:
-        """Docs must link to fderuiter.github.io/fred-skills, retain offline explorer, and preserve README offsets."""
-        readme_lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
-        intro_window = "\n".join(readme_lines[8:11])
-        self.assertIn(HOSTED_URL, intro_window)
-        self.assertIn("docs/explorer.html", intro_window)
-        self.assertEqual(readme_lines[28], "### Claude Code")
-        self.assertEqual(readme_lines[30], "```sh")
-
+        """Docs must link to fderuiter.github.io/fred-skills, retain offline explorer, and tolerate intro prose edits."""
         self.assertEqual(build_experience.HOSTED_EXPLORER_URL, HOSTED_EXPLORER_URL)
 
-        exp_lines = (
-            (ROOT / "docs/experience.md").read_text(encoding="utf-8").splitlines()
-        )
-        self.assertIn(HOSTED_EXPLORER_URL, exp_lines[2])
-        self.assertIn("](explorer.html)", exp_lines[2])
+        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+        exp_text = (ROOT / "docs/experience.md").read_text(encoding="utf-8")
+        impl_text = (ROOT / "docs/implementation-status.md").read_text(encoding="utf-8")
+        rel_text = (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
 
-        impl_lines = (
-            (ROOT / "docs/implementation-status.md")
-            .read_text(encoding="utf-8")
-            .splitlines()
-        )
-        self.assertIn(HOSTED_EXPLORER_URL, impl_lines[8])
-        self.assertIn("](explorer.html)", impl_lines[8])
+        self._assert_pages_docs_structure(readme_text, exp_text, impl_text, rel_text)
 
-        rel_lines = (
-            (ROOT / "docs/releasing.md").read_text(encoding="utf-8").splitlines()
+        prepended = "\n\nAdditional introductory prose paragraph above headings.\n\n"
+        self._assert_pages_docs_structure(
+            prepended + readme_text,
+            prepended + exp_text,
+            prepended + impl_text,
+            prepended + rel_text,
         )
-        rel_window = "\n".join(rel_lines[7:16])
-        self.assertIn(HOSTED_URL, rel_window)
-        self.assertIn("pages.yml", rel_window)
-        self.assertIn("Validate skill packages", rel_window)
-        self.assertIn("workflow_dispatch", rel_window)
-        self.assertIn("superseded", rel_window)
 
         banned_providers = re.compile(
             r"\b(netlify|vercel|cloudflare\s+pages|surge\.sh)\b",

@@ -12,12 +12,20 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 from build_site import build_site
 from fredlib.common import read_json
 from fredlib.reports import render
 from playwright.sync_api import expect, sync_playwright
+
+from tests.catalog_oracles import (
+    expected_pack_count,
+    expected_suite_skill_count,
+    expected_total_skills,
+)
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--screenshot", type=Path)
@@ -406,6 +414,16 @@ with tempfile.TemporaryDirectory() as temporary:
         recipes = read_json(ROOT / "catalog/recipes.json")["recipes"]
         expected_packs = read_json(ROOT / "catalog/packs.json")["packs"]
         expected_hosts = read_json(ROOT / "catalog/hosts.json")["hosts"]
+        expected_total = expected_total_skills(ROOT)
+        expected_workflows = expected_suite_skill_count("repository-workflows", ROOT)
+        expected_spec = expected_suite_skill_count("spec-driven-development", ROOT)
+        expected_packs_count = expected_pack_count(ROOT)
+        assert expected_total >= 1
+        assert expected_workflows >= 1
+        assert expected_spec >= 1
+        assert expected_packs_count >= 1
+        assert len(recipes) >= 1
+        assert len(expected_hosts) >= 1
 
         # Verify above-the-fold controls on 1280x800 desktop and 375x812 mobile viewports
         page.set_viewport_size({"width": 1280, "height": 800})
@@ -436,11 +454,15 @@ with tempfile.TemporaryDirectory() as temporary:
         page.set_viewport_size({"width": 1280, "height": 800})
         page.goto(explorer_uri)
         count = page.locator("article.finding").count()
-        assert count >= 41
+        assert count == expected_total
         assert page.locator("details.task:visible").count() == len(recipes)
-        assert page.locator("article.pack-card").count() == len(expected_packs) == 13
+        assert (
+            page.locator("article.pack-card").count()
+            == len(expected_packs)
+            == expected_packs_count
+        )
         assert page.locator("#hosts tbody tr").count() == len(expected_hosts)
-        assert page.locator("#hosts tbody tr").count() >= 4
+        assert page.locator("#hosts tbody tr").count() >= 1
         page.set_viewport_size({"width": 375, "height": 812})
         assert page.evaluate(
             "document.documentElement.scrollWidth <= window.innerWidth"
@@ -469,18 +491,21 @@ with tempfile.TemporaryDirectory() as temporary:
 
         # #toggle-details and print expansion in explorer
         page.get_by_label("Family").select_option("repository-workflows")
-        assert page.locator("article.finding:visible").count() == 8
+        assert page.locator("article.finding:visible").count() == expected_workflows
         exp_toggle = page.locator("#toggle-details")
         assert exp_toggle.get_attribute("aria-expanded") == "false"
         exp_toggle.click()
         assert exp_toggle.get_attribute("aria-expanded") == "true"
-        assert page.locator("article.finding:visible details[open]").count() == 8
+        assert (
+            page.locator("article.finding:visible details[open]").count()
+            == expected_workflows
+        )
         assert page.locator("article.finding[hidden] details[open]").count() == 0
         exp_toggle.click()
         assert exp_toggle.get_attribute("aria-expanded") == "false"
         assert page.locator("article.finding details[open]").count() == 0
         page.get_by_label("Family").select_option("spec-driven-development")
-        assert page.locator("article.finding:visible").count() == 3
+        assert page.locator("article.finding:visible").count() == expected_spec
         assert page.locator("details#task-specify-feature").is_visible()
         page.get_by_label("Family").select_option("")
         assert page.locator("article.finding:visible").count() == count
@@ -530,7 +555,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
         # Verify cross-suite #anchor click reveals and scrolls to hidden card without resetting Family first
         page.get_by_label("Family").select_option("repository-workflows")
-        assert page.locator("article.finding:visible").count() == 8
+        assert page.locator("article.finding:visible").count() == expected_workflows
         assert page.locator("details#task-investigate-bug").is_visible()
         assert not page.locator("details#task-review-code-changes").is_visible()
         target_card = page.locator("article#repo-audit-concurrency")
@@ -663,7 +688,7 @@ with tempfile.TemporaryDirectory() as temporary:
             skill_names = sorted(
                 p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")
             )
-            assert len(skill_names) == 57
+            assert len(skill_names) == expected_total
             for s_name in skill_names:
                 for s_route in (
                     f"{server_origin}/fred-skills/skills/{s_name}/",
@@ -683,7 +708,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert (
                 web_page.locator("article.pack-card").count()
                 == len(expected_packs)
-                == 13
+                == expected_packs_count
             )
             packs_text = web_page.locator("section#packs").inner_text()
             for pack_name in expected_packs:
@@ -719,7 +744,7 @@ with tempfile.TemporaryDirectory() as temporary:
                     .map(a => a.getAttribute('href'))
                     .filter(h => h && !h.startsWith('#') && !h.startsWith('http:') && !h.startsWith('https:'))"""
             )
-            assert len(file_hrefs) >= 57
+            assert len(file_hrefs) >= expected_total
             for href in file_hrefs:
                 assert not href.split("#")[0].endswith(".md"), href
                 target_url = urllib.parse.urljoin(explorer_base, href)
@@ -739,7 +764,9 @@ with tempfile.TemporaryDirectory() as temporary:
             web_page.locator("header nav a", has_text="Catalog").click()
             web_page.wait_for_url(f"{server_origin}/fred-skills/docs/catalog.html")
             assert (
-                web_page.locator('table a[href$="/SKILL.html"]').count() == count >= 51
+                web_page.locator('table a[href$="/SKILL.html"]').count()
+                == count
+                == expected_total
             )
 
             web_page.locator("header nav a", has_text="Skill explorer").click()

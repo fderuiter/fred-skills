@@ -786,6 +786,221 @@ class AuditToSarifTests(unittest.TestCase):
         )
         self.assertEqual({"fred-skills/v1": expected_fp}, obs["partial_fingerprints"])
         self.assertEqual({"fred-skills/v1": expected_fp}, obs["fingerprints"])
+        self.assertEqual(
+            {
+                "findingId": "F-1",
+                "topic": "concurrency",
+                "status": "supported",
+                "severity": "critical",
+                "confidence": "high",
+                "remedy": "Fence publication",
+            },
+            obs["properties"],
+        )
+
+    def test_refuted_findings_emit_pass_kind_and_preserve_states_across_roundtrip(
+        self,
+    ):
+        import jsonschema
+
+        statuses = [
+            ("confirmed", "critical"),
+            ("supported", "high"),
+            ("needs-validation", "medium"),
+            ("hardening", "low"),
+            ("refuted", "high"),
+        ]
+        audit = copy.deepcopy(self.base_audit)
+        audit["findings"] = []
+        for idx, (status, sev) in enumerate(statuses, start=1):
+            f = copy.deepcopy(self.base_audit["findings"][0])
+            f["id"] = f"F-{idx}"
+            f["status"] = status
+            f["severity"] = sev
+            f["root_cause"] = f"Distinct cause for {status}"
+            audit["findings"].append(f)
+
+        sarif_data = audit_to_sarif(audit)
+        sarif_schema = json.loads(SARIF_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [],
+            [
+                e.message
+                for e in jsonschema.Draft202012Validator(sarif_schema).iter_errors(
+                    sarif_data
+                )
+            ],
+        )
+
+        results = sarif_data["runs"][0]["results"]
+        self.assertEqual(5, len(results))
+        refuted_res = results[4]
+        self.assertEqual("pass", refuted_res["kind"])
+        self.assertEqual("none", refuted_res["level"])
+        self.assertEqual("refuted", refuted_res["properties"]["status"])
+        for active_res in results[:4]:
+            self.assertNotIn("kind", active_res)
+
+        sarif_path = self.temp_path / "states.sarif"
+        sarif_path.write_text(json.dumps(sarif_data), encoding="utf-8")
+        imported = fred_runs.import_sarif(sarif_path)
+        obs_list = imported["observations"]
+        self.assertEqual(4, len(obs_list))
+        self.assertEqual(
+            ["F-1", "F-2", "F-3", "F-4"],
+            [o["properties"]["findingId"] for o in obs_list],
+        )
+        self.assertEqual(
+            ["confirmed", "supported", "needs-validation", "hardening"],
+            [o["properties"]["status"] for o in obs_list],
+        )
+        for obs in obs_list:
+            self.assertEqual(
+                "scanner-reported; agent verification not performed",
+                obs["evidence_state"],
+            )
+
+    def test_review_json_exports_to_sarif_and_rejects_empty_or_invalid_inputs(self):
+        import jsonschema
+
+        review_doc = {
+            "schema_version": "1.0",
+            "run_id": "run-rev-1",
+            "snapshot": "snap-1",
+            "verdict": "request_changes",
+            "summary": "Found boundary and advisory issues.",
+            "coverage": [
+                {
+                    "topic": "auth",
+                    "scope": "src/auth.py",
+                    "status": "reviewed",
+                    "paths": ["src/auth.py"],
+                }
+            ],
+            "paths": ["src/auth.py", "src/helpers.py"],
+            "findings": [
+                {
+                    "id": "REV-1",
+                    "title": "Missing token expiry check",
+                    "severity": "critical",
+                    "file": "src/auth.py",
+                    "paths": ["src/auth.py", "src/helpers.py"],
+                    "line": 27,
+                    "description": "Expired tokens remain accepted.",
+                    "recommendation": "Reject tokens past exp claim.",
+                },
+                {
+                    "id": "REV-2",
+                    "title": "Prefer explicit timeout constant",
+                    "severity": "advisory",
+                    "file": "src/helpers.py",
+                    "description": "Magic number timeout hinders readability.",
+                },
+            ],
+        }
+        sarif = audit_to_sarif(review_doc)
+        sarif_schema = json.loads(SARIF_SCHEMA_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [],
+            [
+                e.message
+                for e in jsonschema.Draft202012Validator(sarif_schema).iter_errors(
+                    sarif
+                )
+            ],
+        )
+        results = sarif["runs"][0]["results"]
+        self.assertEqual(2, len(results))
+        self.assertEqual("error", results[0]["level"])
+        self.assertEqual("REV-1", results[0]["properties"]["findingId"])
+        self.assertEqual("critical", results[0]["properties"]["severity"])
+        self.assertEqual(
+            "Reject tokens past exp claim.", results[0]["properties"]["remedy"]
+        )
+        self.assertEqual(2, len(results[0]["locations"]))
+        self.assertEqual(
+            27,
+            results[0]["locations"][0]["physicalLocation"]["region"]["startLine"],
+        )
+        self.assertEqual("note", results[1]["level"])
+        self.assertEqual("advisory", results[1]["properties"]["severity"])
+        self.assertNotIn("region", results[1]["locations"][0]["physicalLocation"])
+
+        filtered = audit_to_sarif(review_doc, filter_info=True)
+        self.assertEqual(1, len(filtered["runs"][0]["results"]))
+        self.assertEqual(
+            "REV-1", filtered["runs"][0]["results"][0]["properties"]["findingId"]
+        )
+
+        rev_dir = self.temp_path / "review_ws"
+        rev_dir.mkdir()
+        rev_file = rev_dir / "review.json"
+        rev_file.write_text(json.dumps(review_doc), encoding="utf-8")
+        out_from_file = self.temp_path / "from-file.sarif"
+        out_from_dir = self.temp_path / "from-dir.sarif"
+        self.assertEqual(
+            2, len(convert_file(rev_file, out_from_file)["runs"][0]["results"])
+        )
+        self.assertEqual(
+            2, len(convert_file(rev_dir, out_from_dir)["runs"][0]["results"])
+        )
+
+        empty_rev = self.temp_path / "empty_review_ws"
+        empty_rev.mkdir()
+        (empty_rev / "review.json").write_text("{}", encoding="utf-8")
+        for bad_target in (empty_rev, empty_rev / "review.json"):
+            with self.assertRaises(ValueError) as bad_ctx:
+                convert_file(bad_target)
+            self.assertIn("audit.json", str(bad_ctx.exception))
+            self.assertIn("review.json", str(bad_ctx.exception))
+
+        for bad_doc in (
+            {"verdict": "approve"},
+            {
+                "schema_version": "1.0",
+                "verdict": "approve",
+                "summary": "ok",
+                "findings": [
+                    {
+                        "id": "R-1",
+                        "title": "Bad path",
+                        "severity": "low",
+                        "file": "../escape.py",
+                        "description": "escape",
+                    }
+                ],
+            },
+            {
+                "schema_version": "1.0",
+                "verdict": "approve",
+                "summary": "ok",
+                "extra": True,
+                "findings": [],
+            },
+            {
+                "schema_version": "1.0",
+                "verdict": "approve",
+                "summary": "Approving critical finding",
+                "findings": [
+                    {
+                        "id": "R-1",
+                        "title": "Critical flaw",
+                        "severity": "critical",
+                        "file": "src/auth.py",
+                        "description": "Critical issue",
+                    }
+                ],
+            },
+            {
+                "schema_version": "1.0",
+                "verdict": "request_changes",
+                "summary": "Requesting changes without findings",
+                "findings": [],
+            },
+        ):
+            with self.assertRaises(ValueError) as schema_ctx:
+                audit_to_sarif(bad_doc)
+            self.assertIn("review.json", str(schema_ctx.exception))
 
     def test_domain_artifacts_rejected_with_clear_audit_guidance(self):
         payloads = {
@@ -793,12 +1008,6 @@ class AuditToSarifTests(unittest.TestCase):
                 "schema_version": "1.0",
                 "title": "System Architecture",
                 "status": "draft",
-            },
-            "review.json": {
-                "schema_version": "1.0",
-                "verdict": "comment",
-                "summary": "Review summary",
-                "findings": [],
             },
             "testing.json": {
                 "schema_version": "1.0",
@@ -869,6 +1078,16 @@ class AuditToSarifTests(unittest.TestCase):
             "remediation.json": {
                 "schema_version": "1.0",
                 "records": [],
+            },
+            "observations.json": {
+                "schema_version": "1.0",
+                "observations": [],
+                "limitations": ["Scanner claims require agent verification."],
+            },
+            "scanner-observations.json": {
+                "schema_version": "1.0",
+                "observations": [],
+                "limitations": ["Scanner claims require agent verification."],
             },
             "run.json": {
                 "schema_version": "1.0",
@@ -954,6 +1173,7 @@ class AuditToSarifTests(unittest.TestCase):
             ("verification", {"safe_controls_passed": True}),
             ("reconciliation", {"state_transitions": []}),
             ("remediation", {"records": []}),
+            ("observations", {"observations": []}),
         ]
         for suite in suites_doc["suites"]:
             samples.append(

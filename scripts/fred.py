@@ -1595,6 +1595,48 @@ def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
     return resolved
 
 
+def _resolve_sarif_export_directory(target: Path) -> Path:
+    if (target / "audit.json").is_file():
+        runs._require_audit_directory(target, "export-sarif")
+        return target / "audit.json"
+    run_file = target / "run.json"
+    if run_file.is_file():
+        expected = runs._deliverable_for_run(
+            read_json_object(run_file, label="Run metadata 'run.json'")
+        )
+        if expected in {"audit.json", "review.json"}:
+            return resolve_audit_path(target)
+        runs._require_audit_directory(target, "export-sarif")
+    if (target / "review.json").is_file():
+        return resolve_audit_path(target)
+    runs._require_audit_directory(target, "export-sarif")
+    return target / "audit.json"
+
+
+def _resolve_sarif_export_input(target: Path) -> Path:
+    resolved = (
+        _resolve_sarif_export_directory(target)
+        if target.is_dir()
+        else resolve_audit_path(target)
+    )
+    if resolved.name == "run.json":
+        raise FredCliError(
+            "Audit command 'export-sarif' requires an 'audit.json' ledger; 'run.json' is run metadata and is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger or 'review.json' deliverable.",
+        )
+    if resolved.name not in {"audit.json", "review.json"} and (
+        resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+        or resolved.name in WORKFLOW_DELIVERABLE_SCHEMAS
+    ):
+        raise FredCliError(
+            f"Audit command 'export-sarif' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger or 'review.json' deliverable.",
+        )
+    return resolved
+
+
 def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
         prior_data = None
@@ -1659,7 +1701,7 @@ def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
 
-        audit_path = _resolve_audit_only_input(a.audit, "export-sarif")
+        audit_path = _resolve_sarif_export_input(a.audit)
         data = convert_file(
             audit_path,
             a.output,

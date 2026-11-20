@@ -15,7 +15,7 @@ Trapdoors:
 - `unittest` only: run `python -m unittest discover -s tests -v`, never `pytest` (`evals/fixtures/oracles/{a,b}/test_fee.py` collides).
 - Cross-platform `mypy`: `tests/test_packaging.py` runs `mypy --platform win32 --no-incremental` (guard POSIX calls with `sys.platform != "win32"`).
 - Action pins: `.github/workflows/*.yml` 40-char SHAs and `# v...` tags must match `.github/action-pins.json`.
-- Doc line offsets: tests lock top lines in `README.md` (L1–L38), `docs/experience.md`, `docs/implementation-status.md`, `docs/releasing.md`, and `docs/runbooks.md` (and ban hosting provider names in Pages docs).
+- Pages docs: tests check structural sections/tables in `README.md`, `docs/experience.md`, `docs/implementation-status.md`, `docs/releasing.md`, and `docs/runbooks.md` (and ban hosting provider names in Pages docs).
 
 Run checks or auto-fixes from the root (see [CONTRIBUTING.md](CONTRIBUTING.md) for phase and script commands):
 

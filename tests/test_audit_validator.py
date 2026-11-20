@@ -215,17 +215,17 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertNotIn("requirements-dev.txt", no_jsonschema_valid.stderr)
 
     def test_diagnostics_validator_auto_selects_bundle_or_audit_schema(self):
-        import re
+        if str(ROOT / "scripts") not in sys.path:
+            sys.path.insert(0, str(ROOT / "scripts"))
+        from _markdown_utils import extract_fenced_blocks
 
         diag_pkg = ROOT / "skills/repo-audit-diagnostics"
         diag_script = diag_pkg / "scripts/validate_audit.py"
         examples_text = (diag_pkg / "references/examples.md").read_text(
             encoding="utf-8"
         )
-        blocks = [
-            json.loads(m.group(1))
-            for m in re.finditer(r"```json\s*\n(.*?)\n```", examples_text, re.DOTALL)
-        ]
+        fenced, _ = extract_fenced_blocks(examples_text)
+        blocks = [json.loads(body) for lang, body in fenced if lang == "json"]
         self.assertGreaterEqual(len(blocks), 2)
         bundle_blocks = [b for b in blocks if "session_id" in b]
         audit_blocks = [b for b in blocks if "run_id" in b]
