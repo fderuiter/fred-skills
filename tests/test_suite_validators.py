@@ -13,6 +13,8 @@ from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import validate_architecture
@@ -22,6 +24,8 @@ import validate_skills
 import validate_spec
 import validate_testing
 import validate_workflow
+
+from tests.catalog_oracles import expected_total_skills
 
 
 class SuiteValidatorsTests(unittest.TestCase):
@@ -512,8 +516,10 @@ class SuiteValidatorsTests(unittest.TestCase):
             ROOT / "scripts/validate_testing.py",
             ROOT / "scripts/validate_spec.py",
         ]
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(57, len(synced_validators))
+        self.assertEqual(expected_skills, len(synced_validators))
 
         for path in canonical_targets:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

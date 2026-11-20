@@ -42,6 +42,9 @@ from _markdown_utils import (
     extract_fenced_blocks as _extract_fenced_blocks,
 )
 from _markdown_utils import (
+    extract_markdown_preamble,
+)
+from _markdown_utils import (
     extract_noncode_lines as _extract_noncode_lines,
 )
 from fredlib import vetting
@@ -3156,7 +3159,7 @@ def _validate_release_notes_doc(
 
 
 def _validate_readme_doc(rel_path: str, text: str, exp: _DocExpectations) -> list[str]:
-    intro = "\n".join(text.splitlines()[:10])
+    intro = extract_markdown_preamble(text)
     return [
         *_check_readme_itemized_sum(rel_path, intro, exp),
         *_check_readme_host_names(rel_path, text, exp.host_ids),

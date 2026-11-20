@@ -19,9 +19,11 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from _markdown_utils import (
     consume_fenced_block,
+    is_markdown_table_separator,
     match_atx_heading,
     match_fence_open,
     parse_frontmatter_scalars,
+    split_markdown_table_cells,
     strip_reference_link_definitions,
     unique_heading_slug,
 )
@@ -232,50 +234,11 @@ def _render_inline(
 
 def _split_table_cells(line: str) -> list[str]:
     """Split a Markdown pipe-table row while ignoring pipes inside backticks or escaped pipes."""
-    stripped = line.strip()
-    stripped = stripped.removeprefix("|")
-    if stripped.endswith("|") and not stripped.endswith(r"\|"):
-        stripped = stripped[:-1]
-
-    cells: list[str] = []
-    buf: list[str] = []
-    in_code = False
-    escaped_backslash = False
-    for ch in stripped:
-        if escaped_backslash:
-            if ch == "|":
-                buf.append("|")
-            else:
-                buf.append("\\")
-                buf.append(ch)
-            escaped_backslash = False
-            continue
-        if ch == "\\":
-            escaped_backslash = True
-            continue
-        if ch == "`":
-            in_code = not in_code
-            buf.append(ch)
-            continue
-        if ch == "|" and not in_code:
-            cells.append("".join(buf).strip())
-            buf = []
-            continue
-        buf.append(ch)
-    if escaped_backslash:
-        buf.append("\\")
-    cells.append("".join(buf).strip())
-    return cells
+    return split_markdown_table_cells(line)
 
 
 def _is_table_separator(line: str) -> bool:
-    stripped = line.strip()
-    if "|" not in stripped:
-        return False
-    cells = _split_table_cells(stripped)
-    if not cells:
-        return False
-    return all(bool(re.fullmatch(r":?-{3,}:?", cell)) for cell in cells)
+    return is_markdown_table_separator(line)
 
 
 def _consume_fenced_block(lines: list[str], start_idx: int) -> tuple[str, int]:

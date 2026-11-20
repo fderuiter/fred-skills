@@ -29,7 +29,15 @@ except ImportError:
     termios = None
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 FRED_PY = ROOT / "scripts/fred.py"
+
+from tests.catalog_oracles import (
+    expected_fred_subcommand_count,
+    expected_pack_skill_count,
+    expected_recipe_count,
+)
 
 
 def _drain_pty_master(master: int) -> bytes:
@@ -340,7 +348,9 @@ class FredCLITests(unittest.TestCase):
         starter_skills = json.loads(
             (ROOT / "catalog/packs.json").read_text(encoding="utf-8")
         )["packs"]["starter"]["skills"]
-        self.assertEqual(6, len(starter_skills))
+        expected_starter = expected_pack_skill_count("starter", ROOT)
+        self.assertGreaterEqual(expected_starter, 1)
+        self.assertEqual(expected_starter, len(starter_skills))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir).resolve()
@@ -497,7 +507,9 @@ class FredCLITests(unittest.TestCase):
         recipes = json.loads((ROOT / "catalog/recipes.json").read_text("utf-8"))[
             "recipes"
         ]
-        self.assertEqual(18, len(recipes))
+        expected_recipes = expected_recipe_count(ROOT)
+        self.assertGreaterEqual(expected_recipes, 1)
+        self.assertEqual(expected_recipes, len(recipes))
         for task_name, recipe in recipes.items():
             with self.subTest(task=task_name):
                 results = fred._search_skills(task_name)
@@ -895,7 +907,9 @@ class FredCLITests(unittest.TestCase):
             },
         }
         all_commands = [cmd for cmds in fred.LIFECYCLE_GROUPS.values() for cmd in cmds]
-        self.assertEqual(29, len(all_commands))
+        expected_subcommands = expected_fred_subcommand_count(ROOT)
+        self.assertGreaterEqual(expected_subcommands, 1)
+        self.assertEqual(expected_subcommands, len(all_commands))
         for cmd in all_commands:
             with self.subTest(command=cmd):
                 rendered = fred.render_tty_output(
@@ -2388,11 +2402,13 @@ class FredDispatchRegistryTests(unittest.TestCase):
         self.assertLessEqual(depth, 1, f"dispatch nesting depth {depth} exceeds 1")
 
     def test_dispatch_registry_maps_all_twenty_eight_commands(self):
-        """COMMAND_REGISTRY must contain all 29 subcommands across all lifecycle groups."""
+        """COMMAND_REGISTRY must contain all subcommands across all lifecycle groups."""
         expected_commands = {
             cmd for cmds in self.fred.LIFECYCLE_GROUPS.values() for cmd in cmds
         }
-        self.assertEqual(29, len(expected_commands))
+        expected_subcommands = expected_fred_subcommand_count(ROOT)
+        self.assertGreaterEqual(expected_subcommands, 1)
+        self.assertEqual(expected_subcommands, len(expected_commands))
         self.assertEqual(expected_commands, set(self.fred.COMMAND_REGISTRY.keys()))
         self.assertEqual(self.fred.COMMAND_REGISTRY, self.fred.DISPATCH_REGISTRY)
 

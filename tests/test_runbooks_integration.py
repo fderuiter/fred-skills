@@ -66,12 +66,16 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def _extract_scenario_c_python_script() -> str:
     """Extract and dedent the inline Python receipt reconstruction script from Runbook 3 Scenario C."""
-    blocks = extract_blocks_from_file(
+    all_blocks = extract_blocks_from_file(
         ROOT / "docs/runbooks.md",
-        start_line=408,
-        end_line=450,
         root=ROOT,
     )
+    blocks = [
+        block
+        for block in all_blocks
+        if any("Scenario C: Non-Destructive Repair" in h for h in block.headings)
+        and any("Reconstructed receipt.json" in cmd for _, cmd in block.commands)
+    ]
     if len(blocks) != 1 or not blocks[0].commands:
         raise AssertionError("Failed to locate Runbook 3 Scenario C Python block")
     _, cmd_str = blocks[0].commands[0]
