@@ -2572,19 +2572,77 @@ def _build_package_telemetry_entry(
     }
 
 
+def _validate_cursor_marketplace_source(
+    root: Path, raw_source: object, label: str
+) -> tuple[Path | None, list[str]]:
+    if not isinstance(raw_source, str) or not _is_safe_cursor_rel_path(raw_source):
+        return None, [
+            f"{label}: 'source' must be a relative path without '..' or absolute prefixes"
+        ]
+    candidate = root / raw_source
+    if candidate.is_symlink():
+        return None, [f"{label}: 'source' path '{raw_source}' must not be a symlink"]
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(root.resolve()) or not resolved.is_dir():
+        return None, [
+            f"{label}: 'source' path '{raw_source}' does not exist inside repository"
+        ]
+    return candidate, []
+
+
+def _validate_cursor_marketplace_entry(
+    root: Path, entry: object, idx: int
+) -> list[str]:
+    label = f".cursor-plugin/marketplace.json plugins[{idx}]"
+    if not isinstance(entry, dict):
+        return [f"{label}: plugin entry must be a JSON object"]
+    plugin_dir, source_errs = _validate_cursor_marketplace_source(
+        root, entry.get("source"), label
+    )
+    without_source = {k: v for k, v in entry.items() if k != "source"}
+    expected_name = str(entry.get("name", ""))
+    meta_errs = _validate_cursor_metadata_fields(without_source, expected_name, label)
+    if plugin_dir is None:
+        return [*source_errs, *meta_errs]
+    return [
+        *source_errs,
+        *meta_errs,
+        *_validate_cursor_paths_section(plugin_dir, without_source, label),
+    ]
+
+
+def _validate_cursor_marketplace(root: Path) -> list[str]:
+    mp_path = root / ".cursor-plugin/marketplace.json"
+    if mp_path.is_symlink():
+        return ["Root .cursor-plugin/marketplace.json must not be a symlink"]
+    if not mp_path.exists():
+        return []
+    doc, load_errs = _load_optional_json_dict(
+        mp_path, ".cursor-plugin/marketplace.json"
+    )
+    if load_errs or doc is None:
+        return load_errs
+    plugins = doc.get("plugins")
+    if not isinstance(plugins, list) or not plugins:
+        return [".cursor-plugin/marketplace.json: 'plugins' must be a non-empty array"]
+    return [
+        err
+        for idx, item in enumerate(plugins)
+        for err in _validate_cursor_marketplace_entry(root, item, idx)
+    ]
+
+
 def _validate_root_cursor_manifest(root: Path) -> list[str]:
     root_manifest = root / ".cursor-plugin/plugin.json"
+    errors: list[str] = []
     if root_manifest.is_symlink():
-        return ["Root .cursor-plugin/plugin.json must not be a symlink"]
-    if not root_manifest.exists():
-        return []
-    try:
-        data = json.loads(root_manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return [f".cursor-plugin/plugin.json: {exc}"]
-    return _validate_cursor_plugin_manifest(
-        root, "fred-skills", data, ".cursor-plugin/plugin.json"
-    )
+        errors.append("Root .cursor-plugin/plugin.json must not be a symlink")
+    elif root_manifest.exists():
+        errors.append(
+            "Root .cursor-plugin/plugin.json must be omitted so marketplace pack skill lists are not overridden"
+        )
+    errors.extend(_validate_cursor_marketplace(root))
+    return errors
 
 
 def _description_content_tokens(description: str) -> frozenset[str]:
@@ -2655,7 +2713,7 @@ def _validate_cross_suite_jaccard(
 def _check_single_pack_budget(
     pack_name: str, pack_cfg: object, raw_chars_by_pkg: Mapping[str, int]
 ) -> str | None:
-    if not isinstance(pack_cfg, dict):
+    if pack_name in UMBRELLA_PACK_NAMES or not isinstance(pack_cfg, dict):
         return None
     skills = pack_cfg.get("skills")
     if not isinstance(skills, list):
@@ -2666,17 +2724,40 @@ def _check_single_pack_budget(
             f"Pack 'starter' exceeds Stage-1 starter budget "
             f"({pack_chars} > {MAX_STARTER_PACK_CHARS} raw characters)"
         )
-    if pack_name not in UMBRELLA_PACK_NAMES and pack_chars >= MAX_CURATED_PACK_CHARS:
+    if pack_chars >= MAX_CURATED_PACK_CHARS:
         return (
             f"Pack '{pack_name}' exceeds Stage-1 pack budget "
             f"({pack_chars} >= {MAX_CURATED_PACK_CHARS} raw characters)"
         )
-    if pack_name in UMBRELLA_PACK_NAMES and pack_chars >= MAX_SUITE_METADATA_CHARS:
-        return (
-            f"Pack '{pack_name}' exceeds Stage-1 suite budget "
-            f"({pack_chars} >= {MAX_SUITE_METADATA_CHARS} raw characters)"
-        )
     return None
+
+
+def _curated_pack_skills(packs: Mapping[str, object]) -> set[str]:
+    covered: set[str] = set()
+    for pack_name, pack_cfg in packs.items():
+        if str(pack_name) in UMBRELLA_PACK_NAMES or not isinstance(pack_cfg, dict):
+            continue
+        skills = pack_cfg.get("skills")
+        if isinstance(skills, list):
+            covered.update(s for s in skills if isinstance(s, str))
+    return covered
+
+
+def _validate_curated_pack_coverage(
+    root: Path, packs: Mapping[str, object]
+) -> list[str]:
+    if not packs or not (root / "catalog/suites.json").is_file():
+        return []
+    try:
+        members = sorted(suite_members(root))
+    except (OSError, ValueError, KeyError):
+        return []
+    covered = _curated_pack_skills(packs)
+    return [
+        f"Skill '{name}' in catalog/suites.json must belong to at least one curated pack in catalog/packs.json"
+        for name in members
+        if name not in covered
+    ]
 
 
 def _validate_pack_char_budgets(
@@ -2690,7 +2771,7 @@ def _validate_pack_char_budgets(
     packs = packs_doc.get("packs")
     if not isinstance(packs, dict):
         return []
-    return [
+    budget_errs = [
         err
         for pack_name, pack_cfg in packs.items()
         if (
@@ -2698,6 +2779,7 @@ def _validate_pack_char_budgets(
         )
         is not None
     ]
+    return [*budget_errs, *_validate_curated_pack_coverage(root, packs)]
 
 
 def _validate_stage1_char_budgets(
@@ -2706,17 +2788,7 @@ def _validate_stage1_char_budgets(
     raw_chars_by_pkg = {
         pkg: len(pkg) + len(desc.strip()) for pkg, desc in descriptions_by_pkg.items()
     }
-    configured = set(skill_to_suite_map(root))
-    active_names = configured if configured else set(raw_chars_by_pkg)
-    total_chars = sum(raw_chars_by_pkg.get(pkg, 0) for pkg in active_names)
-    errors: list[str] = []
-    if total_chars >= MAX_SUITE_METADATA_CHARS:
-        errors.append(
-            f"Aggregate Stage-1 skill metadata exceeds budget "
-            f"({total_chars} >= {MAX_SUITE_METADATA_CHARS} raw characters)"
-        )
-    errors.extend(_validate_pack_char_budgets(root, raw_chars_by_pkg))
-    return errors
+    return _validate_pack_char_budgets(root, raw_chars_by_pkg)
 
 
 def _validate_routing_and_budget_gates(
@@ -2787,7 +2859,6 @@ _BUILD_CATALOG_DOC_TOKENS: tuple[str, ...] = (
     "docs/catalog.md",
     ".claude-plugin/marketplace.json",
     ".cursor-plugin/marketplace.json",
-    ".cursor-plugin/plugin.json",
     "gemini-extension.json",
 )
 _ACTION_PINS_DOC_TOKEN = ".github/action-pins.json"

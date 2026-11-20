@@ -8,7 +8,7 @@ Portable Agent Skills toolkit (audit-only default; require explicit user authori
 - `scripts/fredlib/`: local CLI and maintenance library; distributable skills never import it.
 - `evals/`: offline evaluation harness and synthetic fixtures; never treat fixture-adapter scores as model quality.
 
-Never manually edit generated outputs: `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json`, `skills/*/.cursor-plugin/plugin.json`, `gemini-extension.json` (`scripts/build_catalog.py`); `docs/experience.md`, `docs/explorer.html` (`scripts/build_experience.py`); or `skills/*/` files synced from `shared/*/manifest.json` (`scripts/sync_audit_resources.py`, including `skills/repo-audit-synthesis/scripts/audit_to_sarif.py`).
+Never manually edit generated outputs: `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `skills/*/.cursor-plugin/plugin.json`, `gemini-extension.json` (`scripts/build_catalog.py`); `docs/experience.md`, `docs/explorer.html` (`scripts/build_experience.py`); or `skills/*/` files synced from `shared/*/manifest.json` (`scripts/sync_audit_resources.py`, including `skills/repo-audit-synthesis/scripts/audit_to_sarif.py`).
 
 Trapdoors:
 - `PYTHONDONTWRITEBYTECODE=1`: `scripts/validate_skills.py` rejects `__pycache__` and `.pyc` files under `skills/`.

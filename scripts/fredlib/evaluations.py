@@ -1155,9 +1155,7 @@ def evaluate(
     if cases and set(cases) - {case["id"] for case in selected}:
         raise ValueError("Unknown evaluation case ID")
     suite_map = _skill_to_suite_map(root)
-    ignore_bytecode = shutil.ignore_patterns(
-        "__pycache__", "*.pyc", "*.pyo", ".cursor-plugin"
-    )
+    ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
     results: list[dict[str, Any]] = []
     for case in selected:
         contract = _resolve_case_contract(case, suite_map)

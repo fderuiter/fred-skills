@@ -28,8 +28,10 @@ from skill_tools import (
 )
 from validate_skills import (
     EXPLICIT_INVOCATION_ONLY_SKILLS,
+    MAX_CURATED_PACK_CHARS,
     MAX_DESCRIPTION_CHARS,
     NAME,
+    UMBRELLA_PACK_NAMES,
     _validate_description_contract,
 )
 
@@ -648,6 +650,106 @@ def _validate_inputs(
                 )
 
 
+def _pack_raw_chars(root: Path, skill_names: Sequence[str]) -> int:
+    total = 0
+    for sk in skill_names:
+        skill_md = root / "skills" / sk / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        meta, _ = read_frontmatter(skill_md)
+        desc = str(meta.get("description", "")).strip()
+        total += len(sk) + len(desc)
+    return total
+
+
+_SUITE_PREFERRED_PACKS: dict[str, tuple[str, ...]] = {
+    "software-architecture": ("software-architecture",),
+    "code-review": ("code-review",),
+    "automated-testing": ("automated-testing",),
+    "spec-driven-development": ("spec-driven-development",),
+    "repository-workflows": ("verified-fixes", "session-hygiene"),
+    "repository-audits": (
+        "release-readiness",
+        "web-review",
+        "backend-consistency",
+        "async-correctness",
+    ),
+}
+
+
+def _select_curated_pack_for_skill(
+    packs: dict[str, Any], root: Path, name: str, suite_name: str
+) -> str | None:
+    curated = {
+        k: v
+        for k, v in packs.items()
+        if k not in UMBRELLA_PACK_NAMES
+        and isinstance(v, dict)
+        and isinstance(v.get("skills"), list)
+    }
+    if not curated or any(name in v["skills"] for v in curated.values()):
+        return None
+    skill_cost = _pack_raw_chars(root, [name])
+    preferred = [p for p in _SUITE_PREFERRED_PACKS.get(suite_name, ()) if p in curated]
+    non_starter = [p for p in curated if p != "starter" and p not in preferred]
+    ordered = [*preferred, *non_starter]
+    for group in (ordered, ["starter"] if "starter" in curated else []):
+        candidates = [
+            (
+                _pack_raw_chars(root, curated[p]["skills"]),
+                idx,
+                p,
+            )
+            for idx, p in enumerate(group)
+            if _pack_raw_chars(root, curated[p]["skills"]) + skill_cost
+            < MAX_CURATED_PACK_CHARS
+        ]
+        if candidates:
+            return min(candidates)[2]
+    return None
+
+
+def _append_pack_skill(pack_obj: dict[str, Any], name: str) -> bool:
+    skills = pack_obj.get("skills")
+    if not isinstance(skills, list) or name in skills:
+        return False
+    if skills and skills[-1] == "repo-audit-synthesis":
+        skills.insert(len(skills) - 1, name)
+    else:
+        skills.append(name)
+    return True
+
+
+def _register_skill_in_packs(
+    packs_path: Path, root: Path, name: str, suite_name: str
+) -> bool:
+    if not packs_path.is_file():
+        return False
+    packs_doc = json.loads(packs_path.read_text(encoding="utf-8"))
+    packs = packs_doc.get("packs")
+    if not isinstance(packs, dict) or not packs:
+        return False
+    changed = False
+    chosen = _select_curated_pack_for_skill(packs, root, name, suite_name)
+    if chosen is not None:
+        changed = _append_pack_skill(packs[chosen], name) or changed
+    if "complete" in packs and isinstance(packs["complete"], dict):
+        changed = _append_pack_skill(packs["complete"], name) or changed
+    if (
+        suite_name == "repository-audits"
+        and "full-audit" in packs
+        and isinstance(packs["full-audit"], dict)
+    ):
+        changed = _append_pack_skill(packs["full-audit"], name) or changed
+    if changed:
+        packs_path.write_text(
+            json.dumps(packs_doc, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    return changed
+
+
 def _sync_catalog_files(
     root: Path,
     name: str,
@@ -766,6 +868,10 @@ def _sync_catalog_files(
                 newline="\n",
             )
             touched.append(aux_path)
+
+    packs_path = catalog_dir / "packs.json"
+    if _register_skill_in_packs(packs_path, root, name, target_suite_name):
+        touched.append(packs_path)
 
     if (root / "shared").is_dir():
         sync_audit_resources.sync(root=root, check=False)

@@ -21,6 +21,10 @@
         "repo-audit-lifecycle",
         "repo-audit-temporal-coupling",
         "repo-audit-state-machines",
+        "repo-audit-capacity",
+        "repo-audit-complexity",
+        "repo-audit-nondeterminism",
+        "repo-audit-side-effects",
         "repo-audit-synthesis"
       ]
     },
@@ -32,6 +36,10 @@
         "repo-audit-idempotency",
         "repo-audit-trust-boundaries",
         "repo-audit-data-integrity",
+        "repo-audit-boundary-conditions",
+        "repo-audit-domain-models",
+        "repo-audit-error-semantics",
+        "repo-audit-sources-of-truth",
         "repo-audit-synthesis"
       ]
     },
@@ -43,6 +51,10 @@
         "repo-audit-concurrency",
         "repo-audit-cache-coherence",
         "repo-audit-accessibility-state",
+        "repo-audit-api-consistency",
+        "repo-audit-architecture",
+        "repo-audit-cohesion",
+        "repo-audit-dead-code",
         "repo-audit-synthesis"
       ]
     },
@@ -54,6 +66,10 @@
         "repo-audit-protocol-drift",
         "repo-audit-failure-modes",
         "repo-audit-test-contracts",
+        "repo-audit-agent-configs",
+        "repo-audit-diagnostics",
+        "repo-audit-observability",
+        "repo-audit-test-oracles",
         "repo-audit-synthesis"
       ]
     },

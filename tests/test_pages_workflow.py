@@ -519,7 +519,7 @@ class PagesWorkflowTests(unittest.TestCase):
             self.assertTrue((site_dir / "docs/explorer.html").is_file())
             self.assertTrue((site_dir / "CLAUDE.md").is_file())
             self.assertTrue((site_dir / "GEMINI.md").is_file())
-            self.assertTrue((site_dir / ".cursor-plugin/plugin.json").is_file())
+            self.assertFalse((site_dir / ".cursor-plugin/plugin.json").exists())
             self.assertTrue((site_dir / ".cursor-plugin/marketplace.json").is_file())
 
             # Clean artifact boundary: exclude repo internals, tests, and scripts

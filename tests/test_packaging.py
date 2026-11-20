@@ -395,7 +395,7 @@ class PackageTests(unittest.TestCase):
         gemini_ext_path = self.root / "gemini-extension.json"
         self.assertTrue(marketplace_path.is_file())
         self.assertTrue(cursor_marketplace_path.is_file())
-        self.assertTrue(cursor_root_plugin_path.is_file())
+        self.assertFalse(cursor_root_plugin_path.exists())
         self.assertTrue(cursor_skill_plugin_path.is_file())
         self.assertTrue(gemini_ext_path.is_file())
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
@@ -407,10 +407,12 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(root_version, marketplace_default["version"])
         self.assertEqual(root_version, marketplace_default["metadata"]["version"])
         self.assertTrue(marketplace_default["description"])
-        cursor_root_default = json.loads(
-            cursor_root_plugin_path.read_text(encoding="utf-8")
+        cursor_marketplace_default = json.loads(
+            cursor_marketplace_path.read_text(encoding="utf-8")
         )
-        self.assertEqual(root_version, cursor_root_default["version"])
+        self.assertEqual(
+            root_version, cursor_marketplace_default["metadata"]["version"]
+        )
 
         (self.root / "VERSION").write_text("1.2.3\n", encoding="utf-8")
         problems_version = build(self.root, check=True)
@@ -430,9 +432,6 @@ class PackageTests(unittest.TestCase):
             )
         )
         self.assertTrue(
-            any(".cursor-plugin/plugin.json" in problem for problem in problems_version)
-        )
-        self.assertTrue(
             any(
                 "skills/sample-audit/.cursor-plugin/plugin.json" in problem
                 for problem in problems_version
@@ -448,7 +447,9 @@ class PackageTests(unittest.TestCase):
         self.assertEqual("1.2.3", updated_marketplace["metadata"]["version"])
         self.assertEqual(
             "1.2.3",
-            json.loads(cursor_root_plugin_path.read_text(encoding="utf-8"))["version"],
+            json.loads(cursor_marketplace_path.read_text(encoding="utf-8"))["metadata"][
+                "version"
+            ],
         )
         self.assertEqual(
             "1.2.3",
@@ -457,7 +458,6 @@ class PackageTests(unittest.TestCase):
 
         marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
         cursor_marketplace_path.write_text('{"tampered": true}', encoding="utf-8")
-        cursor_root_plugin_path.write_text('{"tampered": true}', encoding="utf-8")
         cursor_skill_plugin_path.write_text('{"tampered": true}', encoding="utf-8")
         gemini_ext_path.write_text('{"tampered": true}', encoding="utf-8")
         problems = build(self.root, check=True)
@@ -466,9 +466,6 @@ class PackageTests(unittest.TestCase):
         )
         self.assertTrue(
             any(".cursor-plugin/marketplace.json" in problem for problem in problems)
-        )
-        self.assertTrue(
-            any(".cursor-plugin/plugin.json" in problem for problem in problems)
         )
         self.assertTrue(
             any(
@@ -598,6 +595,7 @@ class PackageTests(unittest.TestCase):
         cursor_manifest = json.loads(
             (self.root / ".cursor-plugin/marketplace.json").read_text(encoding="utf-8")
         )
+        self.assertFalse((self.root / ".cursor-plugin/plugin.json").exists())
         self.assertEqual(
             cursor_manifest["plugins"],
             [
@@ -608,6 +606,16 @@ class PackageTests(unittest.TestCase):
                     "version": root_version,
                     "author": {"name": "fderuiter"},
                     "license": "MIT",
+                    "skills": ["./skills/sample-audit"],
+                },
+                {
+                    "name": "starter",
+                    "source": "./",
+                    "description": "Starter bundle.",
+                    "version": root_version,
+                    "author": {"name": "fderuiter"},
+                    "license": "MIT",
+                    "skills": ["./skills/sample-audit"],
                 },
                 {
                     "name": "sample-audit",
@@ -616,6 +624,7 @@ class PackageTests(unittest.TestCase):
                     "version": root_version,
                     "author": {"name": "fderuiter"},
                     "license": "MIT",
+                    "skills": ["."],
                 },
             ],
         )
@@ -635,7 +644,7 @@ class PackageTests(unittest.TestCase):
     def test_committed_marketplace_manifest_is_valid_and_current(self):
         self.assertEqual([], build(ROOT, check=True))
         self.assertFalse((ROOT / ".claude-plugin/plugin.json").exists())
-        self.assertTrue((ROOT / ".cursor-plugin/plugin.json").is_file())
+        self.assertFalse((ROOT / ".cursor-plugin/plugin.json").exists())
         suite_skills = get_suite_skills(ROOT)
         packs = json.loads((ROOT / "catalog/packs.json").read_text(encoding="utf-8"))[
             "packs"
@@ -701,19 +710,6 @@ class PackageTests(unittest.TestCase):
                     (ROOT / plugin["source"] / member_source / "SKILL.md").is_file()
                 )
 
-        cursor_root_manifest = json.loads(
-            (ROOT / ".cursor-plugin/plugin.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(cursor_root_manifest["name"], "fred-skills")
-        self.assertEqual(cursor_root_manifest["version"], active_version)
-        self.assertEqual(cursor_root_manifest["author"], {"name": "fderuiter"})
-        self.assertEqual(cursor_root_manifest["license"], "MIT")
-        self.assertNotIn("strict", cursor_root_manifest)
-        self.assertEqual(
-            cursor_root_manifest["skills"],
-            [f"./skills/{member}" for member in sorted(suite_skills)],
-        )
-
         cursor_manifest_path = ROOT / ".cursor-plugin/marketplace.json"
         self.assertTrue(cursor_manifest_path.is_file())
         cursor_data = json.loads(cursor_manifest_path.read_text(encoding="utf-8"))
@@ -722,19 +718,44 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(cursor_data["metadata"]["version"], active_version)
         self.assertTrue(cursor_data["metadata"]["description"])
         cursor_plugins = cursor_data["plugins"]
-        self.assertEqual(len(cursor_plugins), 1 + len(suite_skills))
+        self.assertEqual(len(cursor_plugins), 1 + len(packs) + len(suite_skills))
         cursor_names = [p["name"] for p in cursor_plugins]
         self.assertEqual(len(cursor_names), len(set(cursor_names)))
-        self.assertEqual(set(cursor_names), {"fred-skills", *suite_skills})
-        for pack_name in packs:
-            self.assertNotIn(pack_name, set(cursor_names))
+        self.assertEqual(set(cursor_names), {"fred-skills", *packs, *suite_skills})
+        cursor_bundles = [p for p in cursor_plugins if p["source"] == "./"]
+        cursor_skill_entries = [
+            p for p in cursor_plugins if p["source"].startswith("./skills/")
+        ]
+        self.assertEqual(
+            len(cursor_bundles) + len(cursor_skill_entries), len(cursor_plugins)
+        )
+        self.assertEqual({p["name"] for p in cursor_bundles}, {"fred-skills", *packs})
+        self.assertEqual({p["name"] for p in cursor_skill_entries}, set(suite_skills))
+        self.assertEqual(
+            cursor_bundles[0]["skills"],
+            [f"./skills/{member}" for member in sorted(suite_skills)],
+        )
+        for bundle in cursor_bundles[1:]:
+            expected_pack = packs[bundle["name"]]
+            self.assertEqual(bundle["description"], expected_pack["description"])
+            self.assertEqual(
+                bundle["skills"],
+                [f"./skills/{member}" for member in expected_pack["skills"]],
+            )
         for entry in cursor_plugins:
             self.assertNotIn("strict", entry)
-            self.assertNotIn("skills", entry)
+            self.assertIn("skills", entry)
+            self.assertTrue(entry["skills"])
             self.assertNotIn("..", entry["source"])
             self.assertEqual(entry["version"], active_version)
             self.assertEqual(entry["author"], {"name": "fderuiter"})
             self.assertEqual(entry["license"], "MIT")
+            plugin_dir = (ROOT / entry["source"]).resolve()
+            for rel_skill in entry["skills"]:
+                self.assertNotIn("..", rel_skill)
+                self.assertTrue((plugin_dir / rel_skill / "SKILL.md").is_file())
+        for entry in cursor_skill_entries:
+            self.assertEqual(entry["skills"], ["."])
             plugin_dir = (ROOT / entry["source"]).resolve()
             plugin_manifest_path = plugin_dir / ".cursor-plugin/plugin.json"
             self.assertTrue(
@@ -1405,7 +1426,6 @@ class PackageTests(unittest.TestCase):
             "docs/catalog.md",
             ".claude-plugin/marketplace.json",
             ".cursor-plugin/marketplace.json",
-            ".cursor-plugin/plugin.json",
             "gemini-extension.json",
         )
 
@@ -3089,7 +3109,7 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(any("strict" in e for e in errs_bad))
         self.assertTrue(any("'..'" in e for e in errs_bad))
 
-        # CLI installation excludes .cursor-plugin from installed destination
+        # CLI installation preserves .cursor-plugin/plugin.json in installed destination
         dest_project = self.root / "dest-project"
         dest_project.mkdir(parents=True, exist_ok=True)
         install_res = installation.install(
@@ -3101,7 +3121,47 @@ class PackageTests(unittest.TestCase):
         )
         installed_dir = Path(install_res["target"]) / "repo-audit-concurrency"
         self.assertTrue((installed_dir / "SKILL.md").is_file())
-        self.assertFalse((installed_dir / ".cursor-plugin").exists())
+        self.assertTrue((installed_dir / ".cursor-plugin/plugin.json").is_file())
+
+        # Root .cursor-plugin/plugin.json and unsafe marketplace paths are rejected
+        plugin_json.write_text(json.dumps(valid_manifest), encoding="utf-8")
+        self.manifest()
+        root_cursor_dir = self.root / ".cursor-plugin"
+        root_cursor_dir.mkdir(parents=True, exist_ok=True)
+        root_plugin = root_cursor_dir / "plugin.json"
+        root_plugin.write_text(json.dumps(valid_manifest), encoding="utf-8")
+        errs_root_plugin, _ = validate_with_telemetry(self.root)
+        self.assertTrue(
+            any(
+                "Root .cursor-plugin/plugin.json must be omitted" in e
+                for e in errs_root_plugin
+            ),
+            errs_root_plugin,
+        )
+        root_plugin.unlink()
+
+        bad_mp = {
+            "name": "fred-skills",
+            "owner": {"name": "fderuiter"},
+            "metadata": {"description": "Test", "version": "0.2.0"},
+            "plugins": [
+                {
+                    "name": "sample-audit",
+                    "source": "../escape",
+                    "description": "Desc",
+                    "version": "0.2.0",
+                    "author": {"name": "fderuiter"},
+                    "skills": ["/abs/path"],
+                }
+            ],
+        }
+        (root_cursor_dir / "marketplace.json").write_text(
+            json.dumps(bad_mp), encoding="utf-8"
+        )
+        errs_bad_mp, _ = validate_with_telemetry(self.root)
+        self.assertTrue(
+            any("'source' must be a relative path" in e for e in errs_bad_mp)
+        )
 
     def test_frontmatter_xml_tags_html_comments_and_hidden_unicode_are_rejected(
         self,
@@ -3885,11 +3945,14 @@ class PackageTests(unittest.TestCase):
             for sk in packs_doc["packs"]["starter"]["skills"]
         )
         self.assertLessEqual(starter_raw, 1500)
+        curated_covered: set[str] = set()
         for pack_name, pack_obj in packs_doc["packs"].items():
             if pack_name in {"complete", "full-audit"}:
                 continue
+            curated_covered.update(pack_obj["skills"])
             pack_raw = sum(len(sk) + len(live_descs[sk]) for sk in pack_obj["skills"])
             self.assertLess(pack_raw, 2500, pack_name)
+        self.assertEqual(set(live_descs), curated_covered)
 
         self.assertEqual([], _validate_stage1_char_budgets(ROOT, live_descs))
         self.assertEqual([], _validate_cross_suite_jaccard(ROOT, live_descs))
@@ -3940,9 +4003,25 @@ class PackageTests(unittest.TestCase):
         )
         self.assertEqual([], _validate_cross_suite_jaccard(jaccard_root, overlap_descs))
 
-        # Verify Stage-1 budget overflow rejections (starter > 1500, curated pack >= 2500, aggregate >= 8000)
+        # Verify Stage-1 pack budget overflow rejections while exempting umbrella packs and repository totals (>= 8000)
         (self.root / "catalog").mkdir(exist_ok=True)
-        synth_descs = {f"skill-{i:02d}": "x" * 130 for i in range(60)}
+        synth_descs = {f"skill-{i:02d}": "x" * 130 for i in range(64)}
+        (self.root / "catalog/suites.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "suites": [
+                        {
+                            "name": "repository-audits",
+                            "phases": [
+                                {"id": 1, "title": "P1", "skills": list(synth_descs)}
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
         (self.root / "catalog/packs.json").write_text(
             json.dumps(
                 {
@@ -3956,10 +4035,9 @@ class PackageTests(unittest.TestCase):
             encoding="utf-8",
         )
         budget_errors = _validate_stage1_char_budgets(self.root, synth_descs)
-        self.assertTrue(
+        self.assertFalse(
             any(
-                "Aggregate Stage-1 skill metadata exceeds budget" in e
-                and "8000 raw characters" in e
+                "Aggregate Stage-1" in e or "Pack 'complete'" in e
                 for e in budget_errors
             ),
             budget_errors,
@@ -3978,6 +4056,32 @@ class PackageTests(unittest.TestCase):
             ),
             budget_errors,
         )
+        self.assertTrue(
+            any(
+                "Skill 'skill-20' in catalog/suites.json must belong to at least one curated pack"
+                in e
+                for e in budget_errors
+            ),
+            budget_errors,
+        )
+
+        # When all 64 skills (> 8,000 aggregate raw chars) belong to bounded curated packs (< 2,500), zero Stage-1 errors
+        bounded_packs = {
+            f"domain-{group_idx}": {
+                "skills": [
+                    f"skill-{i:02d}"
+                    for i in range(group_idx * 16, (group_idx + 1) * 16)
+                ]
+            }
+            for group_idx in range(4)
+        }
+        bounded_packs["starter"] = {"skills": [f"skill-{i:02d}" for i in range(6)]}
+        bounded_packs["complete"] = {"skills": list(synth_descs)}
+        (self.root / "catalog/packs.json").write_text(
+            json.dumps({"packs": bounded_packs}),
+            encoding="utf-8",
+        )
+        self.assertEqual([], _validate_stage1_char_budgets(self.root, synth_descs))
 
     def test_invocation_policy_parity_and_guarded_skills_rejected_when_mismatched(
         self,

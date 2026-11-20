@@ -18,7 +18,7 @@ escaping its directory. CI rejects drift.
 with 13 packs in `catalog/packs.json` and 9 host adapters in `catalog/hosts.json`.
 `scripts/build_catalog.py` emits deterministic generated discovery and plugin manifests:
 `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`,
-`.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json` (plus per-skill
+`.cursor-plugin/marketplace.json` (plus per-skill
 `skills/*/.cursor-plugin/plugin.json`), and `gemini-extension.json`. New families can be
 added without changing the audit suite's public names.
 
@@ -167,7 +167,7 @@ Do not infer permission to copy an upstream implementation from its public avail
 Each `shared/<suite>/` directory owns its suite protocol, schema, and templates, and its
 `manifest.json` limits copies to that suite's members. `catalog/{suites,recipes,packs,profiles,hosts,experience}.json`
 are authoring inputs; `catalog/skills.json`, `docs/catalog.md`, `.claude-plugin/marketplace.json`,
-`.cursor-plugin/marketplace.json`, `.cursor-plugin/plugin.json`, `skills/*/.cursor-plugin/plugin.json`,
+`.cursor-plugin/marketplace.json`, `skills/*/.cursor-plugin/plugin.json`,
 `gemini-extension.json`, `docs/experience.md`, and `docs/explorer.html` are generated. Keep
 these boundaries explicit rather than adding another editable index.
 

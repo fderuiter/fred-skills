@@ -6,13 +6,13 @@ All workflows follow the audit-only default policy defined in [AGENTS.md](../AGE
 
 ## Supported Agent Hosts
 
-The toolkit catalogs nine agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json), [.cursor-plugin/plugin.json](../.cursor-plugin/plugin.json), and [gemini-extension.json](../gemini-extension.json).
+The toolkit catalogs nine agent hosts in [catalog/hosts.json](../catalog/hosts.json). The table below lists installation targets, invocation syntax, and marker files. Native plugin and extension manifests are generated at [.claude-plugin/marketplace.json](../.claude-plugin/marketplace.json), [.cursor-plugin/marketplace.json](../.cursor-plugin/marketplace.json) (plus per-skill `skills/*/.cursor-plugin/plugin.json`), and [gemini-extension.json](../gemini-extension.json).
 
 | Host | Project Path | User Path | Invocation Syntax | Marker File | Behavioral Test Status |
 | --- | --- | --- | --- | --- | --- |
 | OpenAI Codex (`codex`) | `.agents/skills` | `.agents/skills` | `$skill-name` | `.agents` | not-executed-by-this-host-adapter |
 | Claude Code (`claude-code`) | `.claude/skills` | `.claude/skills` | `/skill-name` or natural language | `.claude` | not-executed |
-| Antigravity (`antigravity`) | `.agents/skills` | `.gemini/antigravity/skills` | Natural language invocation | `.agents` | not-executed |
+| Antigravity (`antigravity`) | `.agents/skills` | `.gemini/antigravity/skills` | Natural language invocation | `.agents` (project), `.gemini/antigravity` (user) | not-executed |
 | Gemini CLI (`gemini-cli`) | `.gemini/skills` | `.gemini/skills` | Natural language invocation | `.gemini` | not-executed |
 | Cursor (`cursor`) | `.cursor/skills` | `.cursor/skills` | `/skill-name` or natural language | `.cursor` | not-executed |
 | GitHub Copilot (`copilot`) | `.github/skills` | `.copilot/skills` | `/skill-name` or natural language | `.github/skills` (primary), `.github` (fallback) | not-executed |
@@ -128,14 +128,14 @@ ls -la /path/to/project/.claude/skills/repo-audit-concurrency/SKILL.md
 
 ### Cursor
 
-Cursor discovers skills in `.cursor/skills` and loads Cursor Plugins from `.cursor-plugin/plugin.json` and `.cursor-plugin/marketplace.json`.
+Cursor discovers skills in `.cursor/skills` and loads Cursor Plugins and inline pack bundles from `.cursor-plugin/marketplace.json` (with per-skill metadata in `skills/*/.cursor-plugin/plugin.json`).
 
 #### Installation Paths
 - **Project Scope**: `<project-root>/.cursor/skills/<skill-name>/`
 - **User Scope**: `<user-home>/.cursor/skills/<skill-name>/`
 
 #### Installation Commands
-Install curated packs (`starter` by default) and skills locally with the toolkit CLI, or import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace from **Dashboard -> Plugins & MCPs** (**Import from Repo**) and install an individual specialist (recommended) or `fred-skills` (loads all 57 skills; see Stage-1 context budget note above) from **Customize** in the sidebar:
+Install curated packs (`starter` by default) and skills locally with the toolkit CLI, or import `https://github.com/fderuiter/fred-skills` as a Git repository marketplace from **Dashboard -> Plugins & MCPs** (**Import from Repo**) and install `starter`, another curated pack, an individual specialist (recommended), or `fred-skills` (loads all 57 skills; see Stage-1 context budget note above) from **Customize** in the sidebar:
 
 1. **Toolkit CLI (Project Scope)**:
    ```sh
@@ -175,7 +175,7 @@ Antigravity uses the portable skills standard. It uses `.agents/skills` for proj
 - **User Scope**: `<user-home>/.gemini/antigravity/skills/<skill-name>/`
 
 #### Installation Commands
-Antigravity shares the project marker `.agents` with OpenAI Codex. For project installations, specify `--host antigravity` explicitly to avoid host ambiguity:
+Antigravity shares the project marker `.agents` with OpenAI Codex (`--scope user` auto-detects `.gemini/antigravity` via longest-prefix matching). For project installations, specify `--host antigravity` explicitly to avoid host ambiguity:
 
 1. **Toolkit CLI (Project Scope)**:
    ```sh
@@ -266,10 +266,10 @@ The function `detect_host()` in `scripts/fredlib/installation.py` identifies tar
 1. **Tiered Marker Detection**:
    - **Primary project markers**: `.claude` (`claude-code`), `.cursor` (`cursor`), `.gemini` (`gemini-cli`), `.opencode` (`opencode`), `.windsurf` or `.devin` (`windsurf`), `.kiro` (`kiro`), `.github/skills` (`copilot`), and `.agents` (`codex` by default, or `antigravity` when an `antigravity` receipt exists).
    - **Fallback project marker**: Bare `.github` resolves to `copilot` only when no primary marker or conflicting host receipt exists.
-   - **User-scope markers** (`--scope user`): `.claude`, `.cursor`, `.agents`, `.gemini`, `.copilot`, `.config/opencode`, `.config/devin`, and `.kiro`.
+   - **User-scope markers** (`--scope user`): `.claude`, `.cursor`, `.agents`, `.gemini/antigravity` (`antigravity`), `.gemini` (`gemini-cli`), `.copilot`, `.config/opencode`, `.config/devin`, and `.kiro` (longest marker prefixes match first, so `.gemini/antigravity` resolves to `antigravity` ahead of `.gemini`).
 
 2. **Multi-Host Fan-Out vs. Single-Host Safeguards**:
-   - When `--host` is omitted, `install` defaults to the `starter` pack, fans out atomically across all detected markers (deduplicating shared `.agents/skills` targets), or bootstraps `.agents/skills` under `codex` when zero markers exist; `update` and `installed` also aggregate across detected hosts.
+   - When `--host` is omitted, `install` defaults to the `starter` pack, fans out atomically across all detected markers (deduplicating shared `.agents/skills` targets), or bootstraps `.agents/skills` under `codex` when zero markers exist; `installed` aggregates across detected hosts, whereas `update` refreshes only receipt-backed hosts with each host's own tracked skills and leaves unmanaged markers untouched.
    - Direct `detect_host()` calls and destructive commands (`remove`, `rollback`, `recover-install`) raise `ValueError` requiring `--host` when zero markers, multiple host markers, or multiple host receipts exist.
    - If conflicting receipts exist for a shared target path (such as both `codex` and `antigravity` project receipts), resolution raises `ValueError`.
 

@@ -322,6 +322,8 @@ def _render_pack_plugins(
     root: Path,
     known_skills: set[str],
     version: str,
+    *,
+    cursor: bool = False,
 ) -> list[dict[str, object]]:
     packs_doc = _worktree_json_dict(root, "catalog/packs.json")
     if packs_doc is None:
@@ -344,17 +346,31 @@ def _render_pack_plugins(
             raise ValueError(
                 f"Invalid skill selection in pack '{pack_name}': {sorted(missing)}"
             )
-        bundles.append(
-            {
-                "name": str(pack_name),
-                "description": str(pack_data["description"]),
-                "version": version,
-                "author": dict(_AUTHOR),
-                "source": "./",
-                "strict": False,
-                "skills": [f"./skills/{skill_name}" for skill_name in pack_skills],
-            }
-        )
+        skills_list = [f"./skills/{skill_name}" for skill_name in pack_skills]
+        if cursor:
+            bundles.append(
+                {
+                    "name": str(pack_name),
+                    "source": "./",
+                    "description": str(pack_data["description"]),
+                    "version": version,
+                    "author": dict(_AUTHOR),
+                    "license": "MIT",
+                    "skills": skills_list,
+                }
+            )
+        else:
+            bundles.append(
+                {
+                    "name": str(pack_name),
+                    "description": str(pack_data["description"]),
+                    "version": version,
+                    "author": dict(_AUTHOR),
+                    "source": "./",
+                    "strict": False,
+                    "skills": skills_list,
+                }
+            )
     return bundles
 
 
@@ -399,14 +415,6 @@ def render_versioned_manifests(root: Path, version: str) -> dict[str, str]:
             *standalone_plugins,
         ],
     }
-    cursor_root_plugin: dict[str, object] = {
-        "name": "fred-skills",
-        "description": _SUITE_DESCRIPTION,
-        "version": version,
-        "author": dict(_AUTHOR),
-        "license": "MIT",
-        "skills": [f"./skills/{name}" for name in sorted_names],
-    }
     cursor_skill_manifests: dict[str, str] = {
         f"skills/{name}/.cursor-plugin/plugin.json": _json_text(
             {
@@ -428,6 +436,7 @@ def render_versioned_manifests(root: Path, version: str) -> dict[str, str]:
             "version": version,
             "author": dict(_AUTHOR),
             "license": "MIT",
+            "skills": ["."],
         }
         for name, desc in members
     ]
@@ -439,7 +448,9 @@ def render_versioned_manifests(root: Path, version: str) -> dict[str, str]:
             "version": version,
             "author": dict(_AUTHOR),
             "license": "MIT",
+            "skills": [f"./skills/{name}" for name in sorted_names],
         },
+        *_render_pack_plugins(root, known_set, version, cursor=True),
         *member_cursor_plugins,
     ]
     cursor_marketplace = {
@@ -469,7 +480,6 @@ def render_versioned_manifests(root: Path, version: str) -> dict[str, str]:
     return {
         ".claude-plugin/marketplace.json": _json_text(claude_marketplace),
         ".cursor-plugin/marketplace.json": _json_text(cursor_marketplace),
-        ".cursor-plugin/plugin.json": _json_text(cursor_root_plugin),
         **cursor_skill_manifests,
         "gemini-extension.json": _json_text(gemini_extension),
     }
