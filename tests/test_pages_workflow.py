@@ -34,6 +34,7 @@ UPLOAD_PAGES_SHA = (
 )
 DEPLOY_PAGES_SHA = "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346"
 HOSTED_URL = "https://fderuiter.github.io/fred-skills"
+HOSTED_EXPLORER_URL = f"{HOSTED_URL}/docs/explorer.html"
 
 _PASSTHROUGH_ENV_KEYS = (
     "PATH",
@@ -516,32 +517,51 @@ class PagesWorkflowTests(unittest.TestCase):
             self.assertTrue((site_dir / ".nojekyll").is_file())
             self.assertEqual((site_dir / ".nojekyll").read_bytes(), b"")
             self.assertTrue((site_dir / "index.html").is_file())
+            self.assertTrue((site_dir / "README.html").is_file())
+            self.assertTrue((site_dir / "docs/index.html").is_file())
             self.assertTrue((site_dir / "docs/explorer.html").is_file())
-            self.assertTrue((site_dir / "CLAUDE.md").is_file())
-            self.assertTrue((site_dir / "GEMINI.md").is_file())
+            self.assertTrue((site_dir / "skills/index.html").is_file())
+            self.assertTrue((site_dir / "LICENSE").is_file())
+            self.assertTrue((site_dir / "VERSION").is_file())
+            self.assertTrue((site_dir / "gemini-extension.json").is_file())
             self.assertFalse((site_dir / ".cursor-plugin/plugin.json").exists())
             self.assertTrue((site_dir / ".cursor-plugin/marketplace.json").is_file())
+            self.assertTrue((site_dir / ".claude-plugin/marketplace.json").is_file())
 
-            # Clean artifact boundary: exclude repo internals, tests, and scripts
+            # Clean artifact boundary: exclude repo internals, tests, scripts, and raw .md/.py/yaml
             for forbidden in (".git", ".github", "tests", "scripts"):
                 self.assertFalse((site_dir / forbidden).exists(), forbidden)
+            staged_files = [
+                p.relative_to(site_dir).as_posix()
+                for p in site_dir.rglob("*")
+                if p.is_file()
+            ]
+            self.assertEqual([], [f for f in staged_files if f.endswith(".md")])
+            self.assertEqual([], [f for f in staged_files if f.endswith(".py")])
+            self.assertEqual([], [f for f in staged_files if f.endswith("openai.yaml")])
+            self.assertEqual(
+                [],
+                [
+                    f
+                    for f in staged_files
+                    if f.startswith("skills/")
+                    and "/assets/" in f
+                    and f.endswith(".html")
+                ],
+            )
 
-            # All 15 docs routes + root index route = 16 routes present
+            # All source docs compile to HTML guides without copying raw .md files
             source_docs = sorted(
                 p.name for p in (ROOT / "docs").iterdir() if p.is_file()
             )
             self.assertGreaterEqual(len(source_docs), 15)
             for doc_name in source_docs:
-                staged_doc = site_dir / "docs" / doc_name
-                self.assertTrue(staged_doc.is_file(), doc_name)
                 if doc_name.endswith(".md"):
-                    self.assertEqual(
-                        staged_doc.read_text(encoding="utf-8"),
-                        (ROOT / "docs" / doc_name).read_text(encoding="utf-8"),
-                        f"Markdown content was unexpectedly rewritten for {doc_name}",
-                    )
+                    self.assertFalse((site_dir / "docs" / doc_name).exists(), doc_name)
                     compiled_doc = site_dir / "docs" / f"{Path(doc_name).stem}.html"
                     self.assertTrue(compiled_doc.is_file(), compiled_doc)
+                else:
+                    self.assertTrue((site_dir / "docs" / doc_name).is_file(), doc_name)
 
             for skill_md in sorted((ROOT / "skills").glob("*/SKILL.md")):
                 skill_name = skill_md.parent.name
@@ -549,13 +569,13 @@ class PagesWorkflowTests(unittest.TestCase):
                     (site_dir / "skills" / skill_name / "SKILL.html").is_file(),
                     skill_name,
                 )
+                self.assertTrue(
+                    (site_dir / "skills" / skill_name / "index.html").is_file(),
+                    skill_name,
+                )
 
-            staged_html_files = [
-                site_dir / "index.html",
-                site_dir / "docs/explorer.html",
-                *sorted((site_dir / "docs").glob("*.html")),
-                *sorted((site_dir / "skills").glob("*/SKILL.html")),
-            ]
+            staged_html_files = sorted(site_dir.rglob("*.html"))
+            self.assertGreaterEqual(len(staged_html_files), 280)
             for html_file in staged_html_files:
                 html_content = html_file.read_text(encoding="utf-8")
                 for target in extract_relative_links(html_content):
@@ -564,29 +584,22 @@ class PagesWorkflowTests(unittest.TestCase):
                         clean_target.lower().endswith(".md"),
                         f"{html_file}: unexpected raw .md link '{target}'",
                     )
-
-            # Verify relative links resolve inside staged site for root index, offline explorer, README, and docs
-            check_files = [
-                site_dir / "index.html",
-                site_dir / "docs/explorer.html",
-                site_dir / "README.md",
-                *sorted((site_dir / "docs").glob("*.md")),
-                *sorted((site_dir / "docs").glob("*.html")),
-            ]
-            for file_path in check_files:
-                content = file_path.read_text(encoding="utf-8")
-                for target in extract_relative_links(content):
-                    resolved = resolve_relative_link_target(target, file_path.parent)
+                    resolved = resolve_relative_link_target(target, html_file.parent)
                     if resolved is None:
                         continue
                     self.assertTrue(
                         resolved.is_relative_to(site_dir.resolve()),
-                        f"{file_path}: link '{target}' escaped dist/site -> {resolved}",
+                        f"{html_file}: link '{target}' escaped dist/site -> {resolved}",
                     )
                     self.assertTrue(
                         resolved.exists(),
-                        f"{file_path}: broken staged relative link '{target}' -> {resolved}",
+                        f"{html_file}: broken staged relative link '{target}' -> {resolved}",
                     )
+                    if resolved.is_dir():
+                        self.assertTrue(
+                            (resolved / "index.html").is_file(),
+                            f"{html_file}: directory target '{target}' missing index.html",
+                        )
 
             with self.assertRaises(ValueError):
                 build_experience.stage_site(ROOT, root=ROOT)
@@ -602,19 +615,21 @@ class PagesWorkflowTests(unittest.TestCase):
         self.assertEqual(readme_lines[28], "### Claude Code")
         self.assertEqual(readme_lines[30], "```sh")
 
+        self.assertEqual(build_experience.HOSTED_EXPLORER_URL, HOSTED_EXPLORER_URL)
+
         exp_lines = (
             (ROOT / "docs/experience.md").read_text(encoding="utf-8").splitlines()
         )
-        self.assertIn(HOSTED_URL, exp_lines[2])
-        self.assertIn("explorer.html", exp_lines[2])
+        self.assertIn(HOSTED_EXPLORER_URL, exp_lines[2])
+        self.assertIn("](explorer.html)", exp_lines[2])
 
         impl_lines = (
             (ROOT / "docs/implementation-status.md")
             .read_text(encoding="utf-8")
             .splitlines()
         )
-        self.assertIn(HOSTED_URL, impl_lines[8])
-        self.assertIn("explorer.html", impl_lines[8])
+        self.assertIn(HOSTED_EXPLORER_URL, impl_lines[8])
+        self.assertIn("](explorer.html)", impl_lines[8])
 
         rel_lines = (
             (ROOT / "docs/releasing.md").read_text(encoding="utf-8").splitlines()
