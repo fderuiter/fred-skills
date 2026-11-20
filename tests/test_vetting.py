@@ -910,7 +910,7 @@ class VettingModuleTests(unittest.TestCase):
         cycle_res = vetting.vet_target(cycle_repo, root=ROOT)
         self.assertTrue(cycle_res["passed"], cycle_res["findings"])
 
-        # Toolkit root passes fred.py vet with .cursor-plugin/plugin.json, gemini-extension.json, and @AGENTS.md shims
+        # Toolkit root passes fred.py vet with .cursor-plugin/marketplace.json, gemini-extension.json, and @AGENTS.md shims
         root_proc = subprocess.run(
             [sys.executable, str(ROOT / "scripts/fred.py"), "vet", str(ROOT)],
             capture_output=True,
@@ -925,7 +925,7 @@ class VettingModuleTests(unittest.TestCase):
             "AGENTS.md",
             "CLAUDE.md",
             "GEMINI.md",
-            ".cursor-plugin/plugin.json",
+            ".cursor-plugin/marketplace.json",
             "gemini-extension.json",
         ):
             self.assertIn(expected_cfg, root_payload["configs_scanned"])

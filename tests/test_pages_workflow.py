@@ -224,6 +224,19 @@ class PagesWorkflowTests(unittest.TestCase):
             }
             self.assertTrue(_eval_if_condition(condition, valid_wf_run), job_name)
 
+            chained_wf_run = {
+                "event_name": "workflow_run",
+                "ref": "refs/heads/main",
+                "event": {
+                    "workflow_run": {
+                        "conclusion": "success",
+                        "event": "workflow_run",
+                        "head_branch": "main",
+                    }
+                },
+            }
+            self.assertTrue(_eval_if_condition(condition, chained_wf_run), job_name)
+
             valid_dispatch = {
                 "event_name": "workflow_dispatch",
                 "ref": "refs/heads/main",
