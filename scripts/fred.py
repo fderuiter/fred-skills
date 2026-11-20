@@ -1307,6 +1307,27 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to manifest.json file or release directory to verify",
     )
+    sub_vrel.add_argument(
+        "--archive",
+        action="append",
+        default=None,
+        help="Specific archive filename to verify against manifest.json (can be repeated)",
+    )
+    sub_vrel.add_argument(
+        "--ignore-missing",
+        action="store_true",
+        help="Skip manifest archive entries that are not present on disk",
+    )
+    sub_vrel.add_argument(
+        "--expected-version",
+        default=None,
+        help="Expected release version string to enforce against manifest.json",
+    )
+    sub_vrel.add_argument(
+        "--require-licensing",
+        action="store_true",
+        help="Require manifest.json licensing field to declare 'See repository LICENSE'",
+    )
 
     # Custom argument groups for root help output
     lifecycle_arg_groups = {
@@ -1574,6 +1595,48 @@ def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
     return resolved
 
 
+def _resolve_sarif_export_directory(target: Path) -> Path:
+    if (target / "audit.json").is_file():
+        runs._require_audit_directory(target, "export-sarif")
+        return target / "audit.json"
+    run_file = target / "run.json"
+    if run_file.is_file():
+        expected = runs._deliverable_for_run(
+            read_json_object(run_file, label="Run metadata 'run.json'")
+        )
+        if expected in {"audit.json", "review.json"}:
+            return resolve_audit_path(target)
+        runs._require_audit_directory(target, "export-sarif")
+    if (target / "review.json").is_file():
+        return resolve_audit_path(target)
+    runs._require_audit_directory(target, "export-sarif")
+    return target / "audit.json"
+
+
+def _resolve_sarif_export_input(target: Path) -> Path:
+    resolved = (
+        _resolve_sarif_export_directory(target)
+        if target.is_dir()
+        else resolve_audit_path(target)
+    )
+    if resolved.name == "run.json":
+        raise FredCliError(
+            "Audit command 'export-sarif' requires an 'audit.json' ledger; 'run.json' is run metadata and is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger or 'review.json' deliverable.",
+        )
+    if resolved.name not in {"audit.json", "review.json"} and (
+        resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+        or resolved.name in WORKFLOW_DELIVERABLE_SCHEMAS
+    ):
+        raise FredCliError(
+            f"Audit command 'export-sarif' requires an 'audit.json' ledger; domain deliverable '{resolved.name}' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger or 'review.json' deliverable.",
+        )
+    return resolved
+
+
 def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
         prior_data = None
@@ -1647,7 +1710,7 @@ def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
 
-        audit_path = _resolve_audit_only_input(a.audit, "export-sarif")
+        audit_path = _resolve_sarif_export_input(a.audit)
         data = convert_file(
             audit_path,
             a.output,
@@ -1683,7 +1746,13 @@ def handle_release(a: argparse.Namespace) -> Any:
     if a.command == "release":
         return releases.build(a.output, a.pack, all_packs=a.all)
     if a.command == "verify-release":
-        return releases.verify(a.manifest)
+        return releases.verify(
+            a.manifest,
+            archive=getattr(a, "archive", None),
+            ignore_missing=bool(getattr(a, "ignore_missing", False)),
+            expected_version=getattr(a, "expected_version", None),
+            require_licensing=bool(getattr(a, "require_licensing", False)),
+        )
     raise ValueError(f"Unknown release command: {a.command}")
 
 
@@ -1852,6 +1921,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         FredCliError,
         subprocess.TimeoutExpired,
         ValueError,
+        RuntimeError,
         OSError,
         KeyError,
         TypeError,

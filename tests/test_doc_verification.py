@@ -9,20 +9,28 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from unittest.mock import patch
 
 from check_doc_links import check_docs, check_file_links, extract_relative_links
 from skill_tools import (
-    extract_relative_links as skill_tools_extract_relative_links,
+    count_fenced_code_blocks,
+    extract_markdown_headings,
+    extract_markdown_preamble,
+    extract_markdown_section,
+    extract_markdown_tables,
+    resolve_relative_link_target,
 )
 from skill_tools import (
-    resolve_relative_link_target,
+    extract_relative_links as skill_tools_extract_relative_links,
 )
 from verify_doc_snippets import (
     DOCUMENTED_RANGES,
     TOOL_DISPATCHERS,
+    _parse_lifecycle_groups_fallback,
     clear_subprocess_cache,
     discover_doc_blocks,
     execute_snippet_command,
@@ -33,6 +41,11 @@ from verify_doc_snippets import (
     verify_all_snippets,
     verify_runbook_citations,
     verify_toolkit_subcommands,
+)
+
+from tests.catalog_oracles import (
+    expected_fred_subcommand_count,
+    registered_fred_commands,
 )
 
 
@@ -408,24 +421,21 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 if e_line is not None:
                     self.assertLessEqual(block.start_line, e_line)
 
-        # Full-file discovery coverage for api (42 blocks), runbooks (65 blocks), and integration (32 blocks)
-        self.assertEqual(
-            len(discovered["docs/api.md"]),
-            42,
-            "Must discover all 42 Python blocks in docs/api.md",
-        )
-
-        # Full-file discovery coverage for runbooks (80 blocks) and integration (37 blocks)
-        self.assertEqual(
-            len(discovered["docs/runbooks.md"]),
-            80,
-            "Must discover all 80 code blocks in docs/runbooks.md",
-        )
-        self.assertEqual(
-            len(discovered["docs/integration.md"]),
-            37,
-            "Must discover all 37 code blocks in docs/integration.md",
-        )
+        # Full-file discovery coverage derived dynamically via fence scanner with >= 1 floors
+        for rel_doc in ("docs/api.md", "docs/runbooks.md", "docs/integration.md"):
+            expected_blocks = count_fenced_code_blocks(
+                (ROOT / rel_doc).read_text(encoding="utf-8")
+            )
+            self.assertGreaterEqual(
+                expected_blocks,
+                1,
+                f"Expected at least 1 fenced code block in {rel_doc}",
+            )
+            self.assertEqual(
+                len(discovered[rel_doc]),
+                expected_blocks,
+                f"Must discover all {expected_blocks} code blocks in {rel_doc}",
+            )
 
     def test_toolkit_cli_subcommands_against_fred_lifecycle_groups(self) -> None:
         """Documented subcommands from docs/toolkit.md must match scripts/fred.py LIFECYCLE_GROUPS dynamically."""
@@ -434,18 +444,21 @@ class DocSnippetVerificationTests(unittest.TestCase):
             [], errors, f"Toolkit subcommand verification failed: {errors}"
         )
 
-        # Dynamic verification of bidirectional parity against LIFECYCLE_GROUPS
+        # Dynamic verification of bidirectional parity against LIFECYCLE_GROUPS and COMMAND_REGISTRY
         groups = get_registered_fred_subcommands(root=ROOT)
         registered = {cmd for cmds in groups.values() for cmd in cmds}
-
-        # Assert complete coverage of all 29 registered subcommands
+        expected_registry_cmds = registered_fred_commands(ROOT)
+        expected_cmd_count = expected_fred_subcommand_count(ROOT)
+        self.assertGreaterEqual(expected_cmd_count, 1)
+        self.assertGreaterEqual(len(registered), 1)
+        self.assertEqual(expected_registry_cmds, registered)
         self.assertEqual(
             len(registered),
-            29,
-            f"Expected exactly 29 registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
+            expected_cmd_count,
+            f"Expected {expected_cmd_count} registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
         )
 
-        start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 195))
+        start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (1, None))
         blocks = extract_blocks_from_file(
             ROOT / "docs/toolkit.md", start_line, end_line, root=ROOT
         )
@@ -739,38 +752,65 @@ class DocSnippetVerificationTests(unittest.TestCase):
     def test_line_range_filtering(self):
         """Blocks outside the specified range are ignored."""
         readme = ROOT / "README.md"
-        # Only line 1 to 20 contains no code blocks
-        blocks = extract_blocks_from_file(readme, start_line=1, end_line=20, root=ROOT)
+        all_blocks = extract_blocks_from_file(readme, root=ROOT)
+        self.assertGreaterEqual(len(all_blocks), 1)
+        first_block = all_blocks[0]
+        self.assertGreater(first_block.start_line, 1)
+
+        # Lines strictly before the first code block contain no code blocks
+        blocks = extract_blocks_from_file(
+            readme, start_line=1, end_line=first_block.start_line - 1, root=ROOT
+        )
         self.assertEqual([], blocks)
 
-        # Lines 27 to 35 contains marketplace blocks
-        blocks = extract_blocks_from_file(readme, start_line=27, end_line=35, root=ROOT)
-        self.assertGreaterEqual(len(blocks), 1)
+        # Range spanning the first code block returns that block
+        blocks = extract_blocks_from_file(
+            readme,
+            start_line=first_block.start_line,
+            end_line=first_block.end_line,
+            root=ROOT,
+        )
+        self.assertEqual(1, len(blocks))
+        self.assertEqual(first_block.commands, blocks[0].commands)
 
     def test_indented_code_blocks_in_runbooks(self):
-        """Indented code blocks in docs/runbooks.md (L55-L57) must be discovered and validated."""
+        """Indented code blocks in docs/runbooks.md Diagnostic Checks must be discovered and validated."""
         runbooks = ROOT / "docs/runbooks.md"
+        all_blocks = extract_blocks_from_file(runbooks, root=ROOT)
+        matching = [
+            b
+            for b in all_blocks
+            if any("Runbook 1:" in h for h in b.headings)
+            and "Diagnostic Checks" in b.headings
+            and any("pgrep" in cmd for _, cmd in b.commands)
+        ]
+        self.assertEqual(1, len(matching))
+        target = matching[0]
         blocks = extract_blocks_from_file(
-            runbooks, start_line=55, end_line=57, root=ROOT
+            runbooks, start_line=target.start_line, end_line=target.end_line, root=ROOT
         )
-        self.assertGreaterEqual(len(blocks), 1)
+        self.assertEqual(1, len(blocks))
         block = blocks[0]
         self.assertEqual(block.language, "sh")
-        self.assertTrue(len(block.commands) > 0)
+        self.assertGreaterEqual(len(block.commands), 1)
         line_no, cmd = block.commands[0]
-        self.assertEqual(line_no, 56)
+        self.assertGreaterEqual(line_no, block.start_line)
+        self.assertLessEqual(line_no, block.end_line)
         self.assertIn("pgrep", cmd)
         ok, msg = execute_snippet_command(cmd, root=ROOT)
         self.assertTrue(ok, f"Runbooks snippet failed: {msg}")
 
     def test_multiline_commands_in_integration(self):
-        """Multiline commands with continuation backslashes in docs/integration.md (L356-L388) must parse and execute without ValueError."""
+        """Multiline commands with continuation backslashes in docs/integration.md must parse and execute without ValueError."""
         integration = ROOT / "docs/integration.md"
-        blocks = extract_blocks_from_file(
-            integration, start_line=356, end_line=388, root=ROOT
-        )
-        self.assertGreaterEqual(len(blocks), 1)
-        block = blocks[0]
+        all_blocks = extract_blocks_from_file(integration, root=ROOT)
+        matching = [
+            b
+            for b in all_blocks
+            if "End-to-End Multi-Agent Workflow Example" in b.headings
+        ]
+        self.assertEqual(1, len(matching))
+        block = matching[0]
         self.assertEqual(block.language, "sh")
         # Ensure commands are joined
         joined_init_cmds = [cmd for _, cmd in block.commands if "init" in cmd]
@@ -815,27 +855,35 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertIn("Failed to parse command syntax", msg)
 
     def test_multiline_python_commands_in_runbooks(self):
-        """Multiline Python commands in docs/runbooks.md:L84-L93 and L409-L449 must parse without quotation errors."""
+        """Multiline Python commands in docs/runbooks.md must parse without quotation errors."""
         runbooks = ROOT / "docs/runbooks.md"
-        # Test L84-L93
-        blocks_early = extract_blocks_from_file(
-            runbooks, start_line=84, end_line=94, root=ROOT
-        )
+        all_blocks = extract_blocks_from_file(runbooks, root=ROOT)
+
+        blocks_early = [
+            b
+            for b in all_blocks
+            if "Diagnostic Checks" in b.headings
+            and any("Committed in receipt history" in cmd for _, cmd in b.commands)
+        ]
         self.assertEqual(1, len(blocks_early))
-        self.assertTrue(len(blocks_early[0].commands) > 0)
+        self.assertGreaterEqual(len(blocks_early[0].commands), 1)
         line_no, cmd = blocks_early[0].commands[0]
-        self.assertEqual(line_no, 84)
+        self.assertGreaterEqual(line_no, blocks_early[0].start_line)
+        self.assertLessEqual(line_no, blocks_early[0].end_line)
         ok, msg = execute_snippet_command(cmd, root=ROOT)
         self.assertTrue(ok, f"Runbooks snippet at L{line_no} failed: {msg}")
 
-        # Test L409-L449
-        blocks_late = extract_blocks_from_file(
-            runbooks, start_line=408, end_line=450, root=ROOT
-        )
+        blocks_late = [
+            b
+            for b in all_blocks
+            if any("Scenario C: Non-Destructive Repair" in h for h in b.headings)
+            and any("Reconstructed receipt.json" in cmd for _, cmd in b.commands)
+        ]
         self.assertEqual(1, len(blocks_late))
-        self.assertTrue(len(blocks_late[0].commands) > 0)
+        self.assertGreaterEqual(len(blocks_late[0].commands), 1)
         line_no, cmd = blocks_late[0].commands[0]
-        self.assertEqual(line_no, 409)
+        self.assertGreaterEqual(line_no, blocks_late[0].start_line)
+        self.assertLessEqual(line_no, blocks_late[0].end_line)
         ok, msg = execute_snippet_command(cmd, root=ROOT)
         self.assertTrue(ok, f"Runbooks snippet at L{line_no} failed: {msg}")
 
@@ -854,7 +902,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_full_file_runbooks_and_integration_snippets_pass(self):
-        """Full-file snippet verification across docs/runbooks.md (80 blocks) and docs/integration.md (37 blocks) passes with zero errors."""
+        """Full-file snippet verification across docs/runbooks.md and docs/integration.md passes with zero errors."""
         errors = verify_all_snippets(
             root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
         )
@@ -1281,52 +1329,80 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 ROOT / "examples", target_is_directory=True
             )
             for rel in (
-                "README.md",
                 "Makefile",
                 "requirements-dev.txt",
                 ".claude-plugin/marketplace.json",
                 "catalog/hosts.json",
                 "catalog/packs.json",
-                "docs/usage.md",
                 "docs/release-notes-0.2.0.md",
-                active_notes,
             ):
                 dst = tmp_root / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes((ROOT / rel).read_bytes())
 
-            # 1. Bump VERSION without updating README.md or docs/usage.md
-            (tmp_root / "VERSION").write_text("9.9.9\n", encoding="utf-8")
-            ver_errors = verify_all_snippets(
-                root=tmp_root, files=["README.md", "docs/usage.md"]
-            )
-            self.assertTrue(
-                any("README.md:L117:" in err and "v9.9.9" in err for err in ver_errors),
-                f"Expected README.md:L117 version drift failure, got: {ver_errors}",
-            )
-            self.assertTrue(
-                any(
-                    "docs/usage.md:L147:" in err and "v9.9.9" in err
-                    for err in ver_errors
-                ),
-                f"Expected docs/usage.md:L147 version drift failure, got: {ver_errors}",
-            )
-            self.assertTrue(
-                any(
-                    "docs/usage.md:L175:" in err and "9.9.9" in err
-                    for err in ver_errors
-                ),
-                f"Expected docs/usage.md:L175 tar version drift failure, got: {ver_errors}",
-            )
-
-            # Restore VERSION and mutate catalog/packs.json skill count without updating docs
-            (tmp_root / "VERSION").write_text(f"{active_ver}\n", encoding="utf-8")
             import json
 
             packs_doc = json.loads(
                 (tmp_root / "catalog/packs.json").read_text(encoding="utf-8")
             )
+            initial_total = len(packs_doc["packs"]["complete"]["skills"])
+            self.assertGreaterEqual(initial_total, 2)
+
+            # Self-contained Markdown fixtures with known line offsets
+            (tmp_root / "README.md").write_text(
+                "# fred-skills\n"
+                "\n"
+                f"**{initial_total} standalone skills** across suites.\n"
+                "\n"
+                "```sh\n"
+                f"curl -LO https://github.com/fderuiter/fred-skills/releases/download/v{active_ver}/SHA256SUMS\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            (tmp_root / "docs/usage.md").write_text(
+                "# Usage\n"
+                "\n"
+                f"Install the complete {initial_total}-package pack:\n"
+                "\n"
+                "```sh\n"
+                f"curl -LO https://github.com/fderuiter/fred-skills/releases/download/v{active_ver}/fred-skills-{active_ver}-starter.tar\n"
+                f"tar -xf fred-skills-{active_ver}-starter.tar -C /path/to/project/.agents/skills/\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            (tmp_root / active_notes).write_text(
+                f"# {active_ver} — Release notes\n\nTotal: {initial_total} skills.\n",
+                encoding="utf-8",
+            )
+
+            # 1. Bump VERSION without updating fixture README.md or docs/usage.md
+            (tmp_root / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+            ver_errors = verify_all_snippets(
+                root=tmp_root, files=["README.md", "docs/usage.md"]
+            )
+            self.assertTrue(
+                any("README.md:L6:" in err and "v9.9.9" in err for err in ver_errors),
+                f"Expected README.md:L6 version drift failure, got: {ver_errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/usage.md:L6:" in err and "v9.9.9" in err for err in ver_errors
+                ),
+                f"Expected docs/usage.md:L6 version drift failure, got: {ver_errors}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/usage.md:L7:" in err and "9.9.9" in err for err in ver_errors
+                ),
+                f"Expected docs/usage.md:L7 tar version drift failure, got: {ver_errors}",
+            )
+
+            # Restore VERSION and mutate catalog/packs.json skill count without updating docs
+            (tmp_root / "VERSION").write_text(f"{active_ver}\n", encoding="utf-8")
             packs_doc["packs"]["complete"]["skills"].pop()
+            decremented_total = len(packs_doc["packs"]["complete"]["skills"])
+            self.assertGreaterEqual(decremented_total, 1)
+            self.assertEqual(initial_total - 1, decremented_total)
             (tmp_root / "catalog/packs.json").write_text(
                 json.dumps(packs_doc), encoding="utf-8"
             )
@@ -1340,20 +1416,25 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(
-                any("README.md:L4:" in err and "56" in err for err in count_errors),
-                f"Expected README.md:L4 count drift failure, got: {count_errors}",
+                any(
+                    "README.md:L3:" in err and str(decremented_total) in err
+                    for err in count_errors
+                ),
+                f"Expected README.md:L3 count drift failure, got: {count_errors}",
             )
             self.assertTrue(
                 any(
-                    "docs/usage.md:L20:" in err and "56" in err for err in count_errors
+                    "docs/usage.md:L3:" in err and str(decremented_total) in err
+                    for err in count_errors
                 ),
-                f"Expected docs/usage.md:L20 count drift failure, got: {count_errors}",
+                f"Expected docs/usage.md:L3 count drift failure, got: {count_errors}",
             )
             self.assertTrue(
                 any(
-                    f"{active_notes}:L6:" in err and "56" in err for err in count_errors
+                    f"{active_notes}:L3:" in err and str(decremented_total) in err
+                    for err in count_errors
                 ),
-                f"Expected active release-notes L6 count drift failure, got: {count_errors}",
+                f"Expected active release-notes L3 count drift failure, got: {count_errors}",
             )
             self.assertFalse(
                 any("docs/release-notes-0.2.0.md" in err for err in count_errors),
@@ -1647,6 +1728,244 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertEqual(1, len(drift_errs), drift_errs)
             self.assertIn("docs/runbooks.md:L3:", drift_errs[0])
             self.assertIn("validate_run", drift_errs[0])
+
+    def test_markdown_section_preamble_table_extractors_ignore_fenced_headings(
+        self,
+    ) -> None:
+        """skill_tools Markdown extractors ignore headings and tables inside fenced blocks."""
+        sample_md = (
+            "# Title\n\n"
+            "Intro paragraph.\n\n"
+            "```markdown\n"
+            "## Fake Section Inside Fence\n"
+            "| Fake | Col |\n"
+            "| --- | --- |\n"
+            "| no | nope |\n"
+            "```\n\n"
+            "| I want to… | Start here |\n"
+            "| --- | --- |\n"
+            "| Design | `design-architecture` | `alt` |\n\n"
+            "## Installation\n\n"
+            "### Claude Code\n\n"
+            "```sh\n"
+            "# Not an H1 heading\n"
+            "## Not an H2 heading\n"
+            "echo ok\n"
+            "```\n\n"
+            "## Next Section\n\n"
+            "Body.\n"
+        )
+        preamble = extract_markdown_preamble(sample_md)
+        self.assertIn("Intro paragraph.", preamble)
+        self.assertIn("`design-architecture`", preamble)
+        self.assertNotIn("### Claude Code", preamble)
+
+        headings = extract_markdown_headings(sample_md)
+        self.assertEqual(
+            [
+                (1, "Title"),
+                (2, "Installation"),
+                (3, "Claude Code"),
+                (2, "Next Section"),
+            ],
+            headings,
+        )
+
+        install_body = extract_markdown_section(sample_md, "Installation", level=2)
+        self.assertIsNotNone(install_body)
+        assert install_body is not None
+        self.assertIn("### Claude Code", install_body)
+        self.assertIn("echo ok", install_body)
+        self.assertNotIn("Body.", install_body)
+
+        tables = extract_markdown_tables(sample_md)
+        self.assertEqual(1, len(tables))
+        self.assertEqual("`design-architecture`", tables[0][0]["Start here"])
+        self.assertEqual(2, count_fenced_code_blocks(sample_md))
+        self.assertEqual(1, count_fenced_code_blocks(sample_md, language="sh"))
+
+        import ast
+
+        import _markdown_utils
+
+        self.assertIs(
+            _markdown_utils.count_fenced_code_blocks, count_fenced_code_blocks
+        )
+        self.assertIs(
+            _markdown_utils.extract_markdown_headings, extract_markdown_headings
+        )
+        self.assertIs(
+            _markdown_utils.extract_markdown_preamble, extract_markdown_preamble
+        )
+        self.assertIs(
+            _markdown_utils.extract_markdown_section, extract_markdown_section
+        )
+        self.assertIs(_markdown_utils.extract_markdown_tables, extract_markdown_tables)
+
+        edge_table_md = (
+            "| Key | Expression |\n"
+            "| :--- | ---: |\n"
+            r"| `a \| b` | ``x | ` | y`` \| z |" + "\n\n"
+            "    ```sh\n"
+            "    indented code block\n"
+            "    ```\n"
+        )
+        edge_tables = extract_markdown_tables(edge_table_md)
+        self.assertEqual(1, len(edge_tables))
+        self.assertEqual("`a | b`", edge_tables[0][0]["Key"])
+        self.assertEqual("``x | ` | y`` | z", edge_tables[0][0]["Expression"])
+        self.assertEqual(1, count_fenced_code_blocks(edge_table_md))
+        self.assertEqual(0, count_fenced_code_blocks(edge_table_md, max_indent=3))
+
+        md_utils_tree = ast.parse(
+            (ROOT / "scripts/_markdown_utils.py").read_text(encoding="utf-8")
+        )
+        for node in md_utils_tree.body:
+            if isinstance(node, ast.FunctionDef):
+                branch_score = 1
+                for child in ast.walk(node):
+                    if isinstance(
+                        child,
+                        (
+                            ast.If,
+                            ast.While,
+                            ast.For,
+                            ast.AsyncFor,
+                            ast.ExceptHandler,
+                            ast.With,
+                            ast.AsyncWith,
+                            ast.IfExp,
+                        ),
+                    ):
+                        branch_score += 1
+                    elif isinstance(child, ast.BoolOp):
+                        branch_score += len(child.values) - 1
+                    elif isinstance(child, ast.comprehension):
+                        branch_score += len(child.ifs)
+                self.assertLess(
+                    branch_score,
+                    10,
+                    f"_markdown_utils.{node.name} complexity {branch_score} >= 10",
+                )
+
+    def test_lifecycle_groups_ast_fallback_finds_groups_beyond_150_lines(self) -> None:
+        """_parse_lifecycle_groups_fallback locates LIFECYCLE_GROUPS via AST regardless of line offset."""
+        leading = "\n".join(f"# comment line {i}" for i in range(220))
+        source = (
+            f"{leading}\n"
+            "LIFECYCLE_GROUPS: dict[str, list[str]] = {\n"
+            '    "Discovery": ["tasks", "packs"],\n'
+            '    "Release": ["evaluate", "release"],\n'
+            "}\n"
+        )
+        parsed = _parse_lifecycle_groups_fallback(source)
+        self.assertEqual(
+            {
+                "Discovery": ["tasks", "packs"],
+                "Release": ["evaluate", "release"],
+            },
+            parsed,
+        )
+
+    def test_verify_release_snippet_executes_against_partial_download_fixture(
+        self,
+    ) -> None:
+        ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        ok_arch, msg_arch = execute_snippet_command(
+            f"python3 scripts/fred.py verify-release manifest.json --archive fred-skills-{ver}-starter.tar",
+            root=ROOT,
+        )
+        self.assertTrue(ok_arch, msg_arch)
+
+        ok_ign, msg_ign = execute_snippet_command(
+            "python3 scripts/fred.py verify-release manifest.json --ignore-missing",
+            root=ROOT,
+        )
+        self.assertTrue(ok_ign, msg_ign)
+
+        ok_local, msg_local = execute_snippet_command(
+            "python scripts/fred.py verify-release dist/starter/manifest.json",
+            root=ROOT,
+        )
+        self.assertTrue(ok_local, msg_local)
+
+        ok_unfiltered, msg_unfiltered = execute_snippet_command(
+            "python3 scripts/fred.py verify-release manifest.json",
+            root=ROOT,
+        )
+        self.assertFalse(ok_unfiltered)
+        self.assertIn("Missing release archive", msg_unfiltered)
+
+    def test_shared_doc_invariants_and_four_backtick_tilde_fences(self) -> None:
+        from _doc_invariants import (
+            CORE_INVARIANT_DOCS,
+            DocCountExpectations,
+            build_prose_count_rules,
+            find_prose_count_mismatches,
+        )
+        from validate_skills import _extract_fenced_blocks
+        from verify_doc_snippets import _parse_fenced_blocks
+
+        self.assertIn("docs/usage.md", CORE_INVARIANT_DOCS)
+
+        nested_md = (
+            "# Fence Parity\n\n"
+            "````markdown\n"
+            "Example skill snippet:\n"
+            "```bash\n"
+            "python scripts/nonexistent.py\n"
+            "```\n"
+            "````\n\n"
+            "~~~python\n"
+            "x = 1\n"
+            "~~~\n"
+        )
+        extracted, has_unclosed = _extract_fenced_blocks(nested_md)
+        self.assertFalse(has_unclosed)
+        self.assertEqual(2, len(extracted))
+        self.assertEqual("markdown", extracted[0][0])
+        self.assertIn("```bash", extracted[0][1])
+        self.assertEqual(("python", "x = 1"), extracted[1])
+
+        parsed = _parse_fenced_blocks(nested_md.splitlines())
+        self.assertEqual(2, len(parsed))
+        self.assertEqual("markdown", parsed[0][2])
+        self.assertTrue(any("```bash" in line for _, line in parsed[0][3]))
+        self.assertEqual("python", parsed[1][2])
+
+        rules = build_prose_count_rules(
+            DocCountExpectations(
+                total_skills=57,
+                starter_skills=6,
+                hosts_count=4,
+                packs_count=16,
+            )
+        )
+        prose = (
+            "Line 1 ok\n"
+            "Install the complete 55-package pack on five explicit host installation\n"
+            "locations or choose sixteen packs.\n"
+        )
+        mismatches = find_prose_count_mismatches(prose, rules)
+        by_label = {m.label: m for m in mismatches}
+        self.assertIn("skill", by_label)
+        self.assertEqual(
+            (2, 55, 57),
+            (
+                by_label["skill"].line_no,
+                by_label["skill"].found,
+                by_label["skill"].expected,
+            ),
+        )
+        self.assertIn("host", by_label)
+        self.assertEqual(
+            (2, 5, 4),
+            (
+                by_label["host"].line_no,
+                by_label["host"].found,
+                by_label["host"].expected,
+            ),
+        )
 
     def test_cached_subprocess_timeout_not_cached_and_main_exits_cleanly(self) -> None:
         """_run_cached_subprocess sets timeout=60 without caching timeouts, and main exits 1 cleanly."""

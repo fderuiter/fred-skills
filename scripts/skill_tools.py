@@ -7,12 +7,31 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from html import unescape
 from pathlib import Path
 from typing import Any, Literal, TypeVar, overload
 from urllib.parse import unquote, urlsplit
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from _markdown_utils import (
+    count_fenced_code_blocks,
+    extract_markdown_headings,
+    extract_markdown_preamble,
+    extract_markdown_section,
+    extract_markdown_tables,
+    extract_reference_link_targets,
+    match_atx_heading,
+    non_fenced_lines,
+    slugify_markdown_heading,
+    split_frontmatter_block,
+    unique_heading_slug,
+)
 
 __all__ = [
     "DEFAULT_GIT_TIMEOUT",
@@ -23,11 +42,16 @@ __all__ = [
     "FredCliError",
     "build_outputs",
     "classify_domain_payload",
+    "count_fenced_code_blocks",
     "detect_artifact_suite",
     "detect_domain_artifact",
     "estimate_tokens",
     "extract_document_anchors",
     "extract_link_fragment",
+    "extract_markdown_headings",
+    "extract_markdown_preamble",
+    "extract_markdown_section",
+    "extract_markdown_tables",
     "extract_relative_links",
     "find_deep_reference_chains",
     "git_blob_bytes",
@@ -288,10 +312,6 @@ def read_json_object(
 MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 # Matches HTML href="..." or src="..."
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
-# Matches reference-style link definitions [label]: target
-MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
-_ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
-_FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
 _HTML_ID_ATTR_RE = re.compile(r"""\bid=["\x27]([^"\x27]+)["\x27]""")
 _HTML_NAME_ANCHOR_RE = re.compile(
@@ -315,7 +335,7 @@ def extract_relative_links(
     raw_targets = (
         MD_LINK_RE.findall(content)
         + HTML_LINK_RE.findall(content)
-        + MD_REF_LINK_RE.findall(content)
+        + extract_reference_link_targets(content)
     )
     relative_paths: list[str] = []
     for target in raw_targets:
@@ -340,15 +360,6 @@ def extract_link_fragment(target: str) -> str | None:
     return unquote(parsed.fragment)
 
 
-def slugify_markdown_heading(heading_text: str) -> str:
-    """Convert Markdown heading text into an anchor slug matching GitHub and build_site."""
-    cleaned = re.sub(r"!?\[([^\]]*)\]\([^)]+\)", r"\1", heading_text)
-    cleaned = cleaned.lower()
-    cleaned = re.sub(r"[`]", "", cleaned)
-    cleaned = re.sub(r"[^a-z0-9 _-]", "", cleaned)
-    return cleaned.strip().replace(" ", "-")
-
-
 def _extract_html_anchors(content: str) -> set[str]:
     """Extract id and <a name=...> anchor targets from HTML text outside script/style."""
     cleaned = _HTML_SCRIPT_STYLE_RE.sub("", content)
@@ -371,30 +382,11 @@ def extract_document_anchors(content: str, suffix: str = ".md") -> set[str]:
 
     anchors: set[str] = set()
     seen_slugs: dict[str, int] = {}
-    fence_char = ""
-    fence_len = 0
 
-    for line in content.splitlines():
-        fence_match = _FENCE_MARKER_RE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if not fence_char:
-                fence_char = marker[0]
-                fence_len = len(marker)
-                continue
-            if marker[0] == fence_char and len(marker) >= fence_len:
-                fence_char = ""
-                fence_len = 0
-                continue
-        if fence_char:
-            continue
-
-        heading_match = _ATX_HEADING_RE.match(line)
-        if heading_match:
-            base = slugify_markdown_heading(heading_match.group(2)) or "section"
-            count = seen_slugs.get(base, 0)
-            seen_slugs[base] = count + 1
-            anchors.add(base if count == 0 else f"{base}-{count}")
+    for _, line in non_fenced_lines(content):
+        heading = match_atx_heading(line)
+        if heading is not None:
+            anchors.add(unique_heading_slug(heading[1], seen_slugs))
 
         for raw_attr in _HTML_ID_ATTR_RE.findall(line) + _HTML_NAME_ANCHOR_RE.findall(
             line
@@ -503,20 +495,216 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
     return violations
 
 
-def read_frontmatter(path: Path) -> tuple[dict, str]:
-    import yaml
+_YAML_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+|\"[^\"]+\"|'[^']+')\s*:(.*)$")
 
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        raise ValueError(f"{path}: missing YAML frontmatter")
-    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-    if end is None:
-        raise ValueError(f"{path}: unterminated YAML frontmatter")
-    metadata = yaml.safe_load("".join(lines[1:end]))
+
+def _strip_yaml_inline_comment(raw: str) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+    for idx, ch in enumerate(raw):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and in_double:
+            escaped = True
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif (
+            ch == "#"
+            and not in_single
+            and not in_double
+            and (idx == 0 or raw[idx - 1].isspace())
+        ):
+            return raw[:idx].rstrip()
+    return raw.strip()
+
+
+def _parse_yaml_scalar_stdlib(raw: str, path: Path) -> Any:
+    cleaned = _strip_yaml_inline_comment(raw.strip())
+    if not cleaned:
+        return None
+    if cleaned.startswith('"'):
+        if len(cleaned) < 2 or not cleaned.endswith('"'):
+            raise ValueError(f"{path}: unterminated double-quoted YAML scalar")
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}: invalid double-quoted YAML scalar") from exc
+    if cleaned.startswith("'"):
+        if len(cleaned) < 2 or not cleaned.endswith("'"):
+            raise ValueError(f"{path}: unterminated single-quoted YAML scalar")
+        return cleaned[1:-1].replace("''", "'")
+    if cleaned in {"true", "True", "TRUE"}:
+        return True
+    if cleaned in {"false", "False", "FALSE"}:
+        return False
+    if cleaned in {"null", "Null", "NULL", "~"}:
+        return None
+    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", cleaned):
+        return int(cleaned)
+    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)\.[0-9]+", cleaned):
+        return float(cleaned)
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        inner = cleaned[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_yaml_scalar_stdlib(item, path) for item in inner.split(",")]
+    return cleaned
+
+
+def _parse_frontmatter_stdlib(frontmatter_text: str, path: Path) -> Any:
+    raw_lines = frontmatter_text.splitlines()
+    result: dict[str, Any] = {}
+    saw_content = False
+    idx = 0
+    total = len(raw_lines)
+    while idx < total:
+        line = raw_lines[idx]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        saw_content = True
+        if "\t" in line[: len(line) - len(line.lstrip())]:
+            raise ValueError(
+                f"{path}: tab indentation is not allowed in YAML frontmatter"
+            )
+        if line[0].isspace() or stripped.startswith("- "):
+            return stripped
+        match = _YAML_KEY_RE.match(line)
+        if match is None:
+            if ":" not in stripped:
+                return _parse_yaml_scalar_stdlib(stripped, path)
+            raise ValueError(f"{path}: invalid YAML frontmatter line: {line!r}")
+        raw_key, raw_rest = match.group(1), match.group(2)
+        key = str(_parse_yaml_scalar_stdlib(raw_key, path))
+        rest = _strip_yaml_inline_comment(raw_rest.strip())
+        idx += 1
+
+        if rest in {"|", "|-", "|+", ">", ">-", ">+"}:
+            block_lines: list[tuple[int, str]] = []
+            block_indent: int | None = None
+            while idx < total:
+                sub = raw_lines[idx]
+                sub_stripped = sub.strip()
+                if not sub_stripped:
+                    block_lines.append((0, ""))
+                    idx += 1
+                    continue
+                indent = len(sub) - len(sub.lstrip(" "))
+                if indent == 0:
+                    break
+                if block_indent is None:
+                    block_indent = indent
+                content = (
+                    sub[block_indent:] if indent >= block_indent else sub.lstrip(" ")
+                )
+                block_lines.append((indent, content))
+                idx += 1
+            while block_lines and block_lines[-1][1] == "" and rest.endswith("-"):
+                block_lines.pop()
+            if rest.startswith("|"):
+                joined = "\n".join(part for _, part in block_lines)
+            else:
+                folded_parts: list[str] = []
+                for _, part in block_lines:
+                    if not part:
+                        folded_parts.append("\n")
+                    elif folded_parts and not folded_parts[-1].endswith("\n"):
+                        folded_parts.append(" " + part)
+                    else:
+                        folded_parts.append(part)
+                joined = "".join(folded_parts)
+            if not rest.endswith("-") and block_lines:
+                joined = joined.rstrip("\n") + "\n"
+            result[key] = joined
+            continue
+
+        if rest == "":
+            sub_lines: list[str] = []
+            while idx < total:
+                sub = raw_lines[idx]
+                sub_stripped = sub.strip()
+                if not sub_stripped or sub_stripped.startswith("#"):
+                    idx += 1
+                    continue
+                if not sub[0].isspace():
+                    break
+                sub_lines.append(sub)
+                idx += 1
+            if not sub_lines:
+                result[key] = None
+            elif sub_lines[0].lstrip().startswith("- "):
+                seq: list[Any] = []
+                for item_line in sub_lines:
+                    item_str = item_line.lstrip()
+                    if not item_str.startswith("- "):
+                        raise ValueError(
+                            f"{path}: invalid YAML sequence item: {item_line!r}"
+                        )
+                    seq.append(_parse_yaml_scalar_stdlib(item_str[2:], path))
+                result[key] = seq
+            else:
+                nested: dict[str, Any] = {}
+                for map_line in sub_lines:
+                    sub_match = _YAML_KEY_RE.match(map_line.lstrip(" "))
+                    if sub_match is None:
+                        raise ValueError(
+                            f"{path}: invalid nested YAML mapping: {map_line!r}"
+                        )
+                    nk = str(_parse_yaml_scalar_stdlib(sub_match.group(1), path))
+                    nv = _parse_yaml_scalar_stdlib(sub_match.group(2), path)
+                    nested[nk] = nv
+                result[key] = nested
+            continue
+
+        scalar_val = _parse_yaml_scalar_stdlib(raw_rest, path)
+        if (
+            isinstance(scalar_val, str)
+            and not raw_rest.lstrip().startswith(('"', "'"))
+            and idx < total
+        ):
+            cont_parts = [scalar_val]
+            while idx < total:
+                sub = raw_lines[idx]
+                sub_stripped = sub.strip()
+                if not sub_stripped:
+                    break
+                if sub_stripped.startswith("#"):
+                    idx += 1
+                    continue
+                if not sub[0].isspace():
+                    break
+                cont_parts.append(_strip_yaml_inline_comment(sub_stripped))
+                idx += 1
+            scalar_val = " ".join(p for p in cont_parts if p)
+        result[key] = scalar_val
+
+    if not saw_content:
+        return None
+    return result
+
+
+def read_frontmatter(path: Path) -> tuple[dict, str]:
+    raw_fm, body = split_frontmatter_block(
+        path.read_text(encoding="utf-8"),
+        label=path,
+        require=True,
+    )
+    assert raw_fm is not None
+    try:
+        import yaml as _yaml
+    except ModuleNotFoundError:
+        metadata = _parse_frontmatter_stdlib(raw_fm, path)
+    else:
+        metadata = _yaml.safe_load(raw_fm)
     if not isinstance(metadata, dict):
         raise TypeError(f"{path}: frontmatter must be a mapping")
-    return metadata, "".join(lines[end + 1 :])
+    return metadata, body
 
 
 def _validate_suite_artifact(suite: dict, root: Path) -> None:
@@ -646,6 +834,7 @@ DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
         ),
     ),
     ("architecture", frozenset({"boundaries", "decisions", "components"})),
+    ("observations", frozenset({"observations"})),
     ("run", frozenset({"plan", "authority", "checkpoints"})),
 )
 
@@ -661,6 +850,7 @@ DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "plan": "repository-workflows",
     "fix": "repository-workflows",
     "verification": "repository-workflows",
+    "observations": "repository-workflows",
 }
 
 

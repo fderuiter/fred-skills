@@ -13,6 +13,8 @@ from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import validate_architecture
@@ -22,6 +24,8 @@ import validate_skills
 import validate_spec
 import validate_testing
 import validate_workflow
+
+from tests.catalog_oracles import expected_total_skills
 
 
 class SuiteValidatorsTests(unittest.TestCase):
@@ -604,8 +608,12 @@ class SuiteValidatorsTests(unittest.TestCase):
     def test_all_57_bundled_validators_run_under_isolated_python(self) -> None:
         from concurrent.futures import ThreadPoolExecutor
 
+        from _markdown_utils import extract_fenced_blocks
+
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         synced = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(57, len(synced))
+        self.assertEqual(expected_skills, len(synced))
 
         def extract_json_blocks(pkg: Path) -> list[str]:
             blocks: list[str] = []
@@ -613,17 +621,8 @@ class SuiteValidatorsTests(unittest.TestCase):
                 ref = pkg / rel
                 if not ref.is_file():
                     continue
-                in_json = False
-                lines: list[str] = []
-                for line in ref.read_text(encoding="utf-8").splitlines():
-                    if not in_json and line.strip() == "```json":
-                        in_json = True
-                        lines = []
-                    elif in_json and line.strip() == "```":
-                        in_json = False
-                        blocks.append("\n".join(lines))
-                    elif in_json:
-                        lines.append(line)
+                fenced, _ = extract_fenced_blocks(ref.read_text(encoding="utf-8"))
+                blocks.extend(body for lang, body in fenced if lang == "json")
             return blocks
 
         def check_one(script_path: Path) -> None:
@@ -668,9 +667,12 @@ class SuiteValidatorsTests(unittest.TestCase):
         import copy
 
         import jsonschema
+        from _markdown_utils import extract_fenced_blocks
 
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         schema_paths = sorted((ROOT / "skills").glob("*/assets/*.schema.json"))
-        self.assertEqual(58, len(schema_paths))
+        self.assertEqual(expected_skills + 1, len(schema_paths))
 
         for schema_path in schema_paths:
             schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -680,17 +682,10 @@ class SuiteValidatorsTests(unittest.TestCase):
                 ref = pkg / rel
                 if not ref.is_file():
                     continue
-                in_json = False
-                buf: list[str] = []
-                for line in ref.read_text(encoding="utf-8").splitlines():
-                    if not in_json and line.strip() == "```json":
-                        in_json = True
-                        buf = []
-                    elif in_json and line.strip() == "```":
-                        in_json = False
-                        examples.append(json.loads("\n".join(buf)))
-                    elif in_json:
-                        buf.append(line)
+                fenced, _ = extract_fenced_blocks(ref.read_text(encoding="utf-8"))
+                examples.extend(
+                    json.loads(body) for lang, body in fenced if lang == "json"
+                )
 
             js_validator = jsonschema.Draft202012Validator(schema)
             matching_examples = [
@@ -741,6 +736,54 @@ class SuiteValidatorsTests(unittest.TestCase):
                     actual_valid,
                     f"Parity mismatch on {schema_path.relative_to(ROOT)} for {candidate!r}",
                 )
+
+        obs_schema = json.loads(
+            (ROOT / "schemas/observations.schema.json").read_text(encoding="utf-8")
+        )
+        valid_obs: dict[str, Any] = {
+            "schema_version": "1.0",
+            "observations": [
+                {
+                    "id": "OBS-1",
+                    "tool": "semgrep",
+                    "tool_version": "1.90.0",
+                    "rule": "python.audit.eval",
+                    "kind": "review",
+                    "reported_level": "warning",
+                    "message": "Avoid eval",
+                    "locations": [{"path": "src/app.py", "line": 1}],
+                    "evidence_state": "scanner-reported; agent verification not performed",
+                    "security_severity": 7.5,
+                    "suppressions": [{"kind": "external", "status": "underReview"}],
+                }
+            ],
+            "limitations": ["Scanner claims require verification."],
+        }
+        js_obs = jsonschema.Draft202012Validator(obs_schema)
+        for obs_sample in (
+            valid_obs,
+            {**valid_obs, "extra": 1},
+            {"schema_version": "1.0", "observations": []},
+            {
+                **valid_obs,
+                "observations": [{**valid_obs["observations"][0], "suppressions": []}],
+            },
+        ):
+            self.assertEqual(
+                not list(js_obs.iter_errors(obs_sample)),
+                not validate_workflow._schema_errors(obs_sample, obs_schema),
+            )
+        self.assertEqual([], validate_workflow.validate(valid_obs, obs_schema))
+        bad_obs_path = {
+            **valid_obs,
+            "observations": [
+                {
+                    **valid_obs["observations"][0],
+                    "locations": [{"path": "../escape.py", "line": 1}],
+                }
+            ],
+        }
+        self.assertTrue(validate_workflow.validate(bad_obs_path, obs_schema))
 
         edge_schema: dict[str, Any] = {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -813,8 +856,10 @@ class SuiteValidatorsTests(unittest.TestCase):
             ROOT / "scripts/validate_testing.py",
             ROOT / "scripts/validate_spec.py",
         ]
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(57, len(synced_validators))
+        self.assertEqual(expected_skills, len(synced_validators))
 
         for path in canonical_targets:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

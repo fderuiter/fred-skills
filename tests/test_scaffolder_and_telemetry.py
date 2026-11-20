@@ -15,6 +15,8 @@ import jsonschema
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 
@@ -26,6 +28,8 @@ import sync_audit_resources
 import validate_skills
 import verify_doc_snippets
 import verify_workflow_actions
+
+from tests.catalog_oracles import expected_total_skills
 
 _PASSTHROUGH_ENV_KEYS = (
     "PATH",
@@ -293,17 +297,20 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], sync_audit_resources.sync(self.root, check=True))
         self.assertEqual([], build_catalog.build(self.root, check=True))
         self.assertEqual([], build_experience.build(self.root, check=True))
+        baseline_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(baseline_skills, 1)
         errors, telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], errors)
-        self.assertEqual(58, telemetry["total_packages"])
+        self.assertEqual(baseline_skills + 1, telemetry["total_packages"])
 
-        for extra_name, extra_suite in (
+        extra_specs = (
             ("arch-service-contracts", "software-architecture"),
             ("review-api-changes", "code-review"),
             ("test-mutation-bounds", "automated-testing"),
             ("spec-acceptance-matrix", "spec-driven-development"),
             ("repo-triage-regressions", "repository-workflows"),
-        ):
+        )
+        for extra_name, extra_suite in extra_specs:
             scaffold_skill.scaffold_skill(
                 extra_name,
                 root=self.root,
@@ -315,7 +322,10 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], build_experience.build(self.root, check=True))
         all_errors, all_telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], all_errors)
-        self.assertEqual(63, all_telemetry["total_packages"])
+        self.assertEqual(
+            baseline_skills + 1 + len(extra_specs),
+            all_telemetry["total_packages"],
+        )
 
     def test_scaffolder_catalog_sync_in_minimal_root(self) -> None:
         scaffold_skill.scaffold_skill(
@@ -477,6 +487,70 @@ class DiffTelemetryAndLedgerTests(unittest.TestCase):
         self.assertEqual(1, telemetry["new_skills_count"])
         self.assertEqual(1, telemetry["new_skills_first_pass_count"])
         self.assertEqual(100.0, telemetry["new_skills_first_pass_percentage"])
+
+    def test_explicit_base_ref_fallback_on_root_unfetched_and_descendant_commits(
+        self,
+    ) -> None:
+        # 1. Root commit: HEAD~1, <root_sha>~1, and <root_sha> fall back to initial-commit cleanly.
+        root_sha = _git(self.repo, self.env, "rev-parse", "HEAD")
+        for ref in ("HEAD~1", f"{root_sha}~1", root_sha, "deadbeef" * 5):
+            with self.subTest(root_case=ref):
+                errs, tel = validate_skills.validate_with_telemetry(
+                    self.repo,
+                    base_ref=ref,
+                    record_attempts=False,
+                )
+                self.assertEqual([], errs)
+                self.assertEqual("initial-commit", tel["diff_scope"])
+                self.assertIsNone(tel["diff_base"])
+                self.assertEqual(1, tel["new_skills_count"])
+
+        # 2. Commit C2 adds target-tag-skill; commit C3 advances main with later-main-skill.
+        scaffold_skill.scaffold_skill("target-tag-skill", root=self.repo)
+        _git(self.repo, self.env, "add", ".")
+        _git(self.repo, self.env, "commit", "-m", "Add target-tag-skill at C2")
+        c2_sha = _git(self.repo, self.env, "rev-parse", "HEAD")
+
+        scaffold_skill.scaffold_skill("later-main-skill", root=self.repo)
+        _git(self.repo, self.env, "add", ".")
+        _git(self.repo, self.env, "commit", "-m", "Add later-main-skill at C3")
+        c3_sha = _git(self.repo, self.env, "rev-parse", "HEAD")
+
+        # Force-updated v* tag with unfetched github.event.before SHA exits 0 and diffs against HEAD~1.
+        unfetched_sha = "f00dbabe" * 5
+        cli_unfetched = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(self.repo),
+                "--base-ref",
+                unfetched_sha,
+                "--no-ledger",
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, cli_unfetched.returncode, cli_unfetched.stderr)
+        self.assertIn("New Skills: 1", cli_unfetched.stdout)
+
+        # Older target_sha checkout (HEAD == C2) diffs C2 against C2~1 (root_sha) for both C2~1 and descendant C3.
+        _git(self.repo, self.env, "checkout", "--detach", c2_sha)
+        for older_ref in (f"{c2_sha}~1", c3_sha, "main"):
+            with self.subTest(older_ref=older_ref):
+                errs_c2, tel_c2 = validate_skills.validate_with_telemetry(
+                    self.repo,
+                    base_ref=older_ref,
+                    record_attempts=False,
+                )
+                self.assertEqual([], errs_c2)
+                self.assertEqual("git-diff", tel_c2["diff_scope"])
+                self.assertEqual(root_sha, tel_c2["diff_base"])
+                self.assertEqual(1, tel_c2["new_skills_count"])
+                new_names = {p["name"] for p in tel_c2["packages"] if p["is_new"]}
+                self.assertEqual({"target-tag-skill"}, new_names)
 
     def test_single_pass_inspection_eliminates_rereads_and_preserves_telemetry_parity(
         self,
@@ -776,7 +850,15 @@ class WorkflowAndContributingGuardrailTests(unittest.TestCase):
             for s in steps
             if "scripts/run_checks.py --phase packages" in s.get("run", "")
         )
-        self.assertIn("--base-ref", pkg_step["run"])
+        self.assertEqual("bash", pkg_step.get("shell"))
+        self.assertIn('--base-ref "$BASE_REF"', pkg_step["run"])
+        self.assertNotIn("${{", pkg_step["run"])
+        base_ref_expr = pkg_step.get("env", {}).get("BASE_REF", "")
+        self.assertIn("inputs.ref != ''", base_ref_expr)
+        self.assertIn("format('{0}~1', inputs.ref)", base_ref_expr)
+        self.assertIn("github.event_name == 'pull_request'", base_ref_expr)
+        self.assertIn("'HEAD~1'", base_ref_expr)
+        self.assertIn("github.event.before", base_ref_expr)
         self.assertIn("--telemetry validation-telemetry.json", pkg_step["run"])
         self.assertIn("--step-summary", pkg_step["run"])
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import hashlib
 import io
 import json
 import re
@@ -13,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,7 +29,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from skill_tools import FredCliError, git_tag_exists
+from _doc_invariants import (
+    CORE_INVARIANT_DOCS,
+    DocCountExpectations,
+    build_prose_count_rules,
+    discover_untagged_release_notes,
+    find_prose_count_mismatches,
+)
+from _markdown_utils import match_atx_heading, scan_markdown_fences
+from skill_tools import FredCliError
 
 fred: ModuleType | None
 try:
@@ -275,44 +285,26 @@ def _parse_fenced_blocks(
     lines: list[str],
 ) -> list[tuple[int, int, str, list[tuple[int, str]]]]:
     """Extract raw fenced code block boundaries and lines from markdown text lines."""
-    blocks: list[tuple[int, int, str, list[tuple[int, str]]]] = []
-    in_block = False
-    block_lang = ""
-    block_lines: list[tuple[int, str]] = []
-    block_start = 0
-
-    for idx, line in enumerate(lines, start=1):
-        stripped = line.strip()
-        if not stripped.startswith("```"):
-            if in_block:
-                block_lines.append((idx, line))
-            continue
-
-        if in_block:
-            blocks.append((block_start, idx, block_lang, block_lines))
-            in_block = False
-            block_lines = []
-        else:
-            block_lang = stripped[3:].strip()
-            block_start = idx
-            in_block = True
-
-    return blocks
+    _, scanned = scan_markdown_fences(lines)
+    return [
+        (block.start_line, block.end_line, block.fence.info.strip(), list(block.lines))
+        for block in scanned
+        if block.closed
+    ]
 
 
-_ATX_SECTION_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _CURSOR_HEADING_RE = re.compile(r"\bcursor\b", re.IGNORECASE)
 
 
 def _update_heading_stack(active: dict[int, str], line: str) -> None:
     """Update active ATX heading hierarchy when line is a Markdown heading."""
-    match = _ATX_SECTION_HEADING_RE.match(line)
-    if not match:
+    heading = match_atx_heading(line)
+    if heading is None:
         return
-    level = len(match.group(1))
+    level, title = heading
     for deeper in [k for k in active if k >= level]:
         del active[deeper]
-    active[level] = match.group(2).strip()
+    active[level] = title
 
 
 def _headings_by_block_start(
@@ -396,28 +388,61 @@ def discover_doc_blocks(
     return discovered
 
 
-def _parse_lifecycle_groups_fallback(content: str) -> dict[str, list[str]]:
-    """Parse LIFECYCLE_GROUPS from the initial lines of scripts/fred.py."""
+def _extract_ast_string_list(node: ast.AST) -> list[str] | None:
+    """Extract string elements from an AST List or Tuple literal."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    return [
+        elt.value
+        for elt in node.elts
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+    ]
+
+
+def _extract_lifecycle_groups_dict(node: ast.AST) -> dict[str, list[str]]:
+    """Extract {group_name: [subcommand, ...]} from an AST Dict literal."""
+    if not isinstance(node, ast.Dict):
+        return {}
     groups: dict[str, list[str]] = {}
-    in_dict = False
-    current_group = ""
-    for line in content.splitlines()[:150]:
-        if "LIFECYCLE_GROUPS = {" in line:
-            in_dict = True
-            continue
-        if not in_dict:
-            continue
-        if line.strip() == "}":
-            break
-        group_match = re.match(r'\s*"([^"]+)":\s*\[', line)
-        if group_match:
-            current_group = group_match.group(1)
-            groups[current_group] = []
-            continue
-        item_match = re.match(r'\s*"([^"]+)",', line)
-        if item_match and current_group:
-            groups[current_group].append(item_match.group(1))
+    for key_node, val_node in zip(node.keys, node.values, strict=False):
+        if (
+            isinstance(key_node, ast.Constant)
+            and isinstance(key_node.value, str)
+            and val_node is not None
+        ):
+            items = _extract_ast_string_list(val_node)
+            if items is not None:
+                groups[key_node.value] = items
     return groups
+
+
+def _lifecycle_groups_value_node(node: ast.AST) -> ast.AST | None:
+    """Return the assigned value node when node assigns to LIFECYCLE_GROUPS."""
+    if isinstance(node, ast.Assign):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "LIFECYCLE_GROUPS":
+                return node.value
+        return None
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "LIFECYCLE_GROUPS"
+    ):
+        return node.value
+    return None
+
+
+def _parse_lifecycle_groups_fallback(content: str) -> dict[str, list[str]]:
+    """Parse LIFECYCLE_GROUPS via AST lookup across scripts/fred.py."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return {}
+    for node in ast.walk(tree):
+        value_node = _lifecycle_groups_value_node(node)
+        if value_node is not None:
+            return _extract_lifecycle_groups_dict(value_node)
+    return {}
 
 
 def get_registered_fred_subcommands(root: Path = ROOT) -> dict[str, list[str]]:
@@ -1671,6 +1696,105 @@ def _validate_fred_catalog_flags(
     return True, ""
 
 
+def _stage_verify_release_fixture(
+    fixture_root: Path,
+    manifest_arg: str,
+    expected_ver: str,
+) -> None:
+    """Create a release verification fixture simulating either a local pack build or partial release download."""
+    rel = Path(manifest_arg)
+    if rel.is_absolute():
+        return
+    bundle_dir = (
+        (fixture_root / rel).parent
+        if rel.name == "manifest.json"
+        else (fixture_root / rel)
+    )
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    is_local_pack_dir = rel.parts[:1] == ("dist",) and len(rel.parts) >= 2
+    if is_local_pack_dir:
+        pack_label = rel.parts[1] if rel.parts[1] != "manifest.json" else "starter"
+        file_specs: list[tuple[str, bool]] = [
+            (f"fred-skills-{expected_ver}-{pack_label}.tar", True),
+            (f"fred-skills-{expected_ver}-{pack_label}.zip", True),
+        ]
+    else:
+        file_specs = [
+            (f"fred-skills-{expected_ver}-starter.tar", True),
+            (f"fred-skills-{expected_ver}-starter.zip", False),
+            (f"fred-skills-{expected_ver}-complete.tar", False),
+            (f"fred-skills-{expected_ver}-cli.tar.gz", True),
+        ]
+
+    archives_manifest: list[dict[str, Any]] = []
+    checksum_lines: list[str] = []
+    for filename, present_on_disk in file_specs:
+        payload = f"fixture:{filename}\n".encode()
+        digest = hashlib.sha256(payload).hexdigest()
+        if present_on_disk:
+            (bundle_dir / filename).write_bytes(payload)
+        archives_manifest.append(
+            {
+                "file": filename,
+                "sha256": digest,
+                "bytes": len(payload),
+                "skills": [],
+            }
+        )
+        checksum_lines.append(f"{digest}  {filename}\n")
+
+    manifest_doc = {
+        "schema_version": "1.0",
+        "version": expected_ver,
+        "pack": "starter" if is_local_pack_dir else "all",
+        "licensing": "See repository LICENSE",
+        "archives": archives_manifest,
+    }
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(manifest_doc, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    joined_checksums = "".join(checksum_lines)
+    (bundle_dir / "SHA256SUMS").write_text(joined_checksums, encoding="utf-8")
+    (bundle_dir / "checksums.sha256").write_text(joined_checksums, encoding="utf-8")
+
+
+def _execute_fred_verify_release(
+    norm_args: list[str],
+    script_path: Path,
+    root: Path,
+) -> tuple[bool, str]:
+    """Execute scripts/fred.py verify-release against an existing bundle or temporary partial fixture."""
+    manifest_arg = next(
+        (arg for arg in norm_args[1:] if not arg.startswith("-")),
+        "manifest.json",
+    )
+    candidate_target = root / manifest_arg
+    resolved_script = script_path.resolve()
+    if not Path(manifest_arg).is_absolute() and candidate_target.exists():
+        return _run_readonly_check(
+            [sys.executable, "-S", str(resolved_script), *norm_args],
+            root,
+            "scripts/fred.py verify-release",
+        )
+    expected_ver = _read_expected_version(root)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        _stage_verify_release_fixture(tmp_path, manifest_arg, expected_ver)
+        proc = subprocess.run(
+            [sys.executable, "-S", str(resolved_script), *norm_args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=DEFAULT_SNIPPET_TIMEOUT,
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip()
+            return False, f"scripts/fred.py verify-release failed: {detail}"
+    return True, ""
+
+
 def _validate_python_fred(
     parts: list[str],
     script_path: Path,
@@ -1693,6 +1817,9 @@ def _validate_python_fred(
             root,
             "scripts/fred.py search",
         )
+    if len(parts) >= 3 and parts[2] == "verify-release":
+        verify_args = [normalize_cli_token(arg) for arg in parts[2:]]
+        return _execute_fred_verify_release(verify_args, script_path, root)
     return True, ""
 
 
@@ -1874,10 +2001,18 @@ def _validate_pre_commit(parts: list[str], root: Path, _cmd: str) -> tuple[bool,
 
 
 STATIC_RELEASE_ASSETS: frozenset[str] = frozenset(
-    {"SHA256SUMS", "checksums.sha256", "manifest.json", "fred-skills-suite.tar.gz"}
+    {
+        "SHA256SUMS",
+        "checksums.sha256",
+        "manifest.json",
+        "fred-skills-suite.tar.gz",
+        "darwin.fred-skills.tar.gz",
+        "linux.fred-skills.tar.gz",
+        "win32.fred-skills.zip",
+    }
 )
 _PACK_ARCHIVE_RE = re.compile(
-    r"^fred-skills-(?P<ver>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-(?P<pack>[a-z0-9-]+)\.(?:tar|zip)$"
+    r"^fred-skills-(?P<ver>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-(?P<pack>[a-z0-9-]+)\.(?:tar\.gz|tar|zip)$"
 )
 
 
@@ -1911,12 +2046,15 @@ def _split_pack_archive_stem(
     filename: str,
     expected_version: str,
 ) -> tuple[str, str] | None:
-    """Extract (version, pack_name) from a fred-skills-<version>-<pack>.(tar|zip) filename."""
-    stem = (
-        filename.removesuffix(".tar")
-        if filename.endswith(".tar")
-        else filename.removesuffix(".zip")
-    )
+    """Extract (version, pack_name) from a fred-skills-<version>-<pack|cli>.(tar.gz|tar|zip) filename."""
+    if filename.endswith(".tar.gz"):
+        stem = filename.removesuffix(".tar.gz")
+    elif filename.endswith(".tar"):
+        stem = filename.removesuffix(".tar")
+    elif filename.endswith(".zip"):
+        stem = filename.removesuffix(".zip")
+    else:
+        stem = filename
     exact_prefix = f"fred-skills-{expected_version}-"
     if stem != filename and stem.startswith(exact_prefix):
         pack_part = stem.removeprefix(exact_prefix)
@@ -1926,7 +2064,7 @@ def _split_pack_archive_stem(
 
 
 def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
-    """Verify pack archive version and canonical pack name against VERSION and catalog/packs.json."""
+    """Verify pack or CLI archive version and canonical pack name against VERSION and catalog/packs.json."""
     expected_ver = _read_expected_version(root)
     parsed = _split_pack_archive_stem(filename, expected_ver)
     if parsed is None:
@@ -1937,6 +2075,10 @@ def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
             False,
             f"Pack archive '{filename}' version '{found_ver}' does not match VERSION '{expected_ver}'",
         )
+    if pack_name == "cli" and filename.endswith((".tar.gz", ".zip")):
+        return True, ""
+    if filename.endswith(".tar.gz"):
+        return False, f"Pack archive '{filename}' must use .tar or .zip extension"
     known_packs = _load_known_packs(root)
     if known_packs and pack_name not in known_packs:
         return (
@@ -2542,55 +2684,26 @@ def _verify_shell_block(
     return errors
 
 
-RELEASE_COUNT_DOCS: frozenset[str] = frozenset({"README.md", "docs/usage.md"})
-_TOTAL_COUNT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\*\*(\d+)\s+standalone skills\*\*"),
-    re.compile(r"`complete`\s+for all\s+(\d+)\s+(?:skills|packages)"),
-    re.compile(r"each of the\s+(\d+)\s+skills"),
-    re.compile(r"complete\s+(\d+)-package pack"),
-    re.compile(r"creates all\s+(\d+)\s+skill directories"),
-    re.compile(r"Total:\s*(\d+)\s+skills"),
-)
-_STARTER_COUNT_PATTERN = re.compile(r"`starter`\s+for\s+(\d+)\s+core audit skills")
-
-
-def _git_tag_exists(root: Path, tag: str) -> bool:
-    """Return True if refs/tags/<tag> exists in the git repository at root."""
-    return git_tag_exists(root, tag)
+RELEASE_COUNT_DOCS: frozenset[str] = frozenset(CORE_INVARIANT_DOCS)
 
 
 def _is_release_count_doc(rel_path: str, root: Path = ROOT) -> bool:
-    """Return True if rel_path is an onboarding guide or untagged active release note."""
+    """Return True if rel_path is a core guide or untagged active release note."""
     if rel_path in RELEASE_COUNT_DOCS:
         return True
-    ver = _read_expected_version(root)
-    if not ver or rel_path != f"docs/release-notes-{ver}.md":
-        return False
-    return not _git_tag_exists(root, f"v{ver}")
+    return rel_path in discover_untagged_release_notes(root, fallback_root=ROOT)
 
 
-def _check_line_count_patterns(
-    rel_path: str,
-    line_no: int,
-    line: str,
-    expected_total: int,
-    expected_starter: int,
-) -> list[str]:
-    """Return count mismatch errors found on a single documentation line."""
-    errors: list[str] = []
-    for pat in _TOTAL_COUNT_PATTERNS:
-        for match in pat.finditer(line):
-            found = int(match.group(1))
-            if found != expected_total:
-                errors.append(
-                    f"{rel_path}:L{line_no}: Documented skill count {found} does not match catalog total {expected_total}"
-                )
-    starter_match = _STARTER_COUNT_PATTERN.search(line)
-    if starter_match and int(starter_match.group(1)) != expected_starter:
-        errors.append(
-            f"{rel_path}:L{line_no}: Documented starter pack count {starter_match.group(1)} does not match catalog count {expected_starter}"
+def _format_release_count_mismatch(rel_path: str, mismatch: Any) -> str:
+    if mismatch.label == "starter pack":
+        return (
+            f"{rel_path}:L{mismatch.line_no}: Documented starter pack count "
+            f"{mismatch.found} does not match catalog count {mismatch.expected}"
         )
-    return errors
+    return (
+        f"{rel_path}:L{mismatch.line_no}: Documented skill count "
+        f"{mismatch.found} does not match catalog total {mismatch.expected}"
+    )
 
 
 def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
@@ -2601,18 +2714,17 @@ def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
     packs = _load_known_packs(root)
     if not doc_path.is_file() or "complete" not in packs:
         return []
-    expected_total = len(packs["complete"])
-    expected_starter = len(packs.get("starter", []))
-    errors: list[str] = []
-    for line_no, line in enumerate(
-        doc_path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
-        errors.extend(
-            _check_line_count_patterns(
-                rel_path, line_no, line, expected_total, expected_starter
-            )
+    rules = build_prose_count_rules(
+        DocCountExpectations(
+            total_skills=len(packs["complete"]),
+            starter_skills=len(packs.get("starter", [])),
         )
-    return errors
+    )
+    mismatches = find_prose_count_mismatches(
+        doc_path.read_text(encoding="utf-8"),
+        rules,
+    )
+    return [_format_release_count_mismatch(rel_path, m) for m in mismatches]
 
 
 _NON_AUDIT_SCHEMA_V1_KEYS: frozenset[str] = frozenset(
@@ -2625,6 +2737,7 @@ _NON_AUDIT_SCHEMA_V1_KEYS: frozenset[str] = frozenset(
         "suites",
         "plan",
         "reconciliations",
+        "observations",
     }
 )
 

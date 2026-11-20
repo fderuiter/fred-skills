@@ -358,17 +358,17 @@ def reconcile(
 ) -> dict
 ```
 
-Updates the remediation state of a finding in `directory / remediation.json`.
+Updates the remediation state of a finding or imported observation claim in `directory / remediation.json`.
 
 - **Parameters:**
   - `directory` (`Path`): Path to the run directory.
-  - `finding_id` (`str`): Target finding ID (must exist in `audit.json`).
+  - `finding_id` (`str`): Target finding ID in `audit.json`, or unique observation ID (`id` / `properties.findingId`) or unique `rule` in `observations.json` / `scanner-observations.json`.
   - `state` (`str`): New remediation state. Must be one of: `"open"`, `"in-progress"`, `"fixed-pending-verification"`, `"verified-fixed"`, `"regressed"`, `"accepted-risk"`.
   - `note` (`str`): Explanatory note for the transition.
   - `verification` (`Path | None`, default: `None`): Path to a structured verification proof artifact (mandatory when `state="verified-fixed"`).
 - **Returns:** `dict` — The newly appended remediation record dictionary containing `"at"`, `"finding_id"`, `"fingerprint"`, `"state"`, `"note"`, and `"verification"`.
 - **Exceptions:**
-  - `ValueError`: Raised if `finding_id` is not in `audit.json`; if `state` is invalid; if `verification` is omitted when `state="verified-fixed"`; or if the verification artifact fails schema validation or execution assertions.
+  - `ValueError`: Raised if `finding_id` does not uniquely match a finding in `audit.json` or an imported observation in `observations.json` / `scanner-observations.json`; if `state` is invalid; if `verification` is omitted when `state="verified-fixed"`; or if the verification artifact fails schema validation or execution assertions.
 
 ---
 
@@ -396,14 +396,14 @@ Generates a portable cross-run memory ledger from a validated run workspace acro
 def import_sarif(path: Path, root: Path | None = None) -> dict
 ```
 
-Imports static analysis observations from a SARIF JSON file, normalizing `file://` URIs against SARIF base metadata or an optional repository root, inheriting rule severity levels, and sanitizing relative paths.
+Imports static analysis observations from a SARIF JSON file, skipping `pass`, `notApplicable`, and accepted `suppressions` results per OASIS SARIF v2.1.0, normalizing `file://` URIs against SARIF base metadata or an optional repository root, evaluating non-fail result kinds before rule severity levels, and sanitizing relative paths.
 
 - **Parameters:**
   - `path` (`Path`): Path to the SARIF file.
   - `root` (`Path | None`, default: `None`): Optional repository root directory used to resolve `file://` URIs and reject out-of-tree paths.
 - **Returns:** `dict` — Schema 1.0 imported observation ledger containing:
   - `"schema_version"`: `"1.0"`
-  - `"observations"`: List of normalized observation records (`tool`, `tool_version`, `rule`, `reported_level`, `message`, `locations`, `evidence_state`, plus optional `security_severity`, `fingerprints`, and `partial_fingerprints`).
+  - `"observations"`: List of normalized observation records (`tool`, `tool_version`, `rule`, `reported_level`, `message`, `locations`, `evidence_state`, plus optional `kind`, `security_severity`, `fingerprints`, `partial_fingerprints`, active `suppressions` with `"underReview"` or `"rejected"` status, and audit `properties` with `findingId`, `topic`, `status`, `severity`, `confidence`, and `remedy`).
   - `"limitations"`: Explicit caveats indicating scanner claims require agent verification.
 - **Exceptions:** None.
 
@@ -797,16 +797,27 @@ Builds reproducible release distribution archives containing selected standalone
 ### `verify`
 
 ```python
-def verify(manifest: Path) -> dict
+def verify(
+    manifest: Path,
+    *,
+    archive: str | Path | Sequence[str | Path] | None = None,
+    ignore_missing: bool = False,
+    expected_version: str | None = None,
+    require_licensing: bool = False,
+) -> dict
 ```
 
 Validates the integrity of release archives (and adjacent `SHA256SUMS` and `checksums.sha256` files when present) against a committed or generated `manifest.json`.
 
 - **Parameters:**
-  - `manifest` (`Path`): Path to `manifest.json`.
+  - `manifest` (`Path`): Path to `manifest.json` or its containing release directory.
+  - `archive` (`str | Path | Sequence[str | Path] | None`, default: `None`): Optional archive filename (or list of filenames) in `manifest.json` to verify selectively without requiring unrequested release archives on disk.
+  - `ignore_missing` (`bool`, default: `False`): If `True`, skip manifest archive entries that are absent on disk while still verifying present archives and checksum manifests.
+  - `expected_version` (`str | None`, default: `None`): Optional version string that `manifest["version"]` must match.
+  - `require_licensing` (`bool`, default: `False`): If `True`, require `manifest["schema_version"] == "1.0"` and `manifest["licensing"] == "See repository LICENSE"`.
 - **Returns:** `dict` — Verification summary dictionary containing `"verified_archives"`, `"version"`, and `"authenticity"`.
 - **Exceptions:**
-  - `ValueError`: Raised if an archive path escapes the manifest directory or is missing; if an archive's byte count or SHA-256 checksum does not match `manifest.json`; or if a present `SHA256SUMS` or `checksums.sha256` file is a symlink, contains malformed lines, or disagrees with `manifest.json`.
+  - `FredCliError` (`ValueError`): Raised if an archive path escapes the manifest directory or is missing (unless skipped by `archive` or `ignore_missing`); if zero archives match on disk; if `expected_version` or `require_licensing` checks fail; if an archive's byte count or SHA-256 checksum does not match `manifest.json`; or if a present `SHA256SUMS` or `checksums.sha256` file is a symlink, contains malformed lines, or disagrees with `manifest.json`.
 
 ---
 

@@ -17,6 +17,19 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from _markdown_utils import (
+    consume_fenced_block,
+    is_markdown_table_separator,
+    match_atx_heading,
+    match_fence_open,
+    parse_frontmatter_scalars,
+    split_markdown_table_cells,
+    strip_reference_link_definitions,
+    unique_heading_slug,
+)
+from _markdown_utils import (
+    slugify_markdown_heading as slugify,
+)
 from build_experience import (
     SITE_DIRECTORIES,
     SITE_ROOT_FILES,
@@ -54,85 +67,13 @@ ROOT_MARKDOWN_FILES: tuple[str, ...] = (
 AUXILIARY_ROOT_MARKDOWN: tuple[str, ...] = ROOT_MARKDOWN_FILES[1:]
 GITHUB_BLOB_BASE_URL = "https://github.com/fderuiter/fred-skills/blob/main"
 
-_ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 _HR_RE = re.compile(r"^\s*(?:-\s*-\s*-[-\s]*|\*\s*\*\s*\*[\*\s]*|_\s*_\s*_[_\s]*)$")
-_FENCE_OPEN_RE = re.compile(r"^([ \t]*)```([^`]*)$")
 _UL_ITEM_RE = re.compile(r"^([ \t]*)[-*+]\s+(.*)$")
 _OL_ITEM_RE = re.compile(r"^([ \t]*)\d+\.\s+(.*)$")
 _BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
-_REF_DEF_RE = re.compile(r"^\[([^\]]+)\]:\s*(\S+)\s*$")
 _INLINE_CODE_RE = re.compile(r"``(.+?)``|`([^`]+)`")
 _INLINE_LINK_RE = re.compile(r"(!?)\[([^\]]+)\]\(([^)]+)\)")
 _REF_LINK_RE = re.compile(r"\[([^\]]+)\]\[([^\]]*)\]")
-_FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:(.*)$")
-
-
-def _extract_stdlib_frontmatter(
-    markdown_text: str,
-) -> tuple[list[tuple[str, str]], str]:
-    """Extract leading YAML frontmatter key/value pairs using Python stdlib only."""
-    lines = markdown_text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return [], markdown_text
-    end_idx = next(
-        (i for i in range(1, len(lines)) if lines[i].strip() == "---"),
-        None,
-    )
-    if end_idx is None:
-        return [], markdown_text
-    raw_fm = lines[1:end_idx]
-    pairs: list[tuple[str, str]] = []
-    idx = 0
-    while idx < len(raw_fm):
-        line = raw_fm[idx]
-        if not line.strip() or line.lstrip().startswith("#"):
-            idx += 1
-            continue
-        key_match = _FRONTMATTER_KEY_RE.match(line)
-        if key_match is None:
-            return [], markdown_text
-        key = key_match.group(1)
-        val_raw = key_match.group(2).strip()
-        idx += 1
-        cont_parts: list[str] = []
-        if val_raw in {"", ">", "|", ">-", "|-", ">+", "|+"}:
-            val_raw = ""
-        while idx < len(raw_fm):
-            nxt = raw_fm[idx]
-            if not nxt.strip():
-                idx += 1
-                continue
-            if nxt.startswith((" ", "\t")):
-                cleaned_cont = nxt.strip()
-                if cleaned_cont.startswith("- "):
-                    cleaned_cont = cleaned_cont[2:].strip()
-                cont_parts.append(cleaned_cont.strip("\"'"))
-                idx += 1
-                continue
-            break
-        if len(val_raw) >= 2 and val_raw[0] == val_raw[-1] and val_raw[0] in {"'", '"'}:
-            val_raw = val_raw[1:-1]
-        combined = " ".join(p for p in [val_raw, *cont_parts] if p)
-        pairs.append((key, combined))
-    if not pairs:
-        return [], markdown_text
-    return pairs, "\n".join(lines[end_idx + 1 :])
-
-
-def slugify(heading_text: str) -> str:
-    """Convert heading text into an anchor slug matching tests/test_api_guide.py."""
-    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", heading_text)
-    cleaned = cleaned.lower()
-    cleaned = re.sub(r"[`]", "", cleaned)
-    cleaned = re.sub(r"[^a-z0-9 _-]", "", cleaned)
-    return cleaned.strip().replace(" ", "-")
-
-
-def _unique_slug(raw_heading: str, seen: dict[str, int]) -> str:
-    base = slugify(raw_heading) or "section"
-    count = seen.get(base, 0)
-    seen[base] = count + 1
-    return base if count == 0 else f"{base}-{count}"
 
 
 def _rel_prefix_to_site_root(page_rel_path: str) -> str:
@@ -293,91 +234,26 @@ def _render_inline(
 
 def _split_table_cells(line: str) -> list[str]:
     """Split a Markdown pipe-table row while ignoring pipes inside backticks or escaped pipes."""
-    stripped = line.strip()
-    stripped = stripped.removeprefix("|")
-    if stripped.endswith("|") and not stripped.endswith(r"\|"):
-        stripped = stripped[:-1]
-
-    cells: list[str] = []
-    buf: list[str] = []
-    in_code = False
-    escaped_backslash = False
-    for ch in stripped:
-        if escaped_backslash:
-            if ch == "|":
-                buf.append("|")
-            else:
-                buf.append("\\")
-                buf.append(ch)
-            escaped_backslash = False
-            continue
-        if ch == "\\":
-            escaped_backslash = True
-            continue
-        if ch == "`":
-            in_code = not in_code
-            buf.append(ch)
-            continue
-        if ch == "|" and not in_code:
-            cells.append("".join(buf).strip())
-            buf = []
-            continue
-        buf.append(ch)
-    if escaped_backslash:
-        buf.append("\\")
-    cells.append("".join(buf).strip())
-    return cells
+    return split_markdown_table_cells(line)
 
 
 def _is_table_separator(line: str) -> bool:
-    stripped = line.strip()
-    if "|" not in stripped:
-        return False
-    cells = _split_table_cells(stripped)
-    if not cells:
-        return False
-    return all(bool(re.fullmatch(r":?-{3,}:?", cell)) for cell in cells)
-
-
-def _extract_reference_definitions(markdown_text: str) -> tuple[str, dict[str, str]]:
-    """Strip reference-style link definitions outside fenced blocks and return (clean_md, defs)."""
-    defs: dict[str, str] = {}
-    kept: list[str] = []
-    in_fence = False
-    for line in markdown_text.splitlines():
-        if _FENCE_OPEN_RE.match(line):
-            in_fence = not in_fence
-            kept.append(line)
-            continue
-        if not in_fence:
-            ref_match = _REF_DEF_RE.match(line.strip())
-            if ref_match:
-                defs[ref_match.group(1).strip().lower()] = ref_match.group(2).strip()
-                continue
-        kept.append(line)
-    return "\n".join(kept), defs
+    return is_markdown_table_separator(line)
 
 
 def _consume_fenced_block(lines: list[str], start_idx: int) -> tuple[str, int]:
-    open_match = _FENCE_OPEN_RE.match(lines[start_idx])
-    assert open_match is not None
-    indent_prefix = open_match.group(1)
-    lang = open_match.group(2).strip().split()[0] if open_match.group(2).strip() else ""
-    code_lines: list[str] = []
-    idx = start_idx + 1
-    while idx < len(lines):
-        candidate = lines[idx]
-        if candidate.strip() == "```":
-            idx += 1
-            break
-        if indent_prefix and candidate.startswith(indent_prefix):
-            code_lines.append(candidate[len(indent_prefix) :])
-        else:
-            code_lines.append(candidate)
-        idx += 1
+    block = consume_fenced_block(lines, start_idx)
+    indent_prefix = block.fence.indent
+    lang = block.fence.language
+    code_lines = [
+        candidate[len(indent_prefix) :]
+        if indent_prefix and candidate.startswith(indent_prefix)
+        else candidate
+        for _, candidate in block.lines
+    ]
     escaped_code = escape("\n".join(code_lines), quote=False)
     lang_attr = f' class="language-{escape(lang, quote=True)}"' if lang else ""
-    return f"<pre><code{lang_attr}>{escaped_code}</code></pre>", idx
+    return f"<pre><code{lang_attr}>{escaped_code}</code></pre>", block.end_line
 
 
 def _consume_table(
@@ -393,7 +269,7 @@ def _consume_table(
         if (
             not row_line.strip()
             or "|" not in row_line
-            or _FENCE_OPEN_RE.match(row_line)
+            or match_fence_open(row_line) is not None
         ):
             break
         body_rows.append(_split_table_cells(row_line))
@@ -467,7 +343,10 @@ def _consume_list(
                 if look < len(lines):
                     next_indent = len(lines[look]) - len(lines[look].lstrip(" \t"))
                     next_item = _match_list_item(lines[look])
-                    if _FENCE_OPEN_RE.match(lines[look]) and next_indent > base_indent:
+                    if (
+                        match_fence_open(lines[look]) is not None
+                        and next_indent > base_indent
+                    ):
                         idx = look
                         fence_html, idx = _consume_fenced_block(lines, idx)
                         extra_blocks.append(fence_html)
@@ -475,15 +354,16 @@ def _consume_list(
                     if next_item and next_item[1] >= base_indent:
                         idx = look
                         break
-                    if next_indent > base_indent and not _ATX_HEADING_RE.match(
-                        lines[look]
+                    if (
+                        next_indent > base_indent
+                        and match_atx_heading(lines[look]) is None
                     ):
                         idx = look
                         continue
                 idx = look
                 break
 
-            if _FENCE_OPEN_RE.match(nxt):
+            if match_fence_open(nxt) is not None:
                 fence_indent = len(nxt) - len(nxt.lstrip(" \t"))
                 if fence_indent > base_indent:
                     fence_html, idx = _consume_fenced_block(lines, idx)
@@ -501,7 +381,7 @@ def _consume_list(
                     continue
                 break
 
-            if _ATX_HEADING_RE.match(nxt) or _HR_RE.match(nxt):
+            if match_atx_heading(nxt) is not None or _HR_RE.match(nxt):
                 break
 
             line_indent = len(nxt.expandtabs(4)) - len(nxt.expandtabs(4).lstrip(" "))
@@ -524,8 +404,8 @@ def compile_markdown(
     root: Path = ROOT,
 ) -> tuple[str, str]:
     """Compile Markdown text into (first_heading_title, rendered_html)."""
-    frontmatter_pairs, body_markdown = _extract_stdlib_frontmatter(markdown_text)
-    cleaned_md, ref_defs = _extract_reference_definitions(body_markdown)
+    frontmatter_pairs, body_markdown = parse_frontmatter_scalars(markdown_text)
+    cleaned_md, ref_defs = strip_reference_link_definitions(body_markdown)
     lines = cleaned_md.splitlines()
     seen_slugs: dict[str, int] = {}
     first_title = ""
@@ -555,18 +435,17 @@ def compile_markdown(
             idx += 1
             continue
 
-        if _FENCE_OPEN_RE.match(line):
+        if match_fence_open(line) is not None:
             fence_html, idx = _consume_fenced_block(lines, idx)
             blocks.append(fence_html)
             continue
 
-        heading_match = _ATX_HEADING_RE.match(line)
-        if heading_match:
-            level = len(heading_match.group(1))
-            raw_heading = heading_match.group(2).strip()
+        heading_info = match_atx_heading(line)
+        if heading_info is not None:
+            level, raw_heading = heading_info
             if not first_title:
                 first_title = re.sub(r"[`*_]", "", raw_heading).strip()
-            slug = _unique_slug(raw_heading, seen_slugs)
+            slug = unique_heading_slug(raw_heading, seen_slugs)
             blocks.append(
                 f'<h{level} id="{escape(slug, quote=True)}">{_inline(raw_heading)}</h{level}>'
             )
@@ -611,8 +490,8 @@ def compile_markdown(
             cur = lines[idx]
             if (
                 not cur.strip()
-                or _FENCE_OPEN_RE.match(cur)
-                or _ATX_HEADING_RE.match(cur)
+                or match_fence_open(cur) is not None
+                or match_atx_heading(cur) is not None
                 or _HR_RE.match(cur)
                 or _BLOCKQUOTE_RE.match(cur)
                 or _match_list_item(cur) is not None

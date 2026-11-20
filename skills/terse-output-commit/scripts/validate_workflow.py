@@ -370,7 +370,7 @@ def _is_repo_relative(raw_path: str) -> bool:
         not raw_path
         or "\\" in raw_path
         or raw_path.startswith(("/", "~"))
-        or (len(raw_path) >= 2 and raw_path[1] == ":")
+        or bool(pathlib.PureWindowsPath(raw_path).drive)
     ):
         return False
     parts = pathlib.PurePosixPath(raw_path).parts
@@ -414,6 +414,21 @@ def _check_entry_paths(entries: Any, label: str, allow_str: bool) -> list[str]:
     return errors
 
 
+def _check_observation_paths(data: Mapping[str, Any]) -> list[str]:
+    observations = data.get("observations")
+    if not isinstance(observations, list):
+        return []
+    errors: list[str] = []
+    for obs in observations:
+        if isinstance(obs, Mapping):
+            errors.extend(
+                _check_entry_paths(
+                    obs.get("locations", []), "observations.locations", allow_str=False
+                )
+            )
+    return errors
+
+
 def _check_workflow_paths(data: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     test_file = data.get("test_file")
@@ -429,6 +444,7 @@ def _check_workflow_paths(data: Mapping[str, Any]) -> list[str]:
         )
     )
     errors.extend(_check_path_list(data.get("touched_files", []), "touched_files"))
+    errors.extend(_check_observation_paths(data))
     return errors
 
 

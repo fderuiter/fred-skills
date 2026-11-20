@@ -27,7 +27,16 @@ except ImportError:
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
+
+from tests.catalog_oracles import (
+    expected_suite_count,
+    expected_task_route_count,
+    expected_total_skills,
+)
+
 PACKAGE = ROOT / "skills/repo-audit-diagnostics"
 SCRIPT = PACKAGE / "scripts/triage.py"
 
@@ -1510,7 +1519,9 @@ Bearer sk-proj-1234567890abcdef1234567890
             (ROOT / "catalog/skills.json").read_text(encoding="utf-8")
         )["skills"]
         expected_names = {item["name"] for item in catalog_skills}
-        self.assertEqual(57, len(expected_names))
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertEqual(expected_skills, len(expected_names))
         self.assertEqual(expected_names, set(triage.KNOWN_SPECIALISTS))
 
         # Every single catalog skill correlates cleanly before any keyword fallback
@@ -2036,10 +2047,14 @@ Bearer sk-proj-1234567890abcdef1234567890
                 )
 
         # 2. Suite skills, schema paths, and task maps match catalog/*.json and fredlib.common
+        expected_suites = expected_suite_count(ROOT)
+        expected_tasks_total = expected_task_route_count(ROOT)
+        self.assertGreaterEqual(expected_suites, 1)
+        self.assertGreaterEqual(expected_tasks_total, 1)
         expected_suite_skills = skill_tools.suite_skills_by_suite(ROOT)
         self.assertIsNotNone(expected_suite_skills)
         assert expected_suite_skills is not None
-        self.assertEqual(6, len(expected_suite_skills))
+        self.assertEqual(expected_suites, len(expected_suite_skills))
         self.assertEqual(expected_suite_skills, triage._DEFAULT_SUITE_SKILLS)
         self.assertEqual(expected_suite_skills, triage._SUITE_SKILLS)
         self.assertEqual(common._skill_to_suite_map(ROOT), triage._SKILL_TO_SUITE)
@@ -2051,7 +2066,7 @@ Bearer sk-proj-1234567890abcdef1234567890
             s["name"]: (s["artifact"]["filename"], s["artifact"]["schema"])
             for s in suites_doc["suites"]
         }
-        self.assertEqual(6, len(expected_suite_artifacts))
+        self.assertEqual(expected_suites, len(expected_suite_artifacts))
         self.assertEqual(expected_suite_artifacts, common.SUITE_DELIVERABLES)
         self.assertEqual(expected_suite_artifacts, triage._DEFAULT_SUITE_ARTIFACTS)
         self.assertEqual(expected_suite_artifacts, triage._SUITE_ARTIFACTS)
@@ -2064,7 +2079,7 @@ Bearer sk-proj-1234567890abcdef1234567890
         )
 
         expected_tasks = common._task_to_suite_map(ROOT)
-        self.assertEqual(18, len(expected_tasks))
+        self.assertEqual(expected_tasks_total, len(expected_tasks))
         self.assertEqual(expected_tasks, triage._DEFAULT_TASK_TO_SUITE)
         self.assertEqual(expected_tasks, triage._TASK_TO_SUITE)
 

@@ -425,8 +425,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
 
         triggers = self._triggers()
+        self.assertIn("workflow_run", triggers)
+        wf_run = triggers["workflow_run"]
+        self.assertEqual(wf_run.get("workflows"), ["Validate skill packages"])
+        self.assertEqual(wf_run.get("types"), ["completed"])
+        self.assertEqual(wf_run.get("branches"), ["main"])
         self.assertIn("push", triggers)
-        self.assertIn("main", triggers["push"].get("branches", []))
+        self.assertNotIn("branches", triggers["push"])
         self.assertIn("v*", triggers["push"].get("tags", []))
         self.assertIn("workflow_dispatch", triggers)
 
@@ -452,8 +457,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "cancel-in-progress": False,
             },
         )
-        self.assertIn("github.event_name == 'push'", str(prepare.get("if", "")))
-        self.assertIn("github.ref == 'refs/heads/main'", str(prepare.get("if", "")))
+        self.assertIn("github.event_name == 'workflow_run'", str(prepare.get("if", "")))
+        self.assertIn(
+            "github.event.workflow_run.conclusion == 'success'",
+            str(prepare.get("if", "")),
+        )
+        self.assertIn(
+            "github.event.workflow_run.event == 'push'", str(prepare.get("if", ""))
+        )
+        self.assertIn(
+            "github.event.workflow_run.head_branch == 'main'",
+            str(prepare.get("if", "")),
+        )
         self.assertIn(
             "github.actor != 'github-actions[bot]'", str(prepare.get("if", ""))
         )
@@ -475,16 +490,36 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(preflight.get("needs"), "prepare")
         self.assertIn("needs.prepare.result == 'success'", str(preflight.get("if", "")))
         self.assertIn("needs.prepare.result == 'skipped'", str(preflight.get("if", "")))
+        self.assertIn(
+            "github.event_name == 'workflow_run'", str(preflight.get("if", ""))
+        )
+        self.assertIn(
+            "github.event.workflow_run.conclusion == 'success'",
+            str(preflight.get("if", "")),
+        )
+        self.assertIn(
+            "github.event.workflow_run.event == 'push'", str(preflight.get("if", ""))
+        )
+        self.assertIn(
+            "github.event.workflow_run.head_branch == 'main'",
+            str(preflight.get("if", "")),
+        )
         self.assertEqual(preflight.get("permissions"), {"contents": "read"})
         self.assertEqual(
             set(preflight.get("outputs", {}).keys()),
-            {"should_build", "should_publish", "release_tag", "target_sha"},
+            {
+                "should_build",
+                "should_publish",
+                "needs_validation",
+                "release_tag",
+                "target_sha",
+            },
         )
         preflight_checkout = preflight["steps"][0]
         self.assertEqual(preflight_checkout.get("uses"), CHECKOUT_SHA)
         self.assertEqual(
             preflight_checkout.get("with", {}).get("ref"),
-            "${{ needs.prepare.outputs.target_sha || github.sha }}",
+            "${{ needs.prepare.outputs.target_sha || github.event.workflow_run.head_sha || github.sha }}",
         )
         self.assertIs(
             preflight_checkout.get("with", {}).get("persist-credentials"), False
@@ -497,6 +532,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(validate_job.get("needs"), ["prepare", "preflight"])
         self.assertIn(
             "needs.preflight.outputs.should_build == 'true'",
+            str(validate_job.get("if", "")),
+        )
+        self.assertIn(
+            "needs.preflight.outputs.needs_validation != 'false'",
             str(validate_job.get("if", "")),
         )
         self.assertIn(
@@ -516,6 +555,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "needs.preflight.outputs.should_build == 'true'", str(build.get("if", ""))
         )
         self.assertIn("needs.validate.result == 'success'", str(build.get("if", "")))
+        self.assertIn(
+            "needs.validate.result == 'skipped' && needs.preflight.outputs.needs_validation == 'false'",
+            str(build.get("if", "")),
+        )
         self.assertEqual(build.get("permissions"), {"contents": "read"})
         build_checkout = build["steps"][0]
         self.assertEqual(build_checkout.get("uses"), CHECKOUT_SHA)
@@ -531,6 +574,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             str(release.get("if", "")),
         )
         self.assertIn("needs.validate.result == 'success'", str(release.get("if", "")))
+        self.assertIn(
+            "needs.validate.result == 'skipped' && needs.preflight.outputs.needs_validation == 'false'",
+            str(release.get("if", "")),
+        )
         self.assertIn("needs.build.result == 'success'", str(release.get("if", "")))
         self.assertEqual(
             release.get("concurrency"),
@@ -675,13 +722,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     )
 
     def test_build_job_preserves_existing_steps(self) -> None:
-        """The build job must retain its validation, packaging, verification, and upload steps."""
+        """The build job must package, verify checksums, and upload without rerunning make check or run_checks.py."""
         build_job = self.workflow_data["jobs"]["build"]
         step_names = [s.get("name") for s in build_job["steps"] if "name" in s]
         self.assertIn("Install validation dependencies", step_names)
-        self.assertIn("Validate source and fixtures", step_names)
+        self.assertNotIn("Validate source and fixtures", step_names)
         self.assertIn("Package release assets", step_names)
         self.assertIn("Verify release manifest and checksums", step_names)
+        run_cmds = "\n".join(s.get("run", "") for s in build_job["steps"])
+        self.assertNotIn("make check", run_cmds)
+        self.assertNotIn("run_checks.py", run_cmds)
+        self.assertIn("scripts/fred.py release --all", run_cmds)
+        self.assertIn("scripts/fred.py verify-release", run_cmds)
+        self.assertIn("sha256sum -c SHA256SUMS", run_cmds)
+        self.assertIn("sha256sum -c checksums.sha256", run_cmds)
 
     def test_release_job_verifies_prerequisites_and_checksums_before_attestation(
         self,
@@ -882,12 +936,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         return proc, _parse_github_output(output_file)
 
     def _run_checksum_step(self, cwd: Path) -> subprocess.CompletedProcess[str]:
+        for repo_subdir in ("scripts", "catalog"):
+            dest_link = cwd / repo_subdir
+            if not dest_link.exists():
+                dest_link.symlink_to(ROOT / repo_subdir, target_is_directory=True)
         release_steps = self.workflow_data["jobs"]["release"]["steps"]
         checksum_step = next(
             s
             for s in release_steps
             if s.get("name") == "Verify downloaded artifact checksums"
         )
+        self.assertIn("scripts/fred.py verify-release", checksum_step["run"])
+        self.assertNotIn("<<'PY'", checksum_step["run"])
         return self._run_shell_script(
             checksum_step["run"],
             cwd=cwd,
@@ -1130,6 +1190,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 {
                     "should_build": "true",
                     "should_publish": "false",
+                    "needs_validation": "true",
                     "release_tag": "",
                     "target_sha": head_sha,
                 },
@@ -1159,6 +1220,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 {
                     "should_build": "true",
                     "should_publish": "false",
+                    "needs_validation": "true",
                     "release_tag": "v0.2.0",
                     "target_sha": tagged_sha,
                 },
@@ -1197,6 +1259,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 {
                     "should_build": "true",
                     "should_publish": "true",
+                    "needs_validation": "true",
                     "release_tag": "v0.2.0",
                     "target_sha": head_sha,
                 },
@@ -1246,6 +1309,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 {
                     "should_build": "false",
                     "should_publish": "false",
+                    "needs_validation": "true",
                     "release_tag": "v0.2.0",
                     "target_sha": head_sha,
                 },
@@ -1485,6 +1549,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     {
                         "should_build": "true",
                         "should_publish": "true",
+                        "needs_validation": "true",
                         "release_tag": "v0.2.0",
                         "target_sha": tag_sha,
                     },
@@ -1507,6 +1572,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     {
                         "should_build": "true",
                         "should_publish": "true",
+                        "needs_validation": "true",
                         "release_tag": "v0.2.0",
                         "target_sha": tag_sha,
                     },
@@ -1910,6 +1976,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     {
                         "should_build": "true",
                         "should_publish": "true",
+                        "needs_validation": "true",
                         "release_tag": "v0.2.0",
                         "target_sha": version_commit_sha,
                     },
@@ -2335,6 +2402,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("[LICENSE](../LICENSE)", doc_text)
         self.assertIn("scripts/bump_version.py", doc_text)
         self.assertIn("prepare", doc_text)
+        self.assertIn("workflow_run", doc_text)
+        self.assertIn("needs_validation", doc_text)
         self.assertIn("--first-parent", doc_text)
         self.assertIn("Check release publication state", doc_text)
         self.assertIn("gh release delete-asset", doc_text)
@@ -2351,14 +2420,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
         _git(repo, "remote", "add", "origin", origin.as_posix())
 
         (repo / "scripts").mkdir(parents=True, exist_ok=True)
-        _write_lf(
-            repo / "scripts/bump_version.py",
-            (ROOT / "scripts/bump_version.py").read_text(encoding="utf-8"),
-        )
-        _write_lf(
-            repo / "scripts/skill_tools.py",
-            (ROOT / "scripts/skill_tools.py").read_text(encoding="utf-8"),
-        )
+        for script_rel in (
+            "scripts/bump_version.py",
+            "scripts/skill_tools.py",
+            "scripts/_markdown_utils.py",
+            "scripts/_doc_invariants.py",
+        ):
+            _write_lf(
+                repo / script_rel,
+                (ROOT / script_rel).read_text(encoding="utf-8"),
+            )
         (repo / "scripts/fredlib").mkdir(parents=True, exist_ok=True)
         _write_lf(repo / "scripts/fredlib/__init__.py", '"""Toolkit library."""\n')
         (repo / "shared/repo-audit").mkdir(parents=True, exist_ok=True)
@@ -2783,6 +2854,317 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(0, prep_guard.returncode, prep_guard.stderr)
             self.assertEqual("false", out_guard.get("bumped"))
             self.assertEqual(pushed_sha, out_guard.get("target_sha"))
+
+    def test_workflow_run_chaining_needs_validation_and_tag_publication(self) -> None:
+        """workflow_run gates main pushes, skips duplicate validate on matching SHA, validates older drafts, and pushes missing tags."""
+        from types import SimpleNamespace
+
+        def to_ns(val: Any) -> Any:
+            if isinstance(val, dict):
+                return SimpleNamespace(**{k: to_ns(v) for k, v in val.items()})
+            return val
+
+        def eval_if(
+            expr: str,
+            github_ctx: dict[str, Any],
+            needs_ctx: dict[str, Any] | None = None,
+            cancelled: bool = False,
+        ) -> bool:
+            cleaned = expr.strip()
+            if cleaned.startswith("${{") and cleaned.endswith("}}"):
+                cleaned = cleaned[3:-2].strip()
+            py_expr = (
+                cleaned.replace("!cancelled()", "not cancelled()")
+                .replace("&&", " and ")
+                .replace("||", " or ")
+            )
+            return bool(
+                eval(
+                    py_expr,
+                    {"__builtins__": {}},
+                    {
+                        "github": to_ns(github_ctx),
+                        "needs": to_ns(needs_ctx or {}),
+                        "cancelled": lambda: cancelled,
+                    },
+                )
+            )
+
+        jobs = self.workflow_data["jobs"]
+        valid_wf_run_ctx = {
+            "event_name": "workflow_run",
+            "actor": "maintainer",
+            "ref": "refs/heads/main",
+            "event": {
+                "workflow_run": {
+                    "conclusion": "success",
+                    "event": "push",
+                    "head_branch": "main",
+                    "head_sha": "a" * 40,
+                }
+            },
+        }
+        self.assertTrue(eval_if(str(jobs["prepare"]["if"]), valid_wf_run_ctx))
+        self.assertFalse(
+            eval_if(
+                str(jobs["prepare"]["if"]),
+                {**valid_wf_run_ctx, "actor": "github-actions[bot]"},
+            )
+        )
+
+        needs_prep_ok = {"prepare": {"result": "success"}}
+        self.assertTrue(
+            eval_if(str(jobs["preflight"]["if"]), valid_wf_run_ctx, needs_prep_ok)
+        )
+        for bad_wf_run in (
+            {"conclusion": "failure", "event": "push", "head_branch": "main"},
+            {"conclusion": "cancelled", "event": "push", "head_branch": "main"},
+            {"conclusion": "success", "event": "pull_request", "head_branch": "main"},
+            {"conclusion": "success", "event": "push", "head_branch": "feature"},
+        ):
+            bad_ctx = {
+                **valid_wf_run_ctx,
+                "event": {"workflow_run": bad_wf_run},
+            }
+            self.assertFalse(eval_if(str(jobs["prepare"]["if"]), bad_ctx))
+            self.assertFalse(
+                eval_if(
+                    str(jobs["preflight"]["if"]),
+                    bad_ctx,
+                    {"prepare": {"result": "skipped"}},
+                )
+            )
+
+        # When needs_validation == 'false' (validated workflow_run SHA == target_sha),
+        # jobs.validate skips while jobs.build and jobs.release execute.
+        needs_skip_val = {
+            "prepare": {"result": "success"},
+            "preflight": {
+                "result": "success",
+                "outputs": {
+                    "should_build": "true",
+                    "should_publish": "true",
+                    "needs_validation": "false",
+                },
+            },
+            "validate": {"result": "skipped"},
+            "build": {"result": "success"},
+        }
+        self.assertFalse(
+            eval_if(str(jobs["validate"]["if"]), valid_wf_run_ctx, needs_skip_val)
+        )
+        self.assertTrue(
+            eval_if(str(jobs["build"]["if"]), valid_wf_run_ctx, needs_skip_val)
+        )
+        self.assertTrue(
+            eval_if(str(jobs["release"]["if"]), valid_wf_run_ctx, needs_skip_val)
+        )
+
+        # When needs_validation == 'true' (tag push, dispatch, or older draft),
+        # jobs.validate runs and a skipped validate blocks build/release.
+        needs_req_val = {
+            **needs_skip_val,
+            "preflight": {
+                "result": "success",
+                "outputs": {
+                    "should_build": "true",
+                    "should_publish": "true",
+                    "needs_validation": "true",
+                },
+            },
+        }
+        self.assertTrue(
+            eval_if(str(jobs["validate"]["if"]), valid_wf_run_ctx, needs_req_val)
+        )
+        self.assertFalse(
+            eval_if(str(jobs["build"]["if"]), valid_wf_run_ctx, needs_req_val)
+        )
+        self.assertFalse(
+            eval_if(str(jobs["release"]["if"]), valid_wf_run_ctx, needs_req_val)
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            origin, workspace, head_sha = self._setup_origin_and_clone(
+                base / "wf-run",
+                version_text="0.2.0\n",
+                license_text="MIT License\n",
+                remote_tag=None,
+            )
+            gh_env, state_path = _install_fake_gh(base / "wf-run", {"releases": []})
+
+            # 1. workflow_run on main with unpublished VERSION and matching head_sha -> needs_validation=false
+            pf_unpub, out_unpub = self._run_preflight_script(
+                workspace,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "workflow_run",
+                    "WORKFLOW_SHA": head_sha,
+                    "WORKFLOW_RUN_HEAD_SHA": head_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                    "INPUT_PUBLISH": "",
+                    "INPUT_TAG": "",
+                    "REF_NAME": "main",
+                    "REF_TYPE": "branch",
+                },
+            )
+            self.assertEqual(0, pf_unpub.returncode, pf_unpub.stderr)
+            self.assertEqual(
+                {
+                    "should_build": "true",
+                    "should_publish": "true",
+                    "needs_validation": "false",
+                    "release_tag": "v0.2.0",
+                    "target_sha": head_sha,
+                },
+                out_unpub,
+            )
+
+            # 2. Verify release prerequisites and Publish GitHub Release allow tag creation under workflow_run
+            prereq_wf = self._run_verification_script(
+                workspace,
+                {
+                    "EVENT_NAME": "workflow_run",
+                    "GITHUB_SHA": head_sha,
+                    "TARGET_SHA": head_sha,
+                    "RELEASE_TAG": "v0.2.0",
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                    "INPUT_TAG": "",
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+            )
+            self.assertEqual(0, prereq_wf.returncode, prereq_wf.stderr)
+
+            dist_dir = workspace / "dist/release"
+            dist_dir.mkdir(parents=True)
+            _write_lf(dist_dir / "pack.tar.gz", "archive-wf-run")
+            pub_wf = self._run_publish_script(
+                workspace,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "workflow_run",
+                    "GH_REPO": "fderuiter/fred-skills",
+                    "GITHUB_SHA": head_sha,
+                    "TARGET_SHA": head_sha,
+                    "RELEASE_TAG": "v0.2.0",
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                    "INPUT_TAG": "",
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+            )
+            self.assertEqual(0, pub_wf.returncode, pub_wf.stderr)
+            self.assertIn(
+                "refs/tags/v0.2.0",
+                _git(
+                    workspace,
+                    "ls-remote",
+                    "--refs",
+                    origin.as_uri(),
+                    "refs/tags/v0.2.0",
+                ),
+            )
+
+            # 3. Already published VERSION on workflow_run -> should_build=false, should_publish=false, needs_validation=false
+            pf_pub, out_pub = self._run_preflight_script(
+                workspace,
+                {
+                    **gh_env,
+                    "EVENT_NAME": "workflow_run",
+                    "WORKFLOW_SHA": head_sha,
+                    "WORKFLOW_RUN_HEAD_SHA": head_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                    "INPUT_PUBLISH": "",
+                    "INPUT_TAG": "",
+                    "REF_NAME": "main",
+                    "REF_TYPE": "branch",
+                },
+            )
+            self.assertEqual(0, pf_pub.returncode, pf_pub.stderr)
+            self.assertEqual("false", out_pub["should_build"])
+            self.assertEqual("false", out_pub["should_publish"])
+            self.assertEqual("false", out_pub["needs_validation"])
+
+            # 4. Older draft commit on origin/main where workflow_run.head_sha advanced -> needs_validation=true
+            _, draft_ws, old_draft_sha = self._setup_origin_and_clone(
+                base / "older-draft",
+                version_text="0.2.0\n",
+                license_text="MIT License\n",
+                remote_tag="v0.2.0",
+            )
+            draft_seed = base / "older-draft/seed"
+            _write_lf(draft_seed / "README.md", "# Updated main\n")
+            _git(draft_seed, "add", "README.md")
+            _git(draft_seed, "commit", "-m", "docs: advance main after draft tag")
+            newer_main_sha = _git(draft_seed, "rev-parse", "HEAD")
+            _git(draft_seed, "push", "origin", "HEAD:refs/heads/main")
+            gh_draft_env, _ = _install_fake_gh(
+                base / "older-draft",
+                {"releases": [{"tag": "v0.2.0", "draft": True}]},
+            )
+            pf_older, out_older = self._run_preflight_script(
+                draft_ws,
+                {
+                    **gh_draft_env,
+                    "EVENT_NAME": "workflow_run",
+                    "WORKFLOW_SHA": newer_main_sha,
+                    "WORKFLOW_RUN_HEAD_SHA": newer_main_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                    "INPUT_PUBLISH": "",
+                    "INPUT_TAG": "",
+                    "REF_NAME": "main",
+                    "REF_TYPE": "branch",
+                },
+            )
+            self.assertEqual(0, pf_older.returncode, pf_older.stderr)
+            self.assertEqual("true", out_older["should_build"])
+            self.assertEqual("true", out_older["should_publish"])
+            self.assertEqual("true", out_older["needs_validation"])
+            self.assertEqual(old_draft_sha, out_older["target_sha"])
+
+            # 5. Defense-in-depth shell rejections for invalid workflow_run metadata
+            for bad_env in (
+                {
+                    "WORKFLOW_CONCLUSION": "failure",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+                {
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "pull_request",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+                {
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "push",
+                    "WORKFLOW_HEAD_BRANCH": "feature",
+                },
+            ):
+                bad_pf, _ = self._run_preflight_script(
+                    workspace,
+                    {
+                        **gh_env,
+                        "EVENT_NAME": "workflow_run",
+                        "WORKFLOW_SHA": head_sha,
+                        "WORKFLOW_RUN_HEAD_SHA": head_sha,
+                        "REF_NAME": "main",
+                        "REF_TYPE": "branch",
+                        **bad_env,
+                    },
+                )
+                self.assertNotEqual(0, bad_pf.returncode)
+            self.assertTrue(state_path.is_file())
 
     def test_workflow_script_runners_stay_under_windows_cmdline_limit(self) -> None:
         """Workflow test helpers must execute shell steps via script files rather than sh -c exceeding Windows 8191-char limit."""

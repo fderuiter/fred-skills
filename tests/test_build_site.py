@@ -16,6 +16,8 @@ from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import build_site
@@ -23,6 +25,12 @@ from check_doc_links import check_docs, check_file_links
 from fredlib.common import read_json
 from fredlib.reports import SCRIPT, STYLE, _csp_value
 from skill_tools import extract_relative_links, resolve_relative_link_target
+
+from tests.catalog_oracles import (
+    expected_host_count,
+    expected_pack_count,
+    expected_total_skills,
+)
 
 
 class BuildSiteTests(unittest.TestCase):
@@ -78,6 +86,8 @@ class BuildSiteTests(unittest.TestCase):
                 (self.site_dir / retained_rel).is_file(),
                 retained_rel,
             )
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         self.assertGreaterEqual(
             len(list((self.site_dir / "catalog").glob("*.json"))), 7
         )
@@ -85,14 +95,16 @@ class BuildSiteTests(unittest.TestCase):
             len(list((self.site_dir / "schemas").glob("*.json"))), 2
         )
         self.assertEqual(
-            57,
+            expected_skills,
             len(list((self.site_dir / "skills").glob("*/.cursor-plugin/plugin.json"))),
         )
         self.assertEqual(
-            57, len(list((self.site_dir / "skills").glob("*/assets/*.svg")))
+            expected_skills,
+            len(list((self.site_dir / "skills").glob("*/assets/*.svg"))),
         )
         self.assertGreaterEqual(
-            len(list((self.site_dir / "skills").glob("*/assets/*.schema.json"))), 57
+            len(list((self.site_dir / "skills").glob("*/assets/*.schema.json"))),
+            expected_skills,
         )
 
         # Zero raw .md, .py, agents/openai.yaml, or skills/*/assets/*.html
@@ -136,8 +148,20 @@ class BuildSiteTests(unittest.TestCase):
         non_release_guides = [
             g for g in source_guides if not g.name.startswith("release-notes-")
         ]
-        self.assertEqual(13, len(non_release_guides))
-        self.assertGreaterEqual(len(source_guides), 15)
+        release_guides = [
+            g for g in source_guides if g.name.startswith("release-notes-")
+        ]
+        self.assertGreaterEqual(len(non_release_guides), 1)
+        self.assertGreaterEqual(len(release_guides), 1)
+        self.assertEqual(
+            len(source_guides), len(non_release_guides) + len(release_guides)
+        )
+        compiled_guides = sorted(
+            p
+            for p in (self.site_dir / "docs").glob("*.html")
+            if p.name not in {"explorer.html", "index.html"}
+        )
+        self.assertEqual(len(source_guides), len(compiled_guides))
         for guide_md in source_guides:
             rel_guide_html = (
                 guide_md.relative_to(ROOT / "docs").with_suffix(".html").as_posix()
@@ -147,7 +171,7 @@ class BuildSiteTests(unittest.TestCase):
             self.assertIn(rel_guide_html, docs_hub_links)
 
         skill_dirs = sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md"))
-        self.assertEqual(57, len(skill_dirs))
+        self.assertEqual(expected_skills, len(skill_dirs))
         skills_hub_html = (self.site_dir / "skills/index.html").read_text(
             encoding="utf-8"
         )
@@ -351,8 +375,14 @@ class BuildSiteTests(unittest.TestCase):
         """Offline explorer uses .md links, web explorer uses .html links, and both render all packs and hosts."""
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
         hosts = read_json(ROOT / "catalog/hosts.json")["hosts"]
-        self.assertEqual(13, len(packs))
-        self.assertGreaterEqual(len(hosts), 4)
+        expected_packs = expected_pack_count(ROOT)
+        expected_hosts = expected_host_count(ROOT)
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_packs, 1)
+        self.assertGreaterEqual(expected_hosts, 1)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertEqual(expected_packs, len(packs))
+        self.assertEqual(expected_hosts, len(hosts))
 
         offline_explorer = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
         web_explorer = (self.site_dir / "docs/explorer.html").read_text(
@@ -374,11 +404,11 @@ class BuildSiteTests(unittest.TestCase):
                 self.assertIn(escape(host_data["behavior_test"]), html_text, label)
 
         offline_links = extract_relative_links(offline_explorer)
-        self.assertGreaterEqual(len(offline_links), 55)
+        self.assertGreaterEqual(len(offline_links), expected_skills)
         self.assertTrue(all(lnk.endswith(".md") for lnk in offline_links))
 
         web_links = extract_relative_links(web_explorer)
-        self.assertGreaterEqual(len(web_links), 55)
+        self.assertGreaterEqual(len(web_links), expected_skills)
         self.assertTrue(all(lnk.endswith(".html") for lnk in web_links))
 
     def test_serving_under_fred_skills_returns_http_200_text_html_for_all_routes(
@@ -412,13 +442,15 @@ class BuildSiteTests(unittest.TestCase):
                     self.assertEqual(200, resp.status, route)
                     self.assertIn("text/html", resp.headers.get("Content-Type", ""))
 
+            expected_skills = expected_total_skills(ROOT)
+            self.assertGreaterEqual(expected_skills, 1)
             for marketplace_rel in (
                 ".cursor-plugin/marketplace.json",
                 ".claude-plugin/marketplace.json",
             ):
                 mp = read_json(ROOT / marketplace_rel)
                 skill_paths = mp["plugins"][0]["skills"]
-                self.assertEqual(57, len(skill_paths), marketplace_rel)
+                self.assertEqual(expected_skills, len(skill_paths), marketplace_rel)
                 for rel_skill_dir in skill_paths:
                     clean_rel = rel_skill_dir.removeprefix("./").strip("/")
                     for suffix in ("/", "/SKILL.html"):
@@ -438,7 +470,7 @@ class BuildSiteTests(unittest.TestCase):
                 encoding="utf-8"
             )
             links = extract_relative_links(web_explorer)
-            self.assertGreaterEqual(len(links), 55)
+            self.assertGreaterEqual(len(links), expected_skills)
             for href in links:
                 resolved_url = urllib.parse.urljoin(explorer_url, href)
                 with urllib.request.urlopen(resolved_url, timeout=5) as resp:
@@ -600,6 +632,98 @@ class BuildSiteTests(unittest.TestCase):
             self.assertIn(f"{stem}.md", offline_exp_links)
             self.assertIn(f"{stem}.html", web_exp_links)
             self.assertIn(f"docs/{stem}.html", index_links)
+
+    def test_shared_markdown_heading_slugs_fences_and_titled_reference_links(
+        self,
+    ) -> None:
+        from _markdown_utils import parse_frontmatter_scalars, split_frontmatter_block
+        from skill_tools import extract_document_anchors
+
+        sample_md = (
+            "---\n"
+            "name: sample-doc\n"
+            "description: >\n"
+            "  Folded summary\n"
+            "  across lines.\n"
+            "notes: |\n"
+            "  line one\n"
+            "  line two\n"
+            "---\n"
+            "# Icon ![](icon.svg) Guide\n\n"
+            "## Empty [](target.md) Heading\n\n"
+            "## Icon ![](other.svg) Guide\n\n"
+            "Jump to [Icon Guide](#icon--guide), [Duplicate](#icon--guide-1), "
+            "and [Empty](#empty--heading).\n\n"
+            "Reference links: [API][api-ref], [Usage][usage-ref], [Arch][arch-ref].\n\n"
+            "````markdown\n"
+            "Nested fence example:\n"
+            "```json\n"
+            '{"broken_link": "[ignored](missing.md)"}\n'
+            "```\n"
+            "````\n\n"
+            "~~~sh\n"
+            "echo '[ignored-tilde](missing-tilde.md)'\n"
+            "~~~\n\n"
+            '[api-ref]: docs/api.md "API Reference"\n'
+            "[usage-ref]: <docs/usage.md> 'Usage Guide'\n"
+            "[arch-ref]: docs/architecture.md (Architecture)\n"
+        )
+
+        pairs, body = parse_frontmatter_scalars(sample_md, require=True)
+        fm_map = dict(pairs)
+        self.assertEqual("sample-doc", fm_map["name"])
+        self.assertEqual("Folded summary across lines.", fm_map["description"])
+        self.assertEqual("line one\nline two", fm_map["notes"])
+        raw_fm, split_body = split_frontmatter_block(sample_md, require=True)
+        self.assertIsNotNone(raw_fm)
+        self.assertEqual(body, split_body)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            (tmp_root / "docs").mkdir()
+            for doc_name in ("api.md", "usage.md", "architecture.md"):
+                (tmp_root / "docs" / doc_name).write_text("# Doc\n", encoding="utf-8")
+            (tmp_root / "target.md").write_text("# Target\n", encoding="utf-8")
+            (tmp_root / "icon.svg").write_text("<svg/>", encoding="utf-8")
+            (tmp_root / "other.svg").write_text("<svg/>", encoding="utf-8")
+            guide_path = tmp_root / "guide.md"
+            guide_path.write_text(sample_md, encoding="utf-8")
+
+            anchors = extract_document_anchors(sample_md)
+            self.assertIn("icon--guide", anchors)
+            self.assertIn("icon--guide-1", anchors)
+            self.assertIn("empty--heading", anchors)
+            self.assertEqual([], check_file_links(guide_path, tmp_root))
+
+            rel_links = extract_relative_links(body)
+            self.assertIn("docs/api.md", rel_links)
+            self.assertIn("docs/usage.md", rel_links)
+            self.assertIn("docs/architecture.md", rel_links)
+
+            first_title, rendered_html = build_site.compile_markdown(
+                sample_md,
+                "guide.md",
+                frozenset(
+                    {
+                        "guide.md",
+                        "target.md",
+                        "docs/api.md",
+                        "docs/usage.md",
+                        "docs/architecture.md",
+                    }
+                ),
+                root=tmp_root,
+            )
+            self.assertIn("Icon", first_title)
+            self.assertIn('id="icon--guide"', rendered_html)
+            self.assertIn('id="icon--guide-1"', rendered_html)
+            self.assertIn('id="empty--heading"', rendered_html)
+            self.assertIn('href="docs/api.html"', rendered_html)
+            self.assertIn('href="docs/usage.html"', rendered_html)
+            self.assertIn('href="docs/architecture.html"', rendered_html)
+            self.assertNotIn("[api-ref]:", rendered_html)
+            # Inner ```json fence inside ````markdown remains literal code rather than closing early
+            self.assertIn("```json", rendered_html)
 
 
 if __name__ == "__main__":

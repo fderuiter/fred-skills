@@ -16,6 +16,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import package_skills as package_skills_module
@@ -36,6 +38,12 @@ from package_skills import (
     verify_checksums,
 )
 
+from tests.catalog_oracles import (
+    expected_standalone_archive_count,
+    expected_suite_skill_count,
+    expected_total_skills,
+)
+
 
 class PackageSkillsTests(unittest.TestCase):
     def setUp(self):
@@ -46,47 +54,39 @@ class PackageSkillsTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_get_suite_skills_returns_audit_skills(self):
+        expected_total = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_total, 1)
         skills = get_suite_skills(ROOT)
-        self.assertEqual(57, len(skills))
+        self.assertEqual(expected_total, len(skills))
         for skill in skills:
             self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
-        audit_skills = get_suite_skills(ROOT, suite_name="repository-audits")
-        self.assertEqual(37, len(audit_skills))
-        for skill in audit_skills:
-            self.assertTrue(skill.startswith("repo-audit-"))
-            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
-
-        arch_skills = get_suite_skills(ROOT, suite_name="software-architecture")
-        self.assertEqual(3, len(arch_skills))
-        for skill in arch_skills:
-            self.assertTrue(skill.startswith("arch-"))
-            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
-
-        review_skills = get_suite_skills(ROOT, suite_name="code-review")
-        self.assertEqual(3, len(review_skills))
-        for skill in review_skills:
-            self.assertTrue(skill.startswith("review-"))
-            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
-
-        test_skills = get_suite_skills(ROOT, suite_name="automated-testing")
-        self.assertEqual(3, len(test_skills))
-        for skill in test_skills:
-            self.assertTrue(skill.startswith("test-"))
-            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
-
-        spec_skills = get_suite_skills(ROOT, suite_name="spec-driven-development")
-        self.assertEqual(3, len(spec_skills))
-        for skill in spec_skills:
-            self.assertTrue(skill.startswith("spec-"))
-            self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
+        suite_prefixes = (
+            ("repository-audits", "repo-audit-"),
+            ("software-architecture", "arch-"),
+            ("code-review", "review-"),
+            ("automated-testing", "test-"),
+            ("spec-driven-development", "spec-"),
+        )
+        for suite_name, prefix in suite_prefixes:
+            with self.subTest(suite=suite_name):
+                expected_suite = expected_suite_skill_count(suite_name, ROOT)
+                self.assertGreaterEqual(expected_suite, 1)
+                suite_skills = get_suite_skills(ROOT, suite_name=suite_name)
+                self.assertEqual(expected_suite, len(suite_skills))
+                for skill in suite_skills:
+                    self.assertTrue(skill.startswith(prefix))
+                    self.assertTrue((ROOT / "skills" / skill / "SKILL.md").is_file())
 
     def test_package_skills_creates_all_archives_and_checksums(self):
+        expected_total = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_total, 1)
         suite_skills = get_suite_skills(ROOT)
-        self.assertEqual(57, len(suite_skills))
+        self.assertEqual(expected_total, len(suite_skills))
         checksums = package_skills(self.output_dir, root=ROOT)
-        expected_archive_count = len(suite_skills) + 1
-        self.assertEqual(58, expected_archive_count)
+        expected_archive_count = expected_standalone_archive_count(ROOT)
+        self.assertGreaterEqual(expected_archive_count, 1)
+        self.assertEqual(len(suite_skills) + 1, expected_archive_count)
         self.assertEqual(expected_archive_count, len(checksums))
         self.assertIn("fred-skills-suite.tar.gz", checksums)
         self.assertIn("repo-audit-concurrency.tar.gz", checksums)
@@ -115,10 +115,20 @@ class PackageSkillsTests(unittest.TestCase):
         archive_path = self.output_dir / "repo-audit-concurrency.tar.gz"
         with tarfile.open(archive_path, "r:gz") as tar:
             names = tar.getnames()
+            self.assertIn("LICENSE", names)
+            lic_member = tar.getmember("LICENSE")
+            self.assertEqual(0o644, lic_member.mode)
+            self.assertEqual(0, lic_member.mtime)
+            extracted_lic = tar.extractfile(lic_member)
+            self.assertIsNotNone(extracted_lic)
+            assert extracted_lic is not None
+            self.assertEqual((ROOT / "LICENSE").read_bytes(), extracted_lic.read())
             self.assertIn("repo-audit-concurrency/SKILL.md", names)
             self.assertIn("repo-audit-concurrency/references/method.md", names)
             self.assertIn("repo-audit-concurrency/.cursor-plugin/plugin.json", names)
             for name in names:
+                if name == "LICENSE":
+                    continue
                 self.assertTrue(name.startswith("repo-audit-concurrency/"))
                 self.assertNotIn("__pycache__", name)
                 self.assertFalse(name.endswith(".pyc"))
@@ -128,7 +138,12 @@ class PackageSkillsTests(unittest.TestCase):
         package_skills(self.output_dir, root=ROOT)
         suite_path = self.output_dir / "fred-skills-suite.tar.gz"
         with tarfile.open(suite_path, "r:gz") as tar:
-            names = set(tar.getnames())
+            raw_names = tar.getnames()
+            self.assertEqual(1, raw_names.count("LICENSE"))
+            lic_member = tar.getmember("LICENSE")
+            self.assertEqual(0o644, lic_member.mode)
+            self.assertEqual(0, lic_member.mtime)
+            names = set(raw_names)
             for skill in get_suite_skills(ROOT):
                 self.assertIn(f"{skill}/SKILL.md", names)
                 self.assertIn(f"{skill}/.cursor-plugin/plugin.json", names)
@@ -524,10 +539,17 @@ class PackageSkillsTests(unittest.TestCase):
         tar_name = next(f for f in files if f.endswith(".tar"))
         zip_name = next(f for f in files if f.endswith(".zip"))
         with tarfile.open(rel_out / tar_name, "r:*") as tf:
+            self.assertIn("LICENSE", tf.getnames())
+            self.assertEqual(0o644, tf.getmember("LICENSE").mode)
+            self.assertEqual(0, tf.getmember("LICENSE").mtime)
             self.assertIn(
                 "repo-audit-concurrency/.cursor-plugin/plugin.json", tf.getnames()
             )
         with zipfile.ZipFile(rel_out / zip_name, "r") as zf:
+            self.assertIn("LICENSE", zf.namelist())
+            lic_zip = zf.getinfo("LICENSE")
+            self.assertEqual(0o100644, lic_zip.external_attr >> 16)
+            self.assertEqual((1980, 1, 1, 0, 0, 0), lic_zip.date_time)
             self.assertIn(
                 "repo-audit-concurrency/.cursor-plugin/plugin.json", zf.namelist()
             )

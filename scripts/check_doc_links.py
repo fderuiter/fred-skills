@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlsplit
 
 sys.dont_write_bytecode = True
 
+from _markdown_utils import strip_fenced_code_blocks
 from skill_tools import (
     ROOT,
     extract_document_anchors,
@@ -34,31 +35,13 @@ EXCLUDE_DIRS = {
 NESTED_EXCLUDE_DIRS = {".git", ".venv", "node_modules", "__pycache__"}
 DOC_EXTENSIONS = {".md", ".html"}
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
-_FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
 def _strip_non_link_blocks(content: str, is_html: bool) -> str:
     """Strip HTML script/style blocks or Markdown fenced code blocks before scanning links."""
     if is_html:
         return _HTML_SCRIPT_STYLE_RE.sub("", content)
-    kept: list[str] = []
-    fence_char = ""
-    fence_len = 0
-    for line in content.splitlines(keepends=True):
-        match = _FENCE_MARKER_RE.match(line)
-        if match:
-            marker = match.group(1)
-            if not fence_char:
-                fence_char = marker[0]
-                fence_len = len(marker)
-                continue
-            if marker[0] == fence_char and len(marker) >= fence_len:
-                fence_char = ""
-                fence_len = 0
-                continue
-        if not fence_char:
-            kept.append(line)
-    return "".join(kept)
+    return strip_fenced_code_blocks(content)
 
 
 def _get_cached_anchors(
