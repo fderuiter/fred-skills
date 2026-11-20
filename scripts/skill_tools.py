@@ -7,12 +7,26 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from html import unescape
 from pathlib import Path
 from typing import Any, Literal, TypeVar, overload
 from urllib.parse import unquote, urlsplit
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from _markdown_utils import (
+    extract_reference_link_targets,
+    match_atx_heading,
+    non_fenced_lines,
+    slugify_markdown_heading,
+    split_frontmatter_block,
+    unique_heading_slug,
+)
 
 __all__ = [
     "DEFAULT_GIT_TIMEOUT",
@@ -288,10 +302,6 @@ def read_json_object(
 MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 # Matches HTML href="..." or src="..."
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
-# Matches reference-style link definitions [label]: target
-MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
-_ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
-_FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
 _HTML_ID_ATTR_RE = re.compile(r"""\bid=["\x27]([^"\x27]+)["\x27]""")
 _HTML_NAME_ANCHOR_RE = re.compile(
@@ -315,7 +325,7 @@ def extract_relative_links(
     raw_targets = (
         MD_LINK_RE.findall(content)
         + HTML_LINK_RE.findall(content)
-        + MD_REF_LINK_RE.findall(content)
+        + extract_reference_link_targets(content)
     )
     relative_paths: list[str] = []
     for target in raw_targets:
@@ -340,15 +350,6 @@ def extract_link_fragment(target: str) -> str | None:
     return unquote(parsed.fragment)
 
 
-def slugify_markdown_heading(heading_text: str) -> str:
-    """Convert Markdown heading text into an anchor slug matching GitHub and build_site."""
-    cleaned = re.sub(r"!?\[([^\]]*)\]\([^)]+\)", r"\1", heading_text)
-    cleaned = cleaned.lower()
-    cleaned = re.sub(r"[`]", "", cleaned)
-    cleaned = re.sub(r"[^a-z0-9 _-]", "", cleaned)
-    return cleaned.strip().replace(" ", "-")
-
-
 def _extract_html_anchors(content: str) -> set[str]:
     """Extract id and <a name=...> anchor targets from HTML text outside script/style."""
     cleaned = _HTML_SCRIPT_STYLE_RE.sub("", content)
@@ -371,30 +372,11 @@ def extract_document_anchors(content: str, suffix: str = ".md") -> set[str]:
 
     anchors: set[str] = set()
     seen_slugs: dict[str, int] = {}
-    fence_char = ""
-    fence_len = 0
 
-    for line in content.splitlines():
-        fence_match = _FENCE_MARKER_RE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if not fence_char:
-                fence_char = marker[0]
-                fence_len = len(marker)
-                continue
-            if marker[0] == fence_char and len(marker) >= fence_len:
-                fence_char = ""
-                fence_len = 0
-                continue
-        if fence_char:
-            continue
-
-        heading_match = _ATX_HEADING_RE.match(line)
-        if heading_match:
-            base = slugify_markdown_heading(heading_match.group(2)) or "section"
-            count = seen_slugs.get(base, 0)
-            seen_slugs[base] = count + 1
-            anchors.add(base if count == 0 else f"{base}-{count}")
+    for _, line in non_fenced_lines(content):
+        heading = match_atx_heading(line)
+        if heading is not None:
+            anchors.add(unique_heading_slug(heading[1], seen_slugs))
 
         for raw_attr in _HTML_ID_ATTR_RE.findall(line) + _HTML_NAME_ANCHOR_RE.findall(
             line
@@ -506,17 +488,16 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
 def read_frontmatter(path: Path) -> tuple[dict, str]:
     import yaml
 
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        raise ValueError(f"{path}: missing YAML frontmatter")
-    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-    if end is None:
-        raise ValueError(f"{path}: unterminated YAML frontmatter")
-    metadata = yaml.safe_load("".join(lines[1:end]))
+    raw_fm, body = split_frontmatter_block(
+        path.read_text(encoding="utf-8"),
+        label=path,
+        require=True,
+    )
+    assert raw_fm is not None
+    metadata = yaml.safe_load(raw_fm)
     if not isinstance(metadata, dict):
         raise TypeError(f"{path}: frontmatter must be a mapping")
-    return metadata, "".join(lines[end + 1 :])
+    return metadata, body
 
 
 def _validate_suite_artifact(suite: dict, root: Path) -> None:
