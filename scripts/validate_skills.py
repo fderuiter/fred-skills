@@ -26,10 +26,13 @@ from skill_tools import (
     estimate_tokens,
     extract_relative_links,
     find_deep_reference_chains,
+    git_blob_bytes,
+    git_tag_exists,
     infer_suite_and_siblings,
     infer_suite_name,
     read_frontmatter,
     resolve_relative_link_target,
+    run_local_git,
     skill_to_suite_map,
     suite_members,
 )
@@ -2156,12 +2159,7 @@ ZERO_GIT_SHA = "0" * 40
 def _git_output(repo: Path, *args: str) -> str | None:
     if not shutil.which("git"):
         return None
-    proc = subprocess.run(
-        ["git", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
+    proc = run_local_git(repo, *args, text=False, check=False)
     if proc.returncode != 0:
         return None
     return proc.stdout.decode("utf-8", errors="surrogateescape").rstrip("\r\n")
@@ -3452,16 +3450,7 @@ def _validate_specific_doc_invariants(
 
 
 def _git_tag_exists(root: Path, tag: str) -> bool:
-    if not (root / ".git").exists():
-        return False
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
+    return git_tag_exists(root, tag)
 
 
 def _discover_release_note_docs(root: Path) -> list[str]:
@@ -3475,22 +3464,30 @@ def _discover_release_note_docs(root: Path) -> list[str]:
     return [candidate] if (root / candidate).is_file() else []
 
 
-def _discover_tagged_release_note_versions(root: Path) -> list[str]:
-    if not (root / ".git").exists():
-        return []
-    proc = subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/v*"],
-        cwd=root,
-        capture_output=True,
+def _list_v_tag_versions(root: Path) -> set[str]:
+    if not (root / ".git").exists() or not shutil.which("git"):
+        return set()
+    proc = run_local_git(
+        root,
+        "for-each-ref",
+        "--format=%(refname:strip=2)",
+        "refs/tags/v*",
         text=True,
         check=False,
     )
-    tagged: set[str] = set()
-    if proc.returncode == 0:
-        for line in proc.stdout.splitlines():
-            raw = line.strip()
-            if raw.startswith("v") and len(raw) > 1:
-                tagged.add(raw[1:])
+    if proc.returncode != 0:
+        return set()
+    return {
+        raw[1:]
+        for line in proc.stdout.splitlines()
+        if (raw := line.strip()).startswith("v") and len(raw) > 1
+    }
+
+
+def _discover_tagged_release_note_versions(root: Path) -> list[str]:
+    if not (root / ".git").exists():
+        return []
+    tagged = _list_v_tag_versions(root)
     docs_dir = root / "docs"
     if docs_dir.is_dir():
         for note_path in sorted(docs_dir.glob("release-notes-*.md")):
@@ -3503,13 +3500,8 @@ def _discover_tagged_release_note_versions(root: Path) -> list[str]:
 def _check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
     rel_path = f"docs/release-notes-{tag_ver}.md"
     doc_path = root / rel_path
-    blob_proc = subprocess.run(
-        ["git", "cat-file", "blob", f"refs/tags/v{tag_ver}:{rel_path}"],
-        cwd=root,
-        capture_output=True,
-        check=False,
-    )
-    if blob_proc.returncode != 0:
+    blob_bytes = git_blob_bytes(root, f"refs/tags/v{tag_ver}:{rel_path}")
+    if blob_bytes is None:
         if doc_path.exists() or doc_path.is_symlink():
             msg = (
                 f"{rel_path}: tagged release notes immutability violation; "
@@ -3523,7 +3515,7 @@ def _check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
             f"file missing or symlink after refs/tags/v{tag_ver}"
         )
         return [msg]
-    if doc_path.read_bytes() != blob_proc.stdout:
+    if doc_path.read_bytes() != blob_bytes:
         msg = (
             f"{rel_path}: tagged release notes immutability violation; "
             f"content must remain byte-identical to refs/tags/v{tag_ver}:{rel_path}"
@@ -3920,6 +3912,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
         if exc.hint:
             print(f"Hint: {exc.hint}", file=sys.stderr)
+        return 2
+    except subprocess.TimeoutExpired as exc:
+        print(
+            f"Error [subprocess_timeout]: Command timed out after {exc.timeout:g}s",
+            file=sys.stderr,
+        )
         return 2
     for error in errors:
         print(error)

@@ -33,6 +33,16 @@ DEFAULT_PHASES: tuple[str, ...] = (
     "docs",
     "tests",
 )
+FAST_PHASE_TIMEOUT = 300
+TESTS_PHASE_TIMEOUT = 900
+PHASE_TIMEOUTS: dict[str, int] = {
+    "lint": FAST_PHASE_TIMEOUT,
+    "format": FAST_PHASE_TIMEOUT,
+    "typecheck": FAST_PHASE_TIMEOUT,
+    "packages": FAST_PHASE_TIMEOUT,
+    "docs": FAST_PHASE_TIMEOUT,
+    "tests": TESTS_PHASE_TIMEOUT,
+}
 
 
 def build_check_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -133,6 +143,12 @@ def build_phase_commands(
         ]
     if phase == "docs":
         return [
+            [
+                python_executable,
+                str(scripts_dir / "build_site.py"),
+                "--output",
+                str(root / "dist" / "site"),
+            ],
             [python_executable, str(scripts_dir / "check_doc_links.py")],
             [python_executable, str(scripts_dir / "verify_doc_snippets.py")],
         ]
@@ -195,13 +211,28 @@ def run_checks(
             base_ref=base_ref,
             step_summary=step_summary,
         )
+        phase_timeout = PHASE_TIMEOUTS.get(phase, FAST_PHASE_TIMEOUT)
         for cmd in commands:
             display = _format_command_display(cmd, root)
             if dry_run:
                 print(f"[dry-run:{phase}] {display}", flush=True)
                 continue
             print(f"==> [{phase}] {display}", flush=True)
-            proc = subprocess.run(cmd, cwd=root, env=check_env, check=False)
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=root,
+                    env=check_env,
+                    timeout=phase_timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                print(
+                    f"FAILED: phase '{phase}' command timed out after {phase_timeout}s: {display}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 124
             if proc.returncode != 0:
                 print(
                     f"FAILED: phase '{phase}' command exited with status {proc.returncode}: {display}",
