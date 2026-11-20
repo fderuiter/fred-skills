@@ -4,19 +4,18 @@ import copy
 import functools
 import importlib.util
 import re
-import sys
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from types import ModuleType
-from typing import Any, Protocol, cast
+from typing import Any
 
 import jsonschema
 import yaml
 
 from . import _sarif_import
 from .common import (
+    _SUITE_VALIDATOR_SCRIPTS,
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
     WORKFLOW_DELIVERABLE_SCHEMAS,
@@ -26,12 +25,15 @@ from .common import (
     _deliverable_for_run,
     _detect_domain_kind,
     _is_single_line_text,
+    _load_script_validator,
     _load_suite_contracts,
     _markdown_code_span,
     _suite_for_run,
     _suite_for_skills,
     _suite_shared_assets,
     _suite_skills_by_suite,
+    _SuiteValidator,
+    _validate_suite_artifact,
     _workflow_phase_order_map,
     atomic_json,
     digest,
@@ -1320,51 +1322,16 @@ commands before running them; record actual outcomes and unavailable capabilitie
 """
 
 
-class _AuditValidator(Protocol):
-    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
+_AUDIT_VALIDATOR_MODULE_NAME = _SUITE_VALIDATOR_SCRIPTS["audit.json"][0]
 
 
-_AUDIT_VALIDATOR_MODULE_NAME = "fred_audit_validator"
-
-
-def _load_script_validator(module_name: str, script: Path) -> _AuditValidator:
-    cached = sys.modules.get(module_name)
-    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
-        return cast(_AuditValidator, cached)
-    spec = importlib.util.spec_from_file_location(module_name, script)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Unable to load validator from {script}")
-    module = importlib.util.module_from_spec(spec)
-    previous = sys.dont_write_bytecode
-    sys.modules[spec.name] = module
-    try:
-        sys.dont_write_bytecode = True
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    finally:
-        sys.dont_write_bytecode = previous
-    return cast(_AuditValidator, module)
-
-
-def _load_audit_validator() -> _AuditValidator:
+def _load_audit_validator() -> _SuiteValidator:
+    mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS["audit.json"]
     return _load_script_validator(
-        _AUDIT_VALIDATOR_MODULE_NAME,
-        ROOT / "skills/repo-audit-program/scripts/validate_audit.py",
+        mod_name,
+        ROOT / script_rel,
+        spec_loader=importlib.util.spec_from_file_location,
     )
-
-
-_SUITE_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
-    "architecture.json": (
-        "fred_architecture_validator",
-        "scripts/validate_architecture.py",
-    ),
-    "review.json": ("fred_review_validator", "scripts/validate_review.py"),
-    "testing.json": ("fred_testing_validator", "scripts/validate_testing.py"),
-    "spec.json": ("fred_spec_validator", "scripts/validate_spec.py"),
-    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
-}
 
 
 @functools.lru_cache(maxsize=1)
@@ -1376,8 +1343,12 @@ def _load_audit_schema() -> dict[str, Any]:
 
 
 def audit_errors(audit: dict) -> list[str]:
-    validator = _load_audit_validator()
-    return validator.validate(audit, _load_audit_schema())
+    return _validate_suite_artifact(
+        audit,
+        "audit.json",
+        schema_override=_load_audit_schema(),
+        spec_loader=importlib.util.spec_from_file_location,
+    )
 
 
 def _schema_errors(payload: object, schema_rel: str) -> list[str]:
@@ -1462,8 +1433,6 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
 
 def _validate_present_workflow_companions(directory: Path) -> list[str]:
     errors: list[str] = []
-    wf_mod_name, wf_script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
-    wf_validator = _load_script_validator(wf_mod_name, ROOT / wf_script_rel)
     for name, companion_schema in WORKFLOW_DELIVERABLE_SCHEMAS.items():
         companion_path = directory / name
         if not companion_path.is_file():
@@ -1473,163 +1442,8 @@ def _validate_present_workflow_companions(directory: Path) -> list[str]:
         except (OSError, ValueError) as exc:
             errors.append(f"{name}: invalid JSON ({exc})")
             continue
-        schema_errs = _schema_errors(companion_payload, companion_schema)
-        if schema_errs:
-            for msg in schema_errs:
-                errors.append(f"{name}: {msg}")
-            continue
-        schema_obj = read_json_object(
-            ROOT / companion_schema, label=f"Workflow schema '{companion_schema}'"
-        )
-        for msg in wf_validator.validate(companion_payload, schema_obj):
+        for msg in _validate_suite_artifact(companion_payload, name, companion_schema):
             errors.append(f"{name}: {msg}")
-    return errors
-
-
-def _check_relative_path_entry(raw_path: object, label: str, errors: list[str]) -> None:
-    if not isinstance(raw_path, str):
-        return
-    try:
-        checked = relative_path(raw_path)
-        if not checked.parts:
-            raise ValueError(f"Unsafe relative path: {raw_path!r}")
-    except ValueError as exc:
-        errors.append(f"{label}: {exc}")
-
-
-def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    for field in (
-        "decisions",
-        "components",
-        "findings",
-        "test_cases",
-        "interview_decisions",
-        "requirements",
-        "convergence_checks",
-    ):
-        items = deliverable.get(field)
-        if not isinstance(items, list):
-            continue
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            item_id = item.get("id")
-            if isinstance(item_id, str):
-                if item_id in seen and item_id not in duplicates:
-                    errors.append(f"Duplicate IDs in {field}: {item_id}")
-                    duplicates.add(item_id)
-                seen.add(item_id)
-    findings = deliverable.get("findings")
-    if isinstance(findings, list):
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            fpath = finding.get("file")
-            fid = finding.get("id", "unknown")
-            _check_relative_path_entry(
-                fpath,
-                f"Finding file path must be repository-relative ({fid})",
-                errors,
-            )
-            for p in finding.get("paths", []) or []:
-                _check_relative_path_entry(
-                    p,
-                    f"Finding path must be repository-relative ({fid})",
-                    errors,
-                )
-    for top_p in deliverable.get("paths", []) or []:
-        _check_relative_path_entry(
-            top_p, "Deliverable path must be repository-relative", errors
-        )
-    for cov in deliverable.get("coverage", []) or []:
-        if isinstance(cov, dict):
-            for cov_p in cov.get("paths", []) or []:
-                _check_relative_path_entry(
-                    cov_p,
-                    f"Coverage path must be repository-relative ({cov.get('topic', 'unknown')})",
-                    errors,
-                )
-    for boundary in deliverable.get("boundaries", []) or []:
-        if isinstance(boundary, dict):
-            for bp in boundary.get("paths", []) or []:
-                _check_relative_path_entry(
-                    bp,
-                    f"Boundary path must be repository-relative ({boundary.get('name', 'unknown')})",
-                    errors,
-                )
-    for dec in deliverable.get("decisions", []) or []:
-        if isinstance(dec, dict):
-            for dp in dec.get("paths", []) or []:
-                _check_relative_path_entry(
-                    dp,
-                    f"Decision path must be repository-relative ({dec.get('id', 'unknown')})",
-                    errors,
-                )
-    components = deliverable.get("components")
-    if isinstance(components, list):
-        comp_deps: dict[str, list[str]] = {}
-        comp_ids = {
-            c["id"]
-            for c in components
-            if isinstance(c, dict) and isinstance(c.get("id"), str)
-        }
-        for comp in components:
-            if not isinstance(comp, dict):
-                continue
-            cid = str(comp.get("id", "unknown"))
-            for cp in comp.get("paths", []) or []:
-                _check_relative_path_entry(
-                    cp,
-                    f"Component path must be repository-relative ({cid})",
-                    errors,
-                )
-            deps = [d for d in (comp.get("depends_on") or []) if isinstance(d, str)]
-            comp_deps[cid] = deps
-            for dep in deps:
-                if dep not in comp_ids:
-                    errors.append(f"Unknown component dependency {dep} in {cid}")
-        visiting: set[str] = set()
-        done: set[str] = set()
-
-        def _visit_comp(node: str) -> None:
-            if node in visiting:
-                errors.append(f"Component dependency cycle: {node}")
-                return
-            if node in done or node not in comp_deps:
-                return
-            visiting.add(node)
-            for dep in comp_deps[node]:
-                _visit_comp(dep)
-            visiting.remove(node)
-            done.add(node)
-
-        for cid in comp_deps:
-            _visit_comp(cid)
-    for tc in deliverable.get("test_cases", []) or []:
-        if isinstance(tc, dict):
-            tid = str(tc.get("id", "unknown"))
-            _check_relative_path_entry(
-                tc.get("file"),
-                f"Test case file path must be repository-relative ({tid})",
-                errors,
-            )
-            for tp in tc.get("paths", []) or []:
-                _check_relative_path_entry(
-                    tp,
-                    f"Test case path must be repository-relative ({tid})",
-                    errors,
-                )
-    new_file_scopes = deliverable.get("new_file_scopes")
-    if isinstance(new_file_scopes, list):
-        for scope_path in new_file_scopes:
-            _check_relative_path_entry(
-                scope_path,
-                f"Specification file scope must be repository-relative ({scope_path!r})",
-                errors,
-            )
     return errors
 
 
@@ -1638,20 +1452,7 @@ def _deliverable_errors(
 ) -> list[str]:
     if expected_name == "audit.json":
         return audit_errors(deliverable)
-    schema_errs = _schema_errors(deliverable, schema_rel)
-    if schema_errs:
-        return schema_errs
-    domain_errs = _domain_deliverable_errors(deliverable)
-    if expected_name in _SUITE_VALIDATOR_SCRIPTS:
-        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS[expected_name]
-        suite_validator = _load_script_validator(mod_name, ROOT / script_rel)
-        schema_obj = read_json_object(
-            ROOT / schema_rel, label=f"Deliverable schema '{schema_rel}'"
-        )
-        for msg in suite_validator.validate(deliverable, schema_obj):
-            if msg not in domain_errs:
-                domain_errs.append(msg)
-    return domain_errs
+    return _validate_suite_artifact(deliverable, expected_name, schema_rel)
 
 
 def validate_run(directory: Path) -> list[str]:
@@ -1966,12 +1767,12 @@ def revalidate(directory: Path) -> dict:
         domain_doc = read_json_object(
             target_path, label=f"Deliverable '{expected_name}'"
         )
-        schema_errs = _schema_errors(domain_doc, schema_rel)
-        if schema_errs:
+        deliv_errs = _deliverable_errors(domain_doc, expected_name, schema_rel)
+        if deliv_errs:
             raise FredCliError(
-                f"Invalid {expected_name}: " + "; ".join(schema_errs[:5]),
+                f"Invalid {expected_name}: " + "; ".join(deliv_errs[:5]),
                 code="invalid_deliverable",
-                hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors in '{expected_name}'.",
+                hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect validation errors in '{expected_name}'.",
             )
         if expected_name in {"architecture.json", "review.json", "testing.json"}:
             provenance_drifted = (
@@ -2323,14 +2124,15 @@ def reconcile(
                 hint="Pass --verification <verification.json> matching verification.schema.json.",
             )
         proof = read_json_object(verification, label="Verification artifact")
-        schema = read_json(
-            ROOT / "skills/repo-verify-fix/assets/verification.schema.json"
+        failures = _validate_suite_artifact(
+            proof,
+            "verification.json",
+            "skills/repo-verify-fix/assets/verification.schema.json",
         )
-        failures = list(jsonschema.Draft202012Validator(schema).iter_errors(proof))
         if failures:
             raise FredCliError(
                 "Verification artifact does not satisfy the proof schema: "
-                + failures[0].message,
+                + failures[0],
                 code="invalid_verification",
                 hint="Update the verification artifact to satisfy skills/repo-verify-fix/assets/verification.schema.json.",
             )
@@ -2441,8 +2243,8 @@ def reconcile(
     if verification is not None:
         transition["verification_proof"] = str(verification)
     records["remediation_state_transitions"].append(transition)
-    remediation_errors = _schema_errors(
-        records, WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
+    remediation_errors = _validate_suite_artifact(
+        records, "remediation.json", WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
     )
     if remediation_errors:
         raise FredCliError(

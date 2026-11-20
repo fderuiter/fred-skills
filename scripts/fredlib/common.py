@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -11,7 +13,8 @@ import tempfile
 import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Any
+from types import ModuleType
+from typing import Any, Protocol, cast
 
 ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS_DIR = ROOT / "scripts"
@@ -222,6 +225,109 @@ DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
     for contract in _load_suite_contracts(ROOT).values()
     if contract["filename"] != "audit.json"
 }
+
+
+class _SuiteValidator(Protocol):
+    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
+
+
+_SUITE_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
+    "audit.json": (
+        "fred_audit_validator",
+        "skills/repo-audit-program/scripts/validate_audit.py",
+    ),
+    "architecture.json": (
+        "fred_architecture_validator",
+        "scripts/validate_architecture.py",
+    ),
+    "review.json": ("fred_review_validator", "scripts/validate_review.py"),
+    "testing.json": ("fred_testing_validator", "scripts/validate_testing.py"),
+    "spec.json": ("fred_spec_validator", "scripts/validate_spec.py"),
+    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
+}
+
+
+def _load_script_validator(
+    module_name: str,
+    script: Path,
+    *,
+    spec_loader: Any = None,
+) -> _SuiteValidator:
+    cached = sys.modules.get(module_name)
+    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
+        return cast(_SuiteValidator, cached)
+    loader_fn = spec_loader or importlib.util.spec_from_file_location
+    spec = loader_fn(module_name, script)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load validator from {script}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    sys.modules[spec.name] = module
+    try:
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = previous
+    return cast(_SuiteValidator, module)
+
+
+@functools.lru_cache(maxsize=16)
+def _load_validator_schema(schema_rel: str) -> dict[str, Any]:
+    return read_json_object(
+        ROOT / schema_rel,
+        label=f"Validator schema '{schema_rel}'",
+    )
+
+
+def _resolve_validator_target(
+    artifact_name: str, schema_rel: str | None = None
+) -> tuple[str, str, str]:
+    if artifact_name == "audit.json":
+        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS["audit.json"]
+        resolved_schema = (
+            schema_rel or "shared/repo-audit/resources/assets/audit.schema.json"
+        )
+        return mod_name, script_rel, resolved_schema
+    if artifact_name in DOMAIN_DELIVERABLE_SCHEMAS:
+        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS[artifact_name]
+        resolved_schema = schema_rel or DOMAIN_DELIVERABLE_SCHEMAS[artifact_name]
+        return mod_name, script_rel, resolved_schema
+    if artifact_name in WORKFLOW_DELIVERABLE_SCHEMAS or artifact_name == "workflow":
+        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
+        resolved_schema = schema_rel or WORKFLOW_DELIVERABLE_SCHEMAS.get(
+            artifact_name, ""
+        )
+        if not resolved_schema:
+            raise ValueError(
+                f"Missing schema path for workflow artifact {artifact_name!r}"
+            )
+        return mod_name, script_rel, resolved_schema
+    raise ValueError(f"Unsupported suite artifact for validation: {artifact_name!r}")
+
+
+def _validate_suite_artifact(
+    payload: object,
+    artifact_name: str,
+    schema_rel: str | None = None,
+    *,
+    schema_override: Mapping[str, Any] | None = None,
+    spec_loader: Any = None,
+) -> list[str]:
+    mod_name, script_rel, resolved_schema_rel = _resolve_validator_target(
+        artifact_name, schema_rel
+    )
+    validator = _load_script_validator(
+        mod_name, ROOT / script_rel, spec_loader=spec_loader
+    )
+    schema_obj = (
+        schema_override
+        if schema_override is not None
+        else _load_validator_schema(resolved_schema_rel)
+    )
+    return validator.validate(payload, schema_obj)
 
 
 def _suite_skills_by_suite(root: Path = ROOT) -> dict[str, tuple[str, ...]] | None:

@@ -8,14 +8,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
-    ROOT,
     FredCliError,
     _detect_domain_kind,
-    read_json,
+    _validate_suite_artifact,
 )
 from .runs import audit_errors, compare, fingerprint
 
@@ -109,12 +106,9 @@ def _page_shell(title: str, body_html: str, include_script: bool = True) -> str:
 
 
 def _validate_domain_payload(payload: dict, kind: str) -> None:
-    schema_rel = DOMAIN_DELIVERABLE_SCHEMAS[f"{kind}.json"]
-    schema = read_json(ROOT / schema_rel)
-    errors = [
-        str(err.message)
-        for err in jsonschema.Draft202012Validator(schema).iter_errors(payload)
-    ]
+    artifact_name = f"{kind}.json"
+    schema_rel = DOMAIN_DELIVERABLE_SCHEMAS[artifact_name]
+    errors = _validate_suite_artifact(payload, artifact_name, schema_rel)
     if errors:
         raise ValueError(f"Invalid {kind} artifact: " + "; ".join(errors[:5]))
 

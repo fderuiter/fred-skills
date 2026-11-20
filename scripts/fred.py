@@ -1609,6 +1609,15 @@ def handle_reporting(a: argparse.Namespace) -> Any:
         elif _detect_domain_kind(audit_data) is None and (
             a.audit.is_dir() or audit_path.name == "audit.json"
         ):
+            if a.audit.is_dir():
+                companion_errs = runs._validate_present_workflow_companions(a.audit)
+                if companion_errs:
+                    raise FredCliError(
+                        "Invalid workflow companion deliverable: "
+                        + "; ".join(companion_errs[:5]),
+                        code="invalid_deliverable",
+                        hint=f"Run 'python scripts/fred.py validate-run {a.audit}' to inspect companion artifact errors.",
+                    )
             for candidate_name in ("remediation.json", "reconciliation.json"):
                 sibling_remediation = audit_path.parent / candidate_name
                 if sibling_remediation.is_file():

@@ -2908,6 +2908,193 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("Hint:", err_raw.getvalue())
             self.assertNotIn("Traceback", err_raw.getvalue())
 
+    def test_validate_run_advance_and_report_enforce_domain_validators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            repo_dir = tmp_path / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
+            for git_args in (
+                ["init"],
+                ["config", "user.email", "test@example.com"],
+                ["config", "user.name", "Test"],
+                ["add", "."],
+                ["commit", "-m", "initial"],
+            ):
+                subprocess.run(
+                    ["git", *git_args], cwd=repo_dir, check=True, capture_output=True
+                )
+            (repo_dir / "app.py").write_text("x = 2\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "commit", "-am", "second"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+            )
+
+            def init_loop_ws(name: str, task: str, *extra: str) -> tuple[Path, dict]:
+                ws = tmp_path / name
+                proc = self.run_cli(
+                    "init",
+                    str(repo_dir),
+                    "--task",
+                    task,
+                    *extra,
+                    "--single-task",
+                    "--output",
+                    str(ws),
+                    "--json",
+                )
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                run_doc = json.loads((ws / "run.json").read_text(encoding="utf-8"))
+                return ws, run_doc
+
+            def assert_all_three_fail(ws: Path, label: str) -> None:
+                v_proc = self.run_cli("validate-run", str(ws))
+                self.assertNotEqual(
+                    0, v_proc.returncode, f"validate-run passed: {label}"
+                )
+                a_proc = self.run_cli("advance", str(ws), "--note", "step done")
+                self.assertNotEqual(0, a_proc.returncode, f"advance passed: {label}")
+                r_proc = self.run_cli(
+                    "report", str(ws), "--output", str(tmp_path / f"{label}.html")
+                )
+                self.assertNotEqual(0, r_proc.returncode, f"report passed: {label}")
+
+            # 1. Review: approved critical review & empty request_changes review
+            rev_ws, rev_run = init_loop_ws(
+                "rev-ws", "review-code-changes", "--base", "HEAD~1"
+            )
+            (rev_ws / "review.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "run_id": rev_run["run_id"],
+                        "snapshot": rev_run["snapshot"]["digest"],
+                        "verdict": "approve",
+                        "summary": "Approved despite critical defect.",
+                        "findings": [
+                            {
+                                "id": "REV-1",
+                                "title": "Auth bypass",
+                                "severity": "critical",
+                                "file": "app.py",
+                                "description": "Auth bypass in handler.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_all_three_fail(rev_ws, "approved-critical-review")
+
+            (rev_ws / "review.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "run_id": rev_run["run_id"],
+                        "snapshot": rev_run["snapshot"]["digest"],
+                        "verdict": "request_changes",
+                        "summary": "Requesting changes with zero findings.",
+                        "findings": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_all_three_fail(rev_ws, "empty-request-changes")
+
+            # 2. Spec: empty-check converged & out_of_scope overlap
+            spec_ws, _ = init_loop_ws("spec-ws", "specify-feature")
+            base_spec = {
+                "schema_version": "1.0",
+                "title": "App Spec",
+                "status": "converged",
+                "interview_decisions": [],
+                "new_file_scopes": ["src/new/feature.py"],
+                "out_of_scope": ["src/legacy/feature.py"],
+                "verification_commands": ["python -m unittest"],
+                "convergence_checks": [],
+            }
+            (spec_ws / "spec.json").write_text(json.dumps(base_spec), encoding="utf-8")
+            assert_all_three_fail(spec_ws, "empty-converged-spec")
+
+            overlap_spec = {
+                **base_spec,
+                "new_file_scopes": ["src/legacy/"],
+                "out_of_scope": ["src/legacy/feature.py"],
+                "convergence_checks": [
+                    {"id": "CHK-1", "target": "REQ-1", "status": "aligned"}
+                ],
+            }
+            (spec_ws / "spec.json").write_text(
+                json.dumps(overlap_spec), encoding="utf-8"
+            )
+            assert_all_three_fail(spec_ws, "overlap-spec")
+
+            # 3. Architecture: duplicate boundary names
+            arch_ws, arch_run = init_loop_ws("arch-ws", "design-architecture")
+            (arch_ws / "architecture.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "run_id": arch_run["run_id"],
+                        "snapshot": arch_run["snapshot"]["digest"],
+                        "title": "System Design",
+                        "status": "proposed",
+                        "boundaries": [
+                            {"name": "core", "responsibility": "Domain logic."},
+                            {"name": "core", "responsibility": "Duplicate boundary."},
+                        ],
+                        "decisions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_all_three_fail(arch_ws, "duplicate-boundaries")
+
+            # 4. Testing: unsafe path in test_cases
+            test_ws, test_run = init_loop_ws("test-ws", "expand-automated-tests")
+            (test_ws / "testing.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "run_id": test_run["run_id"],
+                        "snapshot": test_run["snapshot"]["digest"],
+                        "component": "app",
+                        "framework": "unittest",
+                        "test_cases": [
+                            {
+                                "id": "TC-1",
+                                "target": "app.x",
+                                "scenario": "Escape check",
+                                "oracle": "Raises ValueError",
+                                "priority": "p1",
+                                "status": "specified",
+                                "file": "../outside/test_app.py",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_all_three_fail(test_ws, "unsafe-testing-path")
+
+            # 5. Workflow companion: unsafe path in fix.json
+            wf_ws, _ = init_loop_ws("wf-ws", "verify-fix")
+            (wf_ws / "fix.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "file_changes": [".git/config"],
+                        "diff_summaries": ["Touched git config."],
+                        "execution_results": ["1 test passed."],
+                        "compatibility_limits": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_all_three_fail(wf_ws, "unsafe-workflow-companion-path")
+
 
 if __name__ == "__main__":
     unittest.main()

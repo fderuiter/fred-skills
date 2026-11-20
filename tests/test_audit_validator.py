@@ -171,9 +171,10 @@ class AuditValidatorTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(2, invalid.returncode)
-        missing_dep = subprocess.run(
+        no_jsonschema = subprocess.run(
             [
                 sys.executable,
+                "-B",
                 "-c",
                 (
                     "import sys, runpy; sys.modules['jsonschema'] = None; "
@@ -187,9 +188,80 @@ class AuditValidatorTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(2, missing_dep.returncode)
-        self.assertIn("Dependency missing: jsonschema", missing_dep.stderr)
-        self.assertIn("pip install", missing_dep.stderr)
+        self.assertEqual(0, no_jsonschema.returncode, no_jsonschema.stderr)
+
+        isolated = subprocess.run(
+            [sys.executable, "-B", "-S", str(SCRIPT), str(fixture)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, isolated.returncode, isolated.stderr)
+
+    def test_diagnostics_validator_auto_selects_bundle_and_audit_schemas(self):
+        diag_pkg = ROOT / "skills/repo-audit-diagnostics"
+        diag_script = diag_pkg / "scripts/validate_audit.py"
+        examples_md = (diag_pkg / "references/examples.md").read_text(encoding="utf-8")
+        json_blocks: list[str] = []
+        in_json = False
+        buf: list[str] = []
+        for line in examples_md.splitlines():
+            if not in_json and line.strip() == "```json":
+                in_json = True
+                buf = []
+            elif in_json and line.strip() == "```":
+                in_json = False
+                json_blocks.append("\n".join(buf))
+            elif in_json:
+                buf.append(line)
+        self.assertEqual(2, len(json_blocks))
+
+        with tempfile.TemporaryDirectory() as temp:
+            temp_dir = Path(temp)
+            bundle_json = temp_dir / "bundle.json"
+            audit_json = temp_dir / "audit.json"
+            bundle_json.write_text(json_blocks[0], encoding="utf-8")
+            audit_json.write_text(json_blocks[1], encoding="utf-8")
+
+            for target in (bundle_json, audit_json):
+                proc = subprocess.run(
+                    [sys.executable, "-B", "-S", str(diag_script), str(target)],
+                    cwd=str(diag_pkg),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(0, proc.returncode, f"{target.name}: {proc.stderr}")
+
+            bad_bundle = json.loads(json_blocks[0])
+            del bad_bundle["session_id"]
+            bad_bundle_path = temp_dir / "bad-bundle.json"
+            bad_bundle_path.write_text(json.dumps(bad_bundle), encoding="utf-8")
+            bad_bundle_proc = subprocess.run(
+                [sys.executable, "-B", "-S", str(diag_script), str(bad_bundle_path)],
+                cwd=str(diag_pkg),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, bad_bundle_proc.returncode)
+
+            override_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-S",
+                    str(diag_script),
+                    str(bundle_json),
+                    "--schema",
+                    str(diag_pkg / "assets/audit.schema.json"),
+                ],
+                cwd=str(diag_pkg),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, override_proc.returncode)
 
 
 if __name__ == "__main__":

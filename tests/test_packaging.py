@@ -4275,6 +4275,46 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Error [subprocess_timeout]:", err_demo.getvalue())
         self.assertNotIn("Traceback", err_demo.getvalue())
 
+    def test_validate_skill_executes_bundled_validator_under_isolated_python(
+        self,
+    ) -> None:
+        src_pkg = ROOT / "skills/review-diff-analysis"
+        copied_pkg = self.root / "skills/review-diff-analysis"
+        shutil.copytree(src_pkg, copied_pkg)
+        self.assertEqual([], validate_skill(copied_pkg))
+
+        val_script = copied_pkg / "scripts/validate_review.py"
+        original_src = val_script.read_text(encoding="utf-8")
+
+        val_script.write_text(
+            "#!/usr/bin/env python3\nimport jsonschema\nraise SystemExit(0)\n",
+            encoding="utf-8",
+        )
+        dep_errs = validate_skill(copied_pkg)
+        self.assertTrue(
+            any("bundled validator scripts/validate_review.py" in e for e in dep_errs),
+            dep_errs,
+        )
+
+        val_script.write_text(original_src, encoding="utf-8")
+        method_md = copied_pkg / "references/method.md"
+        mutated_md = method_md.read_text(encoding="utf-8").replace(
+            '"verdict": "request_changes"', '"verdict": "approve"', 1
+        )
+        mutated_md = mutated_md.replace(
+            '"severity": "high"', '"severity": "critical"', 1
+        )
+        method_md.write_text(mutated_md, encoding="utf-8")
+        domain_errs = validate_skill(copied_pkg)
+        self.assertTrue(
+            any(
+                "bundled validator scripts/validate_review.py failed on worked example"
+                in e
+                for e in domain_errs
+            ),
+            domain_errs,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
