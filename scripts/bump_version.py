@@ -52,7 +52,7 @@ _RELEASE_DOWNLOAD_URL_RE = re.compile(
 )
 _PACK_ARCHIVE_STEM_RE = re.compile(
     r"\bfred-skills-(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:[-+][0-9A-Za-z.-]+)?-([a-z0-9-]+)\.(tar|zip)\b"
+    r"(?:[-+][0-9A-Za-z.-]+)?-([a-z0-9-]+)\.(tar\.gz|tar|zip)\b"
 )
 _README_RELEASE_NOTES_LINK_RE = re.compile(
     r"\[(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?"
@@ -440,7 +440,6 @@ def render_versioned_manifests(root: Path, version: str) -> dict[str, str]:
         "name": "fred-skills",
         "description": gemini_description,
         "version": version,
-        "contextFileName": "AGENTS.md",
     }
     return {
         ".claude-plugin/marketplace.json": _json_text(claude_marketplace),

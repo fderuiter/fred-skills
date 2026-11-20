@@ -115,10 +115,20 @@ class PackageSkillsTests(unittest.TestCase):
         archive_path = self.output_dir / "repo-audit-concurrency.tar.gz"
         with tarfile.open(archive_path, "r:gz") as tar:
             names = tar.getnames()
+            self.assertIn("LICENSE", names)
+            lic_member = tar.getmember("LICENSE")
+            self.assertEqual(0o644, lic_member.mode)
+            self.assertEqual(0, lic_member.mtime)
+            extracted_lic = tar.extractfile(lic_member)
+            self.assertIsNotNone(extracted_lic)
+            assert extracted_lic is not None
+            self.assertEqual((ROOT / "LICENSE").read_bytes(), extracted_lic.read())
             self.assertIn("repo-audit-concurrency/SKILL.md", names)
             self.assertIn("repo-audit-concurrency/references/method.md", names)
             self.assertIn("repo-audit-concurrency/.cursor-plugin/plugin.json", names)
             for name in names:
+                if name == "LICENSE":
+                    continue
                 self.assertTrue(name.startswith("repo-audit-concurrency/"))
                 self.assertNotIn("__pycache__", name)
                 self.assertFalse(name.endswith(".pyc"))
@@ -128,7 +138,12 @@ class PackageSkillsTests(unittest.TestCase):
         package_skills(self.output_dir, root=ROOT)
         suite_path = self.output_dir / "fred-skills-suite.tar.gz"
         with tarfile.open(suite_path, "r:gz") as tar:
-            names = set(tar.getnames())
+            raw_names = tar.getnames()
+            self.assertEqual(1, raw_names.count("LICENSE"))
+            lic_member = tar.getmember("LICENSE")
+            self.assertEqual(0o644, lic_member.mode)
+            self.assertEqual(0, lic_member.mtime)
+            names = set(raw_names)
             for skill in get_suite_skills(ROOT):
                 self.assertIn(f"{skill}/SKILL.md", names)
                 self.assertIn(f"{skill}/.cursor-plugin/plugin.json", names)
@@ -524,10 +539,17 @@ class PackageSkillsTests(unittest.TestCase):
         tar_name = next(f for f in files if f.endswith(".tar"))
         zip_name = next(f for f in files if f.endswith(".zip"))
         with tarfile.open(rel_out / tar_name, "r:*") as tf:
+            self.assertIn("LICENSE", tf.getnames())
+            self.assertEqual(0o644, tf.getmember("LICENSE").mode)
+            self.assertEqual(0, tf.getmember("LICENSE").mtime)
             self.assertIn(
                 "repo-audit-concurrency/.cursor-plugin/plugin.json", tf.getnames()
             )
         with zipfile.ZipFile(rel_out / zip_name, "r") as zf:
+            self.assertIn("LICENSE", zf.namelist())
+            lic_zip = zf.getinfo("LICENSE")
+            self.assertEqual(0o100644, lic_zip.external_attr >> 16)
+            self.assertEqual((1980, 1, 1, 0, 0, 0), lic_zip.date_time)
             self.assertIn(
                 "repo-audit-concurrency/.cursor-plugin/plugin.json", zf.namelist()
             )

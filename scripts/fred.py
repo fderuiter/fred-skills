@@ -1307,6 +1307,27 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to manifest.json file or release directory to verify",
     )
+    sub_vrel.add_argument(
+        "--archive",
+        action="append",
+        default=None,
+        help="Specific archive filename to verify against manifest.json (can be repeated)",
+    )
+    sub_vrel.add_argument(
+        "--ignore-missing",
+        action="store_true",
+        help="Skip manifest archive entries that are not present on disk",
+    )
+    sub_vrel.add_argument(
+        "--expected-version",
+        default=None,
+        help="Expected release version string to enforce against manifest.json",
+    )
+    sub_vrel.add_argument(
+        "--require-licensing",
+        action="store_true",
+        help="Require manifest.json licensing field to declare 'See repository LICENSE'",
+    )
 
     # Custom argument groups for root help output
     lifecycle_arg_groups = {
@@ -1694,7 +1715,13 @@ def handle_release(a: argparse.Namespace) -> Any:
     if a.command == "release":
         return releases.build(a.output, a.pack, all_packs=a.all)
     if a.command == "verify-release":
-        return releases.verify(a.manifest)
+        return releases.verify(
+            a.manifest,
+            archive=getattr(a, "archive", None),
+            ignore_missing=bool(getattr(a, "ignore_missing", False)),
+            expected_version=getattr(a, "expected_version", None),
+            require_licensing=bool(getattr(a, "require_licensing", False)),
+        )
     raise ValueError(f"Unknown release command: {a.command}")
 
 
@@ -1863,6 +1890,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         FredCliError,
         subprocess.TimeoutExpired,
         ValueError,
+        RuntimeError,
         OSError,
         KeyError,
         TypeError,

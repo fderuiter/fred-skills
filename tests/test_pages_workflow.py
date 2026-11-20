@@ -350,6 +350,9 @@ class PagesWorkflowTests(unittest.TestCase):
             s for s in build_steps if s.get("uses") == SETUP_PYTHON_SHA
         )
         self.assertEqual(setup_py_step.get("with", {}).get("python-version"), "3.12")
+        self.assertNotIn("cache", setup_py_step.get("with", {}))
+        for step in build_steps:
+            self.assertNotIn("pip install", str(step.get("run", "")))
 
         stage_steps = [
             s for s in build_steps if "scripts/build_experience.py" in s.get("run", "")
