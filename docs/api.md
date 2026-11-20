@@ -797,16 +797,27 @@ Builds reproducible release distribution archives containing selected standalone
 ### `verify`
 
 ```python
-def verify(manifest: Path) -> dict
+def verify(
+    manifest: Path,
+    *,
+    archive: str | Path | Sequence[str | Path] | None = None,
+    ignore_missing: bool = False,
+    expected_version: str | None = None,
+    require_licensing: bool = False,
+) -> dict
 ```
 
 Validates the integrity of release archives (and adjacent `SHA256SUMS` and `checksums.sha256` files when present) against a committed or generated `manifest.json`.
 
 - **Parameters:**
-  - `manifest` (`Path`): Path to `manifest.json`.
+  - `manifest` (`Path`): Path to `manifest.json` or its containing release directory.
+  - `archive` (`str | Path | Sequence[str | Path] | None`, default: `None`): Optional archive filename (or list of filenames) in `manifest.json` to verify selectively without requiring unrequested release archives on disk.
+  - `ignore_missing` (`bool`, default: `False`): If `True`, skip manifest archive entries that are absent on disk while still verifying present archives and checksum manifests.
+  - `expected_version` (`str | None`, default: `None`): Optional version string that `manifest["version"]` must match.
+  - `require_licensing` (`bool`, default: `False`): If `True`, require `manifest["schema_version"] == "1.0"` and `manifest["licensing"] == "See repository LICENSE"`.
 - **Returns:** `dict` — Verification summary dictionary containing `"verified_archives"`, `"version"`, and `"authenticity"`.
 - **Exceptions:**
-  - `ValueError`: Raised if an archive path escapes the manifest directory or is missing; if an archive's byte count or SHA-256 checksum does not match `manifest.json`; or if a present `SHA256SUMS` or `checksums.sha256` file is a symlink, contains malformed lines, or disagrees with `manifest.json`.
+  - `FredCliError` (`ValueError`): Raised if an archive path escapes the manifest directory or is missing (unless skipped by `archive` or `ignore_missing`); if zero archives match on disk; if `expected_version` or `require_licensing` checks fail; if an archive's byte count or SHA-256 checksum does not match `manifest.json`; or if a present `SHA256SUMS` or `checksums.sha256` file is a symlink, contains malformed lines, or disagrees with `manifest.json`.
 
 ---
 

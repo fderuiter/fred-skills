@@ -143,11 +143,11 @@ Official releases publish versioned pack archives (led by the 6-skill `starter` 
 Fetch release pack artifacts directly from GitHub Releases or via `curl`:
 
 ```sh
-# Download a versioned pack archive and checksum manifest
+# Download a versioned pack archive, checksum manifest, and standalone CLI bundle
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-starter.tar
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/SHA256SUMS
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/manifest.json
-
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-cli.tar.gz
 # Or download the complete 57-package pack
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-complete.tar
 ```
@@ -159,9 +159,9 @@ Check artifact integrity against the release manifest or checksums:
 ```sh
 # Verify SHA-256 checksum against manifest
 sha256sum --ignore-missing -c SHA256SUMS
-
-# Or verify release archives using the fred toolkit
-python scripts/fred.py verify-release manifest.json
+# Or unpack the standalone CLI bundle and verify the downloaded archive
+tar -xzf fred-skills-0.3.0-cli.tar.gz
+python3 scripts/fred.py verify-release manifest.json --archive fred-skills-0.3.0-starter.tar
 ```
 
 ### Extract and deploy

@@ -3138,6 +3138,64 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             adv_fix = self.run_cli("advance", str(ws_fix), "--note", "Attempt advance")
             self.assertNotEqual(0, adv_fix.returncode)
 
+            # 5. Standalone workflow companions (session-handoff, terse-output-commit)
+            if str(ROOT / "scripts") not in sys.path:
+                sys.path.insert(0, str(ROOT / "scripts"))
+            from fredlib import common as fred_common
+
+            valid_handoff = {
+                "schema_version": "1.0",
+                "objective": "Resume audit verification",
+                "repository": {"path": ".", "revision": "abc1234", "dirty": False},
+                "verified_facts": ["Unit tests pass"],
+                "assumptions": [],
+                "completed_steps": ["Inspected run.json"],
+                "dead_ends": [],
+                "touched_files": ["src/app.py"],
+                "untouched_scope": ["docs/"],
+                "commands_run": [
+                    {"command": "python -m unittest", "outcome": "passed"}
+                ],
+                "next_action": "Validate remaining findings",
+            }
+            for alias in ("session-handoff.json", "handoff.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_handoff, artifact_name=alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {**valid_handoff, "touched_files": ["../escape.py"]},
+                        artifact_name=alias,
+                    )
+                )
+
+            valid_commit = {
+                "schema_version": "1.0",
+                "compression_level": "full",
+                "terse_response": "Fixed validator dispatch.",
+                "preserved_exact_spans": ["scripts/fredlib/common.py"],
+                "commit_type": "fix",
+                "commit_subject": "fix: unify validator dispatch",
+                "commit_body_bullets": ["Route companions to canonical validators"],
+                "git_mutated": False,
+            }
+            for alias in ("terse-output-commit.json", "commit.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_commit, artifact_name=alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {**valid_commit, "commit_type": "feat"},
+                        artifact_name=alias,
+                    )
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,10 +8,10 @@ import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import jsonschema
-import yaml
+if TYPE_CHECKING:
+    import yaml
 
 from . import _sarif_import
 from .common import (
@@ -46,6 +46,26 @@ from .repository import changed_files, preflight, snapshot
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _require_yaml() -> Any:
+    try:
+        import yaml as _yaml
+    except ImportError as exc:
+        raise RuntimeError(
+            "Dependency missing: PyYAML. Use an approved environment with PyYAML; project config not loaded."
+        ) from exc
+    return _yaml
+
+
+def _require_jsonschema() -> Any:
+    try:
+        import jsonschema as _jsonschema
+    except ImportError as exc:
+        raise RuntimeError(
+            "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."
+        ) from exc
+    return _jsonschema
 
 
 def _format_yaml_error(config_path: Path, exc: yaml.YAMLError) -> FredCliError:
@@ -207,9 +227,10 @@ def _load_project_config(config: Path | None, profile_list: str) -> dict[str, An
             code="io_error",
             hint=f"Check file permissions for '{config_path}'.",
         ) from exc
+    yaml_mod = _require_yaml()
     try:
-        loaded = yaml.safe_load(raw_yaml)
-    except yaml.YAMLError as exc:
+        loaded = yaml_mod.safe_load(raw_yaml)
+    except yaml_mod.YAMLError as exc:
         raise _format_yaml_error(config_path, exc) from exc
     if not isinstance(loaded, dict) or set(loaded) - {
         "profile",
@@ -1338,10 +1359,11 @@ def audit_errors(audit: dict) -> list[str]:
 
 
 def _schema_errors(payload: object, schema_rel: str) -> list[str]:
+    jsonschema_mod = _require_jsonschema()
     schema = read_json(ROOT / schema_rel)
     return [
         str(error.message)
-        for error in jsonschema.Draft202012Validator(schema).iter_errors(payload)
+        for error in jsonschema_mod.Draft202012Validator(schema).iter_errors(payload)
     ]
 
 

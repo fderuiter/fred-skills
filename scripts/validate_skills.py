@@ -22,6 +22,31 @@ from typing import Any
 
 import jsonschema
 import yaml
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from _doc_invariants import (
+    CORE_INVARIANT_DOCS,
+    HOST_LAYOUTS_RE,
+    RELEASE_HOST_COUNT_RE,
+    RELEASE_PACK_COUNT_RE,
+    RELEASE_SUITE_COUNT_RE,
+    RELEASE_TOTAL_SKILLS_RE,
+    DocCountExpectations,
+    build_prose_count_rules,
+    discover_untagged_release_notes,
+    find_prose_count_mismatches,
+    git_tag_exists,
+    parse_prose_int,
+)
+from _markdown_utils import (
+    extract_fenced_blocks as _extract_fenced_blocks,
+)
+from _markdown_utils import (
+    extract_noncode_lines as _extract_noncode_lines,
+)
 from fredlib import vetting
 from fredlib.common import FredCliError, atomic_json, read_json_object
 from skill_tools import (
@@ -30,7 +55,6 @@ from skill_tools import (
     extract_relative_links,
     find_deep_reference_chains,
     git_blob_bytes,
-    git_tag_exists,
     infer_suite_and_siblings,
     infer_suite_name,
     read_frontmatter,
@@ -97,8 +121,6 @@ MAX_METADATA_TOKENS = 100
 MAX_BODY_TOKENS = 5000
 MAX_REFERENCE_TOKENS = 5000
 MIN_WORKED_EXAMPLE_BLOCKS = 2
-FENCE_OPEN_PATTERN = re.compile(r"^\s*```([A-Za-z0-9_+-]*)\s*$")
-FENCE_CLOSE_PATTERN = re.compile(r"^\s*```\s*$")
 PLACEHOLDER_PATTERN = re.compile(r"<[^>]+>")
 ALLOWED_PROMPT_PLACEHOLDERS = frozenset(
     {
@@ -781,46 +803,6 @@ def _discover_output_schemas(package: Path) -> tuple[list[Path], list[Path]]:
         if not p.name.startswith("evaluation-scenarios")
     )
     return assets_schemas, fallback_schemas
-
-
-def _extract_fenced_blocks(markdown_text: str) -> tuple[list[tuple[str, str]], bool]:
-    """Return ([(lang, code_body), ...], has_unclosed_fence) from Markdown text."""
-    blocks: list[tuple[str, str]] = []
-    in_fence = False
-    fence_lang = ""
-    current_lines: list[str] = []
-    for raw_line in markdown_text.splitlines():
-        if not in_fence:
-            open_match = FENCE_OPEN_PATTERN.match(raw_line)
-            if open_match:
-                in_fence = True
-                fence_lang = open_match.group(1).strip().lower()
-                current_lines = []
-        elif FENCE_CLOSE_PATTERN.match(raw_line):
-            blocks.append((fence_lang, "\n".join(current_lines)))
-            in_fence = False
-            fence_lang = ""
-            current_lines = []
-        else:
-            current_lines.append(raw_line)
-    return blocks, in_fence
-
-
-def _extract_noncode_lines(markdown_text: str) -> list[str]:
-    """Return non-empty stripped prose/heading lines outside fenced code blocks."""
-    noncode: list[str] = []
-    in_fence = False
-    for raw_line in markdown_text.splitlines():
-        if not in_fence:
-            if FENCE_OPEN_PATTERN.match(raw_line):
-                in_fence = True
-                continue
-            stripped = raw_line.strip()
-            if stripped:
-                noncode.append(stripped)
-        elif FENCE_CLOSE_PATTERN.match(raw_line):
-            in_fence = False
-    return noncode
 
 
 def _build_output_validators(
@@ -2398,29 +2380,30 @@ def _skills_at_commit(root: Path, commit_sha: str) -> set[str]:
     return skills
 
 
+def _fallback_parent_commit(root: Path) -> tuple[str | None, str, list[str]]:
+    parent_sha = _resolve_commit_sha(root, "HEAD~1")
+    if parent_sha is None:
+        return None, "initial-commit", []
+    return parent_sha, "git-diff", []
+
+
 def _resolve_explicit_base_commit(
     root: Path, head_sha: str, explicit_ref: str
 ) -> tuple[str | None, str, list[str]]:
     if not explicit_ref or explicit_ref == ZERO_GIT_SHA:
-        parent_sha = _resolve_commit_sha(root, "HEAD~1")
-        if parent_sha is None:
-            return None, "initial-commit", []
-        return parent_sha, "git-diff", []
+        return _fallback_parent_commit(root)
 
     target_sha = _resolve_commit_sha(root, explicit_ref)
     if target_sha is None:
-        return (
-            None,
-            "git-diff",
-            [f"Could not resolve git base ref '{explicit_ref}'"],
-        )
+        return _fallback_parent_commit(root)
+
     merge_base = _git_output(root, "merge-base", target_sha, head_sha)
-    if not merge_base or not re.fullmatch(r"[0-9a-f]{40,64}", merge_base):
-        return (
-            None,
-            "git-diff",
-            [f"Could not resolve git merge-base between '{explicit_ref}' and HEAD"],
-        )
+    if (
+        not merge_base
+        or not re.fullmatch(r"[0-9a-f]{40,64}", merge_base)
+        or merge_base == head_sha
+    ):
+        return _fallback_parent_commit(root)
     return merge_base, "git-diff", []
 
 
@@ -3003,29 +2986,6 @@ def _validate_suite_manifest(root: Path) -> list[str]:
     return problems
 
 
-_PROSE_NUMBER_WORDS: dict[str, int] = {
-    "zero": 0,
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-    "thirteen": 13,
-    "fourteen": 14,
-    "fifteen": 15,
-    "sixteen": 16,
-    "seventeen": 17,
-    "eighteen": 18,
-    "nineteen": 19,
-    "twenty": 20,
-}
 _HOST_DISPLAY_LABELS: dict[str, str] = {
     "codex": "Codex",
     "claude-code": "Claude Code",
@@ -3047,15 +3007,6 @@ _BUILD_CATALOG_DOC_TOKENS: tuple[str, ...] = (
 _ACTION_PINS_DOC_TOKEN = ".github/action-pins.json"
 _AUDIT_CORE_SKILLS: frozenset[str] = frozenset(
     {"repo-audit-program", "repo-audit-diagnostics", "repo-audit-synthesis"}
-)
-_CORE_INVARIANT_DOCS: tuple[str, ...] = (
-    "README.md",
-    "docs/architecture.md",
-    "CONTRIBUTING.md",
-    "AGENTS.md",
-    "docs/validation.md",
-    "docs/implementation-status.md",
-    "docs/research.md",
 )
 _IMPL_STATUS_BANNED_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
@@ -3096,18 +3047,6 @@ _RESEARCH_BANNED_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         "obsolete read-only scope claim",
     ),
 )
-_RELEASE_HOST_COUNT_RE = re.compile(
-    r"\b([A-Za-z0-9]+)\s+explicit\s+host\s+installation\s+locations\b",
-    re.IGNORECASE,
-)
-_RELEASE_SUITE_COUNT_RE = re.compile(r"\b([A-Za-z0-9]+)\s+suites\b", re.IGNORECASE)
-_RELEASE_PACK_COUNT_RE = re.compile(
-    r"\b([A-Za-z0-9]+)\s+(?:purpose\s+)?packs\b", re.IGNORECASE
-)
-_RELEASE_TOTAL_SKILLS_RE = re.compile(
-    r"\bTotal:\s*([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE
-)
-_HOST_LAYOUTS_RE = re.compile(r"\b([A-Za-z0-9]+)\s+host\s+layouts\b", re.IGNORECASE)
 _README_AUDIT_DOMAINS_RE = re.compile(
     r"\b([A-Za-z0-9]+)\s+audit\s+domains\b", re.IGNORECASE
 )
@@ -3135,13 +3074,6 @@ class _DocExpectations:
     packs_count: int | None
     starter_skills: int | None
     shared_dirs: tuple[str, ...]
-
-
-def _parse_prose_int(raw: str) -> int | None:
-    token = raw.strip().lower()
-    if token.isdigit():
-        return int(token)
-    return _PROSE_NUMBER_WORDS.get(token)
 
 
 def _load_optional_json_dict(
@@ -3298,152 +3230,21 @@ def _load_doc_expectations(root: Path) -> tuple[_DocExpectations, list[str]]:
 def _build_prose_count_rules(
     exp: _DocExpectations,
 ) -> tuple[tuple[re.Pattern[str], str, int | None], ...]:
-    scenarios_total = exp.total_skills * 3 if exp.total_skills is not None else None
     deliverables_total = len(exp.deliverables) if exp.deliverables else None
-    return (
-        (
-            re.compile(r"\*\*([A-Za-z0-9]+)\s+standalone\s+skills\*\*", re.IGNORECASE),
-            "skill",
-            exp.total_skills,
-        ),
-        (
-            re.compile(
-                r"`complete`\s+for\s+all\s+([A-Za-z0-9]+)\s+(?:skills|packages)",
-                re.IGNORECASE,
-            ),
-            "skill",
-            exp.total_skills,
-        ),
-        (
-            re.compile(r"\beach\s+of\s+the\s+([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE),
-            "skill",
-            exp.total_skills,
-        ),
-        (
-            re.compile(
-                r"\bcreates\s+all\s+([A-Za-z0-9]+)\s+skill\s+directories\b",
-                re.IGNORECASE,
-            ),
-            "skill",
-            exp.total_skills,
-        ),
-        (_RELEASE_TOTAL_SKILLS_RE, "skill", exp.total_skills),
-        (
-            re.compile(
-                r"\b([A-Za-z0-9]+)\s+total\s+(?:packages|skills)\b", re.IGNORECASE
-            ),
-            "skill",
-            exp.total_skills,
-        ),
-        (
-            re.compile(r"\bacross\s+the\s+([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE),
-            "skill",
-            exp.total_skills,
-        ),
-        (
-            re.compile(
-                r"\bhosts?(?:\s+adapters)?,\s+and\s+([A-Za-z0-9]+)\s+skills\b",
-                re.IGNORECASE,
-            ),
-            "skill",
-            exp.total_skills,
-        ),
-        (
-            re.compile(
-                r"`starter`\s+for\s+([A-Za-z0-9]+)\s+core\s+audit\s+skills",
-                re.IGNORECASE,
-            ),
-            "starter pack",
-            exp.starter_skills,
-        ),
-        (
-            re.compile(r"\b([A-Za-z0-9]+)\s+(?:`shared/`\s+)?suites\b", re.IGNORECASE),
-            "suite",
-            exp.suites_count,
-        ),
-        (_RELEASE_PACK_COUNT_RE, "pack", exp.packs_count),
-        (
-            re.compile(
-                r"\b([A-Za-z0-9]+)\s+(?:explicit\s+)?(?:cataloged\s+)?(?:agent\s+)?hosts?(?:\s+(?:layouts|adapters|installation\s+locations))?\b",
-                re.IGNORECASE,
-            ),
-            "host",
-            exp.hosts_count,
-        ),
-        (
-            re.compile(
-                r"\b([A-Za-z0-9]+)\s+structured\s+JSON\s+deliverables\b",
-                re.IGNORECASE,
-            ),
-            "JSON deliverable",
-            deliverables_total,
-        ),
-        (
-            re.compile(r"\b([A-Za-z0-9]+)-package\s+audit\s+family\b", re.IGNORECASE),
-            "audit suite",
-            exp.audit_skills,
-        ),
-        (
-            re.compile(r"\ball\s+([A-Za-z0-9]+)\s+specialists\b", re.IGNORECASE),
-            "audit specialist",
-            exp.audit_domains,
-        ),
-        (
-            re.compile(
-                r"\b([A-Za-z0-9]+)-package\s+workflow\s+family\b", re.IGNORECASE
-            ),
-            "workflow suite",
-            exp.workflow_skills,
-        ),
-        (
-            re.compile(r"\b([A-Za-z0-9]+)\s+correction\s+workflows\b", re.IGNORECASE),
-            "workflow suite",
-            exp.workflow_skills,
-        ),
-        (
-            re.compile(
-                r"\|\s*Verification\s+lifecycle\s*\|\s*([A-Za-z0-9]+)\s+skills\b",
-                re.IGNORECASE,
-            ),
-            "workflow suite",
-            exp.workflow_skills,
-        ),
-        (
-            re.compile(
-                r"\b([A-Za-z0-9]+)\s+engineering\s+suite\s+packages\b", re.IGNORECASE
-            ),
-            "engineering suite",
-            exp.engineering_skills,
-        ),
-        (
-            re.compile(
-                r"\b(?:These|all)\s+([A-Za-z0-9]+)\s+(?:scenario\s+)?specifications\b",
-                re.IGNORECASE,
-            ),
-            "scenario specification",
-            scenarios_total,
-        ),
+    return build_prose_count_rules(
+        DocCountExpectations(
+            total_skills=exp.total_skills,
+            starter_skills=exp.starter_skills,
+            suites_count=exp.suites_count,
+            packs_count=exp.packs_count,
+            hosts_count=exp.hosts_count,
+            deliverables_count=deliverables_total,
+            audit_skills=exp.audit_skills,
+            audit_domains=exp.audit_domains,
+            workflow_skills=exp.workflow_skills,
+            engineering_skills=exp.engineering_skills,
+        )
     )
-
-
-def _check_single_count_rule(
-    rel_path: str,
-    text: str,
-    pattern: re.Pattern[str],
-    label: str,
-    expected: int | None,
-) -> list[str]:
-    if expected is None:
-        return []
-    errors: list[str] = []
-    for match in pattern.finditer(text):
-        found = _parse_prose_int(match.group(1))
-        if found is not None and found != expected:
-            snippet = " ".join(match.group(0).split())
-            errors.append(
-                f"{rel_path}: stale {label} count {found} in '{snippet}' (expected {expected})"
-            )
-    return errors
 
 
 def _check_prose_counts(
@@ -3451,12 +3252,10 @@ def _check_prose_counts(
     text: str,
     rules: Sequence[tuple[re.Pattern[str], str, int | None]],
 ) -> list[str]:
-    errors: list[str] = []
-    for pattern, label, expected in rules:
-        errors.extend(
-            _check_single_count_rule(rel_path, text, pattern, label, expected)
-        )
-    return errors
+    return [
+        f"{rel_path}: stale {m.label} count {m.found} in '{m.snippet}' (expected {m.expected})"
+        for m in find_prose_count_mismatches(text, rules)
+    ]
 
 
 def _require_doc_tokens(
@@ -3484,7 +3283,7 @@ def _extract_matched_prose_int(pattern: re.Pattern[str], text: str) -> int | Non
     match = pattern.search(text)
     if match is None:
         return None
-    return _parse_prose_int(match.group(1))
+    return parse_prose_int(match.group(1))
 
 
 def _check_readme_itemized_sum(
@@ -3529,10 +3328,10 @@ def _validate_release_notes_doc(
     if exp.total_skills is None or exp.hosts_count is None or exp.packs_count is None:
         return []
     required_patterns = (
-        (_RELEASE_HOST_COUNT_RE, "host installation location count"),
-        (_RELEASE_SUITE_COUNT_RE, "suite count"),
-        (_RELEASE_PACK_COUNT_RE, "pack count"),
-        (_RELEASE_TOTAL_SKILLS_RE, "total skill count"),
+        (RELEASE_HOST_COUNT_RE, "host installation location count"),
+        (RELEASE_SUITE_COUNT_RE, "suite count"),
+        (RELEASE_PACK_COUNT_RE, "pack count"),
+        (RELEASE_TOTAL_SKILLS_RE, "total skill count"),
     )
     return [
         f"{rel_path}: missing required {label}"
@@ -3593,7 +3392,7 @@ def _validate_agents_doc(rel_path: str, text: str, _exp: _DocExpectations) -> li
 def _require_host_layouts(rel_path: str, text: str, exp: _DocExpectations) -> list[str]:
     if exp.hosts_count is None:
         return []
-    if _extract_matched_prose_int(_HOST_LAYOUTS_RE, text) is None:
+    if _extract_matched_prose_int(HOST_LAYOUTS_RE, text) is None:
         return [f"{rel_path}: missing required host layout count"]
     return []
 
@@ -3633,21 +3432,6 @@ def _validate_specific_doc_invariants(
     return handler(rel_path, text, exp)
 
 
-def _git_tag_exists(root: Path, tag: str) -> bool:
-    return git_tag_exists(root, tag)
-
-
-def _discover_release_note_docs(root: Path) -> list[str]:
-    version_path = root / "VERSION"
-    if not version_path.is_file():
-        return []
-    ver = version_path.read_text(encoding="utf-8").strip()
-    if not ver or _git_tag_exists(root, f"v{ver}"):
-        return []
-    candidate = f"docs/release-notes-{ver}.md"
-    return [candidate] if (root / candidate).is_file() else []
-
-
 def _list_v_tag_versions(root: Path) -> set[str]:
     if not (root / ".git").exists() or not shutil.which("git"):
         return set()
@@ -3676,7 +3460,7 @@ def _discover_tagged_release_note_versions(root: Path) -> list[str]:
     if docs_dir.is_dir():
         for note_path in sorted(docs_dir.glob("release-notes-*.md")):
             ver = note_path.name.removeprefix("release-notes-").removesuffix(".md")
-            if ver and _git_tag_exists(root, f"v{ver}"):
+            if ver and git_tag_exists(root, f"v{ver}"):
                 tagged.add(ver)
     return sorted(tagged)
 
@@ -3744,13 +3528,13 @@ def _validate_documentation_invariants(root: Path) -> list[str]:
         return load_errors
     count_rules = _build_prose_count_rules(exp)
     errors = _validate_tagged_release_notes_immutability(root)
-    for rel_path in _discover_release_note_docs(root):
+    for rel_path in discover_untagged_release_notes(root):
         errors.extend(
             _validate_single_doc_file(
                 root, rel_path, exp, count_rules, is_release_notes=True
             )
         )
-    for rel_path in _CORE_INVARIANT_DOCS:
+    for rel_path in CORE_INVARIANT_DOCS:
         errors.extend(_validate_single_doc_file(root, rel_path, exp, count_rules))
     return errors
 

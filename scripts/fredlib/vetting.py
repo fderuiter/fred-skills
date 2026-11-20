@@ -14,7 +14,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
-from .common import ROOT
+from .common import ROOT, non_fenced_lines, parse_reference_link_definition
 
 __all__ = [
     "SKILL_CAPABILITY_ALLOWLIST",
@@ -432,12 +432,10 @@ _HIDDEN_UNICODE_RANGES: tuple[tuple[int, int, str], ...] = (
     (0xE0100, 0xE01EF, "variation selector supplement"),
 )
 
-_FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})(.*)$")
 _INLINE_CODE_RE = re.compile(r"(`+)([^`]*?)\1")
 
 _MD_INLINE_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)")
 _MD_REF_IMAGE_USE_RE = re.compile(r"!\[([^\]]*)\](?:\[([^\]]*)\])?")
-_MD_REF_DEF_RE = re.compile(r"^[ \t]{0,3}\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s+.*)?$")
 _HTML_IMG_RE = re.compile(
     r"""<img\b[^>]*?\bsrc\s*=\s*(?:["']([^"']+)["']|([^\s>]+))""",
     re.IGNORECASE,
@@ -2236,41 +2234,15 @@ def _vet_svg_file(path: Path, *, root: Path | None = None) -> list[dict[str, Any
     return _vet_svg_text(svg_text, file_label)
 
 
-def _non_fenced_lines(text: str) -> list[tuple[int, str]]:
-    result: list[tuple[int, str]] = []
-    fence_char = ""
-    fence_len = 0
-    for idx, line in enumerate(text.splitlines(), start=1):
-        if fence_char:
-            stripped = line.lstrip(" \t")
-            if stripped.startswith(fence_char * fence_len):
-                closing_run = len(stripped) - len(stripped.lstrip(fence_char))
-                if closing_run >= fence_len and not stripped[closing_run:].strip():
-                    fence_char = ""
-                    fence_len = 0
-            continue
-        m = _FENCE_OPEN_RE.match(line)
-        if m:
-            marker = m.group(1)
-            info = m.group(2)
-            # Backtick info strings cannot contain backticks per CommonMark.
-            if marker[0] == "~" or "`" not in info:
-                fence_char = marker[0]
-                fence_len = len(marker)
-                continue
-        result.append((idx, line))
-    return result
-
-
 def _vet_markdown_text(text: str, file_label: str) -> list[dict[str, Any]]:
     findings = _scan_hidden_unicode_text(text, file_label, category="prompt")
-    non_fenced = _non_fenced_lines(text)
+    non_fenced = non_fenced_lines(text, max_indent=3)
 
     ref_defs: dict[str, str] = {}
     for _, raw_line in non_fenced:
-        ref_match = _MD_REF_DEF_RE.match(raw_line)
-        if ref_match:
-            ref_defs[ref_match.group(1).strip().lower()] = ref_match.group(2).strip()
+        ref_def = parse_reference_link_definition(raw_line)
+        if ref_def is not None:
+            ref_defs[ref_def[0]] = ref_def[1]
 
     in_html_comment = False
     for line_no, raw_line in non_fenced:
@@ -2402,7 +2374,7 @@ def _extract_markdown_shim_directives(
 ) -> list[tuple[int, str]]:
     directives: list[tuple[int, str]] = []
     in_html_comment = False
-    for line_no, raw_line in _non_fenced_lines(text):
+    for line_no, raw_line in non_fenced_lines(text, max_indent=3):
         masked = _strip_inline_code(raw_line)
         if in_html_comment:
             if "-->" not in masked:

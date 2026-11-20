@@ -1,8 +1,11 @@
 import json
 import shutil
+import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -474,7 +477,7 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((one / "checksums.sha256").is_file())
 
         ver_result = releases.verify(manifest_path)
-        self.assertEqual(84, ver_result["verified_archives"])
+        self.assertEqual(89, ver_result["verified_archives"])
         self.assertEqual(len(first["archives"]), ver_result["verified_archives"])
 
         # Check all 13 canonical catalog packs (tar and zip) and archive skills lists
@@ -487,9 +490,18 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(tuple(catalog_packs), releases.DOCUMENTED_PACKS)
         self.assertEqual(catalog_packs, list(first["packs"].keys()))
         archives_by_file = {item["file"]: item for item in first["archives"]}
+        cli_names = {
+            f"fred-skills-{first['version']}-cli.tar.gz",
+            f"fred-skills-{first['version']}-cli.zip",
+        }
         for item in first["archives"]:
             self.assertIn("skills", item)
-            self.assertTrue(len(item["skills"]) > 0, f"Empty skills for {item['file']}")
+            if item["file"] in cli_names:
+                self.assertEqual([], item["skills"])
+            else:
+                self.assertTrue(
+                    len(item["skills"]) > 0, f"Empty skills for {item['file']}"
+                )
         for pack in catalog_packs:
             tar_name = f"fred-skills-{first['version']}-{pack}.tar"
             zip_name = f"fred-skills-{first['version']}-{pack}.zip"
@@ -516,6 +528,107 @@ class InstallationTests(unittest.TestCase):
             ["repo-audit-concurrency"],
             archives_by_file["repo-audit-concurrency.tar.gz"]["skills"],
         )
+
+        # Check Gemini CLI platform bundles
+        for gemini_name in (
+            "darwin.fred-skills.tar.gz",
+            "linux.fred-skills.tar.gz",
+            "win32.fred-skills.zip",
+        ):
+            self.assertTrue((one / gemini_name).is_file(), f"Missing {gemini_name}")
+            self.assertIn(gemini_name, archives_by_file)
+            self.assertEqual(57, len(archives_by_file[gemini_name]["skills"]))
+        self.assertEqual(
+            (one / "darwin.fred-skills.tar.gz").read_bytes(),
+            (one / "linux.fred-skills.tar.gz").read_bytes(),
+        )
+        with tarfile.open(one / "darwin.fred-skills.tar.gz", "r:gz") as gtar:
+            gnames = set(gtar.getnames())
+            self.assertIn("gemini-extension.json", gnames)
+            self.assertIn("LICENSE", gnames)
+            self.assertEqual(0o644, gtar.getmember("LICENSE").mode)
+            self.assertIn("skills/repo-audit-concurrency/SKILL.md", gnames)
+            self.assertIn(
+                "skills/repo-audit-concurrency/.cursor-plugin/plugin.json", gnames
+            )
+            self.assertEqual(
+                0o755,
+                gtar.getmember(
+                    "skills/repo-audit-program/scripts/validate_audit.py"
+                ).mode,
+            )
+        with zipfile.ZipFile(one / "win32.fred-skills.zip", "r") as gzip_file:
+            gznames = set(gzip_file.namelist())
+            self.assertIn("gemini-extension.json", gznames)
+            self.assertIn("LICENSE", gznames)
+            self.assertIn("skills/repo-audit-concurrency/SKILL.md", gznames)
+
+        # Check standalone CLI bundles (tar.gz and zip) and execute extracted CLI under -S
+        cli_tar_gz = one / f"fred-skills-{first['version']}-cli.tar.gz"
+        cli_zip = one / f"fred-skills-{first['version']}-cli.zip"
+        self.assertTrue(cli_tar_gz.is_file())
+        self.assertTrue(cli_zip.is_file())
+        with tarfile.open(cli_tar_gz, "r:gz") as ctar:
+            cnames = set(ctar.getnames())
+            for req in (
+                "LICENSE",
+                "VERSION",
+                "catalog/packs.json",
+                "catalog/skills.json",
+                "scripts/fred.py",
+                "scripts/skill_tools.py",
+                "scripts/_markdown_utils.py",
+                "scripts/audit_to_sarif.py",
+                "scripts/fredlib/__init__.py",
+                "scripts/fredlib/releases.py",
+            ):
+                self.assertIn(req, cnames)
+            self.assertEqual(0o755, ctar.getmember("scripts/fred.py").mode)
+            self.assertEqual(0o755, ctar.getmember("scripts/audit_to_sarif.py").mode)
+            self.assertEqual(0o644, ctar.getmember("scripts/skill_tools.py").mode)
+            self.assertEqual(0o644, ctar.getmember("scripts/_markdown_utils.py").mode)
+            self.assertEqual(0o644, ctar.getmember("scripts/fredlib/releases.py").mode)
+            self.assertEqual(0o644, ctar.getmember("LICENSE").mode)
+        with zipfile.ZipFile(cli_zip, "r") as czip:
+            self.assertEqual(
+                0o100755, czip.getinfo("scripts/fred.py").external_attr >> 16
+            )
+            self.assertEqual(
+                0o100755, czip.getinfo("scripts/audit_to_sarif.py").external_attr >> 16
+            )
+            self.assertEqual(
+                0o100644, czip.getinfo("scripts/skill_tools.py").external_attr >> 16
+            )
+
+        standalone_cli_dir = self.root / "standalone_cli_check"
+        standalone_cli_dir.mkdir()
+        starter_tar_name = f"fred-skills-{first['version']}-starter.tar"
+        shutil.copy2(one / "manifest.json", standalone_cli_dir / "manifest.json")
+        shutil.copy2(one / "SHA256SUMS", standalone_cli_dir / "SHA256SUMS")
+        shutil.copy2(one / starter_tar_name, standalone_cli_dir / starter_tar_name)
+        with tarfile.open(cli_tar_gz, "r:gz") as ctar:
+            ctar.extractall(standalone_cli_dir, filter="data")
+        cli_proc = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "scripts/fred.py",
+                "verify-release",
+                "manifest.json",
+                "--archive",
+                starter_tar_name,
+                "--expected-version",
+                first["version"],
+                "--require-licensing",
+            ],
+            cwd=standalone_cli_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, cli_proc.returncode, cli_proc.stderr)
+        cli_verified = json.loads(cli_proc.stdout)
+        self.assertEqual(1, cli_verified["verified_archives"])
 
         # Verify tampering is detected
         corrupt_target = one / first["archives"][0]["file"]
@@ -1613,6 +1726,106 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ambig_ctx:
             installation.detect_host(home_antigravity, scope="user")
         self.assertIn("--host", str(ambig_ctx.exception))
+
+    def test_verify_partial_flags_and_extracted_license_compatibility(self) -> None:
+        (self.source / "LICENSE").write_text("MIT License\n", encoding="utf-8")
+        rel_dir = self.root / "partial_verify_bundle"
+        manifest = releases.build(rel_dir, skills=["sample"], root=self.source)
+        tar_name = f"fred-skills-{manifest['version']}-selected.tar"
+        zip_name = f"fred-skills-{manifest['version']}-selected.zip"
+
+        # Extracting pack tar (which contains LICENSE) into .agents/skills/ keeps installation healthy
+        dest = self.root / "extracted_pack_dest"
+        skills_target = dest / ".agents/skills"
+        skills_target.mkdir(parents=True)
+        with tarfile.open(rel_dir / tar_name, "r") as tf:
+            self.assertIn("LICENSE", tf.getnames())
+            tf.extractall(skills_target, filter="data")
+        self.assertTrue((skills_target / "LICENSE").is_file())
+        status_before = installation.query_installed(
+            installation.TargetEnvironment(dest, "codex", "project"),
+            root=self.source,
+        )
+        self.assertNotIn("LICENSE", status_before.get("untracked", []))
+        installation.install(
+            installation.TargetEnvironment(dest, "codex", "project"),
+            installation.InstallOptions(skills=["other"]),
+            root=self.source,
+        )
+        status_after = installation.query_installed(
+            installation.TargetEnvironment(dest, "codex", "project"),
+            root=self.source,
+        )
+        self.assertNotIn("LICENSE", status_after.get("untracked", []))
+
+        # Remove .zip to simulate a partial release download
+        (rel_dir / zip_name).unlink()
+        with self.assertRaises(FredCliError) as strict_err:
+            releases.verify(rel_dir / "manifest.json")
+        self.assertEqual("missing_archive", strict_err.exception.code)
+
+        by_archive = releases.verify(
+            rel_dir / "manifest.json",
+            archive=tar_name,
+            expected_version=manifest["version"],
+            require_licensing=True,
+        )
+        self.assertEqual(1, by_archive["verified_archives"])
+
+        by_ignore = releases.verify(
+            rel_dir / "manifest.json",
+            ignore_missing=True,
+            expected_version=manifest["version"],
+            require_licensing=True,
+        )
+        self.assertEqual(1, by_ignore["verified_archives"])
+
+        with self.assertRaises(FredCliError) as ver_err:
+            releases.verify(
+                rel_dir / "manifest.json", archive=tar_name, expected_version="9.9.9"
+            )
+        self.assertIn("does not match VERSION", str(ver_err.exception))
+
+        with self.assertRaises(FredCliError) as unk_err:
+            releases.verify(rel_dir / "manifest.json", archive="nonexistent.tar")
+        self.assertEqual("no_matching_archives", unk_err.exception.code)
+
+        # Tampered SHA256SUMS must still fail during --archive and --ignore-missing
+        orig_sums = (rel_dir / "SHA256SUMS").read_text(encoding="utf-8")
+        (rel_dir / "SHA256SUMS").write_text(
+            f"{'0' * 64}  {tar_name}\n", encoding="utf-8"
+        )
+        with self.assertRaises(FredCliError):
+            releases.verify(rel_dir / "manifest.json", archive=tar_name)
+        with self.assertRaises(FredCliError):
+            releases.verify(rel_dir / "manifest.json", ignore_missing=True)
+        (rel_dir / "SHA256SUMS").write_text(orig_sums, encoding="utf-8")
+
+        # Zero matched archives on disk with --ignore-missing raises FredCliError
+        (rel_dir / tar_name).unlink()
+        with self.assertRaises(FredCliError) as zero_err:
+            releases.verify(rel_dir / "manifest.json", ignore_missing=True)
+        self.assertEqual("no_matching_archives", zero_err.exception.code)
+
+    def test_stdlib_only_imports_do_not_eagerly_load_optional_packages(self) -> None:
+        probe = (
+            "import sys; sys.path.insert(0, 'scripts'); "
+            "import fredlib, skill_tools; "
+            "from fredlib import common, evaluations, installation, releases, reports, repository, runs, vetting; "
+            "review_starter = common._DEFAULT_SUITE_CONTRACTS['code-review']['starter']; "
+            "assert runs.audit_errors({}) and common._validate_canonical_artifact(review_starter, artifact_name='review.json') == []; "
+            "reports._validate_domain_payload(review_starter, 'review'); "
+            "assert 'yaml' not in sys.modules; "
+            "assert 'jsonschema' not in sys.modules"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-S", "-c", probe],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
 
 
 if __name__ == "__main__":

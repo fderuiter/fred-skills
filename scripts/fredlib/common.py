@@ -21,6 +21,10 @@ _SCRIPTS_DIR = ROOT / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from _markdown_utils import (
+    non_fenced_lines,
+    parse_reference_link_definition,
+)
 from skill_tools import (
     DOMAIN_KIND_KEY_SETS,
     SKILL_SUITE_PREFIXES,
@@ -42,6 +46,8 @@ from skill_tools import (
 
 _DOMAIN_KIND_KEY_SETS = DOMAIN_KIND_KEY_SETS
 _SKILL_SUITE_PREFIXES = SKILL_SUITE_PREFIXES
+_non_fenced_lines = non_fenced_lines
+_parse_reference_link_definition = parse_reference_link_definition
 
 _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     "repository-audits": {
@@ -412,9 +418,18 @@ _SCHEMA_NAME_VALIDATOR_KEYS: dict[str, str] = {
     "fix.schema.json": "workflow",
     "verification.schema.json": "workflow",
     "reconciliation.schema.json": "workflow",
+    "session-handoff.schema.json": "workflow",
     "handoff.schema.json": "workflow",
+    "terse-output-commit.schema.json": "workflow",
     "commit.schema.json": "workflow",
 }
+
+_SESSION_HANDOFF_SCHEMA_REL = (
+    "skills/session-handoff/assets/session-handoff.schema.json"
+)
+_TERSE_COMMIT_SCHEMA_REL = (
+    "skills/terse-output-commit/assets/terse-output-commit.schema.json"
+)
 
 _ARTIFACT_VALIDATOR_TARGETS: dict[str, tuple[str, str]] = {
     "audit.json": ("audit", "shared/repo-audit/resources/assets/audit.schema.json"),
@@ -438,14 +453,10 @@ _ARTIFACT_VALIDATOR_TARGETS: dict[str, tuple[str, str]] = {
         "spec",
         "shared/spec-driven-development/resources/assets/spec.schema.json",
     ),
-    "handoff.json": (
-        "workflow",
-        "skills/repo-session-handoff/assets/handoff.schema.json",
-    ),
-    "commit.json": (
-        "workflow",
-        "skills/terse-output-commit/assets/commit.schema.json",
-    ),
+    "session-handoff.json": ("workflow", _SESSION_HANDOFF_SCHEMA_REL),
+    "handoff.json": ("workflow", _SESSION_HANDOFF_SCHEMA_REL),
+    "terse-output-commit.json": ("workflow", _TERSE_COMMIT_SCHEMA_REL),
+    "commit.json": ("workflow", _TERSE_COMMIT_SCHEMA_REL),
 } | {
     wf_name: ("workflow", wf_schema)
     for wf_name, wf_schema in _DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS.items()
@@ -460,6 +471,12 @@ _BUNDLE_PAYLOAD_KEYS = frozenset(
         "session_id",
         "transcript_discovery",
     }
+)
+_HANDOFF_PAYLOAD_KEYS = frozenset(
+    {"dead_ends", "next_action", "untouched_scope", "verified_facts"}
+)
+_COMMIT_PAYLOAD_KEYS = frozenset(
+    {"commit_body_bullets", "commit_subject", "compression_level", "terse_response"}
 )
 
 
@@ -500,6 +517,28 @@ def _load_canonical_validator(
     return cast(_ScriptValidator, module)
 
 
+def _resolve_payload_shape_target(
+    payload: Mapping[Any, Any], schema_rel: str | None
+) -> tuple[str, str] | None:
+    if "findings" not in payload:
+        payload_keys = set(payload.keys())
+        if _BUNDLE_PAYLOAD_KEYS & payload_keys:
+            return (
+                "bundle",
+                schema_rel or "skills/repo-audit-diagnostics/assets/bundle.schema.json",
+            )
+        if _HANDOFF_PAYLOAD_KEYS <= payload_keys:
+            return ("workflow", schema_rel or _SESSION_HANDOFF_SCHEMA_REL)
+        if _COMMIT_PAYLOAD_KEYS <= payload_keys:
+            return ("workflow", schema_rel or _TERSE_COMMIT_SCHEMA_REL)
+    if is_audit_ledger_shape(payload):
+        return (
+            "audit",
+            schema_rel or "shared/repo-audit/resources/assets/audit.schema.json",
+        )
+    return None
+
+
 def _resolve_validator_target(
     artifact_name: str | None,
     schema_rel: str | None,
@@ -527,16 +566,9 @@ def _resolve_validator_target(
         v_key, default_schema = _ARTIFACT_VALIDATOR_TARGETS[detected]
         return v_key, (schema_rel or default_schema)
     if isinstance(payload, Mapping):
-        if "findings" not in payload and (_BUNDLE_PAYLOAD_KEYS & set(payload.keys())):
-            return (
-                "bundle",
-                schema_rel or "skills/repo-audit-diagnostics/assets/bundle.schema.json",
-            )
-        if is_audit_ledger_shape(payload):
-            return (
-                "audit",
-                schema_rel or "shared/repo-audit/resources/assets/audit.schema.json",
-            )
+        matched = _resolve_payload_shape_target(payload, schema_rel)
+        if matched is not None:
+            return matched
     raise ValueError(
         f"Unsupported canonical validator target: artifact={artifact_name!r}, schema={schema_rel!r}"
     )
