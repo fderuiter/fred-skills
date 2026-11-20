@@ -12,10 +12,16 @@ __all__ = [
     "FenceOpen",
     "FencedBlock",
     "consume_fenced_block",
+    "count_fenced_code_blocks",
     "extract_fenced_blocks",
+    "extract_markdown_headings",
+    "extract_markdown_preamble",
+    "extract_markdown_section",
+    "extract_markdown_tables",
     "extract_noncode_lines",
     "extract_reference_link_targets",
     "is_fence_close",
+    "is_markdown_table_separator",
     "match_atx_heading",
     "match_fence_open",
     "non_fenced_lines",
@@ -24,6 +30,7 @@ __all__ = [
     "scan_markdown_fences",
     "slugify_markdown_heading",
     "split_frontmatter_block",
+    "split_markdown_table_cells",
     "strip_fenced_code_blocks",
     "strip_reference_link_definitions",
     "unique_heading_slug",
@@ -31,6 +38,7 @@ __all__ = [
 
 ATX_HEADING_RE = re.compile(r"^[ \t]{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _FENCE_OPEN_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})(.*)$")
+_TABLE_DELIM_CELL_RE = re.compile(r"^:?-{3,}:?$")
 _REF_LINK_DEF_RE = re.compile(
     r"^[ \t]{0,3}\[([^\]]+)\]:(?:\s*<([^>\r\n]+)>|\s+(\S+?))"
     r"(?:\s+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^)\r\n]*\)))?\s*$"
@@ -241,6 +249,229 @@ def unique_heading_slug(heading_text: str, seen_slugs: dict[str, int]) -> str:
     count = seen_slugs.get(base, 0)
     seen_slugs[base] = count + 1
     return base if count == 0 else f"{base}-{count}"
+
+
+def count_fenced_code_blocks(
+    content: str,
+    *,
+    language: str | None = None,
+    max_indent: int | None = None,
+) -> int:
+    """Count closed fenced code blocks in Markdown, optionally filtered by language."""
+    blocks, _ = extract_fenced_blocks(content, max_indent=max_indent)
+    if language is None:
+        return len(blocks)
+    wanted = language.strip().lower()
+    return sum(1 for lang, _ in blocks if lang == wanted)
+
+
+def _preamble_stops_at_heading(h_level: int, before_level: int) -> bool:
+    return h_level == 1 if before_level == 1 else 2 <= h_level <= before_level
+
+
+def extract_markdown_preamble(
+    content: str,
+    *,
+    before_level: int = 2,
+    max_indent: int | None = None,
+) -> str:
+    """Extract Markdown content preceding the first unfenced section heading.
+
+    By default (`before_level=2`), preserves `#` document titles and intro content
+    up to the first `##` heading, ignoring ATX headings inside fenced blocks.
+    """
+    if before_level < 1:
+        raise ValueError("before_level must be at least 1")
+    lines = content.splitlines()
+    outside, _ = scan_markdown_fences(lines, max_indent=max_indent)
+    for line_no, line in outside:
+        heading = match_atx_heading(line)
+        if heading is not None and _preamble_stops_at_heading(heading[0], before_level):
+            return "\n".join(lines[: line_no - 1])
+    return "\n".join(lines)
+
+
+def extract_markdown_headings(
+    content: str,
+    *,
+    level: int | None = None,
+    max_indent: int | None = None,
+) -> list[tuple[int, str]]:
+    """Return ordered (level, heading_text) tuples for unfenced ATX headings."""
+    headings: list[tuple[int, str]] = []
+    for _, line in non_fenced_lines(content, max_indent=max_indent):
+        heading = match_atx_heading(line)
+        if heading is not None and (level is None or heading[0] == level):
+            headings.append(heading)
+    return headings
+
+
+def _unfenced_heading_positions(
+    lines: Sequence[str],
+    *,
+    max_indent: int | None = None,
+) -> list[tuple[int, int, str]]:
+    outside, _ = scan_markdown_fences(lines, max_indent=max_indent)
+    positions: list[tuple[int, int, str]] = []
+    for line_no, line in outside:
+        parsed = match_atx_heading(line)
+        if parsed is not None:
+            positions.append((line_no, parsed[0], parsed[1]))
+    return positions
+
+
+def extract_markdown_section(
+    content: str,
+    heading: str,
+    *,
+    level: int | None = None,
+    include_subheadings: bool = True,
+    max_indent: int | None = None,
+) -> str | None:
+    """Extract the body of an unfenced ATX heading section, ignoring fenced headings."""
+    wanted = heading.strip()
+    lines = content.splitlines()
+    positions = _unfenced_heading_positions(lines, max_indent=max_indent)
+    match_idx = next(
+        (
+            idx
+            for idx, (_, h_level, h_text) in enumerate(positions)
+            if h_text == wanted and (level is None or h_level == level)
+        ),
+        None,
+    )
+    if match_idx is None:
+        return None
+    start_line, section_level, _ = positions[match_idx]
+    for next_line, next_level, _ in positions[match_idx + 1 :]:
+        if not include_subheadings or next_level <= section_level:
+            return "\n".join(lines[start_line : next_line - 1])
+    return "\n".join(lines[start_line:])
+
+
+def _trim_outer_table_pipes(line: str) -> str:
+    stripped = line.strip().removeprefix("|")
+    if stripped.endswith("|") and not stripped.endswith(r"\|"):
+        return stripped[:-1]
+    return stripped
+
+
+def _find_closing_backticks(text: str, start: int, run_len: int) -> int | None:
+    idx = start
+    total = len(text)
+    while idx < total:
+        if text[idx] != "`":
+            idx += 1
+            continue
+        end = idx + 1
+        while end < total and text[end] == "`":
+            end += 1
+        if end - idx == run_len:
+            return end
+        idx = end
+    return None
+
+
+def _consume_table_token(text: str, idx: int) -> tuple[str | None, int]:
+    ch = text[idx]
+    if ch == "\\" and idx + 1 < len(text):
+        nxt = text[idx + 1]
+        return ("|" if nxt == "|" else f"\\{nxt}"), idx + 2
+    if ch == "`":
+        end = idx + 1
+        while end < len(text) and text[end] == "`":
+            end += 1
+        closed = _find_closing_backticks(text, end, end - idx)
+        stop = closed if closed is not None else end
+        return text[idx:stop].replace(r"\|", "|"), stop
+    if ch == "|":
+        return None, idx + 1
+    return ch, idx + 1
+
+
+def split_markdown_table_cells(line: str) -> list[str]:
+    """Split a Markdown pipe-table row into trimmed cells, preserving inline code pipes."""
+    trimmed = _trim_outer_table_pipes(line)
+    cells: list[str] = []
+    buf: list[str] = []
+    idx = 0
+    while idx < len(trimmed):
+        piece, idx = _consume_table_token(trimmed, idx)
+        if piece is None:
+            cells.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(piece)
+    cells.append("".join(buf).strip())
+    return cells
+
+
+def is_markdown_table_separator(line: str) -> bool:
+    """Return True when line is a GFM pipe-table alignment/delimiter row."""
+    stripped = line.strip()
+    if "|" not in stripped:
+        return False
+    cells = split_markdown_table_cells(stripped)
+    return bool(cells) and all(
+        _TABLE_DELIM_CELL_RE.match(cell) is not None for cell in cells
+    )
+
+
+def _unfenced_pipe_rows(
+    lines: Sequence[str],
+    *,
+    max_indent: int | None = None,
+) -> list[list[str] | None]:
+    outside, _ = scan_markdown_fences(lines, max_indent=max_indent)
+    outside_nos = {line_no for line_no, _ in outside}
+    return [
+        split_markdown_table_cells(line)
+        if line_no in outside_nos and "|" in line and line.strip()
+        else None
+        for line_no, line in enumerate(lines, start=1)
+    ]
+
+
+def _is_delim_row(headers: list[str] | None, delims: list[str] | None) -> bool:
+    if headers is None or delims is None or len(headers) != len(delims):
+        return False
+    return all(_TABLE_DELIM_CELL_RE.match(cell) is not None for cell in delims)
+
+
+def _consume_table_dict_rows(
+    rows: Sequence[list[str] | None],
+    start_idx: int,
+    headers: Sequence[str],
+) -> tuple[list[dict[str, str]], int]:
+    idx = start_idx
+    width = len(headers)
+    parsed_rows: list[dict[str, str]] = []
+    while idx < len(rows) and rows[idx] is not None:
+        row_cells = rows[idx]
+        assert row_cells is not None
+        padded = (row_cells + [""] * width)[:width]
+        parsed_rows.append(dict(zip(headers, padded, strict=True)))
+        idx += 1
+    return parsed_rows, idx
+
+
+def extract_markdown_tables(
+    content: str,
+    *,
+    max_indent: int | None = None,
+) -> list[list[dict[str, str]]]:
+    """Extract unfenced Markdown pipe tables as lists of {header: cell_value} dicts."""
+    rows = _unfenced_pipe_rows(content.splitlines(), max_indent=max_indent)
+    tables: list[list[dict[str, str]]] = []
+    idx = 0
+    while idx + 1 < len(rows):
+        headers = rows[idx]
+        if headers is not None and _is_delim_row(headers, rows[idx + 1]):
+            table_rows, idx = _consume_table_dict_rows(rows, idx + 2, headers)
+            tables.append(table_rows)
+            continue
+        idx += 1
+    return tables
 
 
 def parse_reference_link_definition(line: str) -> tuple[str, str] | None:

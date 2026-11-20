@@ -20,10 +20,14 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _markdown_utils import (
+    count_fenced_code_blocks,
+    extract_markdown_headings,
+    extract_markdown_preamble,
+    extract_markdown_section,
+    extract_markdown_tables,
     extract_reference_link_targets,
     match_atx_heading,
     non_fenced_lines,
-    scan_markdown_fences,
     slugify_markdown_heading,
     split_frontmatter_block,
     unique_heading_slug,
@@ -308,172 +312,11 @@ def read_json_object(
 MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 # Matches HTML href="..." or src="..."
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
-_TABLE_DELIM_CELL_RE = re.compile(r"^:?-{3,}:?$")
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
 _HTML_ID_ATTR_RE = re.compile(r"""\bid=["\x27]([^"\x27]+)["\x27]""")
 _HTML_NAME_ANCHOR_RE = re.compile(
     r"""<a\b[^>]*\bname=["\x27]([^"\x27]+)["\x27]""", re.IGNORECASE
 )
-
-
-def count_fenced_code_blocks(
-    content: str,
-    *,
-    language: str | None = None,
-) -> int:
-    """Count closed fenced code blocks in Markdown, optionally filtered by language."""
-    wanted_lang = language.strip().lower() if language is not None else None
-    _, blocks = scan_markdown_fences(content.splitlines())
-    return sum(
-        1
-        for block in blocks
-        if block.closed
-        and (wanted_lang is None or block.fence.language.lower() == wanted_lang)
-    )
-
-
-def extract_markdown_preamble(content: str, *, before_level: int = 2) -> str:
-    """Extract Markdown content preceding the first unfenced section heading.
-
-    By default (`before_level=2`), preserves `#` document titles and intro content
-    up to the first `##` heading, ignoring ATX headings inside fenced blocks.
-    """
-    if before_level < 1:
-        raise ValueError("before_level must be at least 1")
-    lines = content.splitlines()
-    outside, _ = scan_markdown_fences(lines)
-    for line_no, line in outside:
-        heading = match_atx_heading(line)
-        if heading is None:
-            continue
-        h_level = heading[0]
-        stop = h_level == 1 if before_level == 1 else (2 <= h_level <= before_level)
-        if stop:
-            return "\n".join(lines[: line_no - 1])
-    return "\n".join(lines)
-
-
-def extract_markdown_headings(
-    content: str,
-    *,
-    level: int | None = None,
-) -> list[tuple[int, str]]:
-    """Return ordered (level, heading_text) tuples for unfenced ATX headings."""
-    headings: list[tuple[int, str]] = []
-    for _, line in non_fenced_lines(content):
-        heading = match_atx_heading(line)
-        if heading is not None and (level is None or heading[0] == level):
-            headings.append(heading)
-    return headings
-
-
-def extract_markdown_section(
-    content: str,
-    heading: str,
-    *,
-    level: int | None = None,
-    include_subheadings: bool = True,
-) -> str | None:
-    """Extract the body of an unfenced ATX heading section, ignoring fenced headings."""
-    wanted = heading.strip()
-    lines = content.splitlines()
-    outside, _ = scan_markdown_fences(lines)
-    start_idx: int | None = None
-    section_level = 0
-    for line_no, line in outside:
-        parsed = match_atx_heading(line)
-        if parsed is None:
-            continue
-        h_level, h_text = parsed
-        if start_idx is None:
-            if h_text == wanted and (level is None or h_level == level):
-                start_idx = line_no
-                section_level = h_level
-            continue
-        if not include_subheadings or h_level <= section_level:
-            return "\n".join(lines[start_idx : line_no - 1])
-    return "\n".join(lines[start_idx:]) if start_idx is not None else None
-
-
-def _split_markdown_table_cells(line: str) -> list[str] | None:
-    """Split a Markdown pipe-table row into trimmed cells while honoring inline code spans."""
-    stripped = line.strip()
-    if not stripped.startswith("|") or stripped.count("|") < 2:
-        return None
-    cells: list[str] = []
-    buf: list[str] = []
-    idx = 0
-    tick_len = 0
-    length = len(stripped)
-    while idx < length:
-        ch = stripped[idx]
-        if ch == "\\" and idx + 1 < length and tick_len == 0:
-            buf.append(stripped[idx + 1])
-            idx += 2
-            continue
-        if ch == "`":
-            run = 1
-            while idx + run < length and stripped[idx + run] == "`":
-                run += 1
-            if tick_len == 0:
-                tick_len = run
-            elif run == tick_len:
-                tick_len = 0
-            buf.append(stripped[idx : idx + run])
-            idx += run
-            continue
-        if ch == "|" and tick_len == 0:
-            cells.append("".join(buf).strip())
-            buf = []
-            idx += 1
-            continue
-        buf.append(ch)
-        idx += 1
-    cells.append("".join(buf).strip())
-    if cells and cells[0] == "":
-        cells = cells[1:]
-    if cells and cells[-1] == "":
-        cells = cells[:-1]
-    return cells if cells else None
-
-
-def extract_markdown_tables(content: str) -> list[list[dict[str, str]]]:
-    """Extract unfenced Markdown pipe tables as lists of {header: cell_value} dicts."""
-    lines = content.splitlines()
-    outside, _ = scan_markdown_fences(lines)
-    outside_line_nos = {line_no for line_no, _ in outside}
-    unfenced_rows: list[list[str] | None] = [
-        _split_markdown_table_cells(line) if line_no in outside_line_nos else None
-        for line_no, line in enumerate(lines, start=1)
-    ]
-
-    tables: list[list[dict[str, str]]] = []
-    idx = 0
-    total = len(unfenced_rows)
-    while idx + 1 < total:
-        headers = unfenced_rows[idx]
-        delims = unfenced_rows[idx + 1]
-        if (
-            headers is not None
-            and delims is not None
-            and len(delims) == len(headers)
-            and all(_TABLE_DELIM_CELL_RE.match(cell) for cell in delims)
-        ):
-            idx += 2
-            table_rows: list[dict[str, str]] = []
-            while idx < total and unfenced_rows[idx] is not None:
-                row_cells = unfenced_rows[idx]
-                assert row_cells is not None
-                padded = [
-                    row_cells[col] if col < len(row_cells) else ""
-                    for col in range(len(headers))
-                ]
-                table_rows.append(dict(zip(headers, padded, strict=True)))
-                idx += 1
-            tables.append(table_rows)
-            continue
-        idx += 1
-    return tables
 
 
 def estimate_tokens(text: str) -> int:

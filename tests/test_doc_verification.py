@@ -458,7 +458,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             f"Expected {expected_cmd_count} registered subcommands across lifecycle groups, found {len(registered)}: {sorted(registered)}",
         )
 
-        start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (10, 195))
+        start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (1, None))
         blocks = extract_blocks_from_file(
             ROOT / "docs/toolkit.md", start_line, end_line, root=ROOT
         )
@@ -1783,6 +1783,70 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertEqual("`design-architecture`", tables[0][0]["Start here"])
         self.assertEqual(2, count_fenced_code_blocks(sample_md))
         self.assertEqual(1, count_fenced_code_blocks(sample_md, language="sh"))
+
+        import ast
+
+        import _markdown_utils
+
+        self.assertIs(
+            _markdown_utils.count_fenced_code_blocks, count_fenced_code_blocks
+        )
+        self.assertIs(
+            _markdown_utils.extract_markdown_headings, extract_markdown_headings
+        )
+        self.assertIs(
+            _markdown_utils.extract_markdown_preamble, extract_markdown_preamble
+        )
+        self.assertIs(
+            _markdown_utils.extract_markdown_section, extract_markdown_section
+        )
+        self.assertIs(_markdown_utils.extract_markdown_tables, extract_markdown_tables)
+
+        edge_table_md = (
+            "| Key | Expression |\n"
+            "| :--- | ---: |\n"
+            r"| `a \| b` | ``x | ` | y`` \| z |" + "\n\n"
+            "    ```sh\n"
+            "    indented code block\n"
+            "    ```\n"
+        )
+        edge_tables = extract_markdown_tables(edge_table_md)
+        self.assertEqual(1, len(edge_tables))
+        self.assertEqual("`a | b`", edge_tables[0][0]["Key"])
+        self.assertEqual("``x | ` | y`` | z", edge_tables[0][0]["Expression"])
+        self.assertEqual(1, count_fenced_code_blocks(edge_table_md))
+        self.assertEqual(0, count_fenced_code_blocks(edge_table_md, max_indent=3))
+
+        md_utils_tree = ast.parse(
+            (ROOT / "scripts/_markdown_utils.py").read_text(encoding="utf-8")
+        )
+        for node in md_utils_tree.body:
+            if isinstance(node, ast.FunctionDef):
+                branch_score = 1
+                for child in ast.walk(node):
+                    if isinstance(
+                        child,
+                        (
+                            ast.If,
+                            ast.While,
+                            ast.For,
+                            ast.AsyncFor,
+                            ast.ExceptHandler,
+                            ast.With,
+                            ast.AsyncWith,
+                            ast.IfExp,
+                        ),
+                    ):
+                        branch_score += 1
+                    elif isinstance(child, ast.BoolOp):
+                        branch_score += len(child.values) - 1
+                    elif isinstance(child, ast.comprehension):
+                        branch_score += len(child.ifs)
+                self.assertLess(
+                    branch_score,
+                    10,
+                    f"_markdown_utils.{node.name} complexity {branch_score} >= 10",
+                )
 
     def test_lifecycle_groups_ast_fallback_finds_groups_beyond_150_lines(self) -> None:
         """_parse_lifecycle_groups_fallback locates LIFECYCLE_GROUPS via AST regardless of line offset."""

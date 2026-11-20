@@ -42,6 +42,9 @@ from _markdown_utils import (
     extract_fenced_blocks as _extract_fenced_blocks,
 )
 from _markdown_utils import (
+    extract_markdown_preamble,
+)
+from _markdown_utils import (
     extract_noncode_lines as _extract_noncode_lines,
 )
 from fredlib import vetting
@@ -49,7 +52,6 @@ from fredlib.common import FredCliError, atomic_json, read_json_object
 from skill_tools import (
     ROOT,
     estimate_tokens,
-    extract_markdown_preamble,
     extract_relative_links,
     find_deep_reference_chains,
     git_blob_bytes,
