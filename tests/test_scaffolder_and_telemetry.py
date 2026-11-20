@@ -15,6 +15,8 @@ import jsonschema
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 
@@ -26,6 +28,8 @@ import sync_audit_resources
 import validate_skills
 import verify_doc_snippets
 import verify_workflow_actions
+
+from tests.catalog_oracles import expected_total_skills
 
 _PASSTHROUGH_ENV_KEYS = (
     "PATH",
@@ -293,17 +297,20 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], sync_audit_resources.sync(self.root, check=True))
         self.assertEqual([], build_catalog.build(self.root, check=True))
         self.assertEqual([], build_experience.build(self.root, check=True))
+        baseline_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(baseline_skills, 1)
         errors, telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], errors)
-        self.assertEqual(58, telemetry["total_packages"])
+        self.assertEqual(baseline_skills + 1, telemetry["total_packages"])
 
-        for extra_name, extra_suite in (
+        extra_specs = (
             ("arch-service-contracts", "software-architecture"),
             ("review-api-changes", "code-review"),
             ("test-mutation-bounds", "automated-testing"),
             ("spec-acceptance-matrix", "spec-driven-development"),
             ("repo-triage-regressions", "repository-workflows"),
-        ):
+        )
+        for extra_name, extra_suite in extra_specs:
             scaffold_skill.scaffold_skill(
                 extra_name,
                 root=self.root,
@@ -315,7 +322,10 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], build_experience.build(self.root, check=True))
         all_errors, all_telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], all_errors)
-        self.assertEqual(63, all_telemetry["total_packages"])
+        self.assertEqual(
+            baseline_skills + 1 + len(extra_specs),
+            all_telemetry["total_packages"],
+        )
 
     def test_scaffolder_catalog_sync_in_minimal_root(self) -> None:
         scaffold_skill.scaffold_skill(

@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 
@@ -17,6 +19,8 @@ import fredlib
 from fredlib import installation, releases, vetting
 from fredlib.common import atomic_json, read_json
 from validate_skills import validate, validate_skill
+
+from tests.catalog_oracles import expected_total_skills
 
 
 def _write_valid_skill_fixture(pkg: Path, name: str = "sample-vetted") -> None:
@@ -910,7 +914,7 @@ class VettingModuleTests(unittest.TestCase):
         cycle_res = vetting.vet_target(cycle_repo, root=ROOT)
         self.assertTrue(cycle_res["passed"], cycle_res["findings"])
 
-        # Toolkit root passes fred.py vet with .cursor-plugin/plugin.json, gemini-extension.json, and @AGENTS.md shims
+        # Toolkit root passes fred.py vet with .cursor-plugin/marketplace.json, gemini-extension.json, and @AGENTS.md shims
         root_proc = subprocess.run(
             [sys.executable, str(ROOT / "scripts/fred.py"), "vet", str(ROOT)],
             capture_output=True,
@@ -925,11 +929,14 @@ class VettingModuleTests(unittest.TestCase):
             "AGENTS.md",
             "CLAUDE.md",
             "GEMINI.md",
-            ".cursor-plugin/plugin.json",
+            ".cursor-plugin/marketplace.json",
+            ".claude-plugin/marketplace.json",
             "gemini-extension.json",
         ):
             self.assertIn(expected_cfg, root_payload["configs_scanned"])
-        self.assertEqual(57, len(root_payload["skills_scanned"]))
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertEqual(expected_skills, len(root_payload["skills_scanned"]))
 
 
 if __name__ == "__main__":

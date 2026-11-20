@@ -394,28 +394,61 @@ def discover_doc_blocks(
     return discovered
 
 
-def _parse_lifecycle_groups_fallback(content: str) -> dict[str, list[str]]:
-    """Parse LIFECYCLE_GROUPS from the initial lines of scripts/fred.py."""
+def _extract_ast_string_list(node: ast.AST) -> list[str] | None:
+    """Extract string elements from an AST List or Tuple literal."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    return [
+        elt.value
+        for elt in node.elts
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+    ]
+
+
+def _extract_lifecycle_groups_dict(node: ast.AST) -> dict[str, list[str]]:
+    """Extract {group_name: [subcommand, ...]} from an AST Dict literal."""
+    if not isinstance(node, ast.Dict):
+        return {}
     groups: dict[str, list[str]] = {}
-    in_dict = False
-    current_group = ""
-    for line in content.splitlines()[:150]:
-        if "LIFECYCLE_GROUPS = {" in line:
-            in_dict = True
-            continue
-        if not in_dict:
-            continue
-        if line.strip() == "}":
-            break
-        group_match = re.match(r'\s*"([^"]+)":\s*\[', line)
-        if group_match:
-            current_group = group_match.group(1)
-            groups[current_group] = []
-            continue
-        item_match = re.match(r'\s*"([^"]+)",', line)
-        if item_match and current_group:
-            groups[current_group].append(item_match.group(1))
+    for key_node, val_node in zip(node.keys, node.values, strict=False):
+        if (
+            isinstance(key_node, ast.Constant)
+            and isinstance(key_node.value, str)
+            and val_node is not None
+        ):
+            items = _extract_ast_string_list(val_node)
+            if items is not None:
+                groups[key_node.value] = items
     return groups
+
+
+def _lifecycle_groups_value_node(node: ast.AST) -> ast.AST | None:
+    """Return the assigned value node when node assigns to LIFECYCLE_GROUPS."""
+    if isinstance(node, ast.Assign):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "LIFECYCLE_GROUPS":
+                return node.value
+        return None
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "LIFECYCLE_GROUPS"
+    ):
+        return node.value
+    return None
+
+
+def _parse_lifecycle_groups_fallback(content: str) -> dict[str, list[str]]:
+    """Parse LIFECYCLE_GROUPS via AST lookup across scripts/fred.py."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return {}
+    for node in ast.walk(tree):
+        value_node = _lifecycle_groups_value_node(node)
+        if value_node is not None:
+            return _extract_lifecycle_groups_dict(value_node)
+    return {}
 
 
 def get_registered_fred_subcommands(root: Path = ROOT) -> dict[str, list[str]]:

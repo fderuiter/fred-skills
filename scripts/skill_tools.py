@@ -22,11 +22,16 @@ __all__ = [
     "FredCliError",
     "build_outputs",
     "classify_domain_payload",
+    "count_fenced_code_blocks",
     "detect_artifact_suite",
     "detect_domain_artifact",
     "estimate_tokens",
     "extract_document_anchors",
     "extract_link_fragment",
+    "extract_markdown_headings",
+    "extract_markdown_preamble",
+    "extract_markdown_section",
+    "extract_markdown_tables",
     "extract_relative_links",
     "find_deep_reference_chains",
     "infer_suite_and_siblings",
@@ -123,13 +128,218 @@ MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
 # Matches reference-style link definitions [label]: target
 MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
-_ATX_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_ATX_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_TABLE_DELIM_CELL_RE = re.compile(r"^:?-{3,}:?$")
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
 _HTML_ID_ATTR_RE = re.compile(r"""\bid=["\x27]([^"\x27]+)["\x27]""")
 _HTML_NAME_ANCHOR_RE = re.compile(
     r"""<a\b[^>]*\bname=["\x27]([^"\x27]+)["\x27]""", re.IGNORECASE
 )
+
+
+def _iter_markdown_fence_states(content: str) -> Iterator[tuple[str, bool, bool]]:
+    """Yield (line, is_fence_delimiter, is_inside_fence) across Markdown lines."""
+    fence_char = ""
+    fence_len = 0
+    for line in content.splitlines():
+        fence_match = _FENCE_MARKER_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            trailing = line[fence_match.end() :].strip()
+            if not fence_char:
+                fence_char = marker[0]
+                fence_len = len(marker)
+                yield line, True, True
+                continue
+            if marker[0] == fence_char and len(marker) >= fence_len and not trailing:
+                fence_char = ""
+                fence_len = 0
+                yield line, True, False
+                continue
+        yield line, False, bool(fence_char)
+
+
+def count_fenced_code_blocks(
+    content: str,
+    *,
+    language: str | None = None,
+) -> int:
+    """Count closed fenced code blocks in Markdown, optionally filtered by language."""
+    fence_char = ""
+    fence_len = 0
+    open_lang = ""
+    wanted_lang = language.strip().lower() if language is not None else None
+    count = 0
+    for line in content.splitlines():
+        fence_match = _FENCE_MARKER_RE.match(line)
+        if not fence_match:
+            continue
+        marker = fence_match.group(1)
+        trailing = line[fence_match.end() :].strip()
+        if not fence_char:
+            fence_char = marker[0]
+            fence_len = len(marker)
+            tokens = trailing.split()
+            open_lang = tokens[0].lower() if tokens else ""
+            continue
+        if marker[0] == fence_char and len(marker) >= fence_len and not trailing:
+            if wanted_lang is None or open_lang == wanted_lang:
+                count += 1
+            fence_char = ""
+            fence_len = 0
+            open_lang = ""
+    return count
+
+
+def extract_markdown_preamble(content: str, *, before_level: int = 2) -> str:
+    """Extract Markdown content preceding the first unfenced section heading.
+
+    By default (`before_level=2`), preserves `#` document titles and intro content
+    up to the first `##` heading, ignoring ATX headings inside fenced blocks.
+    """
+    if before_level < 1:
+        raise ValueError("before_level must be at least 1")
+    collected: list[str] = []
+    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
+        if not is_delim and not in_fence:
+            heading_match = _ATX_HEADING_RE.match(line)
+            if heading_match:
+                level = len(heading_match.group(1))
+                stop = level == 1 if before_level == 1 else (2 <= level <= before_level)
+                if stop:
+                    break
+        collected.append(line)
+    return "\n".join(collected)
+
+
+def extract_markdown_headings(
+    content: str,
+    *,
+    level: int | None = None,
+) -> list[tuple[int, str]]:
+    """Return ordered (level, heading_text) tuples for unfenced ATX headings."""
+    headings: list[tuple[int, str]] = []
+    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
+        if is_delim or in_fence:
+            continue
+        heading_match = _ATX_HEADING_RE.match(line)
+        if not heading_match:
+            continue
+        h_level = len(heading_match.group(1))
+        if level is None or h_level == level:
+            headings.append((h_level, heading_match.group(2).strip()))
+    return headings
+
+
+def extract_markdown_section(
+    content: str,
+    heading: str,
+    *,
+    level: int | None = None,
+    include_subheadings: bool = True,
+) -> str | None:
+    """Extract the body of an unfenced ATX heading section, ignoring fenced headings."""
+    wanted = heading.strip()
+    in_section = False
+    section_level = 0
+    collected: list[str] = []
+    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
+        if not is_delim and not in_fence:
+            heading_match = _ATX_HEADING_RE.match(line)
+            if heading_match:
+                h_level = len(heading_match.group(1))
+                h_text = heading_match.group(2).strip()
+                if not in_section:
+                    if h_text == wanted and (level is None or h_level == level):
+                        in_section = True
+                        section_level = h_level
+                    continue
+                if not include_subheadings or h_level <= section_level:
+                    break
+        if in_section:
+            collected.append(line)
+    return "\n".join(collected) if in_section else None
+
+
+def _split_markdown_table_cells(line: str) -> list[str] | None:
+    """Split a Markdown pipe-table row into trimmed cells while honoring inline code spans."""
+    stripped = line.strip()
+    if not stripped.startswith("|") or stripped.count("|") < 2:
+        return None
+    cells: list[str] = []
+    buf: list[str] = []
+    idx = 0
+    tick_len = 0
+    length = len(stripped)
+    while idx < length:
+        ch = stripped[idx]
+        if ch == "\\" and idx + 1 < length and tick_len == 0:
+            buf.append(stripped[idx + 1])
+            idx += 2
+            continue
+        if ch == "`":
+            run = 1
+            while idx + run < length and stripped[idx + run] == "`":
+                run += 1
+            if tick_len == 0:
+                tick_len = run
+            elif run == tick_len:
+                tick_len = 0
+            buf.append(stripped[idx : idx + run])
+            idx += run
+            continue
+        if ch == "|" and tick_len == 0:
+            cells.append("".join(buf).strip())
+            buf = []
+            idx += 1
+            continue
+        buf.append(ch)
+        idx += 1
+    cells.append("".join(buf).strip())
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells if cells else None
+
+
+def extract_markdown_tables(content: str) -> list[list[dict[str, str]]]:
+    """Extract unfenced Markdown pipe tables as lists of {header: cell_value} dicts."""
+    unfenced_rows: list[list[str] | None] = []
+    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
+        if is_delim or in_fence:
+            unfenced_rows.append(None)
+        else:
+            unfenced_rows.append(_split_markdown_table_cells(line))
+
+    tables: list[list[dict[str, str]]] = []
+    idx = 0
+    total = len(unfenced_rows)
+    while idx + 1 < total:
+        headers = unfenced_rows[idx]
+        delims = unfenced_rows[idx + 1]
+        if (
+            headers is not None
+            and delims is not None
+            and len(delims) == len(headers)
+            and all(_TABLE_DELIM_CELL_RE.match(cell) for cell in delims)
+        ):
+            idx += 2
+            table_rows: list[dict[str, str]] = []
+            while idx < total and unfenced_rows[idx] is not None:
+                row_cells = unfenced_rows[idx]
+                assert row_cells is not None
+                padded = [
+                    row_cells[col] if col < len(row_cells) else ""
+                    for col in range(len(headers))
+                ]
+                table_rows.append(dict(zip(headers, padded, strict=True)))
+                idx += 1
+            tables.append(table_rows)
+            continue
+        idx += 1
+    return tables
 
 
 def estimate_tokens(text: str) -> int:

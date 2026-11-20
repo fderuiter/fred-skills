@@ -24,6 +24,7 @@ from fredlib.common import FredCliError, atomic_json, read_json_object
 from skill_tools import (
     ROOT,
     estimate_tokens,
+    extract_markdown_preamble,
     extract_relative_links,
     find_deep_reference_chains,
     infer_suite_and_siblings,
@@ -3359,7 +3360,7 @@ def _validate_release_notes_doc(
 
 
 def _validate_readme_doc(rel_path: str, text: str, exp: _DocExpectations) -> list[str]:
-    intro = "\n".join(text.splitlines()[:10])
+    intro = extract_markdown_preamble(text)
     return [
         *_check_readme_itemized_sum(rel_path, intro, exp),
         *_check_readme_host_names(rel_path, text, exp.host_ids),
