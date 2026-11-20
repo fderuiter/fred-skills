@@ -143,6 +143,12 @@ def build_phase_commands(
         ]
     if phase == "docs":
         return [
+            [
+                python_executable,
+                str(scripts_dir / "build_site.py"),
+                "--output",
+                str(root / "dist" / "site"),
+            ],
             [python_executable, str(scripts_dir / "check_doc_links.py")],
             [python_executable, str(scripts_dir / "verify_doc_snippets.py")],
         ]

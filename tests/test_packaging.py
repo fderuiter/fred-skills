@@ -1181,9 +1181,14 @@ class PackageTests(unittest.TestCase):
         self.assertIn("custom-telemetry.json", telemetry_pkg_cmds[-1])
 
         docs_cmds = build_phase_commands("docs", root=ROOT)
-        self.assertEqual(2, len(docs_cmds))
-        self.assertTrue(docs_cmds[0][-1].endswith("check_doc_links.py"))
-        self.assertTrue(docs_cmds[1][-1].endswith("verify_doc_snippets.py"))
+        self.assertEqual(3, len(docs_cmds))
+        self.assertTrue(docs_cmds[0][1].endswith("build_site.py"))
+        self.assertEqual("--output", docs_cmds[0][2])
+        self.assertEqual(
+            (ROOT / "dist" / "site").resolve(), Path(docs_cmds[0][3]).resolve()
+        )
+        self.assertTrue(docs_cmds[1][-1].endswith("check_doc_links.py"))
+        self.assertTrue(docs_cmds[2][-1].endswith("verify_doc_snippets.py"))
 
     def test_run_checks_dry_run_and_failure_isolation(self) -> None:
         dry = subprocess.run(
