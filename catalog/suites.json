@@ -120,6 +120,8 @@
         {
           "id": 0,
           "title": "Finding Verification",
+          "deliverable": "finding-verification.json",
+          "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
           "skills": [
             "repo-verify-finding"
           ]
@@ -127,6 +129,8 @@
         {
           "id": 1,
           "title": "Regression Specification",
+          "deliverable": "regression.json",
+          "schema": "skills/repo-specify-regression/assets/regression.schema.json",
           "skills": [
             "repo-specify-regression"
           ]
@@ -134,6 +138,8 @@
         {
           "id": 2,
           "title": "Scoped Implementation Planning",
+          "deliverable": "plan.json",
+          "schema": "skills/repo-plan-fix/assets/plan.schema.json",
           "skills": [
             "repo-plan-fix"
           ]
@@ -141,6 +147,8 @@
         {
           "id": 3,
           "title": "Scoped Correction",
+          "deliverable": "fix.json",
+          "schema": "skills/repo-apply-fix/assets/fix.schema.json",
           "skills": [
             "repo-apply-fix"
           ]
@@ -148,6 +156,8 @@
         {
           "id": 4,
           "title": "Fix Verification",
+          "deliverable": "verification.json",
+          "schema": "skills/repo-verify-fix/assets/verification.schema.json",
           "skills": [
             "repo-verify-fix"
           ]
@@ -155,6 +165,8 @@
         {
           "id": 5,
           "title": "Remediation Reconciliation",
+          "deliverable": "reconciliation.json",
+          "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
           "skills": [
             "repo-reconcile-findings"
           ]
@@ -179,7 +191,9 @@
           "schema_version": "1.0",
           "title": "Architecture specification",
           "status": "draft",
+          "coverage": [],
           "boundaries": [],
+          "components": [],
           "decisions": []
         }
       },

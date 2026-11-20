@@ -11,6 +11,14 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def _is_repo_relative(raw_path: str) -> bool:
+    if not raw_path or "\\" in raw_path:
+        return False
+    posix = pathlib.PurePosixPath(raw_path)
+    win = pathlib.PureWindowsPath(raw_path)
+    return not (posix.is_absolute() or win.is_absolute() or ".." in posix.parts)
+
+
 def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema
@@ -24,6 +32,20 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
     ]
     if errors or not isinstance(data, Mapping):
         return errors
+
+    for top_path in data.get("paths", []):
+        if isinstance(top_path, str) and not _is_repo_relative(top_path):
+            errors.append(
+                f"Deliverable path must be repository-relative (paths): {top_path}"
+            )
+
+    for cov in data.get("coverage", []):
+        if isinstance(cov, Mapping):
+            for cov_path in cov.get("paths", []):
+                if isinstance(cov_path, str) and not _is_repo_relative(cov_path):
+                    errors.append(
+                        f"Deliverable path must be repository-relative (coverage.paths): {cov_path}"
+                    )
 
     verdict = data.get("verdict")
     seen_ids: set[str] = set()
@@ -41,17 +63,14 @@ def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
             seen_ids.add(fid)
 
         fpath = finding.get("file")
-        if isinstance(fpath, str):
-            posix = pathlib.PurePosixPath(fpath)
-            win = pathlib.PureWindowsPath(fpath)
-            if (
-                posix.is_absolute()
-                or win.is_absolute()
-                or ".." in posix.parts
-                or "\\" in fpath
-            ):
+        if isinstance(fpath, str) and not _is_repo_relative(fpath):
+            errors.append(
+                f"Finding file path must be repository-relative: {fid or fpath}"
+            )
+        for extra_path in finding.get("paths", []):
+            if isinstance(extra_path, str) and not _is_repo_relative(extra_path):
                 errors.append(
-                    f"Finding file path must be repository-relative: {fid or fpath}"
+                    f"Finding file path must be repository-relative: {fid or extra_path}"
                 )
 
         if finding.get("severity") in ("critical", "high") and isinstance(fid, str):

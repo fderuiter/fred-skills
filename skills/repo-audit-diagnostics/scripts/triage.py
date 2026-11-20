@@ -207,29 +207,46 @@ TIMEOUT_PATTERNS = [
 SCHEMA_PATTERNS = [
     re.compile(r"\bjsonschema(?:\.exceptions)?\.ValidationError\b"),
     re.compile(r"'[A-Za-z0-9_.-]+' is a required property"),
+    re.compile(
+        r"(?i)\b(?:missing|lacks?|omits?|without)\s+(?:required\s+)?(?:property|properties|field|fields|key|keys)?\s*['`\"]?(?:finding_id|reproduction_status|safe_control_outcomes|confidence_rating|test_file|failure_boundaries|test_command_traces|assertion_expectations|plan_id|title|task_breakdowns|dependency_order|task_id|file_scopes|acceptance_criteria|file_changes|diff_summaries|execution_results|compatibility_limits|before_revision|after_revision|original_reproduced|regression_passed|safe_controls_passed|commands|result|finding_fingerprint_matches|remediation_state_transitions|unmapped_records|schema_version|records|previous_state|new_state|record_id|fingerprint|verification|match_status|reason|components|responsibility|paths)\b"
+    ),
     re.compile(r"is not one of \[[^\r\n]+\]"),
-    re.compile(r"'1\.0' was expected"),
+    re.compile(r"'(?:1\.0|verified-fixed)' was expected|\bTrue was expected\b"),
     re.compile(
         r"Additional properties are not allowed \([^\n)]*w(?:as|ere) unexpected\)"
     ),
-    re.compile(r"(?i)\bInvalid (?:architecture|review|testing)(?:\.json| artifact)\b"),
+    re.compile(
+        r"(?i)\bInvalid (?:architecture|review|testing|spec|workflow|remediation|reconciliation|finding-verification|regression|plan|fix|verification)(?:\.json| artifact| ledger)\b"
+    ),
+    re.compile(r"(?i)\b(?:does not satisfy|failed)\s+[A-Za-z0-9_.-]+\.schema\.json\b"),
     re.compile(r"(?i)\bschema mismatch\b"),
     re.compile(r"(?i)\bschema validation (?:failed|error)\b"),
     re.compile(r"(?i)is not valid under any of the given schemas"),
     re.compile(
-        r"Duplicate IDs in (?:evidence|contracts|findings|issues|decisions|test_cases):"
+        r"Duplicate (?:IDs|names|task_id) in (?:evidence|contracts|findings|issues|decisions|boundaries|components|test_cases|task_breakdowns|interview_decisions|requirements|convergence_checks):"
     ),
     re.compile(r"Reversed lines:"),
     re.compile(
-        r"(?:Evidence|Finding file|Deliverable) path must be repository-relative"
+        r"(?:Evidence|Finding|Finding file|Deliverable|Coverage|Boundary|Decision|Component|Test case|Test case file|Specification file scope)?\s*[Pp]ath(?:s| scope)? must be repository-relative"
     ),
     re.compile(r"Unsafe relative path:"),
     re.compile(r"Expected a nonempty repository-relative POSIX path"),
-    re.compile(r"Unknown (?:evidence|contracts|findings|issues) reference"),
+    re.compile(
+        r"Unknown (?:evidence|contracts|findings|issues|task|task_id|component) (?:reference|dependency|in dependency_order)"
+    ),
     re.compile(r"Actionable defect lacks contract/evidence:"),
-    re.compile(r"Confirmed finding lacks executed command:"),
+    re.compile(
+        r"Confirmed finding (?:lacks executed command:|verification\b|(?:F-[A-Za-z0-9_-]+\s+)?cannot set reproduced to false)"
+    ),
     re.compile(r"Refuted candidate must be info:"),
-    re.compile(r"Issue dependency cycle:"),
+    re.compile(r"(?:Issue|Task|Component) dependency cycle(?:\s+detected)?:?"),
+    re.compile(r"commit_subject must match commit_type/commit_scope prefix"),
+    re.compile(
+        r"(?:Verdict '[A-Za-z_-]+' conflicts with|Status 'converged' conflicts with)"
+    ),
+    re.compile(
+        r"(?:Run and [A-Za-z0-9_.-]+ IDs differ|(?:Audit|[A-Za-z0-9_.-]+) evidence is not tied to the current run snapshot|Deliverable (?:run_id does not match|snapshot is not tied to the current run snapshot))"
+    ),
 ]
 
 CONTEXT_PATTERNS = [
@@ -450,8 +467,8 @@ _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
             }
         ),
     ),
-    ("architecture", frozenset({"boundaries", "decisions"})),
-    ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
+    ("architecture", frozenset({"boundaries", "decisions", "components"})),
+    ("run", frozenset({"plan", "authority", "checkpoints"})),
 )
 
 _DOMAIN_KIND_TO_SUITE: dict[str, str] = {
@@ -1890,8 +1907,26 @@ def _find_topic_keyword_in_segment(text: str) -> tuple[str, str] | None:
 
 
 def _is_audit_ledger_shape(data: Mapping[str, Any]) -> bool:
-    return "findings" in data and any(
-        key in data for key in ("evidence", "coverage", "contracts", "run_id")
+    if "findings" not in data or "verdict" in data:
+        return False
+    if any(
+        key in data
+        for key in (
+            "test_cases",
+            "boundaries",
+            "decisions",
+            "components",
+            "interview_decisions",
+        )
+    ):
+        return False
+    if "summary" in data and not any(
+        key in data for key in ("evidence", "contracts", "repository", "issues")
+    ):
+        return False
+    return any(
+        key in data
+        for key in ("evidence", "coverage", "contracts", "run_id", "repository")
     )
 
 
@@ -1989,6 +2024,7 @@ _ARTIFACT_ID_SECTIONS: tuple[str, ...] = (
     "contracts",
     "issues",
     "decisions",
+    "components",
     "test_cases",
     "interview_decisions",
     "requirements",

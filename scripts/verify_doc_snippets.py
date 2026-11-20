@@ -2758,6 +2758,167 @@ def _verify_single_block(
     return errors
 
 
+_RUNBOOK_MODULE_PATHS: dict[str, str] = {
+    "fred": "scripts/fred.py",
+    "fredlib.common": "scripts/fredlib/common.py",
+    "fredlib.evaluations": "scripts/fredlib/evaluations.py",
+    "fredlib.installation": "scripts/fredlib/installation.py",
+    "fredlib.releases": "scripts/fredlib/releases.py",
+    "fredlib.reports": "scripts/fredlib/reports.py",
+    "fredlib.repository": "scripts/fredlib/repository.py",
+    "fredlib.runs": "scripts/fredlib/runs.py",
+    "fredlib.vetting": "scripts/fredlib/vetting.py",
+    "triage": "skills/repo-audit-diagnostics/scripts/triage.py",
+}
+_RUNBOOK_COLON_BASENAMES: dict[str, str] = {
+    Path(rel).name: mod_key for mod_key, rel in _RUNBOOK_MODULE_PATHS.items()
+}
+_RAW_COLON_LINE_RE = re.compile(r":L\d+(?:-L?\d+)?\b")
+_RAW_BARE_RANGE_RE = re.compile(r"(?<!:)\bL\d+-L\d+\b")
+_DOTTED_CITATION_RE = re.compile(
+    r"\b(?P<mod>fredlib\.[A-Za-z_][A-Za-z0-9_]*|fred|triage)\.(?!py\b)"
+    r"(?P<sym>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\b"
+)
+_COLON_CITATION_RE = re.compile(
+    r"(?P<path>[A-Za-z0-9_./-]+?\.py):(?P<sym>(?!L\d+\b)[A-Za-z_][A-Za-z0-9_.]*)\b"
+)
+
+
+def _extract_ast_target_names(node: ast.AST) -> set[str]:
+    """Return top-level or class-body symbol names defined by an AST statement."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    if isinstance(node, ast.Assign):
+        return {t.id for t in node.targets if isinstance(t, ast.Name)}
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return {node.target.id}
+    return set()
+
+
+def _collect_ast_symbols(source_path: Path) -> set[str]:
+    """Parse a Python module via AST and collect all defined symbol names."""
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    symbols: set[str] = set()
+    for item in tree.body:
+        symbols.update(_extract_ast_target_names(item))
+        if isinstance(item, ast.ClassDef):
+            for member in item.body:
+                symbols.update(
+                    f"{item.name}.{name}" for name in _extract_ast_target_names(member)
+                )
+    return symbols
+
+
+def _resolve_runbook_module_file(mod_key: str, root: Path) -> Path | None:
+    """Resolve a runbook citation module key or relative .py path to a file on disk."""
+    rel = _RUNBOOK_MODULE_PATHS.get(mod_key, mod_key if mod_key.endswith(".py") else "")
+    if not rel:
+        return None
+    candidate = root / rel
+    if candidate.is_file():
+        return candidate
+    fallback = ROOT / rel
+    return fallback if fallback.is_file() else None
+
+
+def _extract_line_symbol_citations(line: str) -> list[tuple[str, str]]:
+    """Extract (module_key, symbol_name) citations from a single documentation line."""
+    refs = [
+        (m.group("mod"), m.group("sym")) for m in _DOTTED_CITATION_RE.finditer(line)
+    ]
+    for match in _COLON_CITATION_RE.finditer(line):
+        raw_path = match.group("path")
+        mod_key = _RUNBOOK_COLON_BASENAMES.get(Path(raw_path).name, raw_path)
+        refs.append((mod_key, match.group("sym")))
+    return refs
+
+
+def _validate_symbol_in_module(
+    rel_path: str,
+    line_no: int,
+    mod_key: str,
+    sym: str,
+    root: Path,
+    cache: dict[Path, set[str]],
+) -> str | None:
+    """Verify that mod_key resolves to a Python file whose AST defines sym."""
+    src = _resolve_runbook_module_file(mod_key, root)
+    if src is None:
+        return (
+            f"{rel_path}:L{line_no}: Unknown module '{mod_key}' "
+            f"in symbol citation '{mod_key}.{sym}'"
+        )
+    if src not in cache:
+        cache[src] = _collect_ast_symbols(src)
+    if sym not in cache[src]:
+        mod_rel = _RUNBOOK_MODULE_PATHS.get(mod_key, mod_key)
+        return (
+            f"{rel_path}:L{line_no}: Symbol '{sym}' not found in AST of "
+            f"'{mod_key}' ({mod_rel})"
+        )
+    return None
+
+
+def _non_fenced_lines(
+    lines: list[str],
+    blocks: list[CommandBlock],
+) -> list[tuple[int, str]]:
+    """Return 1-indexed (line_no, text) pairs outside fenced code blocks."""
+    fenced = {
+        ln for block in blocks for ln in range(block.start_line, block.end_line + 1)
+    }
+    return [(idx, text) for idx, text in enumerate(lines, start=1) if idx not in fenced]
+
+
+def _check_runbook_line_citations(
+    rel_path: str,
+    lines: list[str],
+    non_fenced: list[tuple[int, str]],
+) -> list[str]:
+    """Reject raw :L<line> or L<start>-L<end> line citations in runbooks."""
+    errors = [
+        f"{rel_path}:L{idx}: Raw line citation '{match.group(0)}' is forbidden; use a module.symbol citation"
+        for idx, line in enumerate(lines, start=1)
+        for match in _RAW_COLON_LINE_RE.finditer(line)
+    ]
+    errors.extend(
+        f"{rel_path}:L{idx}: Raw line citation '{match.group(0)}' is forbidden; use a module.symbol citation"
+        for idx, line in non_fenced
+        for match in _RAW_BARE_RANGE_RE.finditer(line)
+    )
+    return errors
+
+
+def verify_runbook_citations(
+    root: Path = ROOT,
+    blocks: list[CommandBlock] | None = None,
+) -> list[str]:
+    """Verify docs/runbooks.md contains AST-valid symbol citations and zero raw line citations."""
+    rel_path = "docs/runbooks.md"
+    doc_path = root / rel_path
+    if not doc_path.is_file():
+        return [f"{rel_path}: File does not exist"]
+    lines = doc_path.read_text(encoding="utf-8").splitlines()
+    active_blocks = (
+        blocks if blocks is not None else extract_blocks_from_file(doc_path, root=root)
+    )
+    non_fenced = _non_fenced_lines(lines, active_blocks)
+    errors = _check_runbook_line_citations(rel_path, lines, non_fenced)
+    cache: dict[Path, set[str]] = {}
+    citation_count = 0
+    for line_no, line in non_fenced:
+        for mod_key, sym in _extract_line_symbol_citations(line):
+            citation_count += 1
+            err = _validate_symbol_in_module(
+                rel_path, line_no, mod_key, sym, root, cache
+            )
+            if err is not None:
+                errors.append(err)
+    if citation_count == 0:
+        errors.append(f"{rel_path}:L1: No module.symbol citations found in runbooks")
+    return errors
+
+
 def _verify_file_snippets(
     rel_path: str,
     blocks: list[CommandBlock],
@@ -2772,6 +2933,8 @@ def _verify_file_snippets(
         return []
 
     errors = _verify_doc_release_counts(rel_path, root)
+    if rel_path == "docs/runbooks.md":
+        errors.extend(verify_runbook_citations(root=root, blocks=blocks))
     for block in blocks:
         errors.extend(_verify_single_block(rel_path, block, root))
     return errors

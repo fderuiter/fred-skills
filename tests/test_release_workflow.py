@@ -1910,7 +1910,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
             repo / "README.md",
             "# Test\n"
             "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.2.0/fred-skills-0.2.0-starter.tar\n"
-            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/\n",
+            "tar -xf fred-skills-0.2.0-starter.tar -C /path/to/project/.agents/skills/\n"
+            "See the [0.2.0 release notes](docs/release-notes-0.2.0.md) and [releasing](docs/releasing.md).\n",
+        )
+        _write_lf(
+            repo / "docs/releasing.md",
+            "# Release process\n\n"
+            "Publishes using `docs/release-notes-<VERSION>.md` when present "
+            "(such as [release-notes-0.2.0.md](release-notes-0.2.0.md), or `--generate-notes` otherwise).\n",
+        )
+        _write_lf(
+            repo / "docs/explorer.html",
+            '<!doctype html><nav><a href="../README.md">Quickstart</a>'
+            '<a href="release-notes-0.2.0.md">Release notes</a></nav>\n',
         )
         _write_lf(
             repo / "docs/usage.md",
@@ -1961,7 +1973,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
             # 1. Commit modifying only tests/ and developer docs skips version bump
             _write_lf(repo / "tests/test_extra.py", "x = 1\n")
-            _write_lf(repo / "docs/releasing.md", "# Releasing\n")
+            _write_lf(
+                repo / "docs/releasing.md",
+                "# Release process\n\n"
+                "Updated prose; publishes using `docs/release-notes-<VERSION>.md` when present "
+                "(such as [release-notes-0.2.0.md](release-notes-0.2.0.md), or `--generate-notes` otherwise).\n",
+            )
             _git(repo, "add", "tests/test_extra.py", "docs/releasing.md")
             _git(repo, "commit", "-m", "docs and tests only")
 
@@ -2062,6 +2079,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "Total: 2 skills.",
                 (repo / "docs/release-notes-0.2.1.md").read_text(encoding="utf-8"),
             )
+            self.assertIn(
+                "[0.3.0 release notes](docs/release-notes-0.3.0.md)",
+                (repo / "README.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                'href="release-notes-0.3.0.md">Release notes</a>',
+                (repo / "docs/explorer.html").read_text(encoding="utf-8"),
+            )
+            releasing_after_minor = (repo / "docs/releasing.md").read_text(
+                encoding="utf-8"
+            )
+            for expected_note in (
+                "release-notes-0.3.0.md",
+                "release-notes-0.2.1.md",
+                "release-notes-0.2.0.md",
+            ):
+                self.assertIn(
+                    f"[{expected_note}]({expected_note})", releasing_after_minor
+                )
             self.assertEqual([], build_catalog.build(root=repo, check=True))
 
     def test_prepare_job_shell_step_pushes_bump_commit_and_hands_off_target_sha(

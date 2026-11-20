@@ -277,6 +277,72 @@ class BuildSiteTests(unittest.TestCase):
             dir_errs = check_docs(root=tmp_path, target_files=[tmp_path])
             self.assertEqual(2, len(dir_errs))
 
+    def test_compile_markdown_renders_yaml_frontmatter_and_full_guide_navigation(
+        self,
+    ) -> None:
+        """compile_markdown safely renders YAML frontmatter via stdlib, and index/explorer reach all 14 guides."""
+        md_with_fm = (
+            "---\n"
+            "name: sample-guide\n"
+            'description: "Safe <script>alert(1)</script> summary"\n'
+            "tags:\n"
+            "  - audits\n"
+            "  - workflows\n"
+            "---\n"
+            "# Sample Guide\n\n"
+            "Body paragraph.\n"
+        )
+        title, html_out = build_site.compile_markdown(
+            md_with_fm,
+            source_rel_path="docs/sample.md",
+            compiled_md_paths=frozenset(),
+            root=ROOT,
+        )
+        self.assertEqual("Sample Guide", title)
+        self.assertIn('<section class="frontmatter"', html_out)
+        self.assertIn("<code>name</code>", html_out)
+        self.assertIn("sample-guide", html_out)
+        self.assertIn("audits workflows", html_out)
+        self.assertNotIn("<script>", html_out)
+        self.assertNotIn("<hr>", html_out)
+
+        index_links = set(
+            extract_relative_links(
+                (self.site_dir / "index.html").read_text(encoding="utf-8")
+            )
+        )
+        web_exp_links = set(
+            extract_relative_links(
+                (self.site_dir / "docs/explorer.html").read_text(encoding="utf-8")
+            )
+        )
+        offline_exp_links = set(
+            extract_relative_links(
+                (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
+            )
+        )
+        readme_links = set(
+            extract_relative_links((ROOT / "README.md").read_text(encoding="utf-8"))
+        )
+        releasing_links = set(
+            extract_relative_links(
+                (ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+            )
+        )
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        active_release_stem = f"release-notes-{active_version}"
+        self.assertIn("release-notes-0.2.0.md", releasing_links)
+        self.assertIn(f"{active_release_stem}.md", releasing_links)
+        for guide_md in sorted((ROOT / "docs").glob("*.md")):
+            stem = guide_md.stem
+            if stem.startswith("release-notes-") and stem != active_release_stem:
+                self.assertIn(f"{stem}.md", releasing_links)
+                continue
+            self.assertIn(f"docs/{stem}.md", readme_links)
+            self.assertIn(f"{stem}.md", offline_exp_links)
+            self.assertIn(f"{stem}.html", web_exp_links)
+            self.assertIn(f"docs/{stem}.html", index_links)
+
 
 if __name__ == "__main__":
     unittest.main()

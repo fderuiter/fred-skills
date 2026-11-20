@@ -34,9 +34,11 @@ Next, the `release` job re-verifies `origin/main` ancestry, nonempty `LICENSE`, 
 `checksums.sha256` completeness before attesting SLSA build provenance, serializes publication
 per release tag, pushes `refs/tags/v<VERSION>` on `main` branch pushes if missing on `origin`,
 and performs zero-touch GitHub Release publication (`--verify-tag` and `--target`, without
-`--draft` or manual approval) using `docs/release-notes-<VERSION>.md` when present (or
-`--generate-notes` otherwise, marking pre-release tags with `--prerelease`). Commits on `main`
-outside distributable paths keep `VERSION` unchanged and skip duplicate publication cleanly.
+`--draft` or manual approval) using `docs/release-notes-<VERSION>.md` when present (such as
+[release-notes-0.3.0.md](release-notes-0.3.0.md) and archived
+[release-notes-0.2.0.md](release-notes-0.2.0.md), or `--generate-notes` otherwise, marking
+pre-release tags with `--prerelease`). Commits on `main` outside distributable paths keep
+`VERSION` unchanged and skip duplicate publication cleanly.
 
 Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
 `workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)

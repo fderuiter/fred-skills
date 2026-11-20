@@ -42,6 +42,8 @@ __all__ = [
     "suite_for_skills",
     "suite_members",
     "suite_skills_by_suite",
+    "workflow_phase_deliverables",
+    "workflow_phase_order_map",
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -474,8 +476,8 @@ DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
             }
         ),
     ),
-    ("architecture", frozenset({"boundaries", "decisions"})),
-    ("run", frozenset({"plan", "snapshot", "authority", "checkpoints"})),
+    ("architecture", frozenset({"boundaries", "decisions", "components"})),
+    ("run", frozenset({"plan", "authority", "checkpoints"})),
 )
 
 DOMAIN_KIND_TO_SUITE: dict[str, str] = {
@@ -616,6 +618,41 @@ def skill_to_suite_map(root: Path = ROOT) -> dict[str, str]:
         for suite_name, members in by_suite.items()
         for skill in members
     }
+
+
+def workflow_phase_deliverables(root: Path = ROOT) -> dict[str, str]:
+    """Return deliverable filename -> schema path registered on repository-workflows phases."""
+    suites = read_suites_catalog(root)
+    if suites is None:
+        return {}
+    mapping: dict[str, str] = {}
+    for suite_name, phase, _skill in _iter_suite_phase_skills(
+        suites, strict=False, root=root
+    ):
+        if suite_name != "repository-workflows" or not isinstance(phase, dict):
+            continue
+        deliverable = phase.get("deliverable")
+        schema_rel = phase.get("schema")
+        if isinstance(deliverable, str) and isinstance(schema_rel, str):
+            mapping[deliverable] = schema_rel
+    return mapping
+
+
+def workflow_phase_order_map(root: Path = ROOT) -> dict[str, int]:
+    """Map each repository-workflows skill in catalog/suites.json to its phase order."""
+    suites = read_suites_catalog(root)
+    if suites is None:
+        return {}
+    order_map: dict[str, int] = {}
+    for suite_name, phase, skill in _iter_suite_phase_skills(
+        suites, strict=False, root=root
+    ):
+        if suite_name != "repository-workflows" or not isinstance(phase, dict):
+            continue
+        order = phase.get("order")
+        if isinstance(order, int) and isinstance(skill, str):
+            order_map[skill] = order
+    return order_map
 
 
 def suite_members(root: Path = ROOT) -> dict[str, dict]:
@@ -764,8 +801,26 @@ def recipe_to_suite_map(root: Path = ROOT) -> dict[str, str]:
 
 def is_audit_ledger_shape(data: Mapping[str, Any]) -> bool:
     """Return True when a JSON mapping carries audit.json ledger markers alongside findings."""
-    return "findings" in data and any(
-        key in data for key in ("evidence", "coverage", "contracts", "run_id")
+    if "findings" not in data or "verdict" in data:
+        return False
+    if any(
+        key in data
+        for key in (
+            "test_cases",
+            "boundaries",
+            "decisions",
+            "components",
+            "interview_decisions",
+        )
+    ):
+        return False
+    if "summary" in data and not any(
+        key in data for key in ("evidence", "contracts", "repository", "issues")
+    ):
+        return False
+    return any(
+        key in data
+        for key in ("evidence", "coverage", "contracts", "run_id", "repository")
     )
 
 

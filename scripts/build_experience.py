@@ -37,6 +37,38 @@ SITE_DIRECTORIES: tuple[str, ...] = (
     "skills",
 )
 EXCLUDED_SITE_NAMES: frozenset[str] = frozenset({"__pycache__", ".DS_Store"})
+
+
+def _active_toolkit_version(root: Path = ROOT) -> str:
+    for candidate in (root / "VERSION", ROOT / "VERSION"):
+        if candidate.is_file():
+            ver = candidate.read_text(encoding="utf-8").strip()
+            if ver:
+                return ver
+    return "0.2.0"
+
+
+def explorer_doc_guides(root: Path = ROOT) -> tuple[tuple[str, str], ...]:
+    version = _active_toolkit_version(root)
+    return (
+        ("experience", "Task guide"),
+        ("catalog", "Catalog"),
+        ("toolkit", "CLI guide"),
+        ("usage", "Usage"),
+        ("integration", "Host integration"),
+        ("api", "API"),
+        ("architecture", "Architecture"),
+        ("runbooks", "Runbooks"),
+        ("validation", "Validation"),
+        ("implementation-status", "Status"),
+        ("releasing", "Releasing"),
+        (f"release-notes-{version}", "Release notes"),
+        ("research", "Research"),
+        ("licensing", "Licensing"),
+    )
+
+
+_EXPLORER_DOC_GUIDES: tuple[tuple[str, str], ...] = explorer_doc_guides(ROOT)
 _SUITE_LABELS: dict[str, str] = {
     "repository-audits": "Audits",
     "repository-workflows": "Verified engineering",
@@ -70,9 +102,10 @@ def _render_explorer_html(
     root_prefix: str = "../",
     docs_prefix: str = "",
     web_mode: bool = False,
+    root: Path = ROOT,
 ) -> str:
     if suites is None:
-        suites = read_json(ROOT / "catalog/suites.json")["suites"]
+        suites = read_json(root / "catalog/suites.json")["suites"]
     skill_suites = {
         str(entry["name"]): str(entry["suite"])
         for entry in catalog
@@ -162,8 +195,12 @@ def _render_explorer_html(
         if hosts
         else ""
     )
+    nav_links = f'<a href="{quickstart_target}">Quickstart</a>' + "".join(
+        f'<a href="{docs_prefix}{slug}.{doc_ext}">{escape(label)}</a>'
+        for slug, label in explorer_doc_guides(root)
+    )
     csp = escape(_csp_value(), quote=True)
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="{csp}"><title>fred-skills task explorer</title><style>{STYLE}</style></head><body><header><h1>Find an engineering workflow</h1><p>Choose an outcome, then inspect a small relevant set of portable skills.</p><nav><a href="{quickstart_target}">Quickstart</a><a href="{docs_prefix}experience.{doc_ext}">Task guide</a><a href="{docs_prefix}catalog.{doc_ext}">Catalog</a><a href="{docs_prefix}toolkit.{doc_ext}">CLI guide</a><a href="{docs_prefix}validation.{doc_ext}">What has been tested</a></nav></header><section aria-label="Search and filter"><label for="query">Task or symptom <input id="query" type="search" placeholder="database migration, memory leak, review-pr…"></label><label for="status">Family <select id="status"><option value="">All</option>{status_options}</select></label><button id="toggle-details" type="button" aria-expanded="false">Expand all</button><p id="count" data-noun="skills" role="status" aria-live="polite"></p><div id="empty-state" class="empty-state" hidden><p>No tasks or skills match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div></section><section id="tasks" data-filter-section><h2>Start from your task</h2>{tasks}</section><section id="skills" data-filter-section><h2>Search skills</h2>{"".join(cards)}</section>{packs_section}{hosts_section}<script>{SCRIPT}</script></body></html>"""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="{csp}"><title>fred-skills task explorer</title><style>{STYLE}</style></head><body><header><h1>Find an engineering workflow</h1><p>Choose an outcome, then inspect a small relevant set of portable skills.</p><nav>{nav_links}</nav></header><section aria-label="Search and filter"><label for="query">Task or symptom <input id="query" type="search" placeholder="database migration, memory leak, review-pr…"></label><label for="status">Family <select id="status"><option value="">All</option>{status_options}</select></label><button id="toggle-details" type="button" aria-expanded="false">Expand all</button><p id="count" data-noun="skills" role="status" aria-live="polite"></p><div id="empty-state" class="empty-state" hidden><p>No tasks or skills match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div></section><section id="tasks" data-filter-section><h2>Start from your task</h2>{tasks}</section><section id="skills" data-filter-section><h2>Search skills</h2>{"".join(cards)}</section>{packs_section}{hosts_section}<script>{SCRIPT}</script></body></html>"""
 
 
 def outputs(root: Path = ROOT) -> dict[str, str]:
@@ -203,6 +240,7 @@ def outputs(root: Path = ROOT) -> dict[str, str]:
         root_prefix="../",
         docs_prefix="",
         web_mode=False,
+        root=root,
     )
     return {"docs/experience.md": doc, "docs/explorer.html": html}
 

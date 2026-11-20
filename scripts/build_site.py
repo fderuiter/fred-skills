@@ -22,6 +22,7 @@ from build_experience import (
     SITE_ROOT_FILES,
     _ignore_site_entries,
     _render_explorer_html,
+    explorer_doc_guides,
 )
 from build_experience import (
     outputs as experience_outputs,
@@ -60,6 +61,59 @@ _REF_DEF_RE = re.compile(r"^\[([^\]]+)\]:\s*(\S+)\s*$")
 _INLINE_CODE_RE = re.compile(r"``(.+?)``|`([^`]+)`")
 _INLINE_LINK_RE = re.compile(r"(!?)\[([^\]]+)\]\(([^)]+)\)")
 _REF_LINK_RE = re.compile(r"\[([^\]]+)\]\[([^\]]*)\]")
+_FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*:(.*)$")
+
+
+def _extract_stdlib_frontmatter(
+    markdown_text: str,
+) -> tuple[list[tuple[str, str]], str]:
+    """Extract leading YAML frontmatter key/value pairs using Python stdlib only."""
+    lines = markdown_text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return [], markdown_text
+    end_idx = next(
+        (i for i in range(1, len(lines)) if lines[i].strip() == "---"),
+        None,
+    )
+    if end_idx is None:
+        return [], markdown_text
+    raw_fm = lines[1:end_idx]
+    pairs: list[tuple[str, str]] = []
+    idx = 0
+    while idx < len(raw_fm):
+        line = raw_fm[idx]
+        if not line.strip() or line.lstrip().startswith("#"):
+            idx += 1
+            continue
+        key_match = _FRONTMATTER_KEY_RE.match(line)
+        if key_match is None:
+            return [], markdown_text
+        key = key_match.group(1)
+        val_raw = key_match.group(2).strip()
+        idx += 1
+        cont_parts: list[str] = []
+        if val_raw in {"", ">", "|", ">-", "|-", ">+", "|+"}:
+            val_raw = ""
+        while idx < len(raw_fm):
+            nxt = raw_fm[idx]
+            if not nxt.strip():
+                idx += 1
+                continue
+            if nxt.startswith((" ", "\t")):
+                cleaned_cont = nxt.strip()
+                if cleaned_cont.startswith("- "):
+                    cleaned_cont = cleaned_cont[2:].strip()
+                cont_parts.append(cleaned_cont.strip("\"'"))
+                idx += 1
+                continue
+            break
+        if len(val_raw) >= 2 and val_raw[0] == val_raw[-1] and val_raw[0] in {"'", '"'}:
+            val_raw = val_raw[1:-1]
+        combined = " ".join(p for p in [val_raw, *cont_parts] if p)
+        pairs.append((key, combined))
+    if not pairs:
+        return [], markdown_text
+    return pairs, "\n".join(lines[end_idx + 1 :])
 
 
 def slugify(heading_text: str) -> str:
@@ -83,19 +137,22 @@ def _rel_prefix_to_site_root(page_rel_path: str) -> str:
     return "../" * depth
 
 
-def _site_header_html(page_rel_path: str, subtitle: str = "documentation") -> str:
+def _site_header_html(
+    page_rel_path: str,
+    subtitle: str = "documentation",
+    root: Path = ROOT,
+) -> str:
     root_prefix = _rel_prefix_to_site_root(page_rel_path)
+    guide_links = "".join(
+        f'<a href="{root_prefix}docs/{slug}.html">{escape(label)}</a>'
+        for slug, label in explorer_doc_guides(root)
+    )
     return (
         f'<header><p class="muted">fred-skills · {escape(subtitle)}</p>'
         f'<nav aria-label="Site navigation">'
         f'<a href="{root_prefix}index.html">Quickstart</a>'
         f'<a href="{root_prefix}docs/explorer.html">Skill explorer</a>'
-        f'<a href="{root_prefix}docs/experience.html">Task guide</a>'
-        f'<a href="{root_prefix}docs/catalog.html">Catalog</a>'
-        f'<a href="{root_prefix}docs/toolkit.html">CLI guide</a>'
-        f'<a href="{root_prefix}docs/usage.html">Usage</a>'
-        f'<a href="{root_prefix}docs/integration.html">Host integration</a>'
-        f'<a href="{root_prefix}docs/validation.html">Validation</a>'
+        f"{guide_links}"
         f"</nav></header>"
     )
 
@@ -435,11 +492,20 @@ def compile_markdown(
     root: Path = ROOT,
 ) -> tuple[str, str]:
     """Compile Markdown text into (first_heading_title, rendered_html)."""
-    cleaned_md, ref_defs = _extract_reference_definitions(markdown_text)
+    frontmatter_pairs, body_markdown = _extract_stdlib_frontmatter(markdown_text)
+    cleaned_md, ref_defs = _extract_reference_definitions(body_markdown)
     lines = cleaned_md.splitlines()
     seen_slugs: dict[str, int] = {}
     first_title = ""
     blocks: list[str] = []
+    if frontmatter_pairs:
+        fm_items = "".join(
+            f"<dt><code>{escape(k, quote=True)}</code></dt><dd>{escape(v, quote=True)}</dd>"
+            for k, v in frontmatter_pairs
+        )
+        blocks.append(
+            f'<section class="frontmatter" aria-label="Document metadata"><dl>{fm_items}</dl></section>'
+        )
 
     def _inline(text_segment: str) -> str:
         return _render_inline(
@@ -529,6 +595,10 @@ def compile_markdown(
             idx += 1
         blocks.append(f"<p>{_inline(' '.join(para_lines))}</p>")
 
+    if not first_title and frontmatter_pairs:
+        fm_map = dict(frontmatter_pairs)
+        first_title = fm_map.get("title") or fm_map.get("name") or ""
+
     return first_title, "\n".join(blocks)
 
 
@@ -577,21 +647,24 @@ def _render_skill_metadata_section(
 def _discover_compilable_markdown_paths(root: Path) -> list[str]:
     """Return sorted repo-relative POSIX paths of all Markdown files compiled into dist/site/."""
     candidates: set[str] = set()
-    if (root / "README.md").is_file():
-        candidates.add("README.md")
-    for rel in AUXILIARY_ROOT_MARKDOWN:
-        if (root / rel).is_file():
+    for rel in (*SITE_ROOT_FILES, *AUXILIARY_ROOT_MARKDOWN):
+        if rel.lower().endswith(".md") and (root / rel).is_file():
             candidates.add(rel)
-    docs_dir = root / "docs"
-    if docs_dir.is_dir():
-        for doc_md in docs_dir.glob("*.md"):
-            if doc_md.is_file():
-                candidates.add(doc_md.relative_to(root).as_posix())
-    skills_dir = root / "skills"
-    if skills_dir.is_dir():
-        for skill_md in skills_dir.rglob("*.md"):
-            if skill_md.is_file() and "__pycache__" not in skill_md.parts:
-                candidates.add(skill_md.relative_to(root).as_posix())
+    for rel_dir in SITE_DIRECTORIES:
+        src_dir = root / rel_dir
+        if not src_dir.is_dir():
+            continue
+        for md_path in src_dir.rglob("*.md"):
+            if not md_path.is_file():
+                continue
+            rel_parts = md_path.relative_to(root).parts
+            if any(
+                part in {"__pycache__", ".DS_Store"}
+                or part.endswith((".pyc", ".pyo", ".pyd", ".telemetry.json"))
+                for part in rel_parts
+            ):
+                continue
+            candidates.add(md_path.relative_to(root).as_posix())
     return sorted(candidates)
 
 
@@ -689,7 +762,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
             )
             page_title = f"{escape(heading_title or skill_name)} — fred-skills"
             full_body = (
-                f"{_site_header_html(rel_html, subtitle='skill package')}\n"
+                f"{_site_header_html(rel_html, subtitle='skill package', root=resolved_root)}\n"
                 f"{meta_section}\n"
                 f"<section>{body_content}</section>"
             )
@@ -710,9 +783,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
                 if rel_md == "README.md"
                 else f"{escape(heading_title or Path(rel_md).stem)} — fred-skills"
             )
-            full_body = (
-                f"{_site_header_html(rel_html)}\n<section>{body_content}</section>"
-            )
+            full_body = f"{_site_header_html(rel_html, root=resolved_root)}\n<section>{body_content}</section>"
 
         rendered_page = _page_shell(page_title, full_body)
         dst_html = resolved_out / rel_html
@@ -732,6 +803,7 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
         root_prefix="../",
         docs_prefix="",
         web_mode=True,
+        root=resolved_root,
     )
     explorer_target = resolved_out / "docs/explorer.html"
     explorer_target.parent.mkdir(parents=True, exist_ok=True)

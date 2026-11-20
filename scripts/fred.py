@@ -836,6 +836,12 @@ def parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="Initialize a stateless single-task loop that emits one active skill per pass",
             )
+            sub.add_argument(
+                "--source-audit",
+                type=Path,
+                default=None,
+                help="Optional existing audit.json file or run directory to seed findings/evidence into a new workflow run without mutating the source ledger",
+            )
 
     # 3. Run Management commands
     sub_val = commands.add_parser(
@@ -893,6 +899,14 @@ def parser() -> argparse.ArgumentParser:
         "--note",
         required=True,
         help="Descriptive note explaining the checkpoint",
+    )
+    sub_chk.add_argument(
+        "--completed-skill",
+        "--completed-skills",
+        dest="completed_skills",
+        action="append",
+        default=None,
+        help="Planned skill completed in this session slice (can be repeated or comma-separated)",
     )
 
     sub_rep = commands.add_parser(
@@ -1413,6 +1427,7 @@ def handle_runs(a: argparse.Namespace) -> Any:
             allow_fixes=a.allow_fixes,
             allow_publication=a.allow_issue_publication,
             single_task=getattr(a, "single_task", False),
+            source_audit=getattr(a, "source_audit", None),
             **options,
         )
         return {
@@ -1433,7 +1448,12 @@ def handle_runs(a: argparse.Namespace) -> Any:
     if a.command == "advance":
         return runs.advance(a.directory, note=getattr(a, "note", None))
     if a.command == "checkpoint":
-        return runs.checkpoint(a.directory, a.state, a.note)
+        return runs.checkpoint(
+            a.directory,
+            a.state,
+            a.note,
+            completed_skills=getattr(a, "completed_skills", None),
+        )
     if a.command == "memory":
         data = runs.memory(a.directory)
         atomic_json(a.output, data)
@@ -1444,6 +1464,7 @@ def handle_runs(a: argparse.Namespace) -> Any:
             for key in (
                 "decisions",
                 "boundaries",
+                "components",
                 "findings",
                 "test_cases",
                 "interview_decisions",
@@ -1581,13 +1602,15 @@ def handle_reporting(a: argparse.Namespace) -> Any:
         elif _detect_domain_kind(audit_data) is None and (
             a.audit.is_dir() or audit_path.name == "audit.json"
         ):
-            sibling_remediation = audit_path.parent / "remediation.json"
-            if sibling_remediation.is_file():
-                remediation_data = read_json_object(
-                    sibling_remediation,
-                    label="Remediation ledger",
-                    hint="Ensure 'remediation.json' is a JSON object containing a 'records' array.",
-                )
+            for candidate_name in ("remediation.json", "reconciliation.json"):
+                sibling_remediation = audit_path.parent / candidate_name
+                if sibling_remediation.is_file():
+                    remediation_data = read_json_object(
+                        sibling_remediation,
+                        label="Remediation ledger",
+                        hint=f"Ensure '{candidate_name}' conforms to reconciliation.schema.json.",
+                    )
+                    break
         target = reports.render(
             audit_data,
             a.output,

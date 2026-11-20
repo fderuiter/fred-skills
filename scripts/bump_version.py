@@ -42,6 +42,24 @@ _PACK_ARCHIVE_STEM_RE = re.compile(
     r"\bfred-skills-(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:[-+][0-9A-Za-z.-]+)?-([a-z0-9-]+)\.(tar|zip)\b"
 )
+_README_RELEASE_NOTES_LINK_RE = re.compile(
+    r"\[(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?"
+    r"(\s+release notes\]\(docs/release-notes-)"
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?"
+    r"(\.md\))"
+)
+_EXPLORER_RELEASE_NOTES_HREF_RE = re.compile(
+    r'(<a href="release-notes-)'
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?"
+    r'(\.md">Release notes</a>)'
+)
+_RELEASING_NOTES_EXAMPLE_RE = re.compile(
+    r"\(such as\s+\[release-notes-[^)]+\)"
+    r"(?:\s*(?:,\s*|\s+and\s+)(?:archived\s+)?\[release-notes-[^)]+\))*"
+    r"(?=,\s*or\s+`--generate-notes`)",
+    re.DOTALL,
+)
+_RELEASE_NOTES_FILENAME_RE = re.compile(r"^release-notes-(.+)\.md$")
 
 BumpKind = Literal["none", "patch", "minor"]
 
@@ -458,9 +476,51 @@ def render_versioned_manifests(root: Path, version: str) -> dict[str, str]:
 
 
 def rewrite_doc_release_versions(content: str, version: str) -> str:
-    """Update GitHub Release download URLs and pack archive filenames to <version>."""
+    """Update GitHub Release download URLs, pack archive filenames, and active release-note links."""
     updated = _RELEASE_DOWNLOAD_URL_RE.sub(rf"\g<1>{version}", content)
-    return _PACK_ARCHIVE_STEM_RE.sub(rf"fred-skills-{version}-\1.\2", updated)
+    updated = _PACK_ARCHIVE_STEM_RE.sub(rf"fred-skills-{version}-\1.\2", updated)
+    return _README_RELEASE_NOTES_LINK_RE.sub(
+        lambda match: f"[{version}{match.group(1)}{version}{match.group(2)}",
+        updated,
+    )
+
+
+def _discover_archived_note_versions(
+    root: Path,
+    new_version: str,
+    restorations: Mapping[str, bytes],
+) -> list[str]:
+    versions: set[str] = set()
+    docs_dir = root / "docs"
+    if docs_dir.is_dir():
+        for note_path in docs_dir.glob("release-notes-*.md"):
+            match = _RELEASE_NOTES_FILENAME_RE.match(note_path.name)
+            if match is not None and _SEMVER_RE.match(match.group(1)):
+                versions.add(match.group(1))
+    for rel_path in restorations:
+        match = _RELEASE_NOTES_FILENAME_RE.match(Path(rel_path).name)
+        if match is not None and _SEMVER_RE.match(match.group(1)):
+            versions.add(match.group(1))
+    versions.discard(new_version)
+    return sorted(versions, key=lambda ver: (parse_semver(ver), ver), reverse=True)
+
+
+def rewrite_releasing_doc_notes(
+    content: str,
+    new_version: str,
+    archived_versions: list[str],
+) -> str:
+    """Keep active and archived release-note relative links current in docs/releasing.md."""
+    active_link = f"[release-notes-{new_version}.md](release-notes-{new_version}.md)"
+    if archived_versions:
+        archived_links = ", ".join(
+            f"[release-notes-{ver}.md](release-notes-{ver}.md)"
+            for ver in archived_versions
+        )
+        replacement = f"(such as {active_link} and archived {archived_links}"
+    else:
+        replacement = f"(such as {active_link}"
+    return _RELEASING_NOTES_EXAMPLE_RE.sub(lambda _match: replacement, content)
 
 
 def render_release_notes(root: Path, version: str) -> str:
@@ -559,6 +619,26 @@ def _apply_version_updates(
     notes_rel = f"docs/release-notes-{new_version}.md"
     text_updates[notes_rel] = render_release_notes(root, new_version)
     byte_restorations = _collect_tagged_note_restorations(root)
+
+    explorer_path = root / "docs/explorer.html"
+    if explorer_path.is_file():
+        text_updates["docs/explorer.html"] = _EXPLORER_RELEASE_NOTES_HREF_RE.sub(
+            lambda match: f"{match.group(1)}{new_version}{match.group(2)}",
+            explorer_path.read_text(encoding="utf-8"),
+        )
+
+    releasing_path = root / "docs/releasing.md"
+    if releasing_path.is_file():
+        archived_versions = _discover_archived_note_versions(
+            root,
+            new_version,
+            byte_restorations,
+        )
+        text_updates["docs/releasing.md"] = rewrite_releasing_doc_notes(
+            releasing_path.read_text(encoding="utf-8"),
+            new_version,
+            archived_versions,
+        )
 
     modified: list[str] = []
     for rel_path, new_text in sorted(text_updates.items()):

@@ -282,6 +282,61 @@ class SuiteValidatorsTests(unittest.TestCase):
             1, self._run_cli("validate_architecture.py", dup, schema_path).returncode
         )
 
+        with_components = {
+            **valid,
+            "run_id": "run-arch-01",
+            "snapshot": "a" * 64,
+            "paths": ["src/billing/outbox.py"],
+            "components": [
+                {
+                    "id": "COMP-API",
+                    "name": "Billing API",
+                    "responsibility": "Validate requests.",
+                    "interfaces": ["POST /charges"],
+                    "depends_on": ["COMP-OUTBOX"],
+                    "paths": ["src/billing/api.py"],
+                },
+                {
+                    "id": "COMP-OUTBOX",
+                    "name": "Outbox Writer",
+                    "responsibility": "Persist outbox events.",
+                    "interfaces": ["enqueue()"],
+                    "depends_on": [],
+                    "paths": ["src/billing/outbox.py"],
+                },
+            ],
+        }
+        self.assertEqual([], validate_architecture.validate(with_components, schema))
+
+        bad_components = {
+            **with_components,
+            "components": [
+                {
+                    "id": "COMP-A",
+                    "name": "Comp A",
+                    "responsibility": "A",
+                    "depends_on": ["COMP-B", "COMP-UNKNOWN"],
+                    "paths": ["../escape.py"],
+                },
+                {
+                    "id": "COMP-B",
+                    "name": "Comp B",
+                    "responsibility": "B",
+                    "depends_on": ["COMP-A"],
+                    "paths": ["src/b.py"],
+                },
+            ],
+        }
+        comp_errs = validate_architecture.validate(bad_components, schema)
+        self.assertTrue(
+            any("Unknown component dependency COMP-UNKNOWN" in e for e in comp_errs),
+            comp_errs,
+        )
+        self.assertTrue(
+            any("Component dependency cycle" in e for e in comp_errs), comp_errs
+        )
+        self.assertTrue(any("repository-relative" in e for e in comp_errs), comp_errs)
+
     def test_validate_review_enforces_relative_paths_and_verdict_alignment(
         self,
     ) -> None:

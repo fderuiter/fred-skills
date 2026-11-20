@@ -2713,6 +2713,123 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
                 sorted(inst_payload["skills"]),
             )
 
+    def test_cli_source_audit_checkpoint_completed_skills_resume_and_reconciliation_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp) / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "app.py").write_text("limit = 5\n", encoding="utf-8")
+
+            ws_src = Path(tmp) / "ws-src"
+            init_src = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "understand-repo",
+                "--mode",
+                "comprehensive",
+                "--budget",
+                "deep",
+                "--output",
+                str(ws_src),
+                "--json",
+            )
+            self.assertEqual(0, init_src.returncode, init_src.stderr)
+            src_run = json.loads(init_src.stdout)["run"]
+            first_slice = src_run["plan"]["skills"][:3]
+
+            chk_proc = self.run_cli(
+                "checkpoint",
+                str(ws_src),
+                "--state",
+                "paused",
+                "--note",
+                "Finished first slice",
+                "--completed-skill",
+                first_slice[0],
+                "--completed-skill",
+                f"{first_slice[1]},{first_slice[2]}",
+                "--json",
+            )
+            self.assertEqual(0, chk_proc.returncode, chk_proc.stderr)
+            chk_run = json.loads(chk_proc.stdout)
+            self.assertEqual(
+                first_slice, chk_run["checkpoints"][-1]["completed_skills"]
+            )
+            self.assertEqual(1, chk_run["checkpoints"][-1]["active_phase"])
+
+            res_proc = self.run_cli("resume", str(ws_src), "--json")
+            self.assertEqual(0, res_proc.returncode, res_proc.stderr)
+            res_data = json.loads(res_proc.stdout)
+            self.assertEqual(1, res_data["active_phase"])
+            self.assertEqual(src_run["plan"]["skills"][3:6], res_data["active_skills"])
+
+            # Seed audit.json with a finding and initialize apply-fix with --source-audit
+            fixture_audit = json.loads(
+                (ROOT / "tests/fixtures/audit-valid.json").read_text(encoding="utf-8")
+            )
+            fixture_audit["run_id"] = src_run["run_id"]
+            fixture_audit["repository"] = json.loads(
+                (ws_src / "audit.json").read_text(encoding="utf-8")
+            )["repository"]
+            fixture_audit["evidence"][0]["path"] = "app.py"
+            (ws_src / "audit.json").write_text(
+                json.dumps(fixture_audit), encoding="utf-8"
+            )
+
+            ws_wf = Path(tmp) / "ws-wf"
+            init_wf = self.run_cli(
+                "init",
+                str(repo_dir),
+                "--task",
+                "apply-fix",
+                "--source-audit",
+                str(ws_src),
+                "--allow-fixes",
+                "--output",
+                str(ws_wf),
+                "--json",
+            )
+            self.assertEqual(0, init_wf.returncode, init_wf.stderr)
+            wf_audit = json.loads((ws_wf / "audit.json").read_text(encoding="utf-8"))
+            self.assertEqual(1, len(wf_audit["findings"]))
+
+            # Write standalone reconciliation.json (without remediation.json) and verify CLI report picks it up
+            (ws_wf / "reconciliation.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "finding_fingerprint_matches": [
+                            {
+                                "fingerprint": "fp-demo",
+                                "finding_id": "F-1",
+                                "match_status": "exact",
+                            }
+                        ],
+                        "remediation_state_transitions": [
+                            {
+                                "finding_id": "F-1",
+                                "fingerprint": "fp-demo",
+                                "previous_state": "open",
+                                "new_state": "in-progress",
+                                "reason": "Triaged via standalone reconciliation.json",
+                            }
+                        ],
+                        "unmapped_records": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rep_html = Path(tmp) / "wf-report.html"
+            rep_proc = self.run_cli(
+                "report", str(ws_wf), "--output", str(rep_html), "--json"
+            )
+            self.assertEqual(0, rep_proc.returncode, rep_proc.stderr)
+            rendered_html = rep_html.read_text(encoding="utf-8")
+            self.assertIn("in-progress", rendered_html)
+            self.assertIn("Triaged via standalone reconciliation.json", rendered_html)
+
 
 if __name__ == "__main__":
     unittest.main()

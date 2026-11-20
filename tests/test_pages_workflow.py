@@ -540,6 +540,30 @@ class PagesWorkflowTests(unittest.TestCase):
                         (ROOT / "docs" / doc_name).read_text(encoding="utf-8"),
                         f"Markdown content was unexpectedly rewritten for {doc_name}",
                     )
+                    compiled_doc = site_dir / "docs" / f"{Path(doc_name).stem}.html"
+                    self.assertTrue(compiled_doc.is_file(), compiled_doc)
+
+            for skill_md in sorted((ROOT / "skills").glob("*/SKILL.md")):
+                skill_name = skill_md.parent.name
+                self.assertTrue(
+                    (site_dir / "skills" / skill_name / "SKILL.html").is_file(),
+                    skill_name,
+                )
+
+            staged_html_files = [
+                site_dir / "index.html",
+                site_dir / "docs/explorer.html",
+                *sorted((site_dir / "docs").glob("*.html")),
+                *sorted((site_dir / "skills").glob("*/SKILL.html")),
+            ]
+            for html_file in staged_html_files:
+                html_content = html_file.read_text(encoding="utf-8")
+                for target in extract_relative_links(html_content):
+                    clean_target = target.split("#")[0].split("?")[0]
+                    self.assertFalse(
+                        clean_target.lower().endswith(".md"),
+                        f"{html_file}: unexpected raw .md link '{target}'",
+                    )
 
             # Verify relative links resolve inside staged site for root index, offline explorer, README, and docs
             check_files = [
@@ -547,6 +571,7 @@ class PagesWorkflowTests(unittest.TestCase):
                 site_dir / "docs/explorer.html",
                 site_dir / "README.md",
                 *sorted((site_dir / "docs").glob("*.md")),
+                *sorted((site_dir / "docs").glob("*.html")),
             ]
             for file_path in check_files:
                 content = file_path.read_text(encoding="utf-8")

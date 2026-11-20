@@ -31,6 +31,7 @@ from verify_doc_snippets import (
     get_registered_fred_subcommands,
     register_tool_dispatcher,
     verify_all_snippets,
+    verify_runbook_citations,
     verify_toolkit_subcommands,
 )
 
@@ -221,6 +222,34 @@ class DocLinkVerificationTests(unittest.TestCase):
             errors = check_file_links(doc, root=tmp_path)
             self.assertEqual([], errors)
 
+    def test_orphan_guide_in_docs_is_rejected(self) -> None:
+        """check_docs rejects unreferenced guides in docs/ and passes once linked."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            docs_dir = tmp_path / "docs"
+            docs_dir.mkdir()
+            (tmp_path / "README.md").write_text(
+                "# Project\n\nSee [Guide](docs/linked.md).\n",
+                encoding="utf-8",
+            )
+            (docs_dir / "linked.md").write_text("# Linked\n", encoding="utf-8")
+            orphan = docs_dir / "orphan-notes.md"
+            orphan.write_text(
+                "# Orphan\n\nSelf link [Top](#orphan) does not count.\n",
+                encoding="utf-8",
+            )
+
+            errors = check_docs(root=tmp_path)
+            self.assertEqual(1, len(errors), errors)
+            self.assertIn("docs/orphan-notes.md", errors[0])
+            self.assertIn("Orphaned documentation file", errors[0])
+
+            (docs_dir / "linked.md").write_text(
+                "# Linked\n\nAlso see [Notes](orphan-notes.md).\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], check_docs(root=tmp_path))
+
     def test_extract_relative_links_exported_from_skill_tools(self):
         """extract_relative_links is exported from skill_tools and shared with check_doc_links."""
         self.assertIs(extract_relative_links, skill_tools_extract_relative_links)
@@ -386,11 +415,11 @@ class DocSnippetVerificationTests(unittest.TestCase):
             "Must discover all 42 Python blocks in docs/api.md",
         )
 
-        # Full-file discovery coverage for runbooks (65 blocks) and integration (37 blocks)
+        # Full-file discovery coverage for runbooks (80 blocks) and integration (37 blocks)
         self.assertEqual(
             len(discovered["docs/runbooks.md"]),
-            65,
-            "Must discover all 65 code blocks in docs/runbooks.md",
+            80,
+            "Must discover all 80 code blocks in docs/runbooks.md",
         )
         self.assertEqual(
             len(discovered["docs/integration.md"]),
@@ -825,7 +854,7 @@ class DocSnippetVerificationTests(unittest.TestCase):
             )
 
     def test_full_file_runbooks_and_integration_snippets_pass(self):
-        """Full-file snippet verification across docs/runbooks.md (65 blocks) and docs/integration.md (37 blocks) passes with zero errors."""
+        """Full-file snippet verification across docs/runbooks.md (80 blocks) and docs/integration.md (37 blocks) passes with zero errors."""
         errors = verify_all_snippets(
             root=ROOT, files=["docs/runbooks.md", "docs/integration.md"]
         )
@@ -1538,6 +1567,87 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 any("L21:" in e and "'Claude Code and Cursor'" in e for e in errs),
                 errs,
             )
+
+    def test_runbook_symbol_citations_resolve_and_forbid_raw_lines(self) -> None:
+        """docs/runbooks.md uses zero raw line citations and 100% AST-valid symbol citations."""
+        self.assertEqual([], verify_runbook_citations(root=ROOT))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            runbooks_dst = tmp_root / "docs/runbooks.md"
+            runbooks_dst.parent.mkdir(parents=True, exist_ok=True)
+
+            # 1. Raw :L<line> and bare L<start>-L<end> citations must fail with exact line numbers
+            runbooks_dst.write_text(
+                "# Runbooks\n\n"
+                "Valid ref: `fredlib.installation.lock`.\n"
+                "Forbidden colon line: `scripts/fredlib/installation.py:L113`.\n"
+                "Forbidden range: `L102-L135`.\n",
+                encoding="utf-8",
+            )
+            line_errs = verify_all_snippets(root=tmp_root, files=["docs/runbooks.md"])
+            self.assertEqual(
+                2, len(line_errs), f"Expected 2 line citation errors: {line_errs}"
+            )
+            self.assertTrue(
+                any("docs/runbooks.md:L4:" in e and ":L113" in e for e in line_errs),
+                line_errs,
+            )
+            self.assertTrue(
+                any(
+                    "docs/runbooks.md:L5:" in e and "L102-L135" in e for e in line_errs
+                ),
+                line_errs,
+            )
+
+            # 2. Missing AST symbols and unknown submodules must fail with exact line numbers
+            runbooks_dst.write_text(
+                "# Runbooks\n\n"
+                "Missing dotted symbol: `fredlib.installation.nonexistent_helper`.\n"
+                "Unknown module: `fredlib.nonexistent_mod.some_fn`.\n"
+                "Missing colon symbol: `installation.py:missing_symbol`.\n",
+                encoding="utf-8",
+            )
+            sym_errs = verify_all_snippets(root=tmp_root, files=["docs/runbooks.md"])
+            self.assertEqual(
+                3, len(sym_errs), f"Expected 3 symbol citation errors: {sym_errs}"
+            )
+            self.assertTrue(
+                any(
+                    "docs/runbooks.md:L3:" in e and "nonexistent_helper" in e
+                    for e in sym_errs
+                ),
+                sym_errs,
+            )
+            self.assertTrue(
+                any(
+                    "docs/runbooks.md:L4:" in e and "fredlib.nonexistent_mod" in e
+                    for e in sym_errs
+                ),
+                sym_errs,
+            )
+            self.assertTrue(
+                any(
+                    "docs/runbooks.md:L5:" in e and "missing_symbol" in e
+                    for e in sym_errs
+                ),
+                sym_errs,
+            )
+
+            # 3. Refactoring a Python module in root to rename a cited symbol triggers AST failure
+            custom_runs = tmp_root / "scripts/fredlib/runs.py"
+            custom_runs.parent.mkdir(parents=True, exist_ok=True)
+            custom_runs.write_text(
+                "def renamed_validate_run():\n    return []\n", encoding="utf-8"
+            )
+            runbooks_dst.write_text(
+                "# Runbooks\n\nCheck `fredlib.runs.validate_run` before advancing.\n",
+                encoding="utf-8",
+            )
+            drift_errs = verify_runbook_citations(root=tmp_root)
+            self.assertEqual(1, len(drift_errs), drift_errs)
+            self.assertIn("docs/runbooks.md:L3:", drift_errs[0])
+            self.assertIn("validate_run", drift_errs[0])
 
 
 if __name__ == "__main__":

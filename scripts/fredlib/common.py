@@ -33,6 +33,8 @@ from skill_tools import (
     skill_to_suite_map,
     suite_for_skills,
     suite_skills_by_suite,
+    workflow_phase_deliverables,
+    workflow_phase_order_map,
 )
 
 _DOMAIN_KIND_KEY_SETS = DOMAIN_KIND_KEY_SETS
@@ -76,7 +78,9 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
             "schema_version": "1.0",
             "title": "Architecture specification",
             "status": "draft",
+            "coverage": [],
             "boundaries": [],
+            "components": [],
             "decisions": [],
         },
     },
@@ -87,6 +91,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
             "schema_version": "1.0",
             "verdict": "comment",
             "summary": "Initialized workspace only; agent code review has not run.",
+            "coverage": [],
             "findings": [],
         },
     },
@@ -97,6 +102,7 @@ _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
             "schema_version": "1.0",
             "component": "repository",
             "framework": "unspecified",
+            "coverage": [],
             "test_cases": [],
         },
     },
@@ -142,13 +148,37 @@ def _load_suite_contracts(root: Path = ROOT) -> dict[str, dict[str, Any]]:
     return contracts
 
 
+WORKFLOW_PHASE_SCHEMAS: dict[int, tuple[str, str]] = {
+    0: (
+        "finding-verification.json",
+        "skills/repo-verify-finding/assets/finding-verification.schema.json",
+    ),
+    1: (
+        "regression.json",
+        "skills/repo-specify-regression/assets/regression.schema.json",
+    ),
+    2: (
+        "plan.json",
+        "skills/repo-plan-fix/assets/plan.schema.json",
+    ),
+    3: (
+        "fix.json",
+        "skills/repo-apply-fix/assets/fix.schema.json",
+    ),
+    4: (
+        "verification.json",
+        "skills/repo-verify-fix/assets/verification.schema.json",
+    ),
+    5: (
+        "reconciliation.json",
+        "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+    ),
+}
+
 _DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS: dict[str, str] = {
-    "finding-verification.json": "skills/repo-verify-finding/assets/finding-verification.schema.json",
-    "regression.json": "skills/repo-specify-regression/assets/regression.schema.json",
-    "plan.json": "skills/repo-plan-fix/assets/plan.schema.json",
-    "fix.json": "skills/repo-apply-fix/assets/fix.schema.json",
-    "verification.json": "skills/repo-verify-fix/assets/verification.schema.json",
-    "reconciliation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+    deliverable: schema_rel
+    for deliverable, schema_rel in WORKFLOW_PHASE_SCHEMAS.values()
+} | {
     "remediation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
 }
 
@@ -164,6 +194,7 @@ WORKFLOW_SKILL_DELIVERABLES: dict[str, tuple[str, ...]] = {
 
 def _load_workflow_companions(root: Path = ROOT) -> dict[str, str]:
     companions = dict(_DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS)
+    companions.update(workflow_phase_deliverables(root))
     suites = read_suites_catalog(root)
     if suites is not None:
         for suite in suites:
@@ -173,6 +204,10 @@ def _load_workflow_companions(root: Path = ROOT) -> dict[str, str]:
                     if isinstance(filename, str) and isinstance(schema_rel, str):
                         companions[filename] = schema_rel
     return companions
+
+
+def _workflow_phase_order_map(root: Path = ROOT) -> dict[str, int]:
+    return workflow_phase_order_map(root)
 
 
 SUITE_DELIVERABLES: dict[str, tuple[str, str]] = {
