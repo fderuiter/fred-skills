@@ -9,10 +9,10 @@ Before merging distributable changes, review the selected diff, run all checks i
 [CONTRIBUTING.md](../CONTRIBUTING.md), inspect the generated [offline explorer](explorer.html),
 execute the synthetic walkthrough, build and verify the intended pack, review the recorded
 behavioral limits, and ensure [LICENSE](../LICENSE) remains present and nonempty. Validated
-pushes to `main` automatically publish the hosted explorer and documentation to
+pushes to `main` publish the hosted explorer and documentation to
 [fderuiter.github.io/fred-skills](https://fderuiter.github.io/fred-skills) via
-`.github/workflows/pages.yml` after `Release` succeeds on verified `origin/main` (with
-`workflow_dispatch` on `main` available to retry transient Pages outages without manual steps).
+`.github/workflows/pages.yml` after `Validate skill packages` succeeds (`workflow_dispatch` on
+`main` verifies a prior passing `Validate skill packages` run and skips superseded commits).
 
 Pushes to `main` run a serialized `prepare` job (`scripts/bump_version.py`) in
 `.github/workflows/release.yml` that checks changes in `skills/`, `catalog/`, `shared/`, and
