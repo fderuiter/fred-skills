@@ -286,6 +286,8 @@ class ExperienceTests(unittest.TestCase):
             "verification.json": "skills/repo-verify-fix/assets/verification.schema.json",
             "reconciliation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
             "remediation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+            "observations.json": "schemas/observations.schema.json",
+            "scanner-observations.json": "schemas/observations.schema.json",
         }
         companions = suites["repository-workflows"].get("companions")
         self.assertEqual(expected_companions, companions)

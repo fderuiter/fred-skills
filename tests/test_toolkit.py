@@ -578,6 +578,200 @@ class RunTests(unittest.TestCase):
         self.assertNotIn("partial_fingerprints", obs[2])
         self.assertNotIn("findings", result)
 
+    def test_sarif_import_filters_non_actionable_kinds_and_suppressions_and_keeps_properties(
+        self,
+    ):
+        import jsonschema
+
+        sarif = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "Semgrep",
+                            "version": "1.90.0",
+                            "rules": [
+                                {
+                                    "id": "rule/check",
+                                    "defaultConfiguration": {"level": "error"},
+                                    "properties": {
+                                        "topic": "auth",
+                                        "confidence": "medium",
+                                    },
+                                }
+                            ],
+                        }
+                    },
+                    "results": [
+                        {
+                            "ruleId": "rule/pass",
+                            "kind": "pass",
+                            "level": "none",
+                            "message": {"text": "passed check"},
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/na",
+                            "kind": "notApplicable",
+                            "level": "none",
+                            "message": {"text": "not applicable"},
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/suppressed-accepted",
+                            "level": "error",
+                            "message": {"text": "accepted suppression"},
+                            "suppressions": [
+                                {
+                                    "kind": "external",
+                                    "status": "accepted",
+                                    "justification": "false positive",
+                                }
+                            ],
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/suppressed-implicit",
+                            "level": "warning",
+                            "message": {
+                                "text": "in-source suppression defaults to accepted"
+                            },
+                            "suppressions": [{"kind": "inSource"}],
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/open-item",
+                            "kind": "open",
+                            "level": "error",
+                            "message": {"text": "open evaluation item"},
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/check",
+                            "kind": "review",
+                            "level": "warning",
+                            "message": {"text": "needs human review"},
+                            "suppressions": [
+                                {
+                                    "kind": "external",
+                                    "status": "underReview",
+                                    "justification": "pending triage",
+                                }
+                            ],
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "source.py"},
+                                        "region": {"startLine": 2},
+                                    }
+                                }
+                            ],
+                        },
+                        {
+                            "ruleId": "rule/info-kind",
+                            "kind": "informational",
+                            "level": "note",
+                            "message": {"text": "informational item"},
+                            "suppressions": [
+                                {
+                                    "kind": "inSource",
+                                    "status": "rejected",
+                                    "justification": "suppression rejected",
+                                }
+                            ],
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/check",
+                            "kind": "fail",
+                            "level": "error",
+                            "message": {"text": "actionable failure"},
+                            "suppressions": [],
+                            "properties": {
+                                "findingId": "F-99",
+                                "status": "supported",
+                                "severity": "high",
+                                "remedy": "Validate caller token",
+                            },
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "source.py"},
+                                        "region": {"startLine": 1},
+                                    }
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        sarif_file = self.root / "filtered.sarif"
+        atomic_json(sarif_file, sarif)
+        imported = runs.import_sarif(sarif_file)
+        obs_schema = read_json(ROOT / "schemas/observations.schema.json")
+        self.assertEqual(
+            [],
+            [
+                e.message
+                for e in jsonschema.Draft202012Validator(obs_schema).iter_errors(
+                    imported
+                )
+            ],
+        )
+
+        obs = imported["observations"]
+        self.assertEqual(4, len(obs))
+
+        self.assertEqual("open", obs[0]["kind"])
+        self.assertEqual("none", obs[0]["reported_level"])
+
+        self.assertEqual("review", obs[1]["kind"])
+        self.assertEqual("none", obs[1]["reported_level"])
+        self.assertEqual(
+            [
+                {
+                    "kind": "external",
+                    "status": "underReview",
+                    "justification": "pending triage",
+                }
+            ],
+            obs[1]["suppressions"],
+        )
+
+        self.assertEqual("informational", obs[2]["kind"])
+        self.assertEqual("none", obs[2]["reported_level"])
+        self.assertEqual(
+            [
+                {
+                    "kind": "inSource",
+                    "status": "rejected",
+                    "justification": "suppression rejected",
+                }
+            ],
+            obs[2]["suppressions"],
+        )
+
+        self.assertEqual("fail", obs[3]["kind"])
+        self.assertEqual("error", obs[3]["reported_level"])
+        self.assertNotIn("suppressions", obs[3])
+        self.assertEqual(
+            {
+                "findingId": "F-99",
+                "topic": "auth",
+                "status": "supported",
+                "severity": "high",
+                "confidence": "medium",
+                "remedy": "Validate caller token",
+            },
+            obs[3]["properties"],
+        )
+        self.assertEqual(
+            "scanner-reported; agent verification not performed",
+            obs[3]["evidence_state"],
+        )
+
     @unittest.skipUnless(shutil.which("git"), "Git unavailable")
     def test_comprehensive_planning_preserves_domain_suites_without_repo_audit(self):
         for argv in [
@@ -2225,6 +2419,42 @@ class ReportTests(unittest.TestCase):
                     ],
                     "unmapped_records": [],
                 },
+                "observations.json": {
+                    "schema_version": "1.0",
+                    "observations": [
+                        {
+                            "id": "OBS-1",
+                            "tool": "semgrep",
+                            "tool_version": "1.90.0",
+                            "rule": "python.lang.security.audit.eval",
+                            "reported_level": "warning",
+                            "message": "Avoid eval on untrusted input",
+                            "locations": [{"path": "app.py", "line": 1}],
+                            "evidence_state": "scanner-reported; agent verification not performed",
+                        }
+                    ],
+                    "limitations": [
+                        "Imported scanner claims are not confirmed audit findings."
+                    ],
+                },
+                "scanner-observations.json": {
+                    "schema_version": "1.0",
+                    "observations": [
+                        {
+                            "tool": "bandit",
+                            "tool_version": "1.7.9",
+                            "rule": "B602",
+                            "reported_level": "error",
+                            "message": "subprocess call with shell=True",
+                            "locations": [{"path": "app.py", "line": 1}],
+                            "evidence_state": "scanner-reported; agent verification not performed",
+                            "properties": {"findingId": "SCAN-1", "severity": "high"},
+                        }
+                    ],
+                    "limitations": [
+                        "Imported scanner claims are not confirmed audit findings."
+                    ],
+                },
             }
             for fname, payload in valid_companions.items():
                 atomic_json(ws / fname, payload)
@@ -2277,6 +2507,16 @@ class ReportTests(unittest.TestCase):
                 },
                 "reconciliation.json": {"schema_version": "1.0"},
                 "remediation.json": {"schema_version": "1.0", "records": [{"bad": 1}]},
+                "observations.json": {
+                    **valid_companions["observations.json"],
+                    "observations": [
+                        {
+                            **valid_companions["observations.json"]["observations"][0],
+                            "locations": [{"path": "../escape.py", "line": 1}],
+                        }
+                    ],
+                },
+                "scanner-observations.json": {"schema_version": "1.0"},
             }
             for fname, bad_payload in invalid_overrides.items():
                 saved = read_json(ws / fname)
@@ -2323,6 +2563,71 @@ class ReportTests(unittest.TestCase):
                 resolve_audit_path(only_wf)
             self.assertIn("audit.json", str(res_ctx.exception))
             self.assertIn("verification.json", str(res_ctx.exception))
+
+            # Reconcile imported observation claims by unique findingId, id, or rule and reject duplicates
+            rec_obs_id = runs.reconcile(
+                ws,
+                "OBS-1",
+                "in-progress",
+                "Investigating semgrep observation",
+            )
+            self.assertEqual("OBS-1", rec_obs_id["finding_id"])
+            rec_scan_rule = runs.reconcile(
+                ws,
+                "B602",
+                "verified-fixed",
+                "Replaced shell=True with explicit argv",
+                verification=ws / "verification.json",
+            )
+            self.assertEqual("B602", rec_scan_rule["finding_id"])
+            self.assertEqual([], runs.validate_run(ws))
+
+            obs_only_dir = root / "obs-only"
+            obs_only_dir.mkdir()
+            dup_doc = {
+                "schema_version": "1.0",
+                "observations": [
+                    {
+                        "tool": "semgrep",
+                        "tool_version": "1.0",
+                        "rule": "dup/rule",
+                        "reported_level": "warning",
+                        "message": "first instance",
+                        "locations": [{"path": "app.py", "line": 1}],
+                        "evidence_state": "scanner-reported; agent verification not performed",
+                    },
+                    {
+                        "tool": "semgrep",
+                        "tool_version": "1.0",
+                        "rule": "dup/rule",
+                        "reported_level": "warning",
+                        "message": "second instance",
+                        "locations": [{"path": "app.py", "line": 2}],
+                        "evidence_state": "scanner-reported; agent verification not performed",
+                    },
+                ],
+                "limitations": ["Scanner claims require verification."],
+            }
+            atomic_json(obs_only_dir / "scanner-observations.json", dup_doc)
+            with self.assertRaises(FredCliError) as dup_rule_ctx:
+                runs.reconcile(obs_only_dir, "dup/rule", "open", "ambiguous rule")
+            self.assertEqual("ambiguous_observation", dup_rule_ctx.exception.code)
+
+            dup_doc["observations"][0]["properties"] = {"findingId": "DUP-ID"}
+            dup_doc["observations"][1]["properties"] = {"findingId": "DUP-ID"}
+            atomic_json(obs_only_dir / "scanner-observations.json", dup_doc)
+            with self.assertRaises(FredCliError) as dup_id_ctx:
+                runs.reconcile(obs_only_dir, "DUP-ID", "open", "ambiguous id")
+            self.assertEqual("ambiguous_observation", dup_id_ctx.exception.code)
+
+            dup_doc["observations"][0]["properties"] = {"findingId": "UNIQ-1"}
+            dup_doc["observations"][1]["properties"] = {"findingId": "UNIQ-2"}
+            atomic_json(obs_only_dir / "scanner-observations.json", dup_doc)
+            standalone_rec = runs.reconcile(
+                obs_only_dir, "UNIQ-2", "accepted-risk", "False positive documented"
+            )
+            self.assertEqual("UNIQ-2", standalone_rec["finding_id"])
+            self.assertEqual("accepted-risk", standalone_rec["state"])
 
 
 class BoundaryGuardAndContractTests(unittest.TestCase):
