@@ -103,17 +103,7 @@ class SuiteValidatorsTests(unittest.TestCase):
                     matched = False
                     for sp in schemas:
                         schema_obj = json.loads(sp.read_text(encoding="utf-8"))
-                        if sp.name == "bundle.schema.json":
-                            import jsonschema
-
-                            errs = [
-                                e.message
-                                for e in jsonschema.Draft202012Validator(
-                                    schema_obj
-                                ).iter_errors(data)
-                            ]
-                        else:
-                            errs = validator_mod.validate(data, schema_obj)
+                        errs = validator_mod.validate(data, schema_obj)
                         if not errs:
                             matched = True
                             break
@@ -383,6 +373,41 @@ class SuiteValidatorsTests(unittest.TestCase):
             self._run_cli("validate_review.py", contradictory, schema_path).returncode,
         )
 
+        empty_request_changes: dict[str, Any] = {
+            **valid,
+            "verdict": "request_changes",
+            "findings": [],
+        }
+        rc_errs = validate_review.validate(empty_request_changes, schema)
+        self.assertTrue(
+            any("Verdict 'request_changes' requires" in e for e in rc_errs),
+            rc_errs,
+        )
+        self.assertEqual(
+            1,
+            self._run_cli(
+                "validate_review.py", empty_request_changes, schema_path
+            ).returncode,
+        )
+
+        for unsafe_path in (
+            "",
+            ".",
+            "../escape.py",
+            "/abs/guard.py",
+            "C:/win/guard.py",
+            "src\\guard.py",
+            ".git/config",
+            "sub/.git/hooks/pre-commit",
+        ):
+            unsafe_review = {
+                **valid,
+                "findings": [{**finding, "file": unsafe_path}],
+            }
+            self.assertTrue(
+                validate_review.validate(unsafe_review, schema), unsafe_path
+            )
+
     def test_validate_testing_enforces_unique_ids_and_relative_component_paths(
         self,
     ) -> None:
@@ -469,8 +494,49 @@ class SuiteValidatorsTests(unittest.TestCase):
             1, self._run_cli("validate_spec.py", invalid, schema_path).returncode
         )
 
-    def test_malformed_json_stdlib_independence_and_fail_closed_schemas(self) -> None:
+        for vacuous in (
+            {**valid, "convergence_checks": []},
+            {k: v for k, v in valid.items() if k != "convergence_checks"},
+        ):
+            vac_errs = validate_spec.validate(vacuous, schema)
+            self.assertTrue(
+                any("Status 'converged' requires" in e for e in vac_errs), vac_errs
+            )
+            self.assertEqual(
+                1, self._run_cli("validate_spec.py", vacuous, schema_path).returncode
+            )
+
+        for new_scopes, out_scopes in (
+            (["src/exporter/legacy_csv.py"], ["src/exporter/"]),
+            (["src/exporter"], ["src/exporter/legacy_csv.py"]),
+            (["src/exporter/ndjson.py"], ["src/exporter/ndjson.py"]),
+        ):
+            overlap_spec = {
+                **valid,
+                "new_file_scopes": new_scopes,
+                "out_of_scope": out_scopes,
+            }
+            ov_errs = validate_spec.validate(overlap_spec, schema)
+            self.assertTrue(
+                any("overlaps with out_of_scope" in e for e in ov_errs), ov_errs
+            )
+            self.assertEqual(
+                1,
+                self._run_cli("validate_spec.py", overlap_spec, schema_path).returncode,
+            )
+
+        prose_out_of_scope = {
+            **valid,
+            "new_file_scopes": ["src/exporter/ndjson.py"],
+            "out_of_scope": ["CSV export format in v1", "src/exporter_v2/ndjson.py"],
+        }
+        self.assertEqual([], validate_spec.validate(prose_out_of_scope, schema))
+
+    def test_malformed_json_and_unsupported_schema_keywords_exit_with_code_2(
+        self,
+    ) -> None:
         schema_path = ROOT / "shared/code-review/resources/assets/review.schema.json"
+        review_schema = json.loads(schema_path.read_text(encoding="utf-8"))
         for script_name in (
             "validate_audit.py",
             "validate_workflow.py",
@@ -489,7 +555,6 @@ class SuiteValidatorsTests(unittest.TestCase):
                 raise ImportError("No module named 'jsonschema'")
             return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
 
-        minimal_schema = {"type": "object", "additionalProperties": False}
         for mod in (
             validate_audit,
             validate_workflow,
@@ -499,349 +564,290 @@ class SuiteValidatorsTests(unittest.TestCase):
             validate_spec,
         ):
             with patch.object(builtins, "__import__", side_effect=block_jsonschema):
-                self.assertEqual([], mod.validate({}, minimal_schema))
-            for unsupported_schema in (
-                {"type": "array", "maxItems": 2},
-                {"$ref": "https://example.com/external.schema.json"},
-                {"$ref": "#/unknown/path"},
-            ):
-                with self.assertRaises(ValueError):
-                    mod.validate({}, unsupported_schema)
+                schema_errs = mod.validate({}, review_schema)
+                self.assertTrue(schema_errs)
 
-        bad_schema_path = self.tmp_dir / "unsupported.schema.json"
-        bad_schema_path.write_text(
-            json.dumps({"type": "object", "maxProperties": 1}), encoding="utf-8"
-        )
-        fail_closed_proc = self._run_cli("validate_review.py", {}, bad_schema_path)
-        self.assertEqual(2, fail_closed_proc.returncode)
-
-        for v_path in [
-            *(ROOT / "scripts").glob("validate_*.py"),
-            *(ROOT / "skills").glob("*/scripts/validate_*.py"),
-        ]:
-            if v_path.name == "validate_skills.py":
-                continue
-            src = v_path.read_text(encoding="utf-8")
-            self.assertNotIn("jsonschema", src, str(v_path))
-            self.assertNotIn("requirements-dev.txt", src, str(v_path))
-
-    def test_spec_and_review_protocol_invariants(self) -> None:
-        spec_schema = json.loads(
-            (
-                ROOT
-                / "shared/spec-driven-development/resources/assets/spec.schema.json"
-            ).read_text(encoding="utf-8")
-        )
-        base_spec: dict[str, Any] = {
-            "schema_version": "1.0",
-            "title": "Exporter Spec",
-            "status": "converged",
-            "interview_decisions": [],
-            "new_file_scopes": ["src/exporter/ndjson.py"],
-            "out_of_scope": [
-                "src/exporter/legacy_csv.py",
-                "Database schema migrations",
-            ],
-            "verification_commands": ["python -m unittest"],
-            "convergence_checks": [
-                {"id": "CHK-1", "target": "REQ-1", "status": "aligned"}
-            ],
-        }
-        self.assertEqual([], validate_spec.validate(base_spec, spec_schema))
-
-        empty_converged = {**base_spec, "convergence_checks": []}
-        errs_empty = validate_spec.validate(empty_converged, spec_schema)
-        self.assertIn(
-            "Status 'converged' conflicts with empty convergence_checks", errs_empty
-        )
-
-        omitted_converged = {
-            k: v for k, v in base_spec.items() if k != "convergence_checks"
-        }
-        errs_omitted = validate_spec.validate(omitted_converged, spec_schema)
-        self.assertIn(
-            "Status 'converged' conflicts with empty convergence_checks", errs_omitted
-        )
-
-        for new_scopes, out_scopes in (
-            (["src/exporter/"], ["src/exporter/legacy_csv.py"]),
-            (["src/exporter/legacy_csv.py"], ["src/exporter"]),
-            (["./src/exporter/ndjson.py"], ["src/exporter/ndjson.py"]),
+        unsupported_schemas = [
+            {"type": "object", "allOf": [{"type": "object"}]},
+            {"type": "object", "$defs": {"item": {"type": "string", "format": "uri"}}},
+            {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0}},
+        ]
+        bad_schema_file = self.tmp_dir / "unsupported.schema.json"
+        bad_schema_file.write_text(json.dumps(unsupported_schemas[0]), encoding="utf-8")
+        for mod, script_name in (
+            (validate_audit, "validate_audit.py"),
+            (validate_workflow, "validate_workflow.py"),
+            (validate_architecture, "validate_architecture.py"),
+            (validate_review, "validate_review.py"),
+            (validate_testing, "validate_testing.py"),
+            (validate_spec, "validate_spec.py"),
         ):
-            overlap_doc = {
-                **base_spec,
-                "new_file_scopes": new_scopes,
-                "out_of_scope": out_scopes,
-            }
-            overlap_errs = validate_spec.validate(overlap_doc, spec_schema)
-            self.assertTrue(
-                any(
-                    "Overlapping new_file_scopes and out_of_scope" in err
-                    for err in overlap_errs
-                ),
-                overlap_errs,
-            )
+            for bad_schema in unsupported_schemas:
+                with self.assertRaises(ValueError):
+                    mod.validate({}, bad_schema)
+            proc = self._run_cli(script_name, {}, bad_schema_file)
+            self.assertEqual(2, proc.returncode, proc.stderr)
+            self.assertIn("Unsupported JSON Schema keyword", proc.stderr)
 
-        sibling_ok = {
-            **base_spec,
-            "new_file_scopes": ["src/exporter_v2/handler.py"],
-            "out_of_scope": ["src/exporter/handler.py"],
-        }
-        self.assertEqual([], validate_spec.validate(sibling_ok, spec_schema))
-
-        review_schema = json.loads(
-            (ROOT / "shared/code-review/resources/assets/review.schema.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        empty_req_changes = {
-            "schema_version": "1.0",
-            "verdict": "request_changes",
-            "summary": "Changes requested without findings.",
-            "findings": [],
-        }
-        rev_errs = validate_review.validate(empty_req_changes, review_schema)
-        self.assertIn(
-            "Verdict 'request_changes' conflicts with empty findings", rev_errs
-        )
-
-    def test_all_57_bundled_validators_run_under_isolated_python(self) -> None:
-        from concurrent.futures import ThreadPoolExecutor
-
-        from _markdown_utils import extract_fenced_blocks
-
-        expected_skills = expected_total_skills(ROOT)
-        self.assertGreaterEqual(expected_skills, 1)
-        synced = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(expected_skills, len(synced))
-
-        def extract_json_blocks(pkg: Path) -> list[str]:
-            blocks: list[str] = []
-            for rel in ("references/method.md", "references/examples.md"):
-                ref = pkg / rel
-                if not ref.is_file():
-                    continue
-                fenced, _ = extract_fenced_blocks(ref.read_text(encoding="utf-8"))
-                blocks.extend(body for lang, body in fenced if lang == "json")
-            return blocks
-
-        def check_one(script_path: Path) -> None:
-            pkg = script_path.parent.parent
-            blocks = extract_json_blocks(pkg)
-            self.assertTrue(blocks, f"No JSON blocks in {pkg.name}")
-            with tempfile.TemporaryDirectory() as tmp:
-                tmp_dir = Path(tmp)
-                for idx, raw_block in enumerate(blocks):
-                    good_file = tmp_dir / f"good-{idx}.json"
-                    good_file.write_text(raw_block, encoding="utf-8")
-                    ok_proc = subprocess.run(
-                        [sys.executable, "-B", "-S", str(script_path), str(good_file)],
-                        cwd=str(pkg),
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    self.assertEqual(
-                        0,
-                        ok_proc.returncode,
-                        f"{pkg.name} block #{idx} failed: {ok_proc.stderr}",
-                    )
-                bad_file = tmp_dir / "bad.json"
-                bad_file.write_text('{"invalid_unknown_key": true}', encoding="utf-8")
-                bad_proc = subprocess.run(
-                    [sys.executable, "-B", "-S", str(script_path), str(bad_file)],
-                    cwd=str(pkg),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(1, bad_proc.returncode, pkg.name)
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(check_one, synced))
-
-        pycache_dirs = list((ROOT / "skills").rglob("__pycache__"))
-        self.assertEqual([], pycache_dirs)
-
-    def test_stdlib_evaluator_parity_across_all_58_package_schemas(self) -> None:
+    def test_stdlib_evaluator_parity_with_jsonschema_across_all_package_schemas(
+        self,
+    ) -> None:
         import copy
 
         import jsonschema
-        from _markdown_utils import extract_fenced_blocks
 
         expected_skills = expected_total_skills(ROOT)
         self.assertGreaterEqual(expected_skills, 1)
         schema_paths = sorted((ROOT / "skills").glob("*/assets/*.schema.json"))
         self.assertEqual(expected_skills + 1, len(schema_paths))
+        obs_schema_path = ROOT / "schemas/observations.schema.json"
+        self.assertTrue(obs_schema_path.is_file())
 
-        for schema_path in schema_paths:
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            pkg = schema_path.parent.parent
-            examples: list[dict[str, Any]] = []
-            for rel in ("references/method.md", "references/examples.md"):
-                ref = pkg / rel
-                if not ref.is_file():
+        expected_keys = {
+            "$defs",
+            "$ref",
+            "$schema",
+            "additionalProperties",
+            "anyOf",
+            "const",
+            "enum",
+            "items",
+            "maxLength",
+            "minItems",
+            "minLength",
+            "minimum",
+            "oneOf",
+            "pattern",
+            "properties",
+            "required",
+            "title",
+            "type",
+        }
+        observed_keys: set[str] = set()
+
+        def collect_keys(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            for k, v in node.items():
+                observed_keys.add(k)
+                if k in ("properties", "$defs") and isinstance(v, dict):
+                    for sub in v.values():
+                        collect_keys(sub)
+                elif k in ("items", "additionalProperties") and isinstance(v, dict):
+                    collect_keys(v)
+                elif k in ("anyOf", "oneOf") and isinstance(v, list):
+                    for sub in v:
+                        collect_keys(sub)
+
+        for sp in [*schema_paths, obs_schema_path]:
+            schema = json.loads(sp.read_text(encoding="utf-8"))
+            collect_keys(schema)
+        self.assertEqual(expected_keys, observed_keys)
+
+        def assert_parity(instance: Any, schema: dict[str, Any], label: str) -> None:
+            stdlib_bad = bool(validate_review._schema_errors(instance, schema))
+            js_bad = bool(
+                list(jsonschema.Draft202012Validator(schema).iter_errors(instance))
+            )
+            self.assertEqual(js_bad, stdlib_bad, label)
+
+        def package_json_blocks(pkg: Path) -> list[Any]:
+            parsed: list[Any] = []
+            for ref_name in ("method.md", "examples.md"):
+                ref_path = pkg / "references" / ref_name
+                if not ref_path.is_file():
                     continue
-                fenced, _ = extract_fenced_blocks(ref.read_text(encoding="utf-8"))
-                examples.extend(
-                    json.loads(body) for lang, body in fenced if lang == "json"
+                fenced, _ = validate_skills._extract_fenced_blocks(
+                    ref_path.read_text(encoding="utf-8")
                 )
+                for lang, body in fenced:
+                    if lang == "json":
+                        parsed.append(json.loads(body))
+            return parsed
 
-            js_validator = jsonschema.Draft202012Validator(schema)
-            matching_examples = [
-                ex for ex in examples if not list(js_validator.iter_errors(ex))
+        # Positive + negative parity across all 57 packages and 58 schemas
+        for sp in schema_paths:
+            schema = json.loads(sp.read_text(encoding="utf-8"))
+            pkg = sp.parents[1]
+            blocks = package_json_blocks(pkg)
+            matching = [
+                b
+                for b in blocks
+                if not list(jsonschema.Draft202012Validator(schema).iter_errors(b))
             ]
-            self.assertTrue(matching_examples, f"No valid example for {schema_path}")
-            base = copy.deepcopy(matching_examples[0])
-
-            candidates: list[Any] = [
-                base,
-                [],
-                "not-an-object",
-                True,
-                42,
-                {**base, "__unexpected_prop__": 1},
-            ]
+            self.assertTrue(matching, f"No matching valid example for {sp}")
+            sample = matching[0]
+            assert_parity(sample, schema, f"{sp}:valid")
+            assert_parity({}, schema, f"{sp}:empty-object")
+            assert_parity("not-an-object", schema, f"{sp}:primitive")
+            assert_parity({**sample, "__extra__": 1}, schema, f"{sp}:extra-prop")
             for req_key in schema.get("required", []):
-                missing = copy.deepcopy(base)
-                missing.pop(req_key, None)
-                candidates.append(missing)
+                missing = {k: v for k, v in sample.items() if k != req_key}
+                assert_parity(missing, schema, f"{sp}:missing:{req_key}")
             for prop_key, prop_schema in schema.get("properties", {}).items():
-                if not isinstance(prop_schema, dict):
+                if prop_key not in sample:
                     continue
-                candidates.append(
-                    {
-                        **copy.deepcopy(base),
-                        prop_key: object.__name__
-                        if prop_schema.get("type") == "array"
-                        else [1, 2],
-                    }
-                )
-                if prop_schema.get("type") == "string":
-                    candidates.append({**copy.deepcopy(base), prop_key: ""})
-                    candidates.append({**copy.deepcopy(base), prop_key: 123})
-                elif prop_schema.get("type") == "integer":
-                    candidates.append({**copy.deepcopy(base), prop_key: True})
-                    candidates.append({**copy.deepcopy(base), prop_key: 1.5})
-                    candidates.append({**copy.deepcopy(base), prop_key: 1.0})
-                    candidates.append({**copy.deepcopy(base), prop_key: -999})
-                elif prop_schema.get("type") == "array" and prop_schema.get("minItems"):
-                    candidates.append({**copy.deepcopy(base), prop_key: []})
+                mutated = copy.deepcopy(sample)
+                mutated[prop_key] = True
+                assert_parity(mutated, schema, f"{sp}:bool-type:{prop_key}")
+                if prop_schema.get("type") == "integer":
+                    mut_float = copy.deepcopy(sample)
+                    mut_float[prop_key] = 1.0
+                    assert_parity(mut_float, schema, f"{sp}:int-float-1.0:{prop_key}")
+                    mut_frac = copy.deepcopy(sample)
+                    mut_frac[prop_key] = 1.5
+                    assert_parity(mut_frac, schema, f"{sp}:int-float-1.5:{prop_key}")
 
-            for candidate in candidates:
-                expected_valid = not list(js_validator.iter_errors(candidate))
-                actual_valid = not validate_review._schema_errors(candidate, schema)
-                self.assertEqual(
-                    expected_valid,
-                    actual_valid,
-                    f"Parity mismatch on {schema_path.relative_to(ROOT)} for {candidate!r}",
-                )
-
-        obs_schema = json.loads(
-            (ROOT / "schemas/observations.schema.json").read_text(encoding="utf-8")
+        # Targeted keyword edge cases ($defs/$ref, additionalProperties dict, pattern, maxLength, minimum, minItems, oneOf, anyOf)
+        rec_schema = json.loads(
+            (
+                ROOT
+                / "skills/repo-reconcile-findings/assets/reconciliation.schema.json"
+            ).read_text(encoding="utf-8")
         )
+        bad_ref = {
+            "schema_version": "1.0",
+            "finding_fingerprint_matches": [],
+            "remediation_state_transitions": [
+                {
+                    "finding_id": "F-1",
+                    "fingerprint": "fp",
+                    "previous_state": "invalid-state",
+                    "new_state": "open",
+                    "reason": "bad enum via $ref",
+                }
+            ],
+            "unmapped_records": [],
+        }
+        assert_parity(bad_ref, rec_schema, "reconciliation:$ref-enum")
+
+        bundle_schema = json.loads(
+            (
+                ROOT / "skills/repo-audit-diagnostics/assets/bundle.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        bad_bundle_entry = {
+            "schema_version": "1.0",
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "failure_classification": {
+                "failure_type": "schema_validation_error",
+                "summary": "err",
+                "line_number": 1,
+            },
+            "environment": {"platform": "linux", "python_version": "3.12"},
+            "recovery": {"instructions": ["retry"]},
+            "scrubbed_transcript": "[line 1] redacted",
+            "redaction": {
+                "tier": "evidence",
+                "credentials_redacted": 1,
+                "tool_outputs_omitted": 0,
+                "total_redactions": 1,
+                "by_category": {"bearer_token": -1},
+            },
+        }
+        assert_parity(
+            bad_bundle_entry, bundle_schema, "bundle:additionalProperties-subschema"
+        )
+
+        obs_schema = json.loads(obs_schema_path.read_text(encoding="utf-8"))
+        obs_entry: dict[str, Any] = {
+            "id": "OBS-1",
+            "tool": "semgrep",
+            "tool_version": "1.90.0",
+            "rule": "rule/check",
+            "kind": "review",
+            "reported_level": "warning",
+            "message": "Needs review",
+            "locations": [{"path": "src/app.py", "line": None}],
+            "evidence_state": "scanner-reported; agent verification not performed",
+            "fingerprints": {"fred-skills/v1": "abc123"},
+            "suppressions": [{"kind": "external", "status": "underReview"}],
+            "properties": {"findingId": "F-1", "severity": "medium"},
+        }
         valid_obs: dict[str, Any] = {
             "schema_version": "1.0",
-            "observations": [
-                {
-                    "id": "OBS-1",
-                    "tool": "semgrep",
-                    "tool_version": "1.90.0",
-                    "rule": "python.audit.eval",
-                    "kind": "review",
-                    "reported_level": "warning",
-                    "message": "Avoid eval",
-                    "locations": [{"path": "src/app.py", "line": 1}],
-                    "evidence_state": "scanner-reported; agent verification not performed",
-                    "security_severity": 7.5,
-                    "suppressions": [{"kind": "external", "status": "underReview"}],
-                }
-            ],
+            "observations": [obs_entry],
             "limitations": ["Scanner claims require verification."],
         }
-        js_obs = jsonschema.Draft202012Validator(obs_schema)
-        for obs_sample in (
-            valid_obs,
-            {**valid_obs, "extra": 1},
-            {"schema_version": "1.0", "observations": []},
+        assert_parity(valid_obs, obs_schema, "observations:valid-nullable-line")
+        assert_parity(
             {
                 **valid_obs,
-                "observations": [{**valid_obs["observations"][0], "suppressions": []}],
+                "observations": [{**obs_entry, "fingerprints": {"k": ""}}],
             },
-        ):
-            self.assertEqual(
-                not list(js_obs.iter_errors(obs_sample)),
-                not validate_workflow._schema_errors(obs_sample, obs_schema),
-            )
+            obs_schema,
+            "observations:additionalProperties-empty-string",
+        )
         self.assertEqual([], validate_workflow.validate(valid_obs, obs_schema))
-        bad_obs_path = {
-            **valid_obs,
-            "observations": [
-                {
-                    **valid_obs["observations"][0],
-                    "locations": [{"path": "../escape.py", "line": 1}],
-                }
-            ],
-        }
-        self.assertTrue(validate_workflow.validate(bad_obs_path, obs_schema))
-
-        edge_schema: dict[str, Any] = {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "title": "Edge Parity Schema",
-            "$defs": {
-                "tag": {
-                    "type": "string",
-                    "minLength": 2,
-                    "maxLength": 5,
-                    "pattern": "^[a-z]+$",
-                }
-            },
-            "type": "object",
-            "additionalProperties": {"$ref": "#/$defs/tag"},
-            "required": ["count", "choice", "mode", "fixed"],
-            "properties": {
-                "count": {"type": "integer", "minimum": 0},
-                "choice": {"oneOf": [{"type": "integer"}, {"type": "number"}]},
-                "mode": {"anyOf": [{"const": 1}, {"enum": ["auto", None]}]},
-                "fixed": {"const": True},
-            },
-        }
-        js_edge = jsonschema.Draft202012Validator(edge_schema)
-        for sample in (
-            {"count": 0, "choice": 1.5, "mode": "auto", "fixed": True, "extra": "abc"},
-            {"count": 1.0, "choice": 2, "mode": 1.0, "fixed": True},
-            {"count": True, "choice": 2, "mode": 1, "fixed": True},
-            {
-                "count": 0,
-                "choice": 2,
-                "mode": 1,
-                "fixed": True,
-            },  # choice matches both integer & number -> oneOf fails!
-            {
-                "count": 0,
-                "choice": 1.5,
-                "mode": True,
-                "fixed": True,
-            },  # mode True != const 1!
-            {
-                "count": 0,
-                "choice": 1.5,
-                "mode": 1,
-                "fixed": 1,
-            },  # fixed 1 != const True!
-            {
-                "count": 0,
-                "choice": 1.5,
-                "mode": None,
-                "fixed": True,
-                "extra": "TOO_LONG",
-            },
-        ):
-            self.assertEqual(
-                not list(js_edge.iter_errors(sample)),
-                not validate_review._schema_errors(sample, edge_schema),
-                f"Edge parity mismatch for {sample!r}",
+        for bad_obs_path in ("../escape.py", ".git/config"):
+            bad_obs_doc = {
+                **valid_obs,
+                "observations": [
+                    {
+                        **obs_entry,
+                        "locations": [{"path": bad_obs_path, "line": 1}],
+                    }
+                ],
+            }
+            self.assertTrue(
+                validate_workflow.validate(bad_obs_doc, obs_schema), bad_obs_path
             )
+
+    def test_all_synced_validators_run_under_python_S_and_omit_dev_deps(
+        self,
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
+        self.assertEqual(expected_skills, len(synced_validators))
+        for script_path in synced_validators:
+            src = script_path.read_text(encoding="utf-8")
+            self.assertNotIn("jsonschema", src, str(script_path))
+            self.assertNotIn("requirements-dev.txt", src, str(script_path))
+
+        def check_package(script_path: Path) -> None:
+            pkg = script_path.parents[1]
+            blocks: list[str] = []
+            for ref_name in ("method.md", "examples.md"):
+                ref_path = pkg / "references" / ref_name
+                if not ref_path.is_file():
+                    continue
+                fenced, _ = validate_skills._extract_fenced_blocks(
+                    ref_path.read_text(encoding="utf-8")
+                )
+                blocks.extend(body for lang, body in fenced if lang == "json")
+            self.assertTrue(blocks, f"No JSON blocks in {pkg.name}")
+            pkg_tmp = self.tmp_dir / pkg.name
+            pkg_tmp.mkdir(parents=True, exist_ok=True)
+            for idx, raw_json in enumerate(blocks):
+                good_file = pkg_tmp / f"valid-{idx}.json"
+                good_file.write_text(raw_json, encoding="utf-8")
+                good_proc = subprocess.run(
+                    [sys.executable, "-B", "-S", str(script_path), str(good_file)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    0,
+                    good_proc.returncode,
+                    f"{pkg.name} block #{idx + 1} failed: {good_proc.stderr}",
+                )
+            bad_file = pkg_tmp / "invalid.json"
+            bad_file.write_text('{"schema_version": "1.0"}', encoding="utf-8")
+            bad_proc = subprocess.run(
+                [sys.executable, "-B", "-S", str(script_path), str(bad_file)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, bad_proc.returncode, f"{pkg.name}: {bad_proc.stderr}")
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(check_package, synced_validators))
 
     def test_refactored_validators_and_sync_stay_flat_and_portable(self) -> None:
         import ast

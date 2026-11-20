@@ -528,62 +528,66 @@ def _render_examples_markdown(name: str, title: str, schema_filename: str) -> st
     )
 
 
+def _extract_stdlib_schema_evaluator() -> str:
+    source = (_SCRIPTS_DIR / "validate_review.py").read_text(encoding="utf-8")
+    marker = "def _is_repo_relative("
+    idx = source.index(marker)
+    header_end = source.index("\n\n", source.index("from typing import Any")) + 2
+    return source[header_end:idx]
+
+
 def _render_validator_script(schema_filename: str) -> str:
-    body = Path(__file__).with_name("validate_review.py").read_text(encoding="utf-8")
-    evaluator_block = body.split("\ndef _is_repo_relative", 1)[0]
-    header = (
-        "#!/usr/bin/env python3\n"
-        '"""Validate skill deliverable JSON against the bundled output schema."""\n'
-    )
-    _, _, evaluator_body = evaluator_block.partition("\n\n")
+    evaluator_body = _extract_stdlib_schema_evaluator()
     return (
-        header
-        + "\n"
-        + evaluator_body
-        + "\n\n\n"
-        + "def _record_unique_id(\n"
-        + "    fid: str, seen_ids: set[str], dup_ids: set[str], errors: list[str]\n"
-        + ") -> None:\n"
-        + "    if fid in seen_ids and fid not in dup_ids:\n"
-        + '        errors.append(f"Duplicate IDs in findings: {fid}")\n'
-        + "        dup_ids.add(fid)\n"
-        + "    seen_ids.add(fid)\n\n\n"
-        + "def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:\n"
-        + "    errors = _schema_errors(data, schema)\n"
-        + "    if errors or not isinstance(data, Mapping):\n"
-        + "        return errors\n"
-        + "    seen_ids: set[str] = set()\n"
-        + "    dup_ids: set[str] = set()\n"
-        + "    for item in data.get('findings', []):\n"
-        + "        if isinstance(item, Mapping) and isinstance(item.get('id'), str):\n"
-        + "            _record_unique_id(item['id'], seen_ids, dup_ids, errors)\n"
-        + "    return errors\n\n\n"
-        + "def main() -> int:\n"
-        + "    parser = argparse.ArgumentParser(description=__doc__)\n"
-        + '    parser.add_argument("artifact", type=pathlib.Path)\n'
-        + "    parser.add_argument(\n"
-        + '        "--schema",\n'
-        + "        type=pathlib.Path,\n"
-        + "        default=pathlib.Path(__file__).resolve().parents[1]\n"
-        + f'        / "assets/{schema_filename}",\n'
-        + "    )\n"
-        + "    args = parser.parse_args()\n"
-        + "    try:\n"
-        + "        errors = validate(\n"
-        + '            json.loads(args.artifact.read_text(encoding="utf-8")),\n'
-        + '            json.loads(args.schema.read_text(encoding="utf-8")),\n'
-        + "        )\n"
-        + "    except (OSError, TypeError, ValueError) as exc:\n"
-        + '        print(f"Invalid input: {exc}", file=sys.stderr)\n'
-        + "        return 2\n"
-        + "    if errors:\n"
-        + "        for err in errors:\n"
-        + "            print(err, file=sys.stderr)\n"
-        + "        return 1\n"
-        + '    print("PASS: deliverable structure and finding IDs; semantic claims require review.")\n'
-        + "    return 0\n\n\n"
-        + 'if __name__ == "__main__":\n'
-        + "    sys.exit(main())\n"
+        "#!/usr/bin/env python3\n"
+        '"""Validate skill deliverable JSON against the bundled output schema."""\n\n'
+        "from __future__ import annotations\n\n"
+        "import argparse\n"
+        "import json\n"
+        "import pathlib\n"
+        "import re\n"
+        "import sys\n"
+        "from collections.abc import Mapping\n"
+        "from typing import Any\n\n"
+        f"{evaluator_body}"
+        "def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:\n"
+        "    errors = _schema_errors(data, schema)\n"
+        "    if errors or not isinstance(data, Mapping):\n"
+        "        return errors\n"
+        "    seen_ids: set[str] = set()\n"
+        "    for item in data.get('findings', []):\n"
+        "        if isinstance(item, Mapping) and isinstance(item.get('id'), str):\n"
+        "            fid = item['id']\n"
+        "            if fid in seen_ids:\n"
+        '                errors.append(f"Duplicate IDs in findings: {fid}")\n'
+        "            seen_ids.add(fid)\n"
+        "    return errors\n\n\n"
+        "def main() -> int:\n"
+        "    parser = argparse.ArgumentParser(description=__doc__)\n"
+        '    parser.add_argument("artifact", type=pathlib.Path)\n'
+        "    parser.add_argument(\n"
+        '        "--schema",\n'
+        "        type=pathlib.Path,\n"
+        "        default=pathlib.Path(__file__).resolve().parents[1]\n"
+        f'        / "assets/{schema_filename}",\n'
+        "    )\n"
+        "    args = parser.parse_args()\n"
+        "    try:\n"
+        "        errors = validate(\n"
+        '            json.loads(args.artifact.read_text(encoding="utf-8")),\n'
+        '            json.loads(args.schema.read_text(encoding="utf-8")),\n'
+        "        )\n"
+        "    except (OSError, TypeError, ValueError) as exc:\n"
+        '        print(f"Invalid input: {exc}", file=sys.stderr)\n'
+        "        return 2\n"
+        "    if errors:\n"
+        "        for err in errors:\n"
+        "            print(err, file=sys.stderr)\n"
+        "        return 1\n"
+        '    print("PASS: deliverable structure and finding IDs; semantic claims require review.")\n'
+        "    return 0\n\n\n"
+        'if __name__ == "__main__":\n'
+        "    sys.exit(main())\n"
     )
 
 

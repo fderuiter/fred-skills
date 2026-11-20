@@ -1914,6 +1914,8 @@ def _classify_hidden_unicode(ch: str, is_file_start: bool) -> str | None:
 def _scan_hidden_unicode_text(
     text: str, file_label: str, *, category: str
 ) -> list[dict[str, Any]]:
+    if text.isascii():
+        return []
     findings: list[dict[str, Any]] = []
     for line_idx, line in enumerate(text.splitlines(), start=1):
         seen_on_line: set[int] = set()

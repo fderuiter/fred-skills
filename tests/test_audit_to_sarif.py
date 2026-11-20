@@ -977,6 +977,26 @@ class AuditToSarifTests(unittest.TestCase):
                 "extra": True,
                 "findings": [],
             },
+            {
+                "schema_version": "1.0",
+                "verdict": "approve",
+                "summary": "Approving critical finding",
+                "findings": [
+                    {
+                        "id": "R-1",
+                        "title": "Critical flaw",
+                        "severity": "critical",
+                        "file": "src/auth.py",
+                        "description": "Critical issue",
+                    }
+                ],
+            },
+            {
+                "schema_version": "1.0",
+                "verdict": "request_changes",
+                "summary": "Requesting changes without findings",
+                "findings": [],
+            },
         ):
             with self.assertRaises(ValueError) as schema_ctx:
                 audit_to_sarif(bad_doc)

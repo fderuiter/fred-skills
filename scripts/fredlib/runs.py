@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 
 from . import _sarif_import
 from .common import (
-    _SUITE_VALIDATOR_SCRIPTS,
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
     WORKFLOW_DELIVERABLE_SCHEMAS,
@@ -25,15 +24,13 @@ from .common import (
     _deliverable_for_run,
     _detect_domain_kind,
     _is_single_line_text,
-    _load_script_validator,
     _load_suite_contracts,
     _markdown_code_span,
     _suite_for_run,
     _suite_for_skills,
     _suite_shared_assets,
     _suite_skills_by_suite,
-    _SuiteValidator,
-    _validate_suite_artifact,
+    _validate_canonical_artifact,
     _workflow_phase_order_map,
     atomic_json,
     digest,
@@ -1353,18 +1350,6 @@ commands before running them; record actual outcomes and unavailable capabilitie
 """
 
 
-_AUDIT_VALIDATOR_MODULE_NAME = _SUITE_VALIDATOR_SCRIPTS["audit.json"][0]
-
-
-def _load_audit_validator() -> _SuiteValidator:
-    mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS["audit.json"]
-    return _load_script_validator(
-        mod_name,
-        ROOT / script_rel,
-        spec_loader=importlib.util.spec_from_file_location,
-    )
-
-
 @functools.lru_cache(maxsize=1)
 def _load_audit_schema() -> dict[str, Any]:
     return read_json_object(
@@ -1374,11 +1359,12 @@ def _load_audit_schema() -> dict[str, Any]:
 
 
 def audit_errors(audit: dict) -> list[str]:
-    return _validate_suite_artifact(
+    return _validate_canonical_artifact(
         audit,
-        "audit.json",
-        schema_override=_load_audit_schema(),
-        spec_loader=importlib.util.spec_from_file_location,
+        artifact_name="audit.json",
+        schema_rel="shared/repo-audit/resources/assets/audit.schema.json",
+        spec_factory=importlib.util.spec_from_file_location,
+        schema_obj=_load_audit_schema(),
     )
 
 
@@ -1479,7 +1465,11 @@ def _validate_present_workflow_companions(directory: Path) -> list[str]:
         except (OSError, ValueError) as exc:
             errors.append(f"{name}: invalid JSON ({exc})")
             continue
-        for msg in _validate_suite_artifact(companion_payload, name, companion_schema):
+        for msg in _validate_canonical_artifact(
+            companion_payload,
+            artifact_name=name,
+            schema_rel=companion_schema,
+        ):
             errors.append(f"{name}: {msg}")
     return errors
 
@@ -1489,7 +1479,11 @@ def _deliverable_errors(
 ) -> list[str]:
     if expected_name == "audit.json":
         return audit_errors(deliverable)
-    return _validate_suite_artifact(deliverable, expected_name, schema_rel)
+    return _validate_canonical_artifact(
+        deliverable,
+        artifact_name=expected_name,
+        schema_rel=schema_rel,
+    )
 
 
 def validate_run(directory: Path) -> list[str]:
@@ -1804,10 +1798,10 @@ def revalidate(directory: Path) -> dict:
         domain_doc = read_json_object(
             target_path, label=f"Deliverable '{expected_name}'"
         )
-        deliv_errs = _deliverable_errors(domain_doc, expected_name, schema_rel)
-        if deliv_errs:
+        deliverable_errs = _deliverable_errors(domain_doc, expected_name, schema_rel)
+        if deliverable_errs:
             raise FredCliError(
-                f"Invalid {expected_name}: " + "; ".join(deliv_errs[:5]),
+                f"Invalid {expected_name}: " + "; ".join(deliverable_errs[:5]),
                 code="invalid_deliverable",
                 hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect validation errors in '{expected_name}'.",
             )
@@ -2169,19 +2163,21 @@ def _observation_fingerprint(obs: dict[str, Any]) -> str:
 
 def _validate_observation_companion(name: str, payload: dict[str, Any]) -> None:
     schema_rel = WORKFLOW_DELIVERABLE_SCHEMAS[name]
-    schema_errs = _schema_errors(payload, schema_rel)
-    if schema_errs:
-        raise FredCliError(
-            f"Invalid observation artifact '{name}': {schema_errs[0]}",
-            code="invalid_observations",
-            hint=f"Ensure '{name}' conforms to '{schema_rel}'.",
+    obs_errs = _validate_canonical_artifact(
+        payload,
+        artifact_name=name,
+        schema_rel=schema_rel,
+    )
+    if obs_errs:
+        hint = (
+            f"Ensure paths in '{name}' are repository-relative."
+            if obs_errs[0].startswith("Path must be repository-relative")
+            else f"Ensure '{name}' conforms to '{schema_rel}'."
         )
-    wf_errs = _validate_suite_artifact(payload, name, schema_rel)
-    if wf_errs:
         raise FredCliError(
-            f"Invalid observation artifact '{name}': {wf_errs[0]}",
+            f"Invalid observation artifact '{name}': {obs_errs[0]}",
             code="invalid_observations",
-            hint=f"Ensure paths in '{name}' are repository-relative.",
+            hint=hint,
         )
 
 
@@ -2300,16 +2296,16 @@ def _validate_verified_fixed_proof(verification: Path | None) -> dict[str, Any]:
             code="missing_verification",
             hint="Pass --verification <verification.json> matching verification.schema.json.",
         )
-    _require_jsonschema()
     proof = read_json_object(verification, label="Verification artifact")
-    failures = _validate_suite_artifact(
+    proof_errors = _validate_canonical_artifact(
         proof,
-        "verification.json",
-        "skills/repo-verify-fix/assets/verification.schema.json",
+        artifact_name="verification.json",
+        schema_rel="skills/repo-verify-fix/assets/verification.schema.json",
     )
-    if failures:
+    if proof_errors:
         raise FredCliError(
-            "Verification artifact does not satisfy the proof schema: " + failures[0],
+            "Verification artifact does not satisfy the proof schema: "
+            + proof_errors[0],
             code="invalid_verification",
             hint="Update the verification artifact to satisfy skills/repo-verify-fix/assets/verification.schema.json.",
         )
@@ -2444,9 +2440,10 @@ def reconcile(
     if verification is not None:
         transition["verification_proof"] = str(verification)
     records["remediation_state_transitions"].append(transition)
-    _require_jsonschema()
-    remediation_errors = _validate_suite_artifact(
-        records, "remediation.json", WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
+    remediation_errors = _validate_canonical_artifact(
+        records,
+        artifact_name="remediation.json",
+        schema_rel=WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"],
     )
     if remediation_errors:
         raise FredCliError(

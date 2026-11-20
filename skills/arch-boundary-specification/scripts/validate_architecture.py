@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import pathlib
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
-_KNOWN_SCHEMA_KEYS = frozenset(
+_SUPPORTED_SCHEMA_KEYWORDS = frozenset(
     {
         "$defs",
         "$ref",
@@ -34,270 +33,248 @@ _KNOWN_SCHEMA_KEYS = frozenset(
         "type",
     }
 )
-_VALID_SCHEMA_TYPES = frozenset(
-    {"object", "array", "string", "boolean", "integer", "number", "null"}
-)
 
 
 def _is_json_number(val: Any) -> bool:
-    if isinstance(val, bool) or not isinstance(val, (int, float)):
-        return False
-    return math.isfinite(val)
+    return isinstance(val, (int, float)) and not isinstance(val, bool)
 
 
-def _is_json_int(val: Any) -> bool:
+def _is_json_integer(val: Any) -> bool:
     if isinstance(val, bool):
         return False
-    if isinstance(val, int):
-        return True
-    return isinstance(val, float) and math.isfinite(val) and val.is_integer()
+    return isinstance(val, int) or (isinstance(val, float) and val.is_integer())
+
+
+_TYPE_PREDICATES: dict[str, Callable[[Any], bool]] = {
+    "null": lambda v: v is None,
+    "boolean": lambda v: isinstance(v, bool),
+    "integer": _is_json_integer,
+    "number": _is_json_number,
+    "string": lambda v: isinstance(v, str),
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, Mapping),
+}
 
 
 def _json_equal(left: Any, right: Any) -> bool:
     if isinstance(left, bool) or isinstance(right, bool):
-        return isinstance(left, bool) and isinstance(right, bool) and left is right
+        return type(left) is type(right) and left == right
     if _is_json_number(left) and _is_json_number(right):
         return bool(left == right)
     if isinstance(left, list) and isinstance(right, list):
         return len(left) == len(right) and all(
-            _json_equal(a, b) for a, b in zip(left, right)
+            _json_equal(a, b) for a, b in zip(left, right, strict=True)
         )
     if isinstance(left, Mapping) and isinstance(right, Mapping):
-        return left.keys() == right.keys() and all(
+        return set(left.keys()) == set(right.keys()) and all(
             _json_equal(left[k], right[k]) for k in left
         )
     return type(left) is type(right) and bool(left == right)
 
 
-def _step_pointer(current: Any, raw_token: str, ref: str) -> Any:
-    token = raw_token.replace("~1", "/").replace("~0", "~")
-    if isinstance(current, Mapping) and token in current:
-        return current[token]
-    raise ValueError(f"Unresolvable JSON Schema $ref: {ref!r}")
+def _validate_type_keyword(expected: Any) -> None:
+    names = [expected] if isinstance(expected, str) else expected
+    if not isinstance(names, list) or not names:
+        raise ValueError(f"Invalid JSON Schema type specification: {expected!r}")
+    for name in names:
+        if not isinstance(name, str) or name not in _TYPE_PREDICATES:
+            raise ValueError(f"Unsupported JSON Schema type: {name!r}")
+
+
+def _matches_type(val: Any, expected: Any) -> bool:
+    names = [expected] if isinstance(expected, str) else list(expected)
+    return any(_TYPE_PREDICATES[name](val) for name in names)
 
 
 def _resolve_local_ref(ref: Any, root_schema: Mapping[str, Any]) -> Any:
-    if not isinstance(ref, str) or not ref.startswith("#"):
-        raise ValueError(f"Unsupported non-local JSON Schema $ref: {ref!r}")
     if ref == "#":
         return root_schema
-    if not ref.startswith("#/"):
-        raise ValueError(f"Unsupported JSON Schema $ref format: {ref!r}")
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        raise ValueError(f"Unsupported JSON Schema $ref: {ref!r}")
     target: Any = root_schema
-    for part in ref[2:].split("/"):
-        target = _step_pointer(target, part, ref)
+    for raw_part in ref[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(target, Mapping) or part not in target:
+            raise ValueError(f"Unresolvable JSON Schema $ref: {ref!r}")
+        target = target[part]
     return target
 
 
-def _validate_type_keyword(expected: Any) -> None:
-    if isinstance(expected, str) and expected in _VALID_SCHEMA_TYPES:
-        return
-    if (
-        isinstance(expected, list)
-        and expected
-        and all(isinstance(t, str) and t in _VALID_SCHEMA_TYPES for t in expected)
-    ):
-        return
-    raise ValueError(f"Invalid JSON Schema 'type': {expected!r}")
-
-
-def _validate_pattern_keyword(pattern: Any) -> None:
-    if not isinstance(pattern, str):
-        raise TypeError("Invalid JSON Schema 'pattern': expected string")
-    try:
-        re.compile(pattern)
-    except re.error as exc:
-        raise ValueError(f"Invalid JSON Schema regex pattern: {exc}") from exc
-
-
-def _validate_scalar_keywords(node: Mapping[str, Any]) -> None:
+def _validate_schema_scalars(node: Mapping[str, Any]) -> None:
     if "type" in node:
         _validate_type_keyword(node["type"])
-    if "required" in node and (
-        not isinstance(node["required"], list)
-        or not all(isinstance(k, str) for k in node["required"])
-    ):
-        raise ValueError("Invalid JSON Schema 'required': expected string array")
-    if "enum" in node and (not isinstance(node["enum"], list) or not node["enum"]):
-        raise ValueError("Invalid JSON Schema 'enum': expected non-empty array")
-    for int_key in ("minItems", "minLength", "maxLength"):
-        if int_key in node and (not _is_json_int(node[int_key]) or node[int_key] < 0):
-            raise ValueError(
-                f"Invalid JSON Schema {int_key!r}: expected non-negative integer"
-            )
-    if "minimum" in node and not _is_json_number(node["minimum"]):
-        raise ValueError("Invalid JSON Schema 'minimum': expected number")
+    if "enum" in node and not isinstance(node["enum"], list):
+        raise ValueError("Invalid JSON Schema enum: expected array")
+    if "required" in node:
+        req = node["required"]
+        if not isinstance(req, list) or not all(isinstance(k, str) for k in req):
+            raise ValueError("Invalid JSON Schema required: expected string array")
     if "pattern" in node:
-        _validate_pattern_keyword(node["pattern"])
+        if not isinstance(node["pattern"], str):
+            raise ValueError("Invalid JSON Schema pattern: expected string")
+        re.compile(node["pattern"])
 
 
-def _validate_schema_dict_children(
-    mapping: Any, root: Mapping[str, Any], label: str
+def _validate_subschema_map(
+    mapping_node: Any, label: str, root_schema: Mapping[str, Any]
 ) -> None:
-    if not isinstance(mapping, Mapping):
+    if not isinstance(mapping_node, Mapping):
         raise TypeError(f"Invalid JSON Schema {label}: expected object")
-    for child in mapping.values():
-        _validate_schema_node(child, root)
+    for sub in mapping_node.values():
+        _validate_schema_tree(sub, root_schema)
 
 
-def _validate_schema_list_children(
-    items: Any, root: Mapping[str, Any], label: str
+def _validate_subschema_list(
+    list_node: Any, label: str, root_schema: Mapping[str, Any]
 ) -> None:
-    if not isinstance(items, list) or not items:
+    if not isinstance(list_node, list) or not list_node:
         raise ValueError(f"Invalid JSON Schema {label}: expected non-empty array")
-    for child in items:
-        _validate_schema_node(child, root)
+    for sub in list_node:
+        _validate_schema_tree(sub, root_schema)
 
 
-def _validate_schema_subtrees(node: Mapping[str, Any], root: Mapping[str, Any]) -> None:
-    for dict_key in ("$defs", "properties"):
-        if dict_key in node:
-            _validate_schema_dict_children(node[dict_key], root, dict_key)
-    for node_key in ("additionalProperties", "items"):
-        if node_key in node:
-            _validate_schema_node(node[node_key], root)
-    for list_key in ("anyOf", "oneOf"):
-        if list_key in node:
-            _validate_schema_list_children(node[list_key], root, list_key)
+def _validate_schema_children(
+    node: Mapping[str, Any], root_schema: Mapping[str, Any]
+) -> None:
+    if "$ref" in node:
+        _resolve_local_ref(node["$ref"], root_schema)
+    for map_key in ("$defs", "properties"):
+        if map_key in node:
+            _validate_subschema_map(node[map_key], map_key, root_schema)
+    for sub_key in ("items", "additionalProperties"):
+        if sub_key in node:
+            _validate_schema_tree(node[sub_key], root_schema)
+    for comb_key in ("anyOf", "oneOf"):
+        if comb_key in node:
+            _validate_subschema_list(node[comb_key], comb_key, root_schema)
 
 
-def _validate_schema_node(node: Any, root: Mapping[str, Any]) -> None:
+def _validate_schema_tree(node: Any, root_schema: Mapping[str, Any]) -> None:
     if isinstance(node, bool):
         return
     if not isinstance(node, Mapping):
-        raise TypeError(f"Invalid JSON Schema node: {node!r}")
-    unknown = sorted(set(node.keys()) - _KNOWN_SCHEMA_KEYS)
+        raise TypeError("Invalid JSON Schema node: expected object or boolean")
+    unknown = sorted(set(node.keys()) - _SUPPORTED_SCHEMA_KEYWORDS)
     if unknown:
         raise ValueError(f"Unsupported JSON Schema keyword(s): {', '.join(unknown)}")
-    if "$ref" in node:
-        _resolve_local_ref(node["$ref"], root)
-    _validate_scalar_keywords(node)
-    _validate_schema_subtrees(node, root)
+    _validate_schema_scalars(node)
+    _validate_schema_children(node, root_schema)
 
 
-def _format_loc(path: tuple[str | int, ...]) -> str:
-    return "/".join(map(str, path)) or "root"
+def _format_loc(path: tuple[str, ...]) -> str:
+    return "/".join(path) if path else "root"
 
 
-def _matches_single_type(val: Any, expected: str) -> bool:
-    if expected == "object":
-        return isinstance(val, Mapping)
-    if expected == "array":
-        return isinstance(val, list)
-    if expected == "string":
-        return isinstance(val, str)
-    if expected == "boolean":
-        return isinstance(val, bool)
-    if expected == "integer":
-        return _is_json_int(val)
-    if expected == "number":
-        return _is_json_number(val)
-    return val is None
-
-
-def _check_schema_type(val: Any, expected: Any, loc: str) -> list[str]:
-    if isinstance(expected, str):
-        ok = _matches_single_type(val, expected)
-    else:
-        ok = any(_matches_single_type(val, t) for t in expected)
-    return [] if ok else [f"{loc}: {val!r} is not of type {expected!r}"]
-
-
-def _eval_string_constraints(
-    val: str, schema: Mapping[str, Any], loc: str
-) -> list[str]:
+def _eval_type_const_enum(val: Any, node: Mapping[str, Any], loc: str) -> list[str]:
     errors: list[str] = []
-    if "minLength" in schema and len(val) < schema["minLength"]:
+    if "type" in node and not _matches_type(val, node["type"]):
+        errors.append(f"{loc}: {val!r} is not of type {node['type']!r}")
+    if "const" in node and not _json_equal(val, node["const"]):
+        errors.append(f"{loc}: {node['const']!r} was expected")
+    if "enum" in node and not any(_json_equal(val, opt) for opt in node["enum"]):
+        errors.append(f"{loc}: {val!r} is not one of {node['enum']!r}")
+    if "minimum" in node and _is_json_number(val) and val < node["minimum"]:
+        errors.append(f"{loc}: {val!r} is less than the minimum of {node['minimum']!r}")
+    return errors
+
+
+def _eval_string_keywords(val: Any, node: Mapping[str, Any], loc: str) -> list[str]:
+    if not isinstance(val, str):
+        return []
+    errors: list[str] = []
+    if "minLength" in node and len(val) < node["minLength"]:
         errors.append(f"{loc}: {val!r} is too short")
-    if "maxLength" in schema and len(val) > schema["maxLength"]:
+    if "maxLength" in node and len(val) > node["maxLength"]:
         errors.append(f"{loc}: {val!r} is too long")
-    if "pattern" in schema and re.search(schema["pattern"], val) is None:
-        errors.append(f"{loc}: {val!r} does not match {schema['pattern']!r}")
+    if "pattern" in node and re.search(node["pattern"], val) is None:
+        errors.append(f"{loc}: {val!r} does not match {node['pattern']!r}")
     return errors
 
 
-def _eval_scalar_constraints(
-    val: Any, schema: Mapping[str, Any], loc: str
+def _eval_array_keywords(
+    val: Any,
+    node: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+    path: tuple[str, ...],
+    seen_refs: frozenset[tuple[tuple[str, ...], str]],
 ) -> list[str]:
+    if not isinstance(val, list):
+        return []
     errors: list[str] = []
-    if "type" in schema:
-        errors.extend(_check_schema_type(val, schema["type"], loc))
-    if "const" in schema and not _json_equal(val, schema["const"]):
-        errors.append(f"{loc}: {schema['const']!r} was expected")
-    if "enum" in schema and not any(_json_equal(val, item) for item in schema["enum"]):
-        errors.append(f"{loc}: {val!r} is not one of {schema['enum']!r}")
-    if isinstance(val, str):
-        errors.extend(_eval_string_constraints(val, schema, loc))
-    if _is_json_number(val) and "minimum" in schema and val < schema["minimum"]:
-        errors.append(
-            f"{loc}: {val!r} is less than the minimum of {schema['minimum']!r}"
-        )
-    return errors
-
-
-def _eval_array_constraints(
-    val: list[Any],
-    schema: Mapping[str, Any],
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
-) -> list[str]:
-    errors: list[str] = []
-    if "minItems" in schema and len(val) < schema["minItems"]:
+    if "minItems" in node and len(val) < node["minItems"]:
         errors.append(f"{_format_loc(path)}: {val!r} is too short")
-    if "items" in schema:
-        item_schema = schema["items"]
+    if "items" in node:
+        item_schema = node["items"]
         for idx, item in enumerate(val):
             errors.extend(
-                _eval_schema(item, item_schema, root, (*path, idx), frozenset())
+                _eval_schema(
+                    item, item_schema, root_schema, (*path, str(idx)), seen_refs
+                )
             )
     return errors
 
 
 def _eval_additional_props(
-    val: Mapping[str, Any],
-    unexpected: list[str],
-    addl: Any,
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
+    val: Mapping[Any, Any],
+    add_props: Any,
+    defined: set[Any],
+    root_schema: Mapping[str, Any],
+    path: tuple[str, ...],
+    seen_refs: frozenset[tuple[tuple[str, ...], str]],
 ) -> list[str]:
-    if not unexpected or addl is True:
+    extras = [k for k in val if k not in defined]
+    if not extras or add_props is True:
         return []
-    if addl is False:
-        verb = "was" if len(unexpected) == 1 else "were"
-        joined = ", ".join(repr(k) for k in unexpected)
+    if add_props is False:
+        quoted = ", ".join(repr(str(k)) for k in extras)
+        verb = "was" if len(extras) == 1 else "were"
         return [
-            f"{_format_loc(path)}: Additional properties are not allowed ({joined} {verb} unexpected)"
+            f"{_format_loc(path)}: Additional properties are not allowed ({quoted} {verb} unexpected)"
         ]
     errors: list[str] = []
-    for key in unexpected:
-        errors.extend(_eval_schema(val[key], addl, root, (*path, key), frozenset()))
+    for key in extras:
+        errors.extend(
+            _eval_schema(val[key], add_props, root_schema, (*path, str(key)), seen_refs)
+        )
     return errors
 
 
-def _eval_object_constraints(
-    val: Mapping[str, Any],
-    schema: Mapping[str, Any],
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
+def _eval_object_keywords(
+    val: Any,
+    node: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+    path: tuple[str, ...],
+    seen_refs: frozenset[tuple[tuple[str, ...], str]],
 ) -> list[str]:
-    errors: list[str] = []
+    if not isinstance(val, Mapping):
+        return []
     loc = _format_loc(path)
-    for req_key in schema.get("required", ()):
-        if req_key not in val:
-            errors.append(f"{loc}: {req_key!r} is a required property")
-    props = schema.get("properties", {})
+    props = node.get("properties", {})
+    errors = [
+        f"{loc}: {req_key!r} is a required property"
+        for req_key in node.get("required", [])
+        if req_key not in val
+    ]
     for prop_key, prop_schema in props.items():
         if prop_key in val:
             errors.extend(
                 _eval_schema(
-                    val[prop_key], prop_schema, root, (*path, prop_key), frozenset()
+                    val[prop_key],
+                    prop_schema,
+                    root_schema,
+                    (*path, str(prop_key)),
+                    seen_refs,
                 )
             )
-    if "additionalProperties" in schema:
-        unexpected = [k for k in val if k not in props]
+    if "additionalProperties" in node:
         errors.extend(
             _eval_additional_props(
-                val, unexpected, schema["additionalProperties"], root, path
+                val,
+                node["additionalProperties"],
+                set(props.keys()),
+                root_schema,
+                path,
+                seen_refs,
             )
         )
     return errors
@@ -305,76 +282,76 @@ def _eval_object_constraints(
 
 def _eval_combinators(
     val: Any,
-    schema: Mapping[str, Any],
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
+    node: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+    path: tuple[str, ...],
+    seen_refs: frozenset[tuple[tuple[str, ...], str]],
 ) -> list[str]:
-    errors: list[str] = []
     loc = _format_loc(path)
-    if "anyOf" in schema and not any(
-        not _eval_schema(val, sub, root, path, frozenset()) for sub in schema["anyOf"]
+    errors: list[str] = []
+    if "anyOf" in node and not any(
+        not _eval_schema(val, sub, root_schema, path, seen_refs)
+        for sub in node["anyOf"]
     ):
         errors.append(f"{loc}: {val!r} is not valid under any of the given schemas")
-    if "oneOf" in schema:
+    if "oneOf" in node:
         matches = sum(
-            not _eval_schema(val, sub, root, path, frozenset())
-            for sub in schema["oneOf"]
+            1
+            for sub in node["oneOf"]
+            if not _eval_schema(val, sub, root_schema, path, seen_refs)
         )
         if matches == 0:
             errors.append(f"{loc}: {val!r} is not valid under any of the given schemas")
         elif matches > 1:
-            errors.append(
-                f"{loc}: {val!r} is valid under more than one of the given schemas"
-            )
+            errors.append(f"{loc}: {val!r} is valid under multiple given schemas")
     return errors
 
 
 def _eval_schema(
     val: Any,
-    schema: Any,
-    root: Mapping[str, Any],
-    path: tuple[str | int, ...],
-    seen_refs: frozenset[str],
+    node: Any,
+    root_schema: Mapping[str, Any],
+    path: tuple[str, ...],
+    seen_refs: frozenset[tuple[tuple[str, ...], str]],
 ) -> list[str]:
-    if isinstance(schema, bool):
+    if isinstance(node, bool):
         return (
             []
-            if schema
+            if node
             else [f"{_format_loc(path)}: False schema does not allow {val!r}"]
         )
     errors: list[str] = []
-    if "$ref" in schema:
-        ref = schema["$ref"]
-        if ref in seen_refs:
+    if "$ref" in node:
+        ref = str(node["$ref"])
+        ref_token = (path, ref)
+        if ref_token in seen_refs:
             raise ValueError(f"Cyclic JSON Schema $ref: {ref!r}")
-        target = _resolve_local_ref(ref, root)
-        errors.extend(_eval_schema(val, target, root, path, seen_refs | {ref}))
-    errors.extend(_eval_scalar_constraints(val, schema, _format_loc(path)))
-    if isinstance(val, list):
-        errors.extend(_eval_array_constraints(val, schema, root, path))
-    if isinstance(val, Mapping):
-        errors.extend(_eval_object_constraints(val, schema, root, path))
-    errors.extend(_eval_combinators(val, schema, root, path))
+        target = _resolve_local_ref(ref, root_schema)
+        errors.extend(
+            _eval_schema(val, target, root_schema, path, seen_refs | {ref_token})
+        )
+    loc = _format_loc(path)
+    errors.extend(_eval_type_const_enum(val, node, loc))
+    errors.extend(_eval_string_keywords(val, node, loc))
+    errors.extend(_eval_array_keywords(val, node, root_schema, path, seen_refs))
+    errors.extend(_eval_object_keywords(val, node, root_schema, path, seen_refs))
+    errors.extend(_eval_combinators(val, node, root_schema, path, seen_refs))
     return errors
 
 
 def _schema_errors(data: Any, schema: Mapping[str, Any]) -> list[str]:
-    if not isinstance(schema, Mapping):
-        raise TypeError("JSON Schema root must be a mapping")
-    _validate_schema_node(schema, schema)
+    _validate_schema_tree(schema, schema)
     return _eval_schema(data, schema, schema, (), frozenset())
 
 
 def _is_repo_relative(raw_path: str) -> bool:
-    if (
-        not raw_path
-        or "\\" in raw_path
-        or raw_path.startswith(("/", "~"))
-        or (len(raw_path) >= 2 and raw_path[1] == ":")
-    ):
+    if not raw_path or "\\" in raw_path:
         return False
-    parts = pathlib.PurePosixPath(raw_path).parts
-    return bool(parts) and not any(seg in {".", "..", ".git"} for seg in parts)
+    posix = pathlib.PurePosixPath(raw_path)
+    win = pathlib.PureWindowsPath(raw_path)
+    if posix.is_absolute() or win.is_absolute() or bool(win.drive):
+        return False
+    return bool(posix.parts) and ".." not in posix.parts and ".git" not in posix.parts
 
 
 def _check_deliverable_paths(paths: Any, label: str) -> list[str]:

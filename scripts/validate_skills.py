@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import functools
-import hashlib
 import json
 import os
 import re
@@ -15,7 +15,6 @@ import tempfile
 import time
 import unicodedata
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import combinations, pairwise
 from pathlib import Path, PureWindowsPath
@@ -312,6 +311,7 @@ _NO_EXPECTED_FINDINGS_SUITES = frozenset(
 _ALLOWED_PACKAGE_TEXT_SUFFIXES = frozenset({".md", ".json", ".yaml", ".svg"})
 _DISALLOWED_DOC_FILENAMES = frozenset({"readme.md", "changelog.md"})
 _ALLOWED_CC_WHITESPACE = frozenset({"\n", "\r", "\t"})
+_NON_PRINTABLE_ASCII_RE = re.compile(r"[^\t\n\r\x20-\x7e]")
 _DISALLOWED_SKILL_CAPABILITIES = frozenset(
     {
         "all",
@@ -325,6 +325,8 @@ _DISALLOWED_SKILL_CAPABILITIES = frozenset(
 
 
 def _find_hidden_unicode(text: str) -> str | None:
+    if not _NON_PRINTABLE_ASCII_RE.search(text):
+        return None
     for ch in text:
         cat = unicodedata.category(ch)
         if cat == "Cf":
@@ -407,15 +409,12 @@ def _format_vetting_finding(finding: Mapping[str, Any]) -> str:
     )
 
 
-@functools.lru_cache(maxsize=256)
-def _inspect_python_script_cached(
+@functools.lru_cache(maxsize=64)
+def _cached_python_script_errors(
     source: str,
     rel_posix: str,
-    allowed: frozenset[str],
+    effective: frozenset[str],
 ) -> tuple[str, ...]:
-    effective = frozenset(
-        cap for cap in allowed if cap not in _DISALLOWED_SKILL_CAPABILITIES
-    )
     findings = vetting._scan_hidden_unicode_text(source, rel_posix, category="script")
     findings.extend(vetting._vet_python_source(source, rel_posix, effective))
     return tuple(_format_vetting_finding(item) for item in findings)
@@ -426,7 +425,10 @@ def _inspect_python_script(
     rel_posix: str,
     allowed: frozenset[str] = frozenset(),
 ) -> list[str]:
-    return list(_inspect_python_script_cached(source, rel_posix, allowed))
+    effective = frozenset(
+        cap for cap in allowed if cap not in _DISALLOWED_SKILL_CAPABILITIES
+    )
+    return list(_cached_python_script_errors(source, rel_posix, effective))
 
 
 def _is_relative_icon_path(raw_value: str) -> bool:
@@ -925,7 +927,8 @@ def _validate_worked_examples(
     valid_closed_schemas: Mapping[Path, dict[str, Any]],
     skill_noncode_set: set[str],
     cached_texts: Mapping[Path, str],
-    validator_scripts: Sequence[Path] = (),
+    runnable_validators: Sequence[Path] = (),
+    deferred_jobs: list[_ExampleValidatorJob] | None = None,
 ) -> tuple[list[str], int, bool, list[str] | None]:
     """Validate worked-example presence, link reachability, fenced block count, and JSON schema conformance."""
     candidates = (package / "references/method.md", package / "references/examples.md")
@@ -965,7 +968,8 @@ def _validate_worked_examples(
             json_blocks,
             output_schemas,
             valid_closed_schemas,
-            validator_scripts=validator_scripts,
+            runnable_validators=runnable_validators,
+            deferred_jobs=deferred_jobs,
         )
     )
     has_valid_examples = (
@@ -976,148 +980,144 @@ def _validate_worked_examples(
     return errors, total_blocks, has_valid_examples, method_noncode
 
 
-_VALIDATOR_EXEC_CACHE: dict[str, tuple[int, str, str]] = {}
+@dataclass(frozen=True)
+class _ExampleValidatorJob:
+    pkg_name: str
+    rel_posix: str
+    block_idx: int
+    raw_json_block: str
+    validators: tuple[tuple[Path, str], ...]
 
 
-def _package_assets_digest(package: Path) -> str:
-    hasher = hashlib.sha256()
-    assets_dir = package / "assets"
-    if assets_dir.is_dir() and not assets_dir.is_symlink():
-        for asset in sorted(assets_dir.glob("*.json"), key=lambda p: p.name):
-            if asset.is_file() and not asset.is_symlink():
-                hasher.update(asset.name.encode("utf-8"))
-                hasher.update(b"\x00")
-                hasher.update(asset.read_bytes())
-                hasher.update(b"\x00")
-    return hasher.hexdigest()
+def _isolated_validator_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.pop("PYTHONPATH", None)
+    return env
 
 
-def _validator_cache_key(
-    script_path: Path, assets_digest: str, raw_json_block: str
-) -> str:
-    cache_hasher = hashlib.sha256()
-    cache_hasher.update(script_path.name.encode("utf-8"))
-    cache_hasher.update(b"\x00")
-    cache_hasher.update(script_path.read_bytes())
-    cache_hasher.update(b"\x00")
-    cache_hasher.update(assets_digest.encode("ascii"))
-    cache_hasher.update(b"\x00")
-    cache_hasher.update(raw_json_block.encode("utf-8"))
-    return cache_hasher.hexdigest()
-
-
-def _invoke_validator_subprocess(
-    package: Path,
+def _run_single_validator_example(
     script_path: Path,
-    raw_json_block: str,
-    assets_digest: str,
-) -> tuple[int, str, str]:
-    cache_key = _validator_cache_key(script_path, assets_digest, raw_json_block)
-    cached = _VALIDATOR_EXEC_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    with tempfile.TemporaryDirectory(prefix="fred-skill-example-") as tmp_dir:
-        tmp_json = Path(tmp_dir) / "example.json"
-        tmp_json.write_text(raw_json_block, encoding="utf-8")
+    script_rel: str,
+    rel_posix: str,
+    block_idx: int,
+    example_file: Path,
+    env: Mapping[str, str],
+) -> tuple[int, str | None]:
+    try:
         proc = subprocess.run(
-            [sys.executable, "-B", "-S", str(script_path), str(tmp_json)],
-            cwd=str(package),
-            env=env,
+            [sys.executable, "-B", "-S", str(script_path), str(example_file)],
             capture_output=True,
             text=True,
-            timeout=15,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=15.0,
             check=False,
         )
-    result = (proc.returncode, proc.stdout, proc.stderr)
-    _VALIDATOR_EXEC_CACHE[cache_key] = result
-    return result
-
-
-def _run_validator_on_example(
-    package: Path,
-    script_path: Path,
-    rel_posix: str,
-    block_idx: int,
-    raw_json_block: str,
-    assets_digest: str,
-) -> tuple[int, str | None]:
-    script_rel = script_path.relative_to(package).as_posix()
-    try:
-        returncode, stdout, stderr = _invoke_validator_subprocess(
-            package, script_path, raw_json_block, assets_digest
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         msg = (
-            f"{rel_posix}: bundled validator {script_rel} crashed on "
-            f"worked example json block #{block_idx} ({exc})"
+            f"{rel_posix}: worked example json block #{block_idx} "
+            f"failed to execute bundled validator {script_rel} ({exc})"
         )
         return 2, msg
-    if returncode == 0:
+    if proc.returncode == 0:
         return 0, None
-    raw_detail = (stderr or stdout).strip()
-    detail = raw_detail.splitlines()[0] if raw_detail else f"exit code {returncode}"
-    is_crash = returncode != 1 or "Traceback (most recent call last):" in stderr
-    effective_code = 2 if is_crash else 1
-    msg = (
-        f"{rel_posix}: bundled validator {script_rel} failed on "
-        f"worked example json block #{block_idx} (exit {returncode}: {detail})"
+    raw_detail = (proc.stderr or proc.stdout or "").strip()
+    first_line = (
+        raw_detail.splitlines()[0] if raw_detail else f"exit code {proc.returncode}"
     )
-    return effective_code, msg
+    msg = (
+        f"{rel_posix}: worked example json block #{block_idx} "
+        f"failed bundled validator {script_rel} (exit {proc.returncode}: {first_line})"
+    )
+    return proc.returncode, msg
 
 
-def _run_validators_for_single_block(
-    package: Path,
-    validator_scripts: Sequence[Path],
-    rel_posix: str,
-    block_idx: int,
-    raw_json_block: str,
-    assets_digest: str,
+def _evaluate_validator_job(
+    job: _ExampleValidatorJob,
+    example_file: Path,
+    env: Mapping[str, str],
 ) -> list[str]:
-    passed_any = False
-    crashes: list[str] = []
-    rejections: list[str] = []
-    for script_path in validator_scripts:
-        code, failure = _run_validator_on_example(
-            package,
+    outcomes = [
+        _run_single_validator_example(
             script_path,
-            rel_posix,
-            block_idx,
-            raw_json_block,
-            assets_digest,
+            script_rel,
+            job.rel_posix,
+            job.block_idx,
+            example_file,
+            env,
         )
-        if code == 0:
-            passed_any = True
-        elif code >= 2 and failure is not None:
-            crashes.append(failure)
-        elif failure is not None:
-            rejections.append(failure)
-    if not passed_any and rejections:
-        crashes.append(rejections[0])
-    return crashes
+        for script_path, script_rel in job.validators
+    ]
+    fatal = [msg for rc, msg in outcomes if rc not in (0, 1) and msg is not None]
+    if fatal:
+        return fatal
+    if any(rc == 0 for rc, _ in outcomes):
+        return []
+    return [msg for _, msg in outcomes if msg is not None]
 
 
-def _execute_validators_on_json_blocks(
+def _write_and_evaluate_job(
+    idx: int,
+    job: _ExampleValidatorJob,
+    tmp_root: Path,
+    env: Mapping[str, str],
+) -> tuple[str, list[str]]:
+    example_file = tmp_root / f"example-{idx}-{job.block_idx}.json"
+    example_file.write_text(job.raw_json_block, encoding="utf-8")
+    return job.pkg_name, _evaluate_validator_job(job, example_file, env)
+
+
+def _execute_validator_jobs(
+    jobs: Sequence[_ExampleValidatorJob],
+) -> dict[str, list[str]]:
+    if not jobs:
+        return {}
+    env = _isolated_validator_env()
+    errors_by_pkg: dict[str, list[str]] = {}
+    with tempfile.TemporaryDirectory(prefix="fred-skill-example-") as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        if len(jobs) == 1:
+            results = [_write_and_evaluate_job(0, jobs[0], tmp_root, env)]
+        else:
+            workers = min(8, len(jobs))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(
+                    pool.map(
+                        lambda pair: _write_and_evaluate_job(
+                            pair[0], pair[1], tmp_root, env
+                        ),
+                        enumerate(jobs),
+                    )
+                )
+    for pkg_name, job_errors in results:
+        if job_errors:
+            errors_by_pkg.setdefault(pkg_name, []).extend(job_errors)
+    return errors_by_pkg
+
+
+def _build_package_validator_jobs(
     package: Path,
     valid_json_blocks: Sequence[tuple[str, int, str]],
-    validator_scripts: Sequence[Path],
-) -> list[str]:
-    if not valid_json_blocks or not validator_scripts:
+    runnable_validators: Sequence[Path],
+) -> list[_ExampleValidatorJob]:
+    if not valid_json_blocks or not runnable_validators:
         return []
-    errors: list[str] = []
-    assets_digest = _package_assets_digest(package)
-    for rel_posix, block_idx, raw_json_block in valid_json_blocks:
-        errors.extend(
-            _run_validators_for_single_block(
-                package,
-                validator_scripts,
-                rel_posix,
-                block_idx,
-                raw_json_block,
-                assets_digest,
-            )
+    validator_pairs = tuple(
+        (script_path, script_path.relative_to(package).as_posix())
+        for script_path in runnable_validators
+    )
+    return [
+        _ExampleValidatorJob(
+            pkg_name=package.name,
+            rel_posix=rel_posix,
+            block_idx=block_idx,
+            raw_json_block=raw_json_block,
+            validators=validator_pairs,
         )
-    return errors
+        for rel_posix, block_idx, raw_json_block in valid_json_blocks
+    ]
 
 
 def _check_worked_example_totals(
@@ -1128,7 +1128,8 @@ def _check_worked_example_totals(
     output_schemas: Sequence[Path],
     valid_closed_schemas: Mapping[Path, dict[str, Any]],
     *,
-    validator_scripts: Sequence[Path] = (),
+    runnable_validators: Sequence[Path] = (),
+    deferred_jobs: list[_ExampleValidatorJob] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     present_rels = ", ".join(p.relative_to(package).as_posix() for p in present_files)
@@ -1150,15 +1151,16 @@ def _check_worked_example_totals(
         block_errs = _validate_json_example_block(
             rel_posix, block_idx, raw_json_block, schema_validators
         )
-        if block_errs:
-            errors.extend(block_errs)
-        elif schema_validators:
+        errors.extend(block_errs)
+        if not any("invalid JSON in worked example block" in e for e in block_errs):
             valid_json_blocks.append((rel_posix, block_idx, raw_json_block))
-    errors.extend(
-        _execute_validators_on_json_blocks(
-            package, valid_json_blocks, validator_scripts
-        )
+    pkg_jobs = _build_package_validator_jobs(
+        package, valid_json_blocks, runnable_validators
     )
+    if deferred_jobs is not None:
+        deferred_jobs.extend(pkg_jobs)
+    else:
+        errors.extend(_execute_validator_jobs(pkg_jobs).get(package.name, []))
     return errors
 
 
@@ -1234,8 +1236,11 @@ def _check_single_bundled_script(
 
 
 def _validate_bundled_scripts(
-    package: Path, cached_texts: dict[Path, str] | None = None
-) -> tuple[list[str], bool]:
+    package: Path,
+    cached_texts: dict[Path, str] | None = None,
+    *,
+    scan_errors: Sequence[str] = (),
+) -> tuple[list[str], bool, list[Path]]:
     """Require at least one executable scripts/validate_*.py validator with valid shebang and mode."""
     scripts_dir = package / "scripts"
     py_scripts = (
@@ -1247,35 +1252,19 @@ def _validate_bundled_scripts(
     )
     validator_scripts = [p for p in py_scripts if p.name.startswith("validate_")]
     errors: list[str] = []
+    runnable: list[Path] = []
     if not validator_scripts:
         errors.append(
             "Missing bundled validator script: expected executable scripts/validate_*.py"
         )
     for script_path in validator_scripts:
-        errors.extend(_check_single_bundled_script(package, script_path, cached_texts))
-    return errors, (len(validator_scripts) > 0 and len(errors) == 0)
-
-
-def _runnable_validator_scripts(
-    package: Path, scan_errors: Sequence[str], script_errors: Sequence[str]
-) -> list[Path]:
-    if script_errors:
-        return []
-    scripts_dir = package / "scripts"
-    if not scripts_dir.is_dir() or scripts_dir.is_symlink():
-        return []
-    candidates = sorted(
-        p
-        for p in scripts_dir.glob("validate_*.py")
-        if not p.is_symlink() and p.is_file()
-    )
-    return [
-        script_path
-        for script_path in candidates
-        if not any(
-            script_path.relative_to(package).as_posix() in err for err in scan_errors
-        )
-    ]
+        script_errs = _check_single_bundled_script(package, script_path, cached_texts)
+        errors.extend(script_errs)
+        rel_posix = script_path.relative_to(package).as_posix()
+        vetted_clean = not any(err.startswith(f"{rel_posix}:") for err in scan_errors)
+        if not script_errs and vetted_clean:
+            runnable.append(script_path)
+    return errors, (len(validator_scripts) > 0 and len(errors) == 0), runnable
 
 
 def _collect_duplicated_method_lines(
@@ -1951,14 +1940,6 @@ def _check_markdown_links(
     return errors
 
 
-@functools.lru_cache(maxsize=512)
-def _vet_markdown_cached(md_text: str, rel_posix: str) -> tuple[str, ...]:
-    return tuple(
-        _format_vetting_finding(item)
-        for item in vetting._vet_markdown_text(md_text, rel_posix)
-    )
-
-
 def _inspect_markdown_text(
     path: Path,
     rel_posix: str,
@@ -1978,7 +1959,10 @@ def _inspect_markdown_text(
             )
     errors.extend(_check_markdown_links(md_text, path.parent, package_resolved))
     if rel_posix != "SKILL.md":
-        errors.extend(_vet_markdown_cached(md_text, rel_posix))
+        errors.extend(
+            _format_vetting_finding(item)
+            for item in vetting._vet_markdown_text(md_text, rel_posix)
+        )
     return errors
 
 
@@ -2222,7 +2206,10 @@ def _validate_ui_metadata(
 
 
 def _inspect_skill_package(
-    package: Path, scenario_schema: dict | None = None
+    package: Path,
+    scenario_schema: dict | None = None,
+    *,
+    deferred_jobs: list[_ExampleValidatorJob] | None = None,
 ) -> _ParsedSkillPackage:
     skill_md_path = package / "SKILL.md"
     raw_skill_errors = _inspect_skill_md_raw_bytes(skill_md_path)
@@ -2286,13 +2273,9 @@ def _inspect_skill_package(
     scan_errors, valid_closed_schemas = _scan_package_files(package, cached_texts)
     errors.extend(scan_errors)
 
-    script_errors, has_validator_script = _validate_bundled_scripts(
-        package, cached_texts
+    script_errors, has_validator_script, runnable_validators = (
+        _validate_bundled_scripts(package, cached_texts, scan_errors=scan_errors)
     )
-    runnable_validators = _runnable_validator_scripts(
-        package, scan_errors, script_errors
-    )
-
     worked_errors, worked_blocks, has_worked_examples, method_noncode = (
         _validate_worked_examples(
             package,
@@ -2301,7 +2284,8 @@ def _inspect_skill_package(
             valid_closed_schemas=valid_closed_schemas,
             skill_noncode_set=_skill_noncode_lines(metadata, body),
             cached_texts=cached_texts,
-            validator_scripts=runnable_validators,
+            runnable_validators=runnable_validators,
+            deferred_jobs=deferred_jobs,
         )
     )
     errors.extend(worked_errors)
@@ -3666,63 +3650,28 @@ def _build_telemetry_summary(
     }
 
 
-def _package_json_example_payloads(package: Path) -> list[str]:
-    payloads: list[str] = []
-    for ref_rel in ("references/method.md", "references/examples.md"):
-        ref_file = package / ref_rel
-        if not ref_file.is_file() or ref_file.is_symlink():
-            continue
-        try:
-            blocks, _ = _extract_fenced_blocks(ref_file.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        payloads.extend(body for lang, body in blocks if lang == "json")
-    return payloads
-
-
-def _package_uncached_jobs(
-    package: Path, seen_keys: set[str]
-) -> list[tuple[Path, Path, str, str]]:
-    scripts_dir = package / "scripts"
-    if not scripts_dir.is_dir() or scripts_dir.is_symlink():
-        return []
-    scripts = sorted(
-        p
-        for p in scripts_dir.glob("validate*.py")
-        if p.is_file() and not p.is_symlink()
-    )
-    if not scripts:
-        return []
-    assets_digest = _package_assets_digest(package)
-    jobs: list[tuple[Path, Path, str, str]] = []
-    for raw_json in _package_json_example_payloads(package):
-        for script_path in scripts:
-            key = _validator_cache_key(script_path, assets_digest, raw_json)
-            if key not in _VALIDATOR_EXEC_CACHE and key not in seen_keys:
-                seen_keys.add(key)
-                jobs.append((package, script_path, raw_json, assets_digest))
-    return jobs
-
-
-def _run_prewarm_job(job: tuple[Path, Path, str, str]) -> None:
-    package, script_path, raw_json, assets_digest = job
-    try:
-        json.loads(raw_json)
-        _invoke_validator_subprocess(package, script_path, raw_json, assets_digest)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return
-
-
-def _prewarm_validator_subprocesses(packages: Sequence[Path]) -> None:
-    seen_keys: set[str] = set()
-    jobs: list[tuple[Path, Path, str, str]] = []
-    for package in packages:
-        jobs.extend(_package_uncached_jobs(package, seen_keys))
-    if len(jobs) <= 1:
-        return
-    workers = min(8, len(jobs))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(_run_prewarm_job, jobs))
+def _inspect_packages_batch(
+    packages: Sequence[Path], scenario_schema: dict | None
+) -> list[tuple[Path, _ParsedSkillPackage]]:
+    deferred_jobs: list[_ExampleValidatorJob] = []
+    parsed_packages = [
+        (
+            package,
+            _inspect_skill_package(
+                package,
+                scenario_schema=scenario_schema,
+                deferred_jobs=deferred_jobs,
+            ),
+        )
+        for package in packages
+    ]
+    validator_errors_by_pkg = _execute_validator_jobs(deferred_jobs)
+    for package, parsed in parsed_packages:
+        extra_errors = validator_errors_by_pkg.get(package.name)
+        if extra_errors:
+            parsed.errors.extend(extra_errors)
+            parsed.has_worked_examples = False
+    return parsed_packages
 
 
 def validate_with_telemetry(
@@ -3737,7 +3686,6 @@ def validate_with_telemetry(
     scenario_schema, problems = _load_validated_scenario_schema(root)
     packages, pkg_problems = _discover_skill_packages(root)
     problems.extend(pkg_problems)
-    _prewarm_validator_subprocesses(packages)
 
     pkg_names = [pkg.name for pkg in packages]
     diff_new_skills, diff_base, diff_scope, diff_errors = resolve_new_skills(
@@ -3766,8 +3714,7 @@ def validate_with_telemetry(
     routing_trigger_count = 0
     ledger_dirty = False
 
-    for package in packages:
-        parsed = _inspect_skill_package(package, scenario_schema=scenario_schema)
+    for package, parsed in _inspect_packages_batch(packages, scenario_schema):
         if parsed.method_noncode_lines is not None:
             method_lines_by_pkg[package.name] = parsed.method_noncode_lines
         problems.extend(f"{package.name}: {error}" for error in parsed.errors)

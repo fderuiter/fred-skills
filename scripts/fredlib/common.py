@@ -235,109 +235,6 @@ DOMAIN_DELIVERABLE_SCHEMAS: dict[str, str] = {
 }
 
 
-class _SuiteValidator(Protocol):
-    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
-
-
-_SUITE_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
-    "audit.json": (
-        "fred_audit_validator",
-        "skills/repo-audit-program/scripts/validate_audit.py",
-    ),
-    "architecture.json": (
-        "fred_architecture_validator",
-        "scripts/validate_architecture.py",
-    ),
-    "review.json": ("fred_review_validator", "scripts/validate_review.py"),
-    "testing.json": ("fred_testing_validator", "scripts/validate_testing.py"),
-    "spec.json": ("fred_spec_validator", "scripts/validate_spec.py"),
-    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
-}
-
-
-def _load_script_validator(
-    module_name: str,
-    script: Path,
-    *,
-    spec_loader: Any = None,
-) -> _SuiteValidator:
-    cached = sys.modules.get(module_name)
-    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
-        return cast(_SuiteValidator, cached)
-    loader_fn = spec_loader or importlib.util.spec_from_file_location
-    spec = loader_fn(module_name, script)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Unable to load validator from {script}")
-    module = importlib.util.module_from_spec(spec)
-    previous = sys.dont_write_bytecode
-    sys.modules[spec.name] = module
-    try:
-        sys.dont_write_bytecode = True
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    finally:
-        sys.dont_write_bytecode = previous
-    return cast(_SuiteValidator, module)
-
-
-@functools.lru_cache(maxsize=16)
-def _load_validator_schema(schema_rel: str) -> dict[str, Any]:
-    return read_json_object(
-        ROOT / schema_rel,
-        label=f"Validator schema '{schema_rel}'",
-    )
-
-
-def _resolve_validator_target(
-    artifact_name: str, schema_rel: str | None = None
-) -> tuple[str, str, str]:
-    if artifact_name == "audit.json":
-        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS["audit.json"]
-        resolved_schema = (
-            schema_rel or "shared/repo-audit/resources/assets/audit.schema.json"
-        )
-        return mod_name, script_rel, resolved_schema
-    if artifact_name in DOMAIN_DELIVERABLE_SCHEMAS:
-        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS[artifact_name]
-        resolved_schema = schema_rel or DOMAIN_DELIVERABLE_SCHEMAS[artifact_name]
-        return mod_name, script_rel, resolved_schema
-    if artifact_name in WORKFLOW_DELIVERABLE_SCHEMAS or artifact_name == "workflow":
-        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
-        resolved_schema = schema_rel or WORKFLOW_DELIVERABLE_SCHEMAS.get(
-            artifact_name, ""
-        )
-        if not resolved_schema:
-            raise ValueError(
-                f"Missing schema path for workflow artifact {artifact_name!r}"
-            )
-        return mod_name, script_rel, resolved_schema
-    raise ValueError(f"Unsupported suite artifact for validation: {artifact_name!r}")
-
-
-def _validate_suite_artifact(
-    payload: object,
-    artifact_name: str,
-    schema_rel: str | None = None,
-    *,
-    schema_override: Mapping[str, Any] | None = None,
-    spec_loader: Any = None,
-) -> list[str]:
-    mod_name, script_rel, resolved_schema_rel = _resolve_validator_target(
-        artifact_name, schema_rel
-    )
-    validator = _load_script_validator(
-        mod_name, ROOT / script_rel, spec_loader=spec_loader
-    )
-    schema_obj = (
-        schema_override
-        if schema_override is not None
-        else _load_validator_schema(resolved_schema_rel)
-    )
-    return validator.validate(payload, schema_obj)
-
-
 def _suite_skills_by_suite(root: Path = ROOT) -> dict[str, tuple[str, ...]] | None:
     return suite_skills_by_suite(root)
 
@@ -491,6 +388,223 @@ def _detect_domain_artifact(data: object) -> str | None:
 
 def _detect_artifact_suite(data: object) -> str | None:
     return detect_artifact_suite(data)
+
+
+class _ScriptValidator(Protocol):
+    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
+
+
+_CANONICAL_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
+    "audit": ("fred_audit_validator", "scripts/validate_audit.py"),
+    "bundle": ("fred_audit_validator", "scripts/validate_audit.py"),
+    "architecture": (
+        "fred_architecture_validator",
+        "scripts/validate_architecture.py",
+    ),
+    "review": ("fred_review_validator", "scripts/validate_review.py"),
+    "testing": ("fred_testing_validator", "scripts/validate_testing.py"),
+    "spec": ("fred_spec_validator", "scripts/validate_spec.py"),
+    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
+}
+
+_SCHEMA_NAME_VALIDATOR_KEYS: dict[str, str] = {
+    "audit.schema.json": "audit",
+    "bundle.schema.json": "bundle",
+    "architecture.schema.json": "architecture",
+    "review.schema.json": "review",
+    "testing.schema.json": "testing",
+    "spec.schema.json": "spec",
+    "finding-verification.schema.json": "workflow",
+    "regression.schema.json": "workflow",
+    "plan.schema.json": "workflow",
+    "fix.schema.json": "workflow",
+    "verification.schema.json": "workflow",
+    "reconciliation.schema.json": "workflow",
+    "observations.schema.json": "workflow",
+    "session-handoff.schema.json": "workflow",
+    "handoff.schema.json": "workflow",
+    "terse-output-commit.schema.json": "workflow",
+    "commit.schema.json": "workflow",
+}
+
+_SESSION_HANDOFF_SCHEMA_REL = (
+    "skills/session-handoff/assets/session-handoff.schema.json"
+)
+_TERSE_COMMIT_SCHEMA_REL = (
+    "skills/terse-output-commit/assets/terse-output-commit.schema.json"
+)
+
+_ARTIFACT_VALIDATOR_TARGETS: dict[str, tuple[str, str]] = {
+    "audit.json": ("audit", "shared/repo-audit/resources/assets/audit.schema.json"),
+    "bundle.json": (
+        "bundle",
+        "skills/repo-audit-diagnostics/assets/bundle.schema.json",
+    ),
+    "architecture.json": (
+        "architecture",
+        "shared/software-architecture/resources/assets/architecture.schema.json",
+    ),
+    "review.json": (
+        "review",
+        "shared/code-review/resources/assets/review.schema.json",
+    ),
+    "testing.json": (
+        "testing",
+        "shared/automated-testing/resources/assets/testing.schema.json",
+    ),
+    "spec.json": (
+        "spec",
+        "shared/spec-driven-development/resources/assets/spec.schema.json",
+    ),
+    "session-handoff.json": ("workflow", _SESSION_HANDOFF_SCHEMA_REL),
+    "handoff.json": ("workflow", _SESSION_HANDOFF_SCHEMA_REL),
+    "terse-output-commit.json": ("workflow", _TERSE_COMMIT_SCHEMA_REL),
+    "commit.json": ("workflow", _TERSE_COMMIT_SCHEMA_REL),
+} | {
+    wf_name: ("workflow", wf_schema)
+    for wf_name, wf_schema in _DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS.items()
+}
+
+_BUNDLE_PAYLOAD_KEYS = frozenset(
+    {
+        "failure_classification",
+        "recovery",
+        "redaction",
+        "scrubbed_transcript",
+        "session_id",
+        "transcript_discovery",
+    }
+)
+_HANDOFF_PAYLOAD_KEYS = frozenset(
+    {"dead_ends", "next_action", "untouched_scope", "verified_facts"}
+)
+_COMMIT_PAYLOAD_KEYS = frozenset(
+    {"commit_body_bullets", "commit_subject", "compression_level", "terse_response"}
+)
+
+
+def _load_canonical_validator(
+    validator_key: str,
+    root: Path = ROOT,
+    *,
+    spec_factory: Any = None,
+) -> _ScriptValidator:
+    if validator_key not in _CANONICAL_VALIDATOR_SCRIPTS:
+        raise ValueError(f"Unknown canonical validator key: {validator_key!r}")
+    module_name, script_rel = _CANONICAL_VALIDATOR_SCRIPTS[validator_key]
+    script = (root / script_rel).resolve()
+    cached = sys.modules.get(module_name)
+    cached_file = getattr(cached, "__file__", None)
+    if (
+        isinstance(cached, ModuleType)
+        and isinstance(cached_file, str)
+        and Path(cached_file).resolve() == script
+        and callable(getattr(cached, "validate", None))
+    ):
+        return cast(_ScriptValidator, cached)
+    loader_fn = spec_factory or importlib.util.spec_from_file_location
+    spec = loader_fn(module_name, script)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Unable to load validator from {script}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    sys.modules[spec.name] = module
+    try:
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = previous
+    return cast(_ScriptValidator, module)
+
+
+def _resolve_payload_shape_target(
+    payload: Mapping[Any, Any], schema_rel: str | None
+) -> tuple[str, str] | None:
+    if "findings" not in payload:
+        payload_keys = set(payload.keys())
+        if _BUNDLE_PAYLOAD_KEYS & payload_keys:
+            return (
+                "bundle",
+                schema_rel or "skills/repo-audit-diagnostics/assets/bundle.schema.json",
+            )
+        if _HANDOFF_PAYLOAD_KEYS <= payload_keys:
+            return ("workflow", schema_rel or _SESSION_HANDOFF_SCHEMA_REL)
+        if _COMMIT_PAYLOAD_KEYS <= payload_keys:
+            return ("workflow", schema_rel or _TERSE_COMMIT_SCHEMA_REL)
+    if is_audit_ledger_shape(payload):
+        return (
+            "audit",
+            schema_rel or "shared/repo-audit/resources/assets/audit.schema.json",
+        )
+    return None
+
+
+def _resolve_validator_target(
+    artifact_name: str | None,
+    schema_rel: str | None,
+    payload: object,
+    root: Path = ROOT,
+) -> tuple[str, str]:
+    if artifact_name is not None:
+        norm_name = (
+            Path(artifact_name).name
+            if artifact_name.endswith(".json")
+            else f"{artifact_name}.json"
+        )
+        if norm_name in _ARTIFACT_VALIDATOR_TARGETS:
+            v_key, default_schema = _ARTIFACT_VALIDATOR_TARGETS[norm_name]
+            return v_key, (schema_rel or default_schema)
+        companions = _load_workflow_companions(root)
+        if norm_name in companions:
+            return "workflow", (schema_rel or companions[norm_name])
+    if schema_rel is not None:
+        schema_name = PurePosixPath(schema_rel).name
+        if schema_name in _SCHEMA_NAME_VALIDATOR_KEYS:
+            return _SCHEMA_NAME_VALIDATOR_KEYS[schema_name], schema_rel
+    detected = detect_domain_artifact(payload)
+    if detected is not None and detected in _ARTIFACT_VALIDATOR_TARGETS:
+        v_key, default_schema = _ARTIFACT_VALIDATOR_TARGETS[detected]
+        return v_key, (schema_rel or default_schema)
+    if isinstance(payload, Mapping):
+        matched = _resolve_payload_shape_target(payload, schema_rel)
+        if matched is not None:
+            return matched
+    raise ValueError(
+        f"Unsupported canonical validator target: artifact={artifact_name!r}, schema={schema_rel!r}"
+    )
+
+
+@functools.lru_cache(maxsize=32)
+def _load_cached_schema_object(schema_path: Path) -> dict[str, Any]:
+    return read_json_object(schema_path, label=f"Schema '{schema_path.name}'")
+
+
+def _validate_canonical_artifact(
+    payload: object,
+    *,
+    artifact_name: str | None = None,
+    schema_rel: str | None = None,
+    root: Path = ROOT,
+    spec_factory: Any = None,
+    schema_obj: Mapping[str, Any] | None = None,
+) -> list[str]:
+    validator_key, resolved_schema_rel = _resolve_validator_target(
+        artifact_name, schema_rel, payload, root=root
+    )
+    validator = _load_canonical_validator(
+        validator_key, root=root, spec_factory=spec_factory
+    )
+    if schema_obj is None:
+        schema_path = (root / resolved_schema_rel).resolve()
+        schema_obj = (
+            _load_cached_schema_object(schema_path)
+            if root == ROOT
+            else read_json_object(schema_path, label=f"Schema '{resolved_schema_rel}'")
+        )
+    return validator.validate(payload, schema_obj)
 
 
 def resolve_audit_path(path: Path | str | None = None) -> Path:

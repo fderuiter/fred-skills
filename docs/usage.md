@@ -116,7 +116,7 @@ snapshot, coverage, evidence, contracts, findings, checks, planned issues, and l
 python skills/repo-audit-program/scripts/validate_audit.py /path/to/audit.json
 ```
 
-This optional checker needs Python and jsonschema. It verifies structure, reference
+This optional checker uses only the Python 3.12 standard library. It verifies structure, reference
 integrity, classification consistency, and dependency cycles. It cannot establish
 whether a finding is true or whether an audit covered all relevant behavior.
 
