@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
@@ -12,7 +11,6 @@ import subprocess
 import sys
 import time
 import unicodedata
-import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations, pairwise
@@ -282,67 +280,14 @@ _NO_EXPECTED_FINDINGS_SUITES = frozenset(
 _ALLOWED_PACKAGE_TEXT_SUFFIXES = frozenset({".md", ".json", ".yaml", ".svg"})
 _DISALLOWED_DOC_FILENAMES = frozenset({"readme.md", "changelog.md"})
 _ALLOWED_CC_WHITESPACE = frozenset({"\n", "\r", "\t"})
-_BANNED_SCRIPT_MODULES = frozenset(
+_DISALLOWED_SKILL_CAPABILITIES = frozenset(
     {
-        "aiohttp",
-        "builtins",
-        "cffi",
-        "ctypes",
-        "curl",
-        "ftplib",
-        "grpc",
-        "http",
-        "httpx",
-        "imaplib",
-        "importlib",
-        "paramiko",
-        "poplib",
-        "pty",
-        "pycurl",
-        "requests",
-        "runpy",
-        "smtplib",
-        "socket",
-        "socketserver",
-        "ssl",
-        "subprocess",
-        "telnetlib",
-        "urllib",
-        "urllib3",
-        "webbrowser",
-        "websocket",
-        "websockets",
-        "wsgiref",
-        "xmlrpc",
-    }
-)
-_BANNED_SCRIPT_BUILTINS = frozenset(
-    {"__builtins__", "__import__", "compile", "eval", "exec"}
-)
-_BANNED_OS_ATTRS = frozenset(
-    {
-        "execl",
-        "execle",
-        "execlp",
-        "execlpe",
-        "execv",
-        "execve",
-        "execvp",
-        "execvpe",
-        "fork",
-        "forkpty",
-        "popen",
-        "posix_spawn",
-        "posix_spawnp",
-        "spawnl",
-        "spawnle",
-        "spawnlp",
-        "spawnlpe",
-        "spawnv",
-        "spawnve",
-        "spawnvp",
-        "spawnvpe",
-        "system",
+        "all",
+        "dynamic-execution",
+        "native-ffi",
+        "network",
+        "process-execution",
+        "shell-execution",
     }
 )
 
@@ -386,7 +331,12 @@ def _inspect_skill_md_raw_bytes(skill_md_path: Path) -> list[str]:
         raw_text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
         return ["Binary or non-UTF-8 file in skill package: SKILL.md"]
-    return _check_text_hygiene(raw_text, "SKILL.md", check_html_comments=True)
+    issues = _check_text_hygiene(raw_text, "SKILL.md", check_html_comments=True)
+    issues.extend(
+        _format_vetting_finding(item)
+        for item in vetting._vet_markdown_text(raw_text, "SKILL.md")
+    )
+    return issues
 
 
 def _is_package_script_rel(rel_posix: str, suffix: str) -> bool:
@@ -412,51 +362,30 @@ def _check_package_file_allowlist(rel_posix: str, name: str, suffix: str) -> str
     )
 
 
-def _ast_import_errors(node: ast.AST, rel_posix: str) -> list[str]:
-    if isinstance(node, ast.Import):
-        return [
-            f"{rel_posix}: banned import '{alias.name}' (line {node.lineno})"
-            for alias in node.names
-            if alias.name.split(".")[0] in _BANNED_SCRIPT_MODULES
-        ]
-    if isinstance(node, ast.ImportFrom) and node.module:
-        root_mod = node.module.split(".")[0]
-        if root_mod in _BANNED_SCRIPT_MODULES:
-            return [
-                f"{rel_posix}: banned import from '{node.module}' (line {node.lineno})"
-            ]
-    return []
+def _skill_read_capabilities(skill_name: str) -> frozenset[str]:
+    builtin = vetting.SKILL_CAPABILITY_ALLOWLIST.get(skill_name, frozenset())
+    return frozenset(
+        cap for cap in builtin if cap not in _DISALLOWED_SKILL_CAPABILITIES
+    )
 
 
-def _ast_expr_error(node: ast.AST, rel_posix: str) -> str | None:
-    if (
-        isinstance(node, ast.Name)
-        and isinstance(node.ctx, ast.Load)
-        and node.id in _BANNED_SCRIPT_BUILTINS
-    ):
-        return f"{rel_posix}: banned builtin '{node.id}' (line {node.lineno})"
-    if (
-        isinstance(node, ast.Attribute)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "os"
-        and node.attr in _BANNED_OS_ATTRS
-    ):
-        return f"{rel_posix}: banned call 'os.{node.attr}' (line {node.lineno})"
-    return None
+def _format_vetting_finding(finding: Mapping[str, Any]) -> str:
+    return (
+        f"{finding['file']}:{finding['line']} [{finding['rule']}]: {finding['message']}"
+    )
 
 
-def _inspect_python_script(source: str, rel_posix: str) -> list[str]:
-    try:
-        tree = ast.parse(source, filename=rel_posix)
-    except SyntaxError as exc:
-        return [f"{rel_posix}: invalid Python syntax ({exc.msg} at line {exc.lineno})"]
-    issues: list[str] = []
-    for node in ast.walk(tree):
-        issues.extend(_ast_import_errors(node, rel_posix))
-        expr_err = _ast_expr_error(node, rel_posix)
-        if expr_err is not None:
-            issues.append(expr_err)
-    return issues
+def _inspect_python_script(
+    source: str,
+    rel_posix: str,
+    allowed: frozenset[str] = frozenset(),
+) -> list[str]:
+    effective = frozenset(
+        cap for cap in allowed if cap not in _DISALLOWED_SKILL_CAPABILITIES
+    )
+    findings = vetting._scan_hidden_unicode_text(source, rel_posix, category="script")
+    findings.extend(vetting._vet_python_source(source, rel_posix, effective))
+    return [_format_vetting_finding(item) for item in findings]
 
 
 def _is_relative_icon_path(raw_value: str) -> bool:
@@ -489,13 +418,13 @@ def _validate_svg_file(
         return [f"Missing UI {field} file: {raw_value}"]
     try:
         svg_text = _read_cached_utf8(candidate, cached_texts)
-        svg_root = ET.fromstring(svg_text)
-    except (OSError, UnicodeDecodeError, ET.ParseError) as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return [f"Invalid SVG in UI {field} ({raw_value}): {exc}"]
-    tag = svg_root.tag.rsplit("}", 1)[-1]
-    if tag != "svg":
-        return [f"Invalid SVG root element in UI {field} ({raw_value}): {tag}"]
-    return []
+    findings = vetting._vet_svg_text(svg_text, raw_value)
+    return [
+        f"Invalid SVG in UI {field} ({raw_value}) [{item['rule']}]: {item['message']}"
+        for item in findings
+    ]
 
 
 def _validate_ui_icon(
@@ -1786,6 +1715,23 @@ def _validate_cursor_plugin_manifest(
     return errors
 
 
+def _vet_package_json_manifest(
+    rel_posix: str, data: object, raw_json: str
+) -> list[str]:
+    if not isinstance(data, Mapping):
+        return []
+    if rel_posix in {".cursor-plugin/plugin.json", ".mcp.json"}:
+        findings = vetting._inspect_manifest_object(
+            data,
+            raw_text=raw_json,
+            file_label=rel_posix,
+            allowed=frozenset(),
+            refs=vetting._ManifestRefs(),
+        )
+        return [_format_vetting_finding(item) for item in findings]
+    return []
+
+
 def _inspect_json_text(
     path: Path,
     package: Path,
@@ -1794,17 +1740,21 @@ def _inspect_json_text(
     valid_closed_schemas: dict[Path, dict[str, Any]],
 ) -> list[str]:
     data = json.loads(raw_json)
+    vet_errs = _vet_package_json_manifest(rel_posix, data, raw_json)
     if rel_posix == ".cursor-plugin/plugin.json":
-        return _validate_cursor_plugin_manifest(package, package.name, data, rel_posix)
+        return [
+            *_validate_cursor_plugin_manifest(package, package.name, data, rel_posix),
+            *vet_errs,
+        ]
     if not path.name.endswith(".schema.json"):
-        return []
+        return vet_errs
     _check_draft202012_schema(raw_json, data)
     if path.name.startswith("evaluation-scenarios"):
-        return []
+        return vet_errs
     closed_errors = _validate_closed_schema(data, rel_posix)
     if not closed_errors and isinstance(data, dict):
         valid_closed_schemas[path] = data
-    return closed_errors
+    return [*closed_errors, *vet_errs]
 
 
 def _check_markdown_links(
@@ -1840,7 +1790,26 @@ def _inspect_markdown_text(
                 f"must be under {MAX_REFERENCE_TOKENS})"
             )
     errors.extend(_check_markdown_links(md_text, path.parent, package_resolved))
+    if rel_posix != "SKILL.md":
+        errors.extend(
+            _format_vetting_finding(item)
+            for item in vetting._vet_markdown_text(md_text, rel_posix)
+        )
     return errors
+
+
+def _vet_static_asset_or_yaml(
+    path: Path, package: Path, rel_posix: str, raw_text: str
+) -> list[str]:
+    if path.suffix == ".svg":
+        findings = vetting._vet_svg_text(raw_text, rel_posix)
+        return [_format_vetting_finding(item) for item in findings]
+    if path.suffix == ".yaml":
+        findings = vetting._vet_agent_yaml_text(
+            raw_text, rel_posix, boundary_root=package
+        )
+        return [_format_vetting_finding(item) for item in findings]
+    return []
 
 
 def _inspect_typed_file_content(
@@ -1866,8 +1835,12 @@ def _inspect_typed_file_content(
             references_dir=references_dir,
         )
     if path.suffix == ".py":
-        return _inspect_python_script(raw_text, rel_posix)
-    return []
+        return _inspect_python_script(
+            raw_text,
+            rel_posix,
+            _skill_read_capabilities(package.name),
+        )
+    return _vet_static_asset_or_yaml(path, package, rel_posix, raw_text)
 
 
 def _load_and_check_entry_text(
@@ -1953,18 +1926,6 @@ def _scan_package_files(
     for chain in find_deep_reference_chains(package, max_hops=1):
         errors.append(
             f"Reference chain exceeds 1-hop depth limit from SKILL.md: {chain}"
-        )
-    vet_res = vetting.vet_skill(
-        package,
-        trust_builtin_allowlists=True,
-        root=package.parent.parent,
-    )
-    for finding in vet_res["findings"]:
-        rule = str(finding.get("rule", ""))
-        if rule.startswith("symlink-") or rule == "missing-skill-manifest":
-            continue
-        errors.append(
-            f"{finding['file']}:{finding['line']} [{rule}]: {finding['message']}"
         )
     return errors, valid_closed_schemas
 

@@ -63,7 +63,7 @@ python scripts/fred.py remove --destination /path/to/project --host claude-code 
 python scripts/fred.py rollback --destination /path/to/project --host claude-code
 ```
 
-`vet` statically scans a skill directory, configuration file, or repository root (`AGENTS.md`, `.cursorrules`, `.mcp.json`, and host skill paths) offline for network calls, shell execution, undeclared credential reads, hidden Unicode, HTML comments, prompt overrides, and remote images, exiting `1` when findings exist. `--destination` is optional on lifecycle commands and defaults to the current working directory for
+`vet` statically scans a skill directory (Markdown, `scripts/*`, `hooks/*`, `.svg`, `agents/*.yaml`, `.mcp.json`, and `.cursor-plugin/plugin.json`), configuration file, or repository root (`AGENTS.md`, `@<path>` shims in `CLAUDE.md`/`GEMINI.md`, `.cursorrules`, `.mcp.json`, `.claude/settings.json`, `.cursor-plugin/plugin.json`, `gemini-extension.json`, and host skill paths) offline for network calls, process/shell/dynamic execution, undeclared credential reads, unsafe SVGs, hidden Unicode, HTML comments, prompt overrides, and remote images, exiting `1` when findings exist. `--destination` is optional on lifecycle commands and defaults to the current working directory for
 project scope or user home for `--scope user`. `installed` hashes managed packages on disk
 to report `tracked`, `modified`, `missing`, and local `untracked` skills (marking risky untracked skills unhealthy); `--check` exits `1`
 when drift, risky untracked skills, or `operation.lock` is present. Preview targets with `--dry-run`. Host paths and
