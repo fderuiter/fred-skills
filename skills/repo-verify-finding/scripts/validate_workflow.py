@@ -69,6 +69,43 @@ def _check_entry_paths(entries: Any, label: str, allow_str: bool) -> list[str]:
     return errors
 
 
+def _check_location_ranges(locations: list[Any]) -> list[str]:
+    errors: list[str] = []
+    for loc in locations:
+        if not isinstance(loc, Mapping):
+            continue
+        start_line = loc.get("line")
+        end_line = loc.get("end_line")
+        if (
+            isinstance(start_line, int)
+            and not isinstance(start_line, bool)
+            and isinstance(end_line, int)
+            and not isinstance(end_line, bool)
+            and end_line < start_line
+        ):
+            errors.append(
+                f"Observation location end_line ({end_line}) precedes line ({start_line}): {loc.get('path', '')}"
+            )
+    return errors
+
+
+def _check_observation_locations(observations: Any) -> list[str]:
+    if not isinstance(observations, list):
+        return []
+    errors: list[str] = []
+    for obs in observations:
+        if not isinstance(obs, Mapping):
+            continue
+        locations = obs.get("locations", [])
+        if not isinstance(locations, list):
+            continue
+        errors.extend(
+            _check_entry_paths(locations, "observations.locations", allow_str=False)
+        )
+        errors.extend(_check_location_ranges(locations))
+    return errors
+
+
 def _check_workflow_paths(data: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     test_file = data.get("test_file")
@@ -84,6 +121,7 @@ def _check_workflow_paths(data: Mapping[str, Any]) -> list[str]:
         )
     )
     errors.extend(_check_path_list(data.get("touched_files", []), "touched_files"))
+    errors.extend(_check_observation_locations(data.get("observations")))
     return errors
 
 

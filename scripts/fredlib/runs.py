@@ -2285,6 +2285,110 @@ def compare(before: dict, after: dict) -> dict:
     return result
 
 
+_OBSERVATION_COMPANION_NAMES = ("observations.json", "scanner-observations.json")
+_RECONCILE_STATES = frozenset(
+    {
+        "open",
+        "in-progress",
+        "fixed-pending-verification",
+        "verified-fixed",
+        "regressed",
+        "accepted-risk",
+    }
+)
+
+
+def _observation_fingerprint(observation: Mapping[str, Any]) -> str:
+    for fp_field in ("fingerprints", "partial_fingerprints"):
+        fp_map = observation.get(fp_field)
+        if isinstance(fp_map, Mapping):
+            fred_fp = fp_map.get("fred-skills/v1")
+            if isinstance(fred_fp, str) and fred_fp:
+                return fred_fp
+    locations = sorted(
+        {
+            (str(loc.get("path", "")), str(loc.get("symbol", "")))
+            for loc in (observation.get("locations") or [])
+            if isinstance(loc, Mapping)
+        }
+    )
+    return digest(
+        {
+            "tool": str(observation.get("tool", "")),
+            "rule": str(observation.get("rule", "")),
+            "message": str(observation.get("message", "")),
+            "locations": locations,
+            "fingerprints": observation.get("fingerprints") or {},
+            "partial_fingerprints": observation.get("partial_fingerprints") or {},
+        }
+    )
+
+
+def _resolve_reconcile_observation(
+    directory: Path, finding_id: str
+) -> tuple[dict[str, Any], str | None]:
+    wf_mod_name, wf_script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
+    wf_validator = _load_script_validator(wf_mod_name, ROOT / wf_script_rel)
+    schema_rel = WORKFLOW_DELIVERABLE_SCHEMAS["observations.json"]
+    schema_obj = read_json_object(
+        ROOT / schema_rel, label=f"Observation schema '{schema_rel}'"
+    )
+    matches: list[tuple[dict[str, Any], str | None]] = []
+    for obs_name in _OBSERVATION_COMPANION_NAMES:
+        obs_path = directory / obs_name
+        if not obs_path.is_file():
+            continue
+        payload = read_json_object(
+            obs_path,
+            label=f"Observation artifact '{obs_name}'",
+            hint=f"Ensure '{obs_name}' conforms to {schema_rel}.",
+        )
+        schema_errs = _schema_errors(payload, schema_rel)
+        wf_errs = [] if schema_errs else wf_validator.validate(payload, schema_obj)
+        all_errs = [*schema_errs, *wf_errs]
+        if all_errs:
+            raise FredCliError(
+                f"Invalid observation artifact '{obs_name}': {all_errs[0]}",
+                code="invalid_observations",
+                hint=f"Ensure '{obs_name}' conforms to {schema_rel}.",
+            )
+        obs_run_id = (
+            payload.get("run_id") if isinstance(payload.get("run_id"), str) else None
+        )
+        for item in payload.get("observations", []):
+            if not isinstance(item, dict):
+                continue
+            props = item.get("properties")
+            prop_fid = props.get("findingId") if isinstance(props, dict) else None
+            if prop_fid == finding_id or item.get("rule") == finding_id:
+                matches.append((item, obs_run_id))
+    if len(matches) > 1:
+        raise FredCliError(
+            f"Ambiguous observation identifier '{finding_id}': matched {len(matches)} observations; reconciliation requires a unique rule or finding ID",
+            code="ambiguous_observation",
+            hint="Ensure the reconciled observation has a unique 'properties.findingId' or 'rule' across observation artifacts.",
+        )
+    if not matches:
+        raise FredCliError(
+            "Unknown finding or remediation state",
+            code="invalid_reconciliation",
+            hint="Verify the finding ID exists in 'audit.json' or imported observations and pass a valid remediation --state.",
+        )
+    return matches[0]
+
+
+def _load_reconcile_audit_or_empty(directory: Path) -> dict[str, Any]:
+    p = Path(directory)
+    if (p / "audit.json").is_file():
+        return _require_audit_directory(p, "reconcile")
+    if p.is_dir() and not (p / "run.json").is_file():
+        has_obs = any((p / name).is_file() for name in _OBSERVATION_COMPANION_NAMES)
+        has_domain = any((p / dom).is_file() for dom in DOMAIN_DELIVERABLE_SCHEMAS)
+        if has_obs and not has_domain:
+            return {"findings": [], "evidence": []}
+    return _require_audit_directory(p, "reconcile")
+
+
 def reconcile(
     directory: Path,
     finding_id: str,
@@ -2292,7 +2396,13 @@ def reconcile(
     note: str,
     verification: Path | None = None,
 ) -> dict:
-    audit = _require_audit_directory(directory, "reconcile")
+    audit = _load_reconcile_audit_or_empty(directory)
+    if state not in _RECONCILE_STATES:
+        raise FredCliError(
+            "Unknown finding or remediation state",
+            code="invalid_reconciliation",
+            hint="Verify the finding ID exists in 'audit.json' and pass a valid remediation --state.",
+        )
     finding = next(
         (
             f
@@ -2301,19 +2411,12 @@ def reconcile(
         ),
         None,
     )
-    if finding is None or state not in {
-        "open",
-        "in-progress",
-        "fixed-pending-verification",
-        "verified-fixed",
-        "regressed",
-        "accepted-risk",
-    }:
-        raise FredCliError(
-            "Unknown finding or remediation state",
-            code="invalid_reconciliation",
-            hint="Verify the finding ID exists in 'audit.json' and pass a valid remediation --state.",
-        )
+    if finding is not None:
+        fp = fingerprint(finding, audit)
+        obs_run_id = None
+    else:
+        matched_obs, obs_run_id = _resolve_reconcile_observation(directory, finding_id)
+        fp = _observation_fingerprint(matched_obs)
     proof = None
     if state == "verified-fixed":
         if verification is None:
@@ -2384,10 +2487,9 @@ def reconcile(
     records.setdefault("finding_fingerprint_matches", [])
     records.setdefault("remediation_state_transitions", [])
     records.setdefault("unmapped_records", [])
-    audit_run_id = audit.get("run_id")
+    audit_run_id = audit.get("run_id") or obs_run_id
     if isinstance(audit_run_id, str) and audit_run_id:
         records.setdefault("run_id", audit_run_id)
-    fp = fingerprint(finding, audit)
     previous_state = "open"
     for prior_tr in records["remediation_state_transitions"]:
         if (

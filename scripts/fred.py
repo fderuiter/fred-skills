@@ -1574,6 +1574,26 @@ def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
     return resolved
 
 
+def _resolve_sarif_export_input(target: Path) -> Path:
+    resolved = resolve_audit_path(target)
+    if resolved.name == "run.json":
+        raise FredCliError(
+            "SARIF export ('export-sarif') requires an 'audit.json' or 'review.json' artifact; 'run.json' is run metadata and is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' or 'review.json' file or run directory.",
+        )
+    if resolved.name not in {"audit.json", "review.json"} and (
+        resolved.name in runs.DOMAIN_DELIVERABLE_SCHEMAS
+        or resolved.name in WORKFLOW_DELIVERABLE_SCHEMAS
+    ):
+        raise FredCliError(
+            f"SARIF export ('export-sarif') requires an 'audit.json' or 'review.json' artifact; domain deliverable '{resolved.name}' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' or 'review.json' file or run directory.",
+        )
+    return resolved
+
+
 def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "report":
         prior_data = None
@@ -1638,7 +1658,7 @@ def handle_reporting(a: argparse.Namespace) -> Any:
     if a.command == "export-sarif":
         from audit_to_sarif import convert_file
 
-        audit_path = _resolve_audit_only_input(a.audit, "export-sarif")
+        audit_path = _resolve_sarif_export_input(a.audit)
         data = convert_file(
             audit_path,
             a.output,

@@ -41,6 +41,25 @@ _NON_FAIL_RESULT_KINDS = frozenset(
     }
 )
 
+_SKIPPED_RESULT_KINDS = frozenset({"pass", "notApplicable"})
+_RETAINED_RESULT_KINDS = frozenset({"fail", "open", "review", "informational"})
+_ACTIVE_SUPPRESSION_STATUSES = frozenset({"underReview", "rejected"})
+_AUDIT_PROPERTY_KEYS = (
+    "findingId",
+    "topic",
+    "status",
+    "severity",
+    "confidence",
+    "remedy",
+)
+_RULE_PROPERTY_KEYS = (
+    "topic",
+    "status",
+    "severity",
+    "confidence",
+    "remedy",
+)
+
 
 def _canonicalize_abs_posix(raw_path: str) -> str | None:
     if (
@@ -611,12 +630,12 @@ def _resolve_sarif_level(
     run: dict[str, Any],
     rule_id: str | None,
 ) -> str:
-    explicit = result.get("level")
-    if isinstance(explicit, str) and explicit:
-        return explicit
     kind = result.get("kind")
     if isinstance(kind, str) and kind in _NON_FAIL_RESULT_KINDS:
         return "none"
+    explicit = result.get("level")
+    if isinstance(explicit, str) and explicit:
+        return explicit
     override_level = _find_override_level(result, run, rule_id)
     if override_level:
         return override_level
@@ -693,6 +712,63 @@ def _clean_fingerprint_map(raw_map: object) -> dict[str, str] | None:
     return cleaned or None
 
 
+def _extract_active_suppressions(
+    raw_suppressions: object, sarif_path: Path
+) -> tuple[bool, list[dict[str, str]] | None]:
+    if raw_suppressions is None:
+        return False, None
+    if not isinstance(raw_suppressions, list):
+        raise FredCliError(
+            f"Malformed SARIF file '{sarif_path}': 'suppressions' in result must be a JSON array",
+            code="invalid_sarif",
+            hint="Ensure each SARIF result's 'suppressions' property is a JSON array.",
+        )
+    if not raw_suppressions:
+        return False, None
+    retained: list[dict[str, str]] = []
+    for entry in raw_suppressions:
+        if not isinstance(entry, dict):
+            continue
+        status = entry.get("status")
+        if status is None or status == "" or status == "accepted":
+            return True, None
+        if isinstance(status, str) and status in _ACTIVE_SUPPRESSION_STATUSES:
+            raw_kind = entry.get("kind")
+            sup_kind = raw_kind if raw_kind in {"inSource", "external"} else "external"
+            sup_record: dict[str, str] = {
+                "kind": sup_kind,
+                "status": status,
+            }
+            for opt_key in ("justification", "guid"):
+                opt_val = entry.get(opt_key)
+                if isinstance(opt_val, str) and opt_val:
+                    sup_record[opt_key] = opt_val
+            retained.append(sup_record)
+    return False, (retained or None)
+
+
+def _extract_audit_properties(
+    result: dict[str, Any], matched_rule: dict[str, Any] | None
+) -> dict[str, str] | None:
+    res_props = result.get("properties")
+    rule_props = (
+        matched_rule.get("properties") if isinstance(matched_rule, dict) else None
+    )
+    extracted: dict[str, str] = {}
+    if isinstance(res_props, dict):
+        for key in _AUDIT_PROPERTY_KEYS:
+            val = res_props.get(key)
+            if isinstance(val, str) and val:
+                extracted[key] = val
+    if isinstance(rule_props, dict):
+        for key in _RULE_PROPERTY_KEYS:
+            if key not in extracted:
+                val = rule_props.get(key)
+                if isinstance(val, str) and val:
+                    extracted[key] = val
+    return extracted or None
+
+
 def _build_location_record(
     item: dict[str, Any],
     run: dict[str, Any],
@@ -760,6 +836,8 @@ def _import_sarif_result(
     base_map: dict[str, ParsedSarifUri | None],
     explicit_roots: list[str] | None,
     default_sarif_roots: list[str],
+    *,
+    active_suppressions: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     inv_idx = result.get("invocationIndex")
     sarif_roots = (
@@ -770,17 +848,17 @@ def _import_sarif_result(
     matched_rule = _find_sarif_rule(result, driver, extensions)
     raw_rule_ref = result.get("rule")
     rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
-    rule_id = (
+    raw_rule_id = (
         result.get("ruleId")
         or rule_ref.get("id")
         or (matched_rule.get("id") if isinstance(matched_rule, dict) else None)
-        or "unknown"
     )
+    rule_id = raw_rule_id if isinstance(raw_rule_id, str) and raw_rule_id else "unknown"
     reported_level = _resolve_sarif_level(
         result,
         matched_rule,
         run,
-        rule_id if isinstance(rule_id, str) and rule_id != "unknown" else None,
+        rule_id if rule_id != "unknown" else None,
     )
     locations = _extract_result_locations(
         result.get("locations", []),
@@ -792,17 +870,28 @@ def _import_sarif_result(
     )
     raw_msg = result.get("message")
     msg_obj: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else {}
+    raw_text = msg_obj.get("text")
+    msg_text = raw_text if isinstance(raw_text, str) and raw_text else "No text message"
+    raw_tool_name = driver.get("name")
+    tool_name = (
+        raw_tool_name if isinstance(raw_tool_name, str) and raw_tool_name else "unknown"
+    )
+    raw_tool_ver = driver.get("version") or driver.get("semanticVersion")
+    tool_version = (
+        raw_tool_ver if isinstance(raw_tool_ver, str) and raw_tool_ver else "unknown"
+    )
     observation: dict[str, Any] = {
-        "tool": driver.get("name", "unknown"),
-        "tool_version": driver.get("version")
-        or driver.get("semanticVersion")
-        or "unknown",
+        "tool": tool_name,
+        "tool_version": tool_version,
         "rule": rule_id,
         "reported_level": reported_level,
-        "message": msg_obj.get("text", "No text message"),
+        "message": msg_text,
         "locations": locations,
         "evidence_state": "scanner-reported; agent verification not performed",
     }
+    kind = result.get("kind")
+    if isinstance(kind, str) and kind in _RETAINED_RESULT_KINDS:
+        observation["kind"] = kind
     sec_severity = _extract_security_severity(result, matched_rule)
     if sec_severity is not None:
         observation["security_severity"] = sec_severity
@@ -812,6 +901,11 @@ def _import_sarif_result(
     partial_fps = _clean_fingerprint_map(result.get("partialFingerprints"))
     if partial_fps:
         observation["partial_fingerprints"] = partial_fps
+    if active_suppressions:
+        observation["suppressions"] = active_suppressions
+    audit_props = _extract_audit_properties(result, matched_rule)
+    if audit_props:
+        observation["properties"] = audit_props
     return observation
 
 
@@ -840,20 +934,32 @@ def _import_sarif_run(
             code="invalid_sarif",
             hint="Ensure each SARIF run's 'results' property is a JSON array.",
         )
-    return [
-        _import_sarif_result(
-            result,
-            sarif_path,
-            run,
-            driver,
-            extensions,
-            base_map,
-            explicit_roots,
-            default_sarif_roots,
+    imported_results: list[dict[str, Any]] = []
+    for result in raw_results:
+        if not isinstance(result, dict):
+            continue
+        kind = result.get("kind")
+        if isinstance(kind, str) and kind in _SKIPPED_RESULT_KINDS:
+            continue
+        skip_suppressed, active_suppressions = _extract_active_suppressions(
+            result.get("suppressions"), sarif_path
         )
-        for result in raw_results
-        if isinstance(result, dict)
-    ]
+        if skip_suppressed:
+            continue
+        imported_results.append(
+            _import_sarif_result(
+                result,
+                sarif_path,
+                run,
+                driver,
+                extensions,
+                base_map,
+                explicit_roots,
+                default_sarif_roots,
+                active_suppressions=active_suppressions,
+            )
+        )
+    return imported_results
 
 
 def import_sarif(path: Path, root: Path | None = None) -> dict:

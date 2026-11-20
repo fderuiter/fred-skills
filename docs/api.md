@@ -403,7 +403,7 @@ Imports static analysis observations from a SARIF JSON file, normalizing `file:/
   - `root` (`Path | None`, default: `None`): Optional repository root directory used to resolve `file://` URIs and reject out-of-tree paths.
 - **Returns:** `dict` — Schema 1.0 imported observation ledger containing:
   - `"schema_version"`: `"1.0"`
-  - `"observations"`: List of normalized observation records (`tool`, `tool_version`, `rule`, `reported_level`, `message`, `locations`, `evidence_state`, plus optional `security_severity`, `fingerprints`, and `partial_fingerprints`).
+  - `"observations"`: List of normalized observation records (`tool`, `tool_version`, `rule`, `reported_level`, `message`, `locations`, `evidence_state`, plus optional `kind`, `security_severity`, `fingerprints`, `partial_fingerprints`, `suppressions`, and `properties`).
   - `"limitations"`: Explicit caveats indicating scanner claims require agent verification.
 - **Exceptions:** None.
 

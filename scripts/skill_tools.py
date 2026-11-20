@@ -613,6 +613,7 @@ DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
             }
         ),
     ),
+    ("observations", frozenset({"observations"})),
     ("review", frozenset({"verdict"})),
     ("testing", frozenset({"test_cases"})),
     (
@@ -642,6 +643,7 @@ DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "plan": "repository-workflows",
     "fix": "repository-workflows",
     "verification": "repository-workflows",
+    "observations": "repository-workflows",
 }
 
 
