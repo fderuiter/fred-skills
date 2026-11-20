@@ -577,6 +577,7 @@ class InstallationTests(unittest.TestCase):
                 "catalog/skills.json",
                 "scripts/fred.py",
                 "scripts/skill_tools.py",
+                "scripts/_markdown_utils.py",
                 "scripts/audit_to_sarif.py",
                 "scripts/fredlib/__init__.py",
                 "scripts/fredlib/releases.py",
@@ -585,6 +586,7 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(0o755, ctar.getmember("scripts/fred.py").mode)
             self.assertEqual(0o755, ctar.getmember("scripts/audit_to_sarif.py").mode)
             self.assertEqual(0o644, ctar.getmember("scripts/skill_tools.py").mode)
+            self.assertEqual(0o644, ctar.getmember("scripts/_markdown_utils.py").mode)
             self.assertEqual(0o644, ctar.getmember("scripts/fredlib/releases.py").mode)
             self.assertEqual(0o644, ctar.getmember("LICENSE").mode)
         with zipfile.ZipFile(cli_zip, "r") as czip:

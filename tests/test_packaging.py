@@ -868,17 +868,28 @@ class PackageTests(unittest.TestCase):
         self.assertIsInstance(concurrency, dict)
         group_expr = concurrency.get("group", "")
         self.assertTrue(
-            group_expr.startswith("skills-${{ github.workflow }}-"),
-            "validate.yml concurrency group must preserve workflow prefix",
+            group_expr.startswith("skills-"),
+            "validate.yml concurrency group must preserve skills- prefix",
         )
+        self.assertIn("validate-", group_expr)
+        self.assertIn("github.workflow", group_expr)
         self.assertIn("github.sha", group_expr)
         self.assertIn("github.ref", group_expr)
+        self.assertIn("github.run_id", group_expr)
         self.assertIn("github.event_name == 'push'", group_expr)
         self.assertIn("github.ref == 'refs/heads/main'", group_expr)
         self.assertEqual(
             concurrency.get("cancel-in-progress"),
-            "${{ github.ref != 'refs/heads/main' }}",
+            "${{ github.workflow == 'Validate skill packages' && github.ref != 'refs/heads/main' }}",
         )
+        for job_name, job_cfg in validate_wf.get("jobs", {}).items():
+            for step in job_cfg.get("steps", []):
+                if "run" in step:
+                    self.assertNotIn(
+                        "${{",
+                        step["run"],
+                        f"Inline expression found in validate.yml {job_name} step {step.get('name')!r}",
+                    )
         validate_steps = (
             validate_wf.get("jobs", {}).get("validate", {}).get("steps", [])
         )
@@ -1065,12 +1076,59 @@ class PackageTests(unittest.TestCase):
             "sha": "e8d6832900000000000000000000000000000004",
             "run_id": "9004",
         }
+        dispatch_release_ctx_2 = {
+            **dispatch_release_ctx,
+            "run_id": "9005",
+        }
+        tag_release_ctx = {
+            "workflow": "Release",
+            "event_name": "push",
+            "ref": "refs/tags/v0.3.0",
+            "sha": "e8d6832900000000000000000000000000000004",
+            "run_id": "9006",
+        }
+        wf_run_release_ctx = {
+            "workflow": "Release",
+            "event_name": "workflow_run",
+            "ref": "refs/heads/main",
+            "sha": "e8d6832900000000000000000000000000000004",
+            "run_id": "9007",
+        }
         caller_group = eval_gha_template(
             release_wf["concurrency"]["group"], dispatch_release_ctx
         )
         called_validate_group = eval_gha_template(group_tpl, dispatch_release_ctx)
+        self.assertEqual(
+            f"skills-validate-Release-{dispatch_release_ctx['sha']}-9004",
+            called_validate_group,
+        )
         self.assertNotEqual(caller_group, called_validate_group)
-        self.assertIn(dispatch_release_ctx["sha"], called_validate_group)
+        self.assertIs(eval_gha_template(cancel_tpl, dispatch_release_ctx), False)
+
+        called_dispatch_2 = eval_gha_template(group_tpl, dispatch_release_ctx_2)
+        called_tag_group = eval_gha_template(group_tpl, tag_release_ctx)
+        called_wf_run_group = eval_gha_template(group_tpl, wf_run_release_ctx)
+        self.assertEqual(
+            f"skills-validate-Release-{tag_release_ctx['sha']}-9006",
+            called_tag_group,
+        )
+        self.assertNotEqual(
+            eval_gha_template(release_wf["concurrency"]["group"], tag_release_ctx),
+            called_tag_group,
+        )
+        self.assertIs(eval_gha_template(cancel_tpl, tag_release_ctx), False)
+        self.assertIs(eval_gha_template(cancel_tpl, wf_run_release_ctx), False)
+        self.assertEqual(
+            4,
+            len(
+                {
+                    called_validate_group,
+                    called_dispatch_2,
+                    called_tag_group,
+                    called_wf_run_group,
+                }
+            ),
+        )
 
     def test_makefile_target_definitions(self):
         makefile_path = ROOT / "Makefile"

@@ -366,6 +366,7 @@ def _build_cli_bundles(
     for rel_script in (
         "scripts/fred.py",
         "scripts/skill_tools.py",
+        "scripts/_markdown_utils.py",
         "scripts/audit_to_sarif.py",
     ):
         entries.append(
