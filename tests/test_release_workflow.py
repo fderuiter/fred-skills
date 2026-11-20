@@ -1831,6 +1831,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             repo / "scripts/bump_version.py",
             (ROOT / "scripts/bump_version.py").read_text(encoding="utf-8"),
         )
+        _write_lf(
+            repo / "scripts/skill_tools.py",
+            (ROOT / "scripts/skill_tools.py").read_text(encoding="utf-8"),
+        )
         (repo / "scripts/fredlib").mkdir(parents=True, exist_ok=True)
         _write_lf(repo / "scripts/fredlib/__init__.py", '"""Toolkit library."""\n')
         (repo / "shared/repo-audit").mkdir(parents=True, exist_ok=True)
@@ -2099,6 +2103,64 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     f"[{expected_note}]({expected_note})", releasing_after_minor
                 )
             self.assertEqual([], build_catalog.build(root=repo, check=True))
+
+    def test_bump_version_stdlib_isolation_and_clean_timeout_exit(self) -> None:
+        """bump_version.py runs under python -S and returns exit code 1 without tracebacks on Git/subprocess timeouts."""
+        import contextlib
+        import io
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, repo = self._create_bump_fixture_repo(Path(tmp_dir))
+            stdlib_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-S",
+                    str(repo / "scripts/bump_version.py"),
+                    "--root",
+                    str(repo),
+                    "--dry-run",
+                    "--json",
+                ],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, stdlib_proc.returncode, stdlib_proc.stderr)
+            parsed = json.loads(stdlib_proc.stdout)
+            self.assertFalse(parsed["bumped"])
+
+            err_git = io.StringIO()
+            with (
+                mock.patch(
+                    "skill_tools.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(
+                        cmd=["git", "rev-parse"], timeout=30
+                    ),
+                ),
+                contextlib.redirect_stderr(err_git),
+            ):
+                rc_git = bump_version.main(["--root", str(repo), "--dry-run"])
+            self.assertEqual(1, rc_git)
+            self.assertIn("Error [git_timeout]:", err_git.getvalue())
+            self.assertIn("Hint:", err_git.getvalue())
+            self.assertNotIn("Traceback", err_git.getvalue())
+
+            err_raw = io.StringIO()
+            with (
+                mock.patch(
+                    "bump_version.bump_repository_version",
+                    side_effect=subprocess.TimeoutExpired(
+                        cmd=["git", "diff"], timeout=30
+                    ),
+                ),
+                contextlib.redirect_stderr(err_raw),
+            ):
+                rc_raw = bump_version.main(["--root", str(repo), "--dry-run"])
+            self.assertEqual(1, rc_raw)
+            self.assertIn("Error [subprocess_timeout]:", err_raw.getvalue())
+            self.assertNotIn("Traceback", err_raw.getvalue())
 
     def test_prepare_job_shell_step_pushes_bump_commit_and_hands_off_target_sha(
         self,
