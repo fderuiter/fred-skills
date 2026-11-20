@@ -7,12 +7,27 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from html import unescape
 from pathlib import Path
 from typing import Any, Literal, TypeVar, overload
 from urllib.parse import unquote, urlsplit
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from _markdown_utils import (
+    extract_reference_link_targets,
+    match_atx_heading,
+    non_fenced_lines,
+    scan_markdown_fences,
+    slugify_markdown_heading,
+    split_frontmatter_block,
+    unique_heading_slug,
+)
 
 __all__ = [
     "DEFAULT_GIT_TIMEOUT",
@@ -293,10 +308,6 @@ def read_json_object(
 MD_LINK_RE = re.compile(r"!?\[.*?\]\(([^)]+)\)")
 # Matches HTML href="..." or src="..."
 HTML_LINK_RE = re.compile(r"""(?:href|src)=["\x27]([^"\x27]+)["\x27]""")
-# Matches reference-style link definitions [label]: target
-MD_REF_LINK_RE = re.compile(r"""^\[[^\]]+\]:\s*(\S+)""", re.MULTILINE)
-_ATX_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
-_FENCE_MARKER_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _TABLE_DELIM_CELL_RE = re.compile(r"^:?-{3,}:?$")
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
 _HTML_ID_ATTR_RE = re.compile(r"""\bid=["\x27]([^"\x27]+)["\x27]""")
@@ -305,58 +316,20 @@ _HTML_NAME_ANCHOR_RE = re.compile(
 )
 
 
-def _iter_markdown_fence_states(content: str) -> Iterator[tuple[str, bool, bool]]:
-    """Yield (line, is_fence_delimiter, is_inside_fence) across Markdown lines."""
-    fence_char = ""
-    fence_len = 0
-    for line in content.splitlines():
-        fence_match = _FENCE_MARKER_RE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            trailing = line[fence_match.end() :].strip()
-            if not fence_char:
-                fence_char = marker[0]
-                fence_len = len(marker)
-                yield line, True, True
-                continue
-            if marker[0] == fence_char and len(marker) >= fence_len and not trailing:
-                fence_char = ""
-                fence_len = 0
-                yield line, True, False
-                continue
-        yield line, False, bool(fence_char)
-
-
 def count_fenced_code_blocks(
     content: str,
     *,
     language: str | None = None,
 ) -> int:
     """Count closed fenced code blocks in Markdown, optionally filtered by language."""
-    fence_char = ""
-    fence_len = 0
-    open_lang = ""
     wanted_lang = language.strip().lower() if language is not None else None
-    count = 0
-    for line in content.splitlines():
-        fence_match = _FENCE_MARKER_RE.match(line)
-        if not fence_match:
-            continue
-        marker = fence_match.group(1)
-        trailing = line[fence_match.end() :].strip()
-        if not fence_char:
-            fence_char = marker[0]
-            fence_len = len(marker)
-            tokens = trailing.split()
-            open_lang = tokens[0].lower() if tokens else ""
-            continue
-        if marker[0] == fence_char and len(marker) >= fence_len and not trailing:
-            if wanted_lang is None or open_lang == wanted_lang:
-                count += 1
-            fence_char = ""
-            fence_len = 0
-            open_lang = ""
-    return count
+    _, blocks = scan_markdown_fences(content.splitlines())
+    return sum(
+        1
+        for block in blocks
+        if block.closed
+        and (wanted_lang is None or block.fence.language.lower() == wanted_lang)
+    )
 
 
 def extract_markdown_preamble(content: str, *, before_level: int = 2) -> str:
@@ -367,17 +340,17 @@ def extract_markdown_preamble(content: str, *, before_level: int = 2) -> str:
     """
     if before_level < 1:
         raise ValueError("before_level must be at least 1")
-    collected: list[str] = []
-    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
-        if not is_delim and not in_fence:
-            heading_match = _ATX_HEADING_RE.match(line)
-            if heading_match:
-                level = len(heading_match.group(1))
-                stop = level == 1 if before_level == 1 else (2 <= level <= before_level)
-                if stop:
-                    break
-        collected.append(line)
-    return "\n".join(collected)
+    lines = content.splitlines()
+    outside, _ = scan_markdown_fences(lines)
+    for line_no, line in outside:
+        heading = match_atx_heading(line)
+        if heading is None:
+            continue
+        h_level = heading[0]
+        stop = h_level == 1 if before_level == 1 else (2 <= h_level <= before_level)
+        if stop:
+            return "\n".join(lines[: line_no - 1])
+    return "\n".join(lines)
 
 
 def extract_markdown_headings(
@@ -387,15 +360,10 @@ def extract_markdown_headings(
 ) -> list[tuple[int, str]]:
     """Return ordered (level, heading_text) tuples for unfenced ATX headings."""
     headings: list[tuple[int, str]] = []
-    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
-        if is_delim or in_fence:
-            continue
-        heading_match = _ATX_HEADING_RE.match(line)
-        if not heading_match:
-            continue
-        h_level = len(heading_match.group(1))
-        if level is None or h_level == level:
-            headings.append((h_level, heading_match.group(2).strip()))
+    for _, line in non_fenced_lines(content):
+        heading = match_atx_heading(line)
+        if heading is not None and (level is None or heading[0] == level):
+            headings.append(heading)
     return headings
 
 
@@ -408,25 +376,23 @@ def extract_markdown_section(
 ) -> str | None:
     """Extract the body of an unfenced ATX heading section, ignoring fenced headings."""
     wanted = heading.strip()
-    in_section = False
+    lines = content.splitlines()
+    outside, _ = scan_markdown_fences(lines)
+    start_idx: int | None = None
     section_level = 0
-    collected: list[str] = []
-    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
-        if not is_delim and not in_fence:
-            heading_match = _ATX_HEADING_RE.match(line)
-            if heading_match:
-                h_level = len(heading_match.group(1))
-                h_text = heading_match.group(2).strip()
-                if not in_section:
-                    if h_text == wanted and (level is None or h_level == level):
-                        in_section = True
-                        section_level = h_level
-                    continue
-                if not include_subheadings or h_level <= section_level:
-                    break
-        if in_section:
-            collected.append(line)
-    return "\n".join(collected) if in_section else None
+    for line_no, line in outside:
+        parsed = match_atx_heading(line)
+        if parsed is None:
+            continue
+        h_level, h_text = parsed
+        if start_idx is None:
+            if h_text == wanted and (level is None or h_level == level):
+                start_idx = line_no
+                section_level = h_level
+            continue
+        if not include_subheadings or h_level <= section_level:
+            return "\n".join(lines[start_idx : line_no - 1])
+    return "\n".join(lines[start_idx:]) if start_idx is not None else None
 
 
 def _split_markdown_table_cells(line: str) -> list[str] | None:
@@ -473,12 +439,13 @@ def _split_markdown_table_cells(line: str) -> list[str] | None:
 
 def extract_markdown_tables(content: str) -> list[list[dict[str, str]]]:
     """Extract unfenced Markdown pipe tables as lists of {header: cell_value} dicts."""
-    unfenced_rows: list[list[str] | None] = []
-    for line, is_delim, in_fence in _iter_markdown_fence_states(content):
-        if is_delim or in_fence:
-            unfenced_rows.append(None)
-        else:
-            unfenced_rows.append(_split_markdown_table_cells(line))
+    lines = content.splitlines()
+    outside, _ = scan_markdown_fences(lines)
+    outside_line_nos = {line_no for line_no, _ in outside}
+    unfenced_rows: list[list[str] | None] = [
+        _split_markdown_table_cells(line) if line_no in outside_line_nos else None
+        for line_no, line in enumerate(lines, start=1)
+    ]
 
     tables: list[list[dict[str, str]]] = []
     idx = 0
@@ -525,7 +492,7 @@ def extract_relative_links(
     raw_targets = (
         MD_LINK_RE.findall(content)
         + HTML_LINK_RE.findall(content)
-        + MD_REF_LINK_RE.findall(content)
+        + extract_reference_link_targets(content)
     )
     relative_paths: list[str] = []
     for target in raw_targets:
@@ -550,15 +517,6 @@ def extract_link_fragment(target: str) -> str | None:
     return unquote(parsed.fragment)
 
 
-def slugify_markdown_heading(heading_text: str) -> str:
-    """Convert Markdown heading text into an anchor slug matching GitHub and build_site."""
-    cleaned = re.sub(r"!?\[([^\]]*)\]\([^)]+\)", r"\1", heading_text)
-    cleaned = cleaned.lower()
-    cleaned = re.sub(r"[`]", "", cleaned)
-    cleaned = re.sub(r"[^a-z0-9 _-]", "", cleaned)
-    return cleaned.strip().replace(" ", "-")
-
-
 def _extract_html_anchors(content: str) -> set[str]:
     """Extract id and <a name=...> anchor targets from HTML text outside script/style."""
     cleaned = _HTML_SCRIPT_STYLE_RE.sub("", content)
@@ -581,30 +539,11 @@ def extract_document_anchors(content: str, suffix: str = ".md") -> set[str]:
 
     anchors: set[str] = set()
     seen_slugs: dict[str, int] = {}
-    fence_char = ""
-    fence_len = 0
 
-    for line in content.splitlines():
-        fence_match = _FENCE_MARKER_RE.match(line)
-        if fence_match:
-            marker = fence_match.group(1)
-            if not fence_char:
-                fence_char = marker[0]
-                fence_len = len(marker)
-                continue
-            if marker[0] == fence_char and len(marker) >= fence_len:
-                fence_char = ""
-                fence_len = 0
-                continue
-        if fence_char:
-            continue
-
-        heading_match = _ATX_HEADING_RE.match(line)
-        if heading_match:
-            base = slugify_markdown_heading(heading_match.group(2)) or "section"
-            count = seen_slugs.get(base, 0)
-            seen_slugs[base] = count + 1
-            anchors.add(base if count == 0 else f"{base}-{count}")
+    for _, line in non_fenced_lines(content):
+        heading = match_atx_heading(line)
+        if heading is not None:
+            anchors.add(unique_heading_slug(heading[1], seen_slugs))
 
         for raw_attr in _HTML_ID_ATTR_RE.findall(line) + _HTML_NAME_ANCHOR_RE.findall(
             line
@@ -716,17 +655,16 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
 def read_frontmatter(path: Path) -> tuple[dict, str]:
     import yaml
 
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        raise ValueError(f"{path}: missing YAML frontmatter")
-    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-    if end is None:
-        raise ValueError(f"{path}: unterminated YAML frontmatter")
-    metadata = yaml.safe_load("".join(lines[1:end]))
+    raw_fm, body = split_frontmatter_block(
+        path.read_text(encoding="utf-8"),
+        label=path,
+        require=True,
+    )
+    assert raw_fm is not None
+    metadata = yaml.safe_load(raw_fm)
     if not isinstance(metadata, dict):
         raise TypeError(f"{path}: frontmatter must be a mapping")
-    return metadata, "".join(lines[end + 1 :])
+    return metadata, body
 
 
 def _validate_suite_artifact(suite: dict, root: Path) -> None:

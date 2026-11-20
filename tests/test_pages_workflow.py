@@ -503,6 +503,19 @@ class PagesWorkflowTests(unittest.TestCase):
             with self.subTest(ctx=ctx):
                 self.assertFalse(_eval_if_condition(preflight_if, ctx))
 
+        chained_wf_run = {
+            "event_name": "workflow_run",
+            "ref": "refs/heads/main",
+            "event": {
+                "workflow_run": {
+                    "conclusion": "success",
+                    "event": "workflow_run",
+                    "head_branch": "main",
+                }
+            },
+        }
+        self.assertTrue(_eval_if_condition(preflight_if, chained_wf_run))
+
         for job_name in ("build", "deploy"):
             job_if = str(self.workflow_data["jobs"][job_name]["if"])
             self.assertTrue(
