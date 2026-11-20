@@ -775,6 +775,12 @@ def _render_audit_html(
     return _page_shell(f"Repository audit — {text(audit['run_id'])}", body)
 
 
+def _domain_artifact_label(domain_kind: str) -> str:
+    if domain_kind == "observations":
+        return "'observations.json' ('scanner-observations.json')"
+    return f"'{domain_kind}.json'"
+
+
 def render(
     audit: dict,
     output: Path,
@@ -789,15 +795,16 @@ def render(
         )
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
+        artifact_label = _domain_artifact_label(domain_kind)
         if prior is not None:
             raise FredCliError(
-                f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported",
+                f"Prior comparison ('--prior') requires 'audit.json' ledgers; domain artifact {artifact_label} is not supported",
                 code="unsupported_domain_artifact",
                 hint="Omit --prior when rendering a domain report, or pass 'audit.json' ledgers.",
             )
         if remediation is not None:
             raise FredCliError(
-                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact '{domain_kind}.json' is not supported",
+                f"Remediation records ('--remediation') require 'audit.json' ledgers; domain artifact {artifact_label} is not supported",
                 code="unsupported_domain_artifact",
                 hint="Omit --remediation when rendering a domain report, or pass an 'audit.json' ledger.",
             )
@@ -809,7 +816,7 @@ def render(
         }
         if domain_kind not in renderers:
             raise FredCliError(
-                f"Report rendering ('report') requires an 'audit.json' ledger; artifact '{domain_kind}.json' is not supported",
+                f"Report rendering ('report') requires an 'audit.json' ledger; artifact {artifact_label} is not supported",
                 code="unsupported_domain_artifact",
                 hint="Pass an 'audit.json' ledger or primary suite deliverable.",
             )
@@ -909,8 +916,9 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
         )
     domain_kind = _detect_domain_kind(audit)
     if domain_kind is not None:
+        artifact_label = _domain_artifact_label(domain_kind)
         raise FredCliError(
-            f"Issue drafts ('issues') require an 'audit.json' ledger; domain artifact '{domain_kind}.json' is not supported",
+            f"Issue drafts ('issues') require an 'audit.json' ledger; domain artifact {artifact_label} is not supported",
             code="unsupported_domain_artifact",
             hint="Pass an 'audit.json' ledger from a repository-audits run.",
         )

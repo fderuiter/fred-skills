@@ -186,6 +186,8 @@ _DEFAULT_WORKFLOW_DELIVERABLE_SCHEMAS: dict[str, str] = {
     for deliverable, schema_rel in WORKFLOW_PHASE_SCHEMAS.values()
 } | {
     "remediation.json": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
+    "observations.json": "schemas/observations.schema.json",
+    "scanner-observations.json": "schemas/observations.schema.json",
 }
 
 WORKFLOW_SKILL_DELIVERABLES: dict[str, tuple[str, ...]] = {

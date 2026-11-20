@@ -1883,8 +1883,12 @@ class FredCLITests(unittest.TestCase):
                         "--output",
                         str(tmp_path / f"{task}.sarif"),
                     )
-                    self.assertEqual(1, sarif_proc.returncode)
-                    self.assertIn("audit.json", sarif_proc.stderr)
+                    if deliverable == "review.json":
+                        self.assertEqual(0, sarif_proc.returncode, sarif_proc.stderr)
+                        self.assertTrue((tmp_path / f"{task}.sarif").is_file())
+                    else:
+                        self.assertEqual(1, sarif_proc.returncode)
+                        self.assertIn("audit.json", sarif_proc.stderr)
 
                     # Even an empty {} domain file still triggers clear domain deliverable guidance
                     (ws / deliverable).write_text("{}", encoding="utf-8")
@@ -2021,6 +2025,16 @@ class FredCLITests(unittest.TestCase):
                     "unmapped_records": [],
                 },
                 "remediation.json": {"schema_version": "1.0", "records": []},
+                "observations.json": {
+                    "schema_version": "1.0",
+                    "observations": [],
+                    "limitations": ["Scanner claims require verification."],
+                },
+                "scanner-observations.json": {
+                    "schema_version": "1.0",
+                    "observations": [],
+                    "limitations": ["Scanner claims require verification."],
+                },
                 "run.json": json.loads((ws / "run.json").read_text(encoding="utf-8")),
             }
             audit_file = ws / "audit.json"
@@ -2043,6 +2057,125 @@ class FredCLITests(unittest.TestCase):
                         self.assertEqual(1, proc.returncode)
                         self.assertIn("audit.json", proc.stderr)
                         self.assertIn(fname, proc.stderr)
+
+    def test_cli_sarif_roundtrip_observations_reconcile_and_review_export(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / "session.mjs").write_text("export const x = 1;\n", encoding="utf-8")
+            ws = root / "ws"
+            init_proc = self.run_cli(
+                "init", str(repo), "--task", "apply-fix", "--output", str(ws)
+            )
+            self.assertEqual(0, init_proc.returncode, init_proc.stderr)
+
+            fixture_audit = json.loads(
+                (ROOT / "tests/fixtures/audit-valid.json").read_text(encoding="utf-8")
+            )
+            refuted_finding = json.loads(json.dumps(fixture_audit["findings"][0]))
+            refuted_finding["id"] = "F-2"
+            refuted_finding["status"] = "refuted"
+            refuted_finding["root_cause"] = "Refuted hypothesis"
+            fixture_audit["findings"].append(refuted_finding)
+            src_audit_path = root / "source-audit.json"
+            src_audit_path.write_text(json.dumps(fixture_audit), encoding="utf-8")
+
+            exported_sarif = root / "exported.sarif"
+            exp_proc = self.run_cli(
+                "export-sarif", str(src_audit_path), "--output", str(exported_sarif)
+            )
+            self.assertEqual(0, exp_proc.returncode, exp_proc.stderr)
+            sarif_doc = json.loads(exported_sarif.read_text(encoding="utf-8"))
+            self.assertEqual(2, len(sarif_doc["runs"][0]["results"]))
+            self.assertEqual("pass", sarif_doc["runs"][0]["results"][1]["kind"])
+            self.assertEqual("none", sarif_doc["runs"][0]["results"][1]["level"])
+
+            obs_out = ws / "scanner-observations.json"
+            imp_proc = self.run_cli(
+                "import-sarif", str(exported_sarif), "--output", str(obs_out)
+            )
+            self.assertEqual(0, imp_proc.returncode, imp_proc.stderr)
+            obs_doc = json.loads(obs_out.read_text(encoding="utf-8"))
+            self.assertEqual(1, len(obs_doc["observations"]))
+            self.assertEqual(
+                "F-1", obs_doc["observations"][0]["properties"]["findingId"]
+            )
+
+            val_proc = self.run_cli("validate-run", str(ws))
+            self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+
+            rec_proc = self.run_cli(
+                "reconcile",
+                str(ws),
+                "--finding",
+                "F-1",
+                "--state",
+                "in-progress",
+                "--note",
+                "Triaging imported observation",
+            )
+            self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
+            self.assertEqual(0, self.run_cli("validate-run", str(ws)).returncode)
+
+            rev_path = root / "review.json"
+            rev_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "verdict": "comment",
+                        "summary": "Review pass",
+                        "findings": [
+                            {
+                                "id": "R-1",
+                                "title": "Advisory style note",
+                                "severity": "advisory",
+                                "file": "session.mjs",
+                                "line": 1,
+                                "description": "Consider const export naming.",
+                            },
+                            {
+                                "id": "R-2",
+                                "title": "High risk check",
+                                "severity": "high",
+                                "file": "session.mjs",
+                                "line": 1,
+                                "description": "Validate session state.",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rev_sarif = root / "review.sarif"
+            rev_proc = self.run_cli(
+                "export-sarif", str(rev_path), "--output", str(rev_sarif)
+            )
+            self.assertEqual(0, rev_proc.returncode, rev_proc.stderr)
+            rev_sarif_doc = json.loads(rev_sarif.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["note", "error"],
+                [r["level"] for r in rev_sarif_doc["runs"][0]["results"]],
+            )
+            filt_proc = self.run_cli(
+                "export-sarif",
+                str(rev_path),
+                "--filter-info",
+                "--output",
+                str(rev_sarif),
+            )
+            self.assertEqual(0, filt_proc.returncode, filt_proc.stderr)
+            self.assertEqual(
+                1,
+                len(
+                    json.loads(rev_sarif.read_text(encoding="utf-8"))["runs"][0][
+                        "results"
+                    ]
+                ),
+            )
 
     def test_cli_profile_and_config_scope_domain_plans_and_copy_suite_assets(self):
         import shutil

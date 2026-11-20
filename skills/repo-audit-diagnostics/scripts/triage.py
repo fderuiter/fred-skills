@@ -468,6 +468,7 @@ _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
         ),
     ),
     ("architecture", frozenset({"boundaries", "decisions", "components"})),
+    ("observations", frozenset({"observations"})),
     ("run", frozenset({"plan", "authority", "checkpoints"})),
 )
 
@@ -483,6 +484,7 @@ _DOMAIN_KIND_TO_SUITE: dict[str, str] = {
     "plan": "repository-workflows",
     "fix": "repository-workflows",
     "verification": "repository-workflows",
+    "observations": "repository-workflows",
 }
 
 _CATALOG_DIR = Path(__file__).resolve().parents[3] / "catalog"

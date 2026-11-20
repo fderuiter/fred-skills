@@ -2704,6 +2704,7 @@ _NON_AUDIT_SCHEMA_V1_KEYS: frozenset[str] = frozenset(
         "suites",
         "plan",
         "reconciliations",
+        "observations",
     }
 )
 
