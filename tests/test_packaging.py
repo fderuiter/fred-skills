@@ -413,7 +413,7 @@ class PackageTests(unittest.TestCase):
         gemini_default = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual("0.0.0", gemini_default["version"])
         self.assertEqual("fred-skills", gemini_default["name"])
-        self.assertEqual("AGENTS.md", gemini_default["contextFileName"])
+        self.assertNotIn("contextFileName", gemini_default)
         root_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         marketplace_default = json.loads(marketplace_path.read_text(encoding="utf-8"))
         self.assertEqual(root_version, marketplace_default["version"])
@@ -791,8 +791,7 @@ class PackageTests(unittest.TestCase):
         gemini_data = json.loads(gemini_ext_path.read_text(encoding="utf-8"))
         self.assertEqual(gemini_data["name"], "fred-skills")
         self.assertTrue(gemini_data["description"])
-        self.assertEqual(gemini_data["contextFileName"], "AGENTS.md")
-        self.assertTrue((ROOT / gemini_data["contextFileName"]).is_file())
+        self.assertNotIn("contextFileName", gemini_data)
         self.assertEqual(
             gemini_data["version"],
             (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
@@ -4273,6 +4272,31 @@ class PackageTests(unittest.TestCase):
             any("allow_implicit_invocation: false" in e for e in guarded_errors),
             guarded_errors,
         )
+
+    def test_stdlib_frontmatter_parser_matches_yaml_safe_load_across_all_skills(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        import yaml
+        from skill_tools import _parse_frontmatter_stdlib, read_frontmatter
+
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
+        self.assertEqual(expected_skills, len(skill_files))
+        for skill_md in skill_files:
+            raw_text = skill_md.read_text(encoding="utf-8")
+            _, rest = raw_text.split("---\n", 1)
+            frontmatter_text, expected_body = rest.split("\n---\n", 1)
+            expected_meta = yaml.safe_load(frontmatter_text)
+            stdlib_meta = _parse_frontmatter_stdlib(frontmatter_text, skill_md)
+            self.assertEqual(expected_meta, stdlib_meta, str(skill_md))
+
+            with patch.dict(sys.modules, {"yaml": None}):
+                fallback_meta, fallback_body = read_frontmatter(skill_md)
+            self.assertEqual(expected_meta, fallback_meta, str(skill_md))
+            self.assertEqual(expected_body, fallback_body, str(skill_md))
 
     def test_all_non_test_subprocess_sites_set_explicit_timeouts_and_handle_cli_exits(
         self,

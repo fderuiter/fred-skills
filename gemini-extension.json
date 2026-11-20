@@ -1,6 +1,5 @@
 {
   "name": "fred-skills",
   "description": "Portable engineering workflows for investigating repositories, planning useful fixes, and verifying that those fixes work. Stage-1 budget note: installing the full extension loads all 57 skills at startup, which can exceed Stage-1 discovery limits in OpenAI Codex (https://developers.openai.com/codex/skills, 2% context / 8,000-character fallback) and Claude Code (https://code.claude.com/docs/en/skills, 1% context); prefer `python scripts/fred.py install --pack starter` (6 skills, <= 1,500 chars) for bounded discovery.",
-  "version": "0.3.0",
-  "contextFileName": "AGENTS.md"
+  "version": "0.3.0"
 }

@@ -143,9 +143,18 @@ def expected_standalone_archive_count(root: Path = ROOT) -> int:
     return expected_total_skills(root) + 1
 
 
+GEMINI_PLATFORM_BUNDLE_COUNT = 3
+STANDALONE_CLI_BUNDLE_COUNT = 2
+
+
 def expected_unified_release_archive_count(root: Path = ROOT) -> int:
-    """Return unified release archive count (tar+zip per pack + suite + standalone skills)."""
-    return 2 * expected_pack_count(root) + expected_standalone_archive_count(root)
+    """Return unified release archive count (tar+zip per pack + suite + standalone skills + Gemini + CLI bundles)."""
+    return (
+        2 * expected_pack_count(root)
+        + expected_standalone_archive_count(root)
+        + GEMINI_PLATFORM_BUNDLE_COUNT
+        + STANDALONE_CLI_BUNDLE_COUNT
+    )
 
 
 def eval_cases(root: Path = ROOT) -> list[dict[str, Any]]:
