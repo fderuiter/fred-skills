@@ -836,10 +836,10 @@ Executes a Git command in the target repository directory with `core.fsmonitor=f
 - **Parameters:**
   - `repo` (`Path`): Repository directory path.
   - `*args` (`str`): Git command-line arguments (for example, `"rev-parse"`, `"HEAD"`).
-  - `required` (`bool`, default: `False`): If `True`, raises `ValueError` on command failure or missing binary.
-- **Returns:** `str | None` — Stripped standard output string, or `None` if Git fails or is not found when `required=False`.
+  - `required` (`bool`, default: `False`): If `True`, raises `ValueError` on command failure, timeout, or missing binary.
+- **Returns:** `str | None` — Stripped standard output string, or `None` if Git fails, times out, or is not found when `required=False`.
 - **Exceptions:**
-  - `ValueError`: Raised when `required=True` and Git is not installed or returns a non-zero exit code.
+  - `ValueError`: Raised when `required=True` and Git is not installed, times out, or returns a non-zero exit code.
 
 ---
 

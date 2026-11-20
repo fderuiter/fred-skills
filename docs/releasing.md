@@ -9,10 +9,10 @@ Before merging distributable changes, review the selected diff, run all checks i
 [CONTRIBUTING.md](../CONTRIBUTING.md), inspect the generated [offline explorer](explorer.html),
 execute the synthetic walkthrough, build and verify the intended pack, review the recorded
 behavioral limits, and ensure [LICENSE](../LICENSE) remains present and nonempty. Validated
-pushes to `main` automatically publish the hosted explorer and documentation to
+pushes to `main` publish the hosted explorer and documentation to
 [fderuiter.github.io/fred-skills](https://fderuiter.github.io/fred-skills) via
-`.github/workflows/pages.yml` after `Release` succeeds on verified `origin/main` (with
-`workflow_dispatch` on `main` available to retry transient Pages outages without manual steps).
+`.github/workflows/pages.yml` after `Validate skill packages` succeeds (`workflow_dispatch` on
+`main` verifies a prior passing `Validate skill packages` run and skips superseded commits).
 
 Pushes to `main` run a serialized `prepare` job (`scripts/bump_version.py`) in
 `.github/workflows/release.yml` that checks changes in `skills/`, `catalog/`, `shared/`, and
@@ -20,25 +20,30 @@ Pushes to `main` run a serialized `prepare` job (`scripts/bump_version.py`) in
 `catalog/suites.json`, or `catalog/packs.json` changes membership (or a patch bump otherwise),
 synchronizes `VERSION`, all 61 plugin/extension manifests, `README.md`, `docs/usage.md`, and
 `docs/release-notes-<VERSION>.md` while keeping tagged `docs/release-notes-<TAG>.md` files
-byte-identical, pushes the bump commit to `origin/main`, and hands the pushed `target_sha`
-directly to `preflight`, `validate`, `build`, and `release` in the same run. Next, `preflight`
-validates SemVer 2.0.0 `v<VERSION>`, fetches full `origin/main` history and tags to verify that
-`target_sha` is an ancestor of `origin/main`, verifies nonempty `LICENSE` and matching `VERSION`
-at `target_sha`, and checks live GitHub Releases. When `v<VERSION>` is unpublished (or exists
-only as a draft), the release workflow calls the reusable `.github/workflows/validate.yml`
+byte-identical, pushes the bump commit to `origin/main`, and hands the pushed commit SHA to
+`preflight`. Next, `preflight` fetches full `origin/main` history and tags, validates SemVer
+2.0.0 `v<VERSION>`, walks `git rev-list --first-parent` on untagged `main` pushes to bind
+`target_sha` to the commit that changed `VERSION` before handing `target_sha` to `validate`,
+`build`, and `release`, verifies `origin/main` ancestry, nonempty `LICENSE`, and matching
+`VERSION` at `target_sha`, and checks live GitHub Releases. When `v<VERSION>` is unpublished (or
+exists only as a draft), the release workflow calls the reusable `.github/workflows/validate.yml`
 workflow (`workflow_call` with `contents: read` across Ubuntu and Windows on Python 3.12 and
 3.13, `pre-commit`, the synthetic Node walkthrough, standalone pack verification, and Chromium
 browser checks) before packaging deterministic release archives and SHA-256 manifests in `build`.
-Next, the `release` job re-verifies `origin/main` ancestry, nonempty `LICENSE`, and remote
-`refs/tags/v<VERSION>` tag binding, verifies downloaded `manifest.json`, `SHA256SUMS`, and
-`checksums.sha256` completeness before attesting SLSA build provenance, serializes publication
-per release tag, pushes `refs/tags/v<VERSION>` on `main` branch pushes if missing on `origin`,
-and performs zero-touch GitHub Release publication (`--verify-tag` and `--target`, without
-`--draft` or manual approval) using `docs/release-notes-<VERSION>.md` when present (such as
+Next, the `release` job serializes publication per release tag, re-verifies `origin/main`
+ancestry, nonempty `LICENSE`, and remote `refs/tags/v<VERSION>` tag binding, checks live release
+state (`Check release publication state`) under the per-tag lock so already-published releases
+skip artifact download, duplicate SLSA provenance signing, and duplicate publication cleanly,
+verifies downloaded `manifest.json`, `SHA256SUMS`, and `checksums.sha256` completeness before
+attesting SLSA build provenance, prunes stale draft assets absent from `dist/release/` via
+`gh release delete-asset` during draft promotion, and performs atomic zero-touch GitHub Release
+publication (minting missing `refs/tags/v<VERSION>` tags on `main` pushes atomically via
+`--target` and passing `--verify-tag` for existing remote tags, without `--draft` or manual
+approval) using `docs/release-notes-<VERSION>.md` when present (such as
 [release-notes-0.3.0.md](release-notes-0.3.0.md) and archived
 [release-notes-0.2.0.md](release-notes-0.2.0.md), or `--generate-notes` otherwise, marking
 pre-release tags with `--prerelease`). Commits on `main` outside distributable paths keep
-`VERSION` unchanged and skip duplicate publication cleanly.
+`VERSION` unchanged and skip duplicate attestation and publication cleanly.
 
 Matching `v*` tag pushes and manual `workflow_dispatch` runs remain supported. Running
 `workflow_dispatch` with `inputs.publish` (`false` by default, plus optional `inputs.tag`)

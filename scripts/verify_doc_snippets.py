@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -28,6 +28,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts"))
+
+from skill_tools import FredCliError, git_tag_exists
 
 fred: ModuleType | None
 try:
@@ -1294,6 +1296,9 @@ def clear_subprocess_cache() -> None:
     _HELP_FLAGS_CACHE.clear()
 
 
+DEFAULT_SNIPPET_TIMEOUT = 60
+
+
 def _run_cached_subprocess(
     cmd: list[str],
     cwd: Path | None = None,
@@ -1309,6 +1314,7 @@ def _run_cached_subprocess(
         cwd=cwd,
         capture_output=True,
         text=True,
+        timeout=DEFAULT_SNIPPET_TIMEOUT,
         check=False,
     )
     _SUBPROCESS_CACHE[key] = proc
@@ -1757,6 +1763,7 @@ def _execute_fred_verify_release(
             cwd=tmp_path,
             capture_output=True,
             text=True,
+            timeout=DEFAULT_SNIPPET_TIMEOUT,
             check=False,
         )
         if proc.returncode != 0:
@@ -2668,16 +2675,7 @@ _STARTER_COUNT_PATTERN = re.compile(r"`starter`\s+for\s+(\d+)\s+core audit skill
 
 def _git_tag_exists(root: Path, tag: str) -> bool:
     """Return True if refs/tags/<tag> exists in the git repository at root."""
-    if not (root / ".git").exists():
-        return False
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
+    return git_tag_exists(root, tag)
 
 
 def _is_release_count_doc(rel_path: str, root: Path = ROOT) -> bool:
@@ -3089,10 +3087,31 @@ def verify_all_snippets(
     return errors
 
 
-def main() -> int:
+def _print_cli_exception(exc: FredCliError | subprocess.TimeoutExpired) -> None:
+    if isinstance(exc, FredCliError):
+        print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
+        if exc.hint:
+            print(f"Hint: {exc.hint}", file=sys.stderr)
+        return
+    cmd_display = (
+        " ".join(str(part) for part in exc.cmd)
+        if isinstance(exc.cmd, (list, tuple))
+        else str(exc.cmd)
+    )
+    print(
+        f"Error [subprocess_timeout]: Command timed out after {exc.timeout:g}s: {cmd_display}",
+        file=sys.stderr,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_cli_parser()
-    args = parser.parse_args()
-    errors = verify_all_snippets(root=ROOT, files=args.files if args.files else None)
+    args = parser.parse_args(argv)
+    try:
+        errors = verify_all_snippets(root=ROOT, files=args.files or None)
+    except (FredCliError, subprocess.TimeoutExpired) as exc:
+        _print_cli_exception(exc)
+        return 1
 
     if errors:
         for err in errors:

@@ -7,9 +7,10 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -1817,6 +1818,17 @@ def dispatch(a: argparse.Namespace) -> Any:
 def _to_cli_error(exc: BaseException) -> FredCliError:
     if isinstance(exc, FredCliError):
         return exc
+    if isinstance(exc, subprocess.TimeoutExpired):
+        cmd_display = (
+            " ".join(str(part) for part in exc.cmd)
+            if isinstance(exc.cmd, (list, tuple))
+            else str(exc.cmd)
+        )
+        return FredCliError(
+            f"Subprocess timed out after {exc.timeout:g}s: {cmd_display}",
+            code="subprocess_timeout",
+            hint="Retry once background filesystem locks or stalled child processes clear.",
+        )
     if isinstance(exc, json.JSONDecodeError):
         return FredCliError(
             f"Malformed JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}",
@@ -1850,11 +1862,13 @@ def _to_cli_error(exc: BaseException) -> FredCliError:
     )
 
 
-def main() -> int:
-    args = parser().parse_args()
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parser().parse_args(argv)
     try:
         result = dispatch(args)
     except (
+        FredCliError,
+        subprocess.TimeoutExpired,
         ValueError,
         RuntimeError,
         OSError,
