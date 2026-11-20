@@ -18,6 +18,10 @@ _SCRIPTS_DIR = ROOT / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from _markdown_utils import (
+    non_fenced_lines,
+    parse_reference_link_definition,
+)
 from skill_tools import (
     DOMAIN_KIND_KEY_SETS,
     SKILL_SUITE_PREFIXES,
@@ -39,6 +43,8 @@ from skill_tools import (
 
 _DOMAIN_KIND_KEY_SETS = DOMAIN_KIND_KEY_SETS
 _SKILL_SUITE_PREFIXES = SKILL_SUITE_PREFIXES
+_non_fenced_lines = non_fenced_lines
+_parse_reference_link_definition = parse_reference_link_definition
 
 _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     "repository-audits": {

@@ -8,8 +8,6 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
     ROOT,
@@ -108,12 +106,23 @@ def _page_shell(title: str, body_html: str, include_script: bool = True) -> str:
     )
 
 
+def _require_jsonschema() -> Any:
+    try:
+        import jsonschema as _jsonschema
+    except ImportError as exc:
+        raise RuntimeError(
+            "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."
+        ) from exc
+    return _jsonschema
+
+
 def _validate_domain_payload(payload: dict, kind: str) -> None:
+    jsonschema_mod = _require_jsonschema()
     schema_rel = DOMAIN_DELIVERABLE_SCHEMAS[f"{kind}.json"]
     schema = read_json(ROOT / schema_rel)
     errors = [
         str(err.message)
-        for err in jsonschema.Draft202012Validator(schema).iter_errors(payload)
+        for err in jsonschema_mod.Draft202012Validator(schema).iter_errors(payload)
     ]
     if errors:
         raise ValueError(f"Invalid {kind} artifact: " + "; ".join(errors[:5]))

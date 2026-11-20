@@ -350,6 +350,9 @@ class PagesWorkflowTests(unittest.TestCase):
             s for s in build_steps if s.get("uses") == SETUP_PYTHON_SHA
         )
         self.assertEqual(setup_py_step.get("with", {}).get("python-version"), "3.12")
+        self.assertNotIn("cache", setup_py_step.get("with", {}))
+        for step in build_steps:
+            self.assertNotIn("pip install", str(step.get("run", "")))
 
         stage_steps = [
             s for s in build_steps if "scripts/build_experience.py" in s.get("run", "")
@@ -495,6 +498,19 @@ class PagesWorkflowTests(unittest.TestCase):
         for ctx in blocked_contexts:
             with self.subTest(ctx=ctx):
                 self.assertFalse(_eval_if_condition(preflight_if, ctx))
+
+        chained_wf_run = {
+            "event_name": "workflow_run",
+            "ref": "refs/heads/main",
+            "event": {
+                "workflow_run": {
+                    "conclusion": "success",
+                    "event": "workflow_run",
+                    "head_branch": "main",
+                }
+            },
+        }
+        self.assertTrue(_eval_if_condition(preflight_if, chained_wf_run))
 
         for job_name in ("build", "deploy"):
             job_if = str(self.workflow_data["jobs"][job_name]["if"])

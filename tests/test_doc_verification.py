@@ -1648,6 +1648,106 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertIn("docs/runbooks.md:L3:", drift_errs[0])
             self.assertIn("validate_run", drift_errs[0])
 
+    def test_verify_release_snippet_executes_against_partial_download_fixture(
+        self,
+    ) -> None:
+        ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        ok_arch, msg_arch = execute_snippet_command(
+            f"python3 scripts/fred.py verify-release manifest.json --archive fred-skills-{ver}-starter.tar",
+            root=ROOT,
+        )
+        self.assertTrue(ok_arch, msg_arch)
+
+        ok_ign, msg_ign = execute_snippet_command(
+            "python3 scripts/fred.py verify-release manifest.json --ignore-missing",
+            root=ROOT,
+        )
+        self.assertTrue(ok_ign, msg_ign)
+
+        ok_local, msg_local = execute_snippet_command(
+            "python scripts/fred.py verify-release dist/starter/manifest.json",
+            root=ROOT,
+        )
+        self.assertTrue(ok_local, msg_local)
+
+        ok_unfiltered, msg_unfiltered = execute_snippet_command(
+            "python3 scripts/fred.py verify-release manifest.json",
+            root=ROOT,
+        )
+        self.assertFalse(ok_unfiltered)
+        self.assertIn("Missing release archive", msg_unfiltered)
+
+    def test_shared_doc_invariants_and_four_backtick_tilde_fences(self) -> None:
+        from _doc_invariants import (
+            CORE_INVARIANT_DOCS,
+            DocCountExpectations,
+            build_prose_count_rules,
+            find_prose_count_mismatches,
+        )
+        from validate_skills import _extract_fenced_blocks
+        from verify_doc_snippets import _parse_fenced_blocks
+
+        self.assertIn("docs/usage.md", CORE_INVARIANT_DOCS)
+
+        nested_md = (
+            "# Fence Parity\n\n"
+            "````markdown\n"
+            "Example skill snippet:\n"
+            "```bash\n"
+            "python scripts/nonexistent.py\n"
+            "```\n"
+            "````\n\n"
+            "~~~python\n"
+            "x = 1\n"
+            "~~~\n"
+        )
+        extracted, has_unclosed = _extract_fenced_blocks(nested_md)
+        self.assertFalse(has_unclosed)
+        self.assertEqual(2, len(extracted))
+        self.assertEqual("markdown", extracted[0][0])
+        self.assertIn("```bash", extracted[0][1])
+        self.assertEqual(("python", "x = 1"), extracted[1])
+
+        parsed = _parse_fenced_blocks(nested_md.splitlines())
+        self.assertEqual(2, len(parsed))
+        self.assertEqual("markdown", parsed[0][2])
+        self.assertTrue(any("```bash" in line for _, line in parsed[0][3]))
+        self.assertEqual("python", parsed[1][2])
+
+        rules = build_prose_count_rules(
+            DocCountExpectations(
+                total_skills=57,
+                starter_skills=6,
+                hosts_count=4,
+                packs_count=16,
+            )
+        )
+        prose = (
+            "Line 1 ok\n"
+            "Install the complete 55-package pack on five explicit host installation\n"
+            "locations or choose sixteen packs.\n"
+        )
+        mismatches = find_prose_count_mismatches(prose, rules)
+        by_label = {m.label: m for m in mismatches}
+        self.assertIn("skill", by_label)
+        self.assertEqual(
+            (2, 55, 57),
+            (
+                by_label["skill"].line_no,
+                by_label["skill"].found,
+                by_label["skill"].expected,
+            ),
+        )
+        self.assertIn("host", by_label)
+        self.assertEqual(
+            (2, 5, 4),
+            (
+                by_label["host"].line_no,
+                by_label["host"].found,
+                by_label["host"].expected,
+            ),
+        )
+
     def test_cached_subprocess_timeout_not_cached_and_main_exits_cleanly(self) -> None:
         """_run_cached_subprocess sets timeout=60 without caching timeouts, and main exits 1 cleanly."""
         import contextlib

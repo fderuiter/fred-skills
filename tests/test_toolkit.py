@@ -4204,6 +4204,119 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             self.assertEqual("git_timeout", req_ctx.exception.code)
             self.assertTrue(req_ctx.exception.hint)
 
+    def test_sarif_export_import_and_reconcile_respect_stdlib_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            review_path = work / "review.json"
+            atomic_json(
+                review_path,
+                {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Found an advisory issue and a high issue.",
+                    "coverage": [
+                        {"topic": "bounds", "scope": "app.py", "status": "reviewed"}
+                    ],
+                    "findings": [
+                        {
+                            "id": "REV-1",
+                            "title": "High issue",
+                            "severity": "high",
+                            "file": "app.py",
+                            "line": 1,
+                            "description": "Missing bounds check.",
+                        },
+                        {
+                            "id": "REV-2",
+                            "title": "Advisory note",
+                            "severity": "advisory",
+                            "file": "app.py",
+                            "line": 1,
+                            "description": "Consider renaming variable.",
+                        },
+                    ],
+                },
+            )
+            sarif_path = work / "review.sarif"
+            obs_path = work / "observations.json"
+
+            # Verify runs, reports, and _sarif_import do not eagerly import yaml or jsonschema under -S
+            probe = (
+                "import sys; sys.path.insert(0, 'scripts'); "
+                "from fredlib import reports, runs, _sarif_import; "
+                "assert 'yaml' not in sys.modules; "
+                "assert 'jsonschema' not in sys.modules"
+            )
+            probe_proc = subprocess.run(
+                [sys.executable, "-S", "-c", probe],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, probe_proc.returncode, probe_proc.stderr)
+
+            # Both export-sarif (on review.json) and import-sarif succeed under pure stdlib (-S)
+            exp_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "export-sarif",
+                    str(review_path),
+                    "--output",
+                    str(sarif_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, exp_proc.returncode, exp_proc.stderr)
+
+            imp_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "import-sarif",
+                    str(sarif_path),
+                    "--output",
+                    str(obs_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, imp_proc.returncode, imp_proc.stderr)
+            imported = read_json(obs_path)
+            self.assertEqual(2, len(imported["observations"]))
+
+            # Without jsonschema (-S), reconcile exits cleanly with code 1 and clear missing-dependency message
+            rec_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "reconcile",
+                    str(work),
+                    "--finding",
+                    "REV-1",
+                    "--state",
+                    "in-progress",
+                    "--note",
+                    "Checking stdlib error path",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, rec_proc.returncode)
+            self.assertIn("Dependency missing: jsonschema", rec_proc.stderr)
+            self.assertNotIn("Traceback", rec_proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,11 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: [Validate skill packages]
+    types: [completed]
     branches: [main]
+  push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -30,8 +33,10 @@ env:
 jobs:
   prepare:
     if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
       github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -61,7 +66,10 @@ jobs:
           GITHUB_ACTOR_NAME: ${{ github.actor }}
           GITHUB_REF_VALUE: ${{ github.ref }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          WORKFLOW_SHA: ${{ github.sha }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -eu
 
@@ -76,7 +84,12 @@ jobs:
             fi
           }
 
-          if [ "${EVENT_NAME:-}" != "push" ] || [ "${GITHUB_REF_VALUE:-}" != "refs/heads/main" ]; then
+          if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
+            if [ "${WORKFLOW_CONCLUSION:-}" != "success" ] || [ "${WORKFLOW_EVENT:-}" != "push" ] || [ "${WORKFLOW_HEAD_BRANCH:-}" != "main" ]; then
+              echo "Error: prepare job requires workflow_run conclusion=success, event=push, and head_branch=main" >&2
+              exit 1
+            fi
+          elif [ "${EVENT_NAME:-}" != "push" ] || [ "${GITHUB_REF_VALUE:-}" != "refs/heads/main" ]; then
             echo "Error: prepare job may only run on push to refs/heads/main" >&2
             exit 1
           fi
@@ -187,7 +200,19 @@ jobs:
 
   preflight:
     needs: prepare
-    if: "!cancelled() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')"
+    if: >-
+      !cancelled() &&
+      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
+      (
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main'
+        ) ||
+        github.event_name == 'push' ||
+        github.event_name == 'workflow_dispatch'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -195,12 +220,13 @@ jobs:
     outputs:
       should_build: ${{ steps.gate.outputs.should_build }}
       should_publish: ${{ steps.gate.outputs.should_publish }}
+      needs_validation: ${{ steps.gate.outputs.needs_validation }}
       release_tag: ${{ steps.gate.outputs.release_tag }}
       target_sha: ${{ steps.gate.outputs.target_sha }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ needs.prepare.outputs.target_sha || github.sha }}
+          ref: ${{ needs.prepare.outputs.target_sha || github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
       - name: Evaluate release preflight gate
         id: gate
@@ -209,7 +235,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_SHA: ${{ needs.prepare.outputs.target_sha || github.sha }}
+          WORKFLOW_SHA: ${{ needs.prepare.outputs.target_sha || github.event.workflow_run.head_sha || github.sha }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           INPUT_PUBLISH: ${{ inputs.publish }}
           INPUT_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
@@ -262,7 +292,21 @@ jobs:
           PUBLISH_INPUT="${INPUT_PUBLISH:-}"
           PUBLISH_REQUESTED="false"
 
-          if [ "$EVENT" = "workflow_dispatch" ]; then
+          if [ "$EVENT" = "workflow_run" ]; then
+            if [ "${WORKFLOW_CONCLUSION:-}" != "success" ]; then
+              echo "Error: Refusing release preflight for non-successful workflow_run conclusion '${WORKFLOW_CONCLUSION:-none}'" >&2
+              exit 1
+            fi
+            if [ "${WORKFLOW_EVENT:-}" != "push" ]; then
+              echo "Error: Refusing release preflight for workflow_run event '${WORKFLOW_EVENT:-none}' (expected push)" >&2
+              exit 1
+            fi
+            if [ "${WORKFLOW_HEAD_BRANCH:-}" != "main" ]; then
+              echo "Error: Refusing release preflight for workflow_run branch '${WORKFLOW_HEAD_BRANCH:-none}' (expected main)" >&2
+              exit 1
+            fi
+            PUBLISH_REQUESTED="true"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
             case "$PUBLISH_INPUT" in
               true|TRUE|True)
                 PUBLISH_REQUESTED="true"
@@ -324,6 +368,7 @@ jobs:
               {
                 echo "should_build=true"
                 echo "should_publish=false"
+                echo "needs_validation=true"
                 echo "release_tag=$DISPATCH_TAG"
                 echo "target_sha=$TARGET_SHA"
               } >> "$GITHUB_OUTPUT"
@@ -338,7 +383,7 @@ jobs:
           elif [ "${REF_TYPE:-}" = "tag" ]; then
             TAG="${REF_NAME:-}"
             validate_tag_syntax "$TAG"
-          elif [ "$EVENT" != "push" ] || [ "${REF_TYPE:-}" != "branch" ] || [ "${REF_NAME:-}" != "main" ]; then
+          elif [ "$EVENT" != "workflow_run" ] && { [ "$EVENT" != "push" ] || [ "${REF_TYPE:-}" != "branch" ] || [ "${REF_NAME:-}" != "main" ]; }; then
             if [ ! -s VERSION ] || [ -z "$(tr -d '[:space:]' < VERSION)" ]; then
               echo "Error: VERSION file is missing or empty in repository root" >&2
               exit 1
@@ -393,7 +438,7 @@ jobs:
             git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || \
               git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
             TARGET_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
-          elif [ "$LS_EXIT" -eq 2 ] && [ "$EVENT" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
+          elif [ "$LS_EXIT" -eq 2 ] && { [ "$EVENT" = "workflow_run" ] || { [ "$EVENT" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; }; }; then
             START_SHA="${WORKFLOW_SHA:-${GITHUB_SHA:-}}"
             if [ -z "$START_SHA" ]; then
               START_SHA="$(git rev-parse --verify HEAD)"
@@ -515,10 +560,16 @@ jobs:
             fi
           fi
 
+          NEEDS_VALIDATION="true"
+          if [ "$EVENT" = "workflow_run" ] && [ -n "${WORKFLOW_RUN_HEAD_SHA:-}" ] && [ "$TARGET_SHA" = "$WORKFLOW_RUN_HEAD_SHA" ]; then
+            NEEDS_VALIDATION="false"
+          fi
+
           if [ -n "${GITHUB_OUTPUT:-}" ]; then
             {
               echo "should_build=$SHOULD_BUILD"
               echo "should_publish=$SHOULD_PUBLISH"
+              echo "needs_validation=$NEEDS_VALIDATION"
               echo "release_tag=$TAG"
               echo "target_sha=$TARGET_SHA"
             } >> "$GITHUB_OUTPUT"
@@ -531,7 +582,8 @@ jobs:
       !cancelled() &&
       (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       needs.preflight.result == 'success' &&
-      needs.preflight.outputs.should_build == 'true'
+      needs.preflight.outputs.should_build == 'true' &&
+      needs.preflight.outputs.needs_validation != 'false'
     permissions:
       contents: read
     uses: ./.github/workflows/validate.yml
@@ -544,7 +596,10 @@ jobs:
       !cancelled() &&
       (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       needs.preflight.result == 'success' &&
-      needs.validate.result == 'success' &&
+      (
+        needs.validate.result == 'success' ||
+        (needs.validate.result == 'skipped' && needs.preflight.outputs.needs_validation == 'false')
+      ) &&
       needs.preflight.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -562,8 +617,6 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Install validation dependencies
         run: python -m pip install -r requirements-dev.txt
-      - name: Validate source and fixtures
-        run: make check
       - name: Package release assets
         run: python scripts/fred.py release --all --output dist/release
       - name: Verify release manifest and checksums
@@ -585,7 +638,10 @@ jobs:
       !cancelled() &&
       (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       needs.preflight.result == 'success' &&
-      needs.validate.result == 'success' &&
+      (
+        needs.validate.result == 'success' ||
+        (needs.validate.result == 'skipped' && needs.preflight.outputs.needs_validation == 'false')
+      ) &&
       needs.build.result == 'success' &&
       needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
@@ -609,12 +665,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           INPUT_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -eu
 
@@ -708,6 +767,15 @@ jobs:
             exit 1
           fi
 
+          if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
+            if { [ -n "${WORKFLOW_CONCLUSION:-}" ] && [ "$WORKFLOW_CONCLUSION" != "success" ]; } || \
+               { [ -n "${WORKFLOW_EVENT:-}" ] && [ "$WORKFLOW_EVENT" != "push" ]; } || \
+               { [ -n "${WORKFLOW_HEAD_BRANCH:-}" ] && [ "$WORKFLOW_HEAD_BRANCH" != "main" ]; }; then
+              echo "Error: Refusing release prerequisite check for unverified workflow_run context" >&2
+              exit 1
+            fi
+          fi
+
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
           if [ "$LS_EXIT" -eq 0 ]; then
@@ -715,7 +783,7 @@ jobs:
             REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
             if [ "$REMOTE_TAG_SHA" != "$TARGET_SHA" ]; then
               MISMATCH_PUBLISHED="false"
-              if [ "${EVENT_NAME:-}" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ] && git merge-base --is-ancestor "$REMOTE_TAG_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
+              if { [ "${EVENT_NAME:-}" = "push" ] || [ "${EVENT_NAME:-}" = "workflow_run" ]; } && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ] && git merge-base --is-ancestor "$REMOTE_TAG_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
                 if VIEW_OUT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
                   NORMALIZED_VIEW="$(printf '%s' "$VIEW_OUT" | tr -d '[:space:]')"
                   case "$NORMALIZED_VIEW" in
@@ -741,7 +809,7 @@ jobs:
                 exit 1
               fi
             fi
-          elif [ "$LS_EXIT" -eq 2 ] && [ "${EVENT_NAME:-}" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
+          elif [ "$LS_EXIT" -eq 2 ] && { [ "${EVENT_NAME:-}" = "push" ] || [ "${EVENT_NAME:-}" = "workflow_run" ]; } && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
             :
           elif [ "$LS_EXIT" -eq 2 ]; then
             echo "Error: Remote tag 'refs/tags/$TAG' does not exist on origin" >&2
@@ -755,7 +823,7 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           INPUT_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
@@ -913,48 +981,11 @@ jobs:
                 exit 1
               fi
             fi
-            "$PY_BIN" -S - <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          dist = Path("dist/release").resolve()
-          manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
-          if manifest.get("schema_version") != "1.0":
-              raise SystemExit("Error: Unsupported manifest schema_version")
-          if manifest.get("licensing") != "See repository LICENSE":
-              raise SystemExit("Error: Release manifest licensing does not report repository LICENSE")
-          version_file = Path("VERSION")
-          if version_file.is_file():
-              expected_version = version_file.read_text(encoding="utf-8").strip()
-              if manifest.get("version") != expected_version:
-                  raise SystemExit(
-                      f"Error: Manifest version '{manifest.get('version')}' does not match VERSION '{expected_version}'"
-                  )
-          archives = manifest.get("archives")
-          if not isinstance(archives, list) or not archives:
-              raise SystemExit("Error: Manifest archives list is missing or empty")
-          expected_lines = []
-          for entry in archives:
-              name = entry.get("file", "")
-              digest = entry.get("sha256", "")
-              size = entry.get("bytes")
-              if not name or "/" in name or name.startswith("."):
-                  raise SystemExit(f"Error: Invalid archive filename in manifest: {name!r}")
-              target = dist / name
-              if target.is_symlink() or not target.resolve().is_relative_to(dist) or not target.is_file():
-                  raise SystemExit(f"Error: Missing or unsafe archive file: {name}")
-              raw = target.read_bytes()
-              if isinstance(size, int) and len(raw) != size:
-                  raise SystemExit(f"Error: Byte length mismatch for {name}")
-              if hashlib.sha256(raw).hexdigest() != digest:
-                  raise SystemExit(f"Error: Manifest SHA-256 mismatch for {name}")
-              expected_lines.append(f"{digest}  {name}\n")
-          if "".join(expected_lines) != (dist / "SHA256SUMS").read_text(encoding="utf-8"):
-              raise SystemExit("Error: manifest.json archives do not match SHA256SUMS")
-          sys.exit(0)
-          PY
+            set -- "$PY_BIN" -S scripts/fred.py verify-release dist/release/manifest.json --require-licensing
+            if [ -f VERSION ]; then
+              set -- "$@" --expected-version "$(tr -d '[:space:]' < VERSION)"
+            fi
+            "$@"
           fi
 
           (
@@ -974,12 +1005,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           INPUT_TAG: ${{ inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -eu
 
@@ -1065,6 +1099,15 @@ jobs:
             exit 1
           fi
 
+          if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
+            if { [ -n "${WORKFLOW_CONCLUSION:-}" ] && [ "$WORKFLOW_CONCLUSION" != "success" ]; } || \
+               { [ -n "${WORKFLOW_EVENT:-}" ] && [ "$WORKFLOW_EVENT" != "push" ]; } || \
+               { [ -n "${WORKFLOW_HEAD_BRANCH:-}" ] && [ "$WORKFLOW_HEAD_BRANCH" != "main" ]; }; then
+              echo "Error: Refusing release publication for unverified workflow_run context" >&2
+              exit 1
+            fi
+          fi
+
           REMOTE_TAG_EXISTS="false"
           LS_EXIT=0
           git ls-remote --exit-code --refs origin "refs/tags/$TAG" >/dev/null 2>&1 || LS_EXIT=$?
@@ -1074,7 +1117,7 @@ jobs:
               git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1
             REMOTE_TAG_SHA="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
             if [ "$REMOTE_TAG_SHA" != "$TARGET_SHA" ]; then
-              if [ "${EVENT_NAME:-push}" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ] && git merge-base --is-ancestor "$REMOTE_TAG_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
+              if { [ "${EVENT_NAME:-push}" = "push" ] || [ "${EVENT_NAME:-}" = "workflow_run" ]; } && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ] && git merge-base --is-ancestor "$REMOTE_TAG_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
                 if VIEW_OUT="$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>"$VIEW_ERR_FILE")"; then
                   NORMALIZED_VIEW="$(printf '%s' "$VIEW_OUT" | tr -d '[:space:]')"
                   case "$NORMALIZED_VIEW" in
@@ -1100,7 +1143,7 @@ jobs:
               echo "Error: Remote tag 'refs/tags/$TAG' points to '$REMOTE_TAG_SHA', expected '$TARGET_SHA'" >&2
               exit 1
             fi
-          elif [ "$LS_EXIT" -eq 2 ] && [ "${EVENT_NAME:-push}" = "push" ] && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
+          elif [ "$LS_EXIT" -eq 2 ] && { [ "${EVENT_NAME:-push}" = "push" ] || [ "${EVENT_NAME:-}" = "workflow_run" ]; } && [ "${REF_TYPE:-}" = "branch" ] && [ "${REF_NAME:-}" = "main" ]; then
             REMOTE_TAG_EXISTS="false"
           elif [ "$LS_EXIT" -eq 2 ]; then
             echo "Error: Remote tag 'refs/tags/$TAG' does not exist on origin" >&2
