@@ -918,7 +918,7 @@ def vet_script(
 ) -> list[dict[str, Any]]
 ```
 
-Inspects a Python or shell script offline for network clients, `shell=True` or dynamic `eval`/`exec` calls, hidden Unicode controls, and undeclared credential or sensitive host path reads.
+Inspects a Python, JS/TS, or shell script offline for network clients, process/shell execution, dynamic loaders (`eval`/`exec`/`importlib`/`runpy`), reflective execution/network lookups (`getattr`/`operator.attrgetter`), hidden Unicode controls, and undeclared credential, `Path.joinpath`, or bulk `os.environ` reads.
 
 - **Parameters:**
   - `path` (`Path`): Path to the Python or shell script file.
@@ -976,7 +976,7 @@ def vet_skill(
 ) -> dict[str, Any]
 ```
 
-Vets a standalone skill package directory across `SKILL.md`, `references/*.md`, `assets/prompt.md`, bundled `scripts/*` files, and filesystem containment boundaries without requiring repository authoring schemas.
+Vets a standalone skill package directory across `SKILL.md`, `references/*.md`, `assets/prompt.md`, `.svg` assets, `agents/*.yaml`, `.mcp.json`, `.cursor-plugin/plugin.json`, `hooks/*`, bundled scripts (`scripts/*`, `.js`/`.ts`, `#!`), and filesystem containment boundaries without requiring repository authoring schemas.
 
 - **Parameters:**
   - `package` (`Path`): Skill package directory path.
@@ -1000,7 +1000,7 @@ def vet_target(
 ) -> dict[str, Any]
 ```
 
-Vets a standalone skill directory, an individual script/instruction/MCP file, or all agent configurations and host skill folders (`.claude/skills`, `.agents/skills`, `.cursor/skills`, `AGENTS.md`, `.cursorrules`, `.mcp.json`, and configured `catalog/hosts.json` project paths) in a target repository.
+Vets a standalone skill directory, an individual script/instruction/SVG/YAML/manifest/MCP file, or all agent configurations, `@<path>` Markdown shims (`CLAUDE.md`, `GEMINI.md`), host plugin/settings manifests (`.claude/settings.json`, `.cursor-plugin/plugin.json`, `gemini-extension.json`), and host skill folders in a target repository.
 
 - **Parameters:**
   - `target` (`Path`): Skill folder, configuration file, or repository root directory to inspect.
