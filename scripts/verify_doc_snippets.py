@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -35,6 +35,7 @@ from _doc_invariants import (
     find_prose_count_mismatches,
 )
 from _markdown_utils import match_atx_heading, scan_markdown_fences
+from skill_tools import FredCliError
 
 fred: ModuleType | None
 try:
@@ -1283,6 +1284,9 @@ def clear_subprocess_cache() -> None:
     _HELP_FLAGS_CACHE.clear()
 
 
+DEFAULT_SNIPPET_TIMEOUT = 60
+
+
 def _run_cached_subprocess(
     cmd: list[str],
     cwd: Path | None = None,
@@ -1298,6 +1302,7 @@ def _run_cached_subprocess(
         cwd=cwd,
         capture_output=True,
         text=True,
+        timeout=DEFAULT_SNIPPET_TIMEOUT,
         check=False,
     )
     _SUBPROCESS_CACHE[key] = proc
@@ -2923,10 +2928,31 @@ def verify_all_snippets(
     return errors
 
 
-def main() -> int:
+def _print_cli_exception(exc: FredCliError | subprocess.TimeoutExpired) -> None:
+    if isinstance(exc, FredCliError):
+        print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
+        if exc.hint:
+            print(f"Hint: {exc.hint}", file=sys.stderr)
+        return
+    cmd_display = (
+        " ".join(str(part) for part in exc.cmd)
+        if isinstance(exc.cmd, (list, tuple))
+        else str(exc.cmd)
+    )
+    print(
+        f"Error [subprocess_timeout]: Command timed out after {exc.timeout:g}s: {cmd_display}",
+        file=sys.stderr,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_cli_parser()
-    args = parser.parse_args()
-    errors = verify_all_snippets(root=ROOT, files=args.files if args.files else None)
+    args = parser.parse_args(argv)
+    try:
+        errors = verify_all_snippets(root=ROOT, files=args.files or None)
+    except (FredCliError, subprocess.TimeoutExpired) as exc:
+        _print_cli_exception(exc)
+        return 1
 
     if errors:
         for err in errors:

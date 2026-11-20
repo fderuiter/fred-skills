@@ -55,12 +55,15 @@ __all__ = [
     "slugify",
 ]
 
-AUXILIARY_ROOT_MARKDOWN: tuple[str, ...] = (
+ROOT_MARKDOWN_FILES: tuple[str, ...] = (
+    "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
     "SECURITY.md",
     "evals/README.md",
 )
+AUXILIARY_ROOT_MARKDOWN: tuple[str, ...] = ROOT_MARKDOWN_FILES[1:]
+GITHUB_BLOB_BASE_URL = "https://github.com/fderuiter/fred-skills/blob/main"
 
 _HR_RE = re.compile(r"^\s*(?:-\s*-\s*-[-\s]*|\*\s*\*\s*\*[\*\s]*|_\s*_\s*_[_\s]*)$")
 _UL_ITEM_RE = re.compile(r"^([ \t]*)[-*+]\s+(.*)$")
@@ -80,19 +83,34 @@ def _site_header_html(
     page_rel_path: str,
     subtitle: str = "documentation",
     root: Path = ROOT,
+    compiled_md_paths: frozenset[str] | None = None,
 ) -> str:
     root_prefix = _rel_prefix_to_site_root(page_rel_path)
     guide_links = "".join(
         f'<a href="{root_prefix}docs/{slug}.html">{escape(label)}</a>'
         for slug, label in explorer_doc_guides(root)
+        if compiled_md_paths is None or f"docs/{slug}.md" in compiled_md_paths
     )
     return (
         f'<header><p class="muted">fred-skills · {escape(subtitle)}</p>'
         f'<nav aria-label="Site navigation">'
         f'<a href="{root_prefix}index.html">Quickstart</a>'
         f'<a href="{root_prefix}docs/explorer.html">Skill explorer</a>'
+        f'<a href="{root_prefix}docs/index.html">Docs</a>'
+        f'<a href="{root_prefix}skills/index.html">Skills</a>'
         f"{guide_links}"
         f"</nav></header>"
+    )
+
+
+def _is_repo_hosted_skill_resource(rel_target: str) -> bool:
+    parts = Path(rel_target).parts
+    if len(parts) < 4 or parts[0] != "skills":
+        return False
+    subdir = parts[2]
+    lower = rel_target.lower()
+    return (subdir == "assets" and lower.endswith(".md")) or (
+        subdir == "scripts" and lower.endswith(".py")
     )
 
 
@@ -102,14 +120,15 @@ def rewrite_link_target(
     compiled_md_paths: frozenset[str],
     root: Path = ROOT,
 ) -> str:
-    """Rewrite relative .md link targets to .html when the target is compiled into the site."""
+    """Rewrite relative .md link targets to .html (or GitHub blob URLs for pruned skill resources)."""
     cleaned = target.strip().strip("<>\"'")
     parsed = urlsplit(cleaned)
     if parsed.scheme or parsed.netloc or not parsed.path:
         return cleaned
 
     raw_path = unquote(parsed.path)
-    if not raw_path.lower().endswith(".md"):
+    lower_path = raw_path.lower()
+    if not lower_path.endswith((".md", ".py")):
         return cleaned
 
     source_dir = (root.resolve() / source_rel_path).parent
@@ -119,11 +138,24 @@ def rewrite_link_target(
     except ValueError:
         return cleaned
 
-    if rel_target not in compiled_md_paths:
-        return cleaned
+    if lower_path.endswith(".md") and rel_target in compiled_md_paths:
+        new_path = parsed.path[:-3] + ".html"
+        return urlunsplit(("", "", new_path, parsed.query, parsed.fragment))
 
-    new_path = parsed.path[:-3] + ".html"
-    return urlunsplit(("", "", new_path, parsed.query, parsed.fragment))
+    if _is_repo_hosted_skill_resource(rel_target):
+        blob_url = f"{GITHUB_BLOB_BASE_URL}/{rel_target}"
+        blob_parts = urlsplit(blob_url)
+        return urlunsplit(
+            (
+                blob_parts.scheme,
+                blob_parts.netloc,
+                blob_parts.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
+    return cleaned
 
 
 def _format_escaped_emphasis(escaped_text: str) -> str:
@@ -560,13 +592,23 @@ def _render_skill_metadata_section(
     )
 
 
+def _is_excluded_markdown_parts(rel_parts: tuple[str, ...]) -> bool:
+    if any(
+        part in {"__pycache__", ".DS_Store"}
+        or part.endswith((".pyc", ".pyo", ".pyd", ".telemetry.json"))
+        for part in rel_parts
+    ):
+        return True
+    return len(rel_parts) >= 3 and rel_parts[0] == "skills" and rel_parts[2] == "assets"
+
+
 def _discover_compilable_markdown_paths(root: Path) -> list[str]:
     """Return sorted repo-relative POSIX paths of all Markdown files compiled into dist/site/."""
     candidates: set[str] = set()
-    for rel in (*SITE_ROOT_FILES, *AUXILIARY_ROOT_MARKDOWN):
-        if rel.lower().endswith(".md") and (root / rel).is_file():
+    for rel in ROOT_MARKDOWN_FILES:
+        if (root / rel).is_file():
             candidates.add(rel)
-    for rel_dir in SITE_DIRECTORIES:
+    for rel_dir in ("docs", "skills"):
         src_dir = root / rel_dir
         if not src_dir.is_dir():
             continue
@@ -574,14 +616,141 @@ def _discover_compilable_markdown_paths(root: Path) -> list[str]:
             if not md_path.is_file():
                 continue
             rel_parts = md_path.relative_to(root).parts
-            if any(
-                part in {"__pycache__", ".DS_Store"}
-                or part.endswith((".pyc", ".pyo", ".pyd", ".telemetry.json"))
-                for part in rel_parts
-            ):
+            if _is_excluded_markdown_parts(rel_parts):
                 continue
             candidates.add(md_path.relative_to(root).as_posix())
+    if (root / "catalog/skills.json").is_file() and (root / "docs").is_dir():
+        candidates.add("docs/experience.md")
     return sorted(candidates)
+
+
+def _prune_empty_directories(directory: Path) -> None:
+    """Remove empty subdirectories bottom-up after filtered static file copying."""
+    for subdir in sorted(
+        (p for p in directory.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        try:
+            next(subdir.iterdir())
+        except StopIteration:
+            subdir.rmdir()
+
+
+def _render_docs_hub_body(
+    compiled_titles: Mapping[str, str],
+    compiled_md_paths: frozenset[str],
+    root: Path,
+) -> str:
+    header = _site_header_html(
+        "docs/index.html",
+        subtitle="documentation",
+        root=root,
+        compiled_md_paths=compiled_md_paths,
+    )
+    guide_labels = dict(explorer_doc_guides(root))
+    docs_md_paths = sorted(p for p in compiled_md_paths if p.startswith("docs/"))
+    docs_items: list[str] = [
+        '<li><a href="explorer.html"><strong>Skill explorer</strong></a> — Interactive task, symptom, pack, and host search (<code>docs/explorer.html</code>).</li>'
+    ]
+    for rel_md in docs_md_paths:
+        rel_from_docs = Path(rel_md).relative_to("docs").with_suffix(".html").as_posix()
+        stem = Path(rel_md).stem
+        title = compiled_titles.get(rel_md) or guide_labels.get(stem) or stem
+        label_prefix = (
+            f"{escape(guide_labels[stem])} — "
+            if stem in guide_labels
+            and Path(rel_md).parent == Path("docs")
+            and guide_labels[stem].lower() != title.lower()
+            else ""
+        )
+        docs_items.append(
+            f'<li><a href="{escape(rel_from_docs, quote=True)}">{label_prefix}{escape(title)}</a> '
+            f"(<code>{escape(rel_from_docs)}</code>)</li>"
+        )
+
+    root_items: list[str] = []
+    for rel_md in ROOT_MARKDOWN_FILES:
+        if rel_md not in compiled_md_paths:
+            continue
+        rel_html = rel_md[:-3] + ".html"
+        title = compiled_titles.get(rel_md) or Path(rel_md).stem
+        root_items.append(
+            f'<li><a href="../{escape(rel_html, quote=True)}">{escape(title)}</a> '
+            f"(<code>{escape(rel_html)}</code>)</li>"
+        )
+    root_items.append(
+        '<li><a href="../skills/index.html">Skill packages</a> (<code>skills/index.html</code>)</li>'
+    )
+
+    return (
+        f"{header}\n"
+        f"<section><h1>Documentation</h1>"
+        f"<p>Browse compiled guides, release notes, and repository references for <code>fred-skills</code>.</p>"
+        f"<pre><code>python scripts/fred.py --help</code></pre>"
+        f"<h2>Guides and release notes</h2><ul>{''.join(docs_items)}</ul>"
+        f"<h2>Repository references</h2><ul>{''.join(root_items)}</ul>"
+        f"</section>"
+    )
+
+
+def _render_skills_hub_body(
+    catalog_list: list[dict[str, Any]],
+    suites_list: list[dict[str, Any]] | None,
+    compiled_md_paths: frozenset[str],
+    root: Path,
+) -> str:
+    header = _site_header_html(
+        "skills/index.html",
+        subtitle="skill packages",
+        root=root,
+        compiled_md_paths=compiled_md_paths,
+    )
+    by_suite: dict[str, list[dict[str, Any]]] = {}
+    for entry in catalog_list:
+        suite_key = str(entry.get("suite") or "standalone")
+        by_suite.setdefault(suite_key, []).append(entry)
+
+    ordered_suites: list[tuple[str, str]] = []
+    seen_suites: set[str] = set()
+    for suite_obj in suites_list or []:
+        sname = str(suite_obj.get("name") or "")
+        if sname and sname in by_suite:
+            stitle = str(suite_obj.get("title") or sname)
+            ordered_suites.append((sname, stitle))
+            seen_suites.add(sname)
+    for sname in sorted(by_suite):
+        if sname not in seen_suites:
+            ordered_suites.append((sname, sname))
+
+    suite_sections: list[str] = []
+    for sname, stitle in ordered_suites:
+        rows = "".join(
+            f"<tr>"
+            f'<td><a href="{escape(str(item["name"]), quote=True)}/index.html"><code>{escape(str(item["name"]))}</code></a> '
+            f'(<a href="{escape(str(item["name"]), quote=True)}/SKILL.html">SKILL.html</a>)</td>'
+            f"<td>{escape(str(item.get('title') or item['name']))}</td>"
+            f"<td>{escape(str(item.get('description') or ''))}</td>"
+            f'<td><span class="badge badge-medium medium">{escape(str(item.get("maturity") or "experimental"))}</span></td>'
+            f"</tr>"
+            for item in by_suite[sname]
+        )
+        suite_sections.append(
+            f'<section id="{escape(sname, quote=True)}">'
+            f"<h2>{escape(stitle)} (<code>{escape(sname)}</code>)</h2>"
+            f'<div class="table-container"><table><thead><tr><th>Package</th><th>Title</th><th>Description</th><th>Maturity</th></tr></thead>'
+            f"<tbody>{rows}</tbody></table></div></section>"
+        )
+
+    return (
+        f"{header}\n"
+        f"<section><h1>Skill packages</h1>"
+        f"<p><strong>{len(catalog_list)} standalone skills</strong> across {len(ordered_suites)} suites. "
+        f'Filter interactively in the <a href="../docs/explorer.html">Skill explorer</a> or view the '
+        f'<a href="../docs/catalog.html">catalog table</a>.</p>'
+        f"<pre><code>python scripts/fred.py install --destination /path/to/repo --host codex --pack starter</code></pre>"
+        f"</section>\n" + "\n".join(suite_sections)
+    )
 
 
 def build_site(output_dir: Path, root: Path = ROOT) -> Path:
@@ -644,13 +813,11 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dst_file)
 
-    for rel_gen, content in generated_experience.items():
-        gen_target = resolved_out / rel_gen
-        gen_target.parent.mkdir(parents=True, exist_ok=True)
-        gen_target.write_text(content, encoding="utf-8", newline="\n")
+    _prune_empty_directories(resolved_out)
 
     compilable_rel_paths = _discover_compilable_markdown_paths(resolved_root)
     compiled_set = frozenset(compilable_rel_paths)
+    compiled_titles: dict[str, str] = {}
 
     for rel_md in compilable_rel_paths:
         src_md = resolved_root / rel_md
@@ -676,9 +843,10 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
                 compiled_md_paths=compiled_set,
                 root=resolved_root,
             )
+            compiled_titles[rel_md] = heading_title or skill_name
             page_title = f"{escape(heading_title or skill_name)} — fred-skills"
             full_body = (
-                f"{_site_header_html(rel_html, subtitle='skill package', root=resolved_root)}\n"
+                f"{_site_header_html(rel_html, subtitle='skill package', root=resolved_root, compiled_md_paths=compiled_set)}\n"
                 f"{meta_section}\n"
                 f"<section>{body_content}</section>"
             )
@@ -694,21 +862,47 @@ def build_site(output_dir: Path, root: Path = ROOT) -> Path:
                 compiled_md_paths=compiled_set,
                 root=resolved_root,
             )
+            compiled_titles[rel_md] = heading_title or Path(rel_md).stem
             page_title = (
                 "fred-skills — documentation"
                 if rel_md == "README.md"
                 else f"{escape(heading_title or Path(rel_md).stem)} — fred-skills"
             )
-            full_body = f"{_site_header_html(rel_html, root=resolved_root)}\n<section>{body_content}</section>"
+            full_body = (
+                f"{_site_header_html(rel_html, root=resolved_root, compiled_md_paths=compiled_set)}\n"
+                f"<section>{body_content}</section>"
+            )
 
-        rendered_page = _page_shell(page_title, full_body)
+        rendered_page = _page_shell(page_title, full_body, include_script=False)
         dst_html = resolved_out / rel_html
         dst_html.parent.mkdir(parents=True, exist_ok=True)
         dst_html.write_text(rendered_page, encoding="utf-8", newline="\n")
+        if is_skill_root:
+            (dst_html.parent / "index.html").write_text(
+                rendered_page, encoding="utf-8", newline="\n"
+            )
         if rel_md == "README.md":
             (resolved_out / "index.html").write_text(
                 rendered_page, encoding="utf-8", newline="\n"
             )
+
+    docs_hub_html = _page_shell(
+        "Documentation — fred-skills",
+        _render_docs_hub_body(compiled_titles, compiled_set, resolved_root),
+        include_script=False,
+    )
+    docs_hub_target = resolved_out / "docs/index.html"
+    docs_hub_target.parent.mkdir(parents=True, exist_ok=True)
+    docs_hub_target.write_text(docs_hub_html, encoding="utf-8", newline="\n")
+
+    skills_hub_html = _page_shell(
+        "Skill packages — fred-skills",
+        _render_skills_hub_body(catalog_list, suites_list, compiled_set, resolved_root),
+        include_script=False,
+    )
+    skills_hub_target = resolved_out / "skills/index.html"
+    skills_hub_target.parent.mkdir(parents=True, exist_ok=True)
+    skills_hub_target.write_text(skills_hub_html, encoding="utf-8", newline="\n")
 
     web_explorer_html = _render_explorer_html(
         catalog_list,

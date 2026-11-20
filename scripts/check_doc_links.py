@@ -7,6 +7,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 sys.dont_write_bytecode = True
 
@@ -60,10 +61,45 @@ def _get_cached_anchors(
     return anchors
 
 
+def _infer_link_policy(
+    resolved_file: Path,
+    resolved_root: Path,
+    boundary_dir: Path | None,
+    reject_md_links: bool | None,
+) -> tuple[Path | None, bool]:
+    staged_site = (resolved_root / "dist" / "site").resolve()
+    in_staged_site = resolved_file.is_relative_to(staged_site)
+
+    if boundary_dir is not None:
+        effective_boundary: Path | None = boundary_dir.resolve()
+    elif in_staged_site:
+        effective_boundary = staged_site
+    elif resolved_file.is_relative_to(resolved_root):
+        effective_boundary = resolved_root
+    else:
+        effective_boundary = None
+
+    if reject_md_links is not None:
+        effective_reject_md = reject_md_links
+    elif in_staged_site or (
+        effective_boundary is not None
+        and effective_boundary != resolved_root
+        and (effective_boundary / ".nojekyll").is_file()
+    ):
+        effective_reject_md = True
+    else:
+        effective_reject_md = False
+
+    return effective_boundary, effective_reject_md
+
+
 def check_file_links(
     file_path: Path,
     root: Path = ROOT,
     anchor_cache: dict[Path, set[str]] | None = None,
+    *,
+    boundary_dir: Path | None = None,
+    reject_md_links: bool | None = None,
 ) -> list[str]:
     """Check that all relative links and #fragment anchors in a markdown or HTML file resolve cleanly."""
     errors: list[str] = []
@@ -73,8 +109,15 @@ def check_file_links(
         return [f"{file_path}: Cannot read file: {exc}"]
 
     resolved_file = file_path.resolve()
+    resolved_root = root.resolve()
     file_dir = resolved_file.parent
     is_html = resolved_file.suffix.lower() == ".html"
+    effective_boundary, effective_reject_md = _infer_link_policy(
+        resolved_file=resolved_file,
+        resolved_root=resolved_root,
+        boundary_dir=boundary_dir,
+        reject_md_links=reject_md_links,
+    )
     active_cache = anchor_cache if anchor_cache is not None else {}
     active_cache.setdefault(
         resolved_file, extract_document_anchors(content, suffix=resolved_file.suffix)
@@ -84,7 +127,7 @@ def check_file_links(
     targets = extract_relative_links(scannable, include_fragments=True)
 
     try:
-        rel_file: Path = Path(resolved_file.relative_to(root.resolve()).as_posix())
+        rel_file: Path = Path(resolved_file.relative_to(resolved_root).as_posix())
     except ValueError:
         rel_file = file_path
 
@@ -98,6 +141,23 @@ def check_file_links(
                     errors.append(
                         f"{rel_file.as_posix()}: Broken anchor link '{target}' -> anchor '#{fragment}' does not exist"
                     )
+            continue
+
+        raw_target_path = unquote(urlsplit(target.strip().strip("<>\"'")).path)
+        policy_failed = False
+        if is_html and effective_reject_md and raw_target_path.lower().endswith(".md"):
+            errors.append(
+                f"{rel_file.as_posix()}: Unrewritten Markdown link '{target}' in staged HTML"
+            )
+            policy_failed = True
+        if effective_boundary is not None and not resolved.is_relative_to(
+            effective_boundary
+        ):
+            errors.append(
+                f"{rel_file.as_posix()}: Relative link '{target}' escapes boundary '{effective_boundary.as_posix()}'"
+            )
+            policy_failed = True
+        if policy_failed:
             continue
 
         if not resolved.exists():
@@ -167,8 +227,11 @@ def _check_orphan_docs_guides(
                 inbound_targets.add((resolved_target / "index.html").resolve())
 
     orphan_errors: list[str] = []
-    for guide_path in sorted(docs_dir.iterdir()):
+    for guide_path in sorted(docs_dir.rglob("*")):
         if not guide_path.is_file() or guide_path.suffix.lower() not in DOC_EXTENSIONS:
+            continue
+        rel_parts = guide_path.relative_to(docs_dir).parts
+        if any(part in NESTED_EXCLUDE_DIRS for part in rel_parts):
             continue
         resolved_guide = guide_path.resolve()
         if resolved_guide not in inbound_targets:
@@ -188,7 +251,8 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
     """Scan markdown and HTML documentation files and verify all relative targets exist."""
     errors: list[str] = []
     resolved_root = root.resolve()
-    files: list[Path] = []
+    staged_site = (resolved_root / "dist" / "site").resolve()
+    file_policies: dict[Path, tuple[Path | None, bool | None]] = {}
     orphan_check_scopes: list[tuple[Path, list[Path]]] = []
 
     if target_files:
@@ -206,11 +270,20 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
                 continue
             if resolved_candidate.is_dir():
                 dir_files = _collect_dir_doc_files(resolved_candidate)
-                files.extend(dir_files)
+                is_staged_dir = (
+                    resolved_candidate == staged_site
+                    or resolved_candidate.is_relative_to(staged_site)
+                    or (resolved_candidate / ".nojekyll").is_file()
+                )
+                for df in dir_files:
+                    file_policies[df.resolve()] = (
+                        resolved_candidate,
+                        True if is_staged_dir else None,
+                    )
                 if (resolved_candidate / "docs").is_dir():
                     orphan_check_scopes.append((resolved_candidate / "docs", dir_files))
             elif resolved_candidate.suffix.lower() in DOC_EXTENSIONS:
-                files.append(resolved_candidate)
+                file_policies.setdefault(resolved_candidate, (None, None))
     else:
         repo_files: list[Path] = []
         for path in resolved_root.rglob("*"):
@@ -220,22 +293,29 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
             if any(part in EXCLUDE_DIRS for part in rel_parts):
                 continue
             repo_files.append(path)
-        files.extend(repo_files)
+            file_policies[path.resolve()] = (resolved_root, False)
         if (resolved_root / "docs").is_dir():
             orphan_check_scopes.append((resolved_root / "docs", repo_files))
-        staged_site = resolved_root / "dist" / "site"
         if staged_site.is_dir():
             staged_files = _collect_dir_doc_files(staged_site)
-            files.extend(staged_files)
+            for sf in staged_files:
+                file_policies[sf.resolve()] = (staged_site, True)
             if (staged_site / "docs").is_dir():
                 orphan_check_scopes.append((staged_site / "docs", staged_files))
 
     anchor_cache: dict[Path, set[str]] = {}
-    for doc_file in sorted(set(files)):
+    for doc_file in sorted(file_policies):
         if not doc_file.is_file():
             continue
+        b_dir, reject_md = file_policies[doc_file]
         errors.extend(
-            check_file_links(doc_file, root=resolved_root, anchor_cache=anchor_cache)
+            check_file_links(
+                doc_file,
+                root=resolved_root,
+                anchor_cache=anchor_cache,
+                boundary_dir=b_dir,
+                reject_md_links=reject_md,
+            )
         )
 
     for docs_dir, scope_files in orphan_check_scopes:

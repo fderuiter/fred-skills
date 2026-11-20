@@ -2830,6 +2830,84 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("in-progress", rendered_html)
             self.assertIn("Triaged via standalone reconciliation.json", rendered_html)
 
+    def test_cli_handles_git_and_subprocess_timeouts_cleanly(self) -> None:
+        import contextlib
+        import io
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import fred
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp) / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+            # 1. --base diff planning raises FredCliError(code="git_timeout") -> clean exit 1
+            err_json = io.StringIO()
+            with (
+                patch("fredlib.repository.shutil.which", return_value="/usr/bin/git"),
+                patch(
+                    "fredlib.repository.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(
+                        cmd=["git", "rev-parse", "HEAD"], timeout=30
+                    ),
+                ),
+                contextlib.redirect_stderr(err_json),
+            ):
+                rc_json = fred.main(
+                    [
+                        "plan",
+                        str(repo_dir),
+                        "--task",
+                        "review-pr",
+                        "--mode",
+                        "changes",
+                        "--base",
+                        "HEAD",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(1, rc_json)
+            err_payload = json.loads(err_json.getvalue())
+            self.assertEqual("git_timeout", err_payload["code"])
+            self.assertTrue(err_payload["hint"])
+
+            # 2. Optional Git timeout during preflight falls back cleanly -> exit 0
+            out_pre, err_pre = io.StringIO(), io.StringIO()
+            with (
+                patch("fredlib.repository.shutil.which", return_value="/usr/bin/git"),
+                patch(
+                    "fredlib.repository.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(
+                        cmd=["git", "ls-files"], timeout=30
+                    ),
+                ),
+                contextlib.redirect_stdout(out_pre),
+                contextlib.redirect_stderr(err_pre),
+            ):
+                rc_pre = fred.main(["preflight", str(repo_dir), "--full", "--json"])
+            self.assertEqual(0, rc_pre, err_pre.getvalue())
+            pre_payload = json.loads(out_pre.getvalue())
+            self.assertIn("app.py", pre_payload["snapshot"]["files"])
+            self.assertEqual("unversioned", pre_payload["repository"]["revision"])
+
+            # 3. Raw subprocess.TimeoutExpired at CLI boundary -> clean exit 1 without traceback
+            err_raw = io.StringIO()
+            with (
+                patch(
+                    "fred.dispatch",
+                    side_effect=subprocess.TimeoutExpired(
+                        cmd=["git", "status"], timeout=30
+                    ),
+                ),
+                contextlib.redirect_stderr(err_raw),
+            ):
+                rc_raw = fred.main(["tasks"])
+            self.assertEqual(1, rc_raw)
+            self.assertIn("fred-skills: Subprocess timed out", err_raw.getvalue())
+            self.assertIn("Hint:", err_raw.getvalue())
+            self.assertNotIn("Traceback", err_raw.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

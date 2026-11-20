@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from skill_tools import git_tag_exists
 
 __all__ = [
     "CORE_INVARIANT_DOCS",
@@ -109,20 +115,6 @@ def parse_prose_int(raw: str) -> int | None:
     if token.isdigit():
         return int(token)
     return PROSE_NUMBER_WORDS.get(token)
-
-
-def git_tag_exists(root: Path, tag: str) -> bool:
-    """Return True if refs/tags/<tag> resolves to a commit in the git repository at root."""
-    if not (root / ".git").exists():
-        return False
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
 
 
 def discover_untagged_release_notes(

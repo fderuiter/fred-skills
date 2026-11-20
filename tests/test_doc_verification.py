@@ -1719,6 +1719,79 @@ class DocSnippetVerificationTests(unittest.TestCase):
             ),
         )
 
+    def test_cached_subprocess_timeout_not_cached_and_main_exits_cleanly(self) -> None:
+        """_run_cached_subprocess sets timeout=60 without caching timeouts, and main exits 1 cleanly."""
+        import contextlib
+        import io
+
+        import verify_doc_snippets
+        from skill_tools import FredCliError
+
+        clear_subprocess_cache()
+        calls: list[float | None] = []
+
+        def flaky_run(
+            cmd: list[str], *_args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            timeout_val = kwargs.get("timeout")
+            calls.append(timeout_val if isinstance(timeout_val, (int, float)) else None)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=60)
+            return subprocess.CompletedProcess(
+                cmd, returncode=0, stdout="ok\n", stderr=""
+            )
+
+        try:
+            with patch("verify_doc_snippets.subprocess.run", side_effect=flaky_run):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    verify_doc_snippets._run_cached_subprocess(
+                        ["ruff", "check", "."], cwd=ROOT
+                    )
+                # Timeout must not be cached; second invocation succeeds and caches result
+                recovered = verify_doc_snippets._run_cached_subprocess(
+                    ["ruff", "check", "."], cwd=ROOT
+                )
+                cached = verify_doc_snippets._run_cached_subprocess(
+                    ["ruff", "check", "."], cwd=ROOT
+                )
+            self.assertEqual([60, 60], calls)
+            self.assertEqual(0, recovered.returncode)
+            self.assertIs(recovered, cached)
+        finally:
+            clear_subprocess_cache()
+
+        err_sub = io.StringIO()
+        with (
+            patch(
+                "verify_doc_snippets.verify_all_snippets",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["ruff", "check", "."], timeout=60
+                ),
+            ),
+            contextlib.redirect_stderr(err_sub),
+        ):
+            rc_sub = verify_doc_snippets.main(["README.md"])
+        self.assertEqual(1, rc_sub)
+        self.assertIn("Error [subprocess_timeout]:", err_sub.getvalue())
+        self.assertNotIn("Traceback", err_sub.getvalue())
+
+        err_git = io.StringIO()
+        with (
+            patch(
+                "verify_doc_snippets.verify_all_snippets",
+                side_effect=FredCliError(
+                    "Git timed out",
+                    code="git_timeout",
+                    hint="Retry after clearing .git/index.lock.",
+                ),
+            ),
+            contextlib.redirect_stderr(err_git),
+        ):
+            rc_git = verify_doc_snippets.main(["README.md"])
+        self.assertEqual(1, rc_git)
+        self.assertIn("Error [git_timeout]:", err_git.getvalue())
+        self.assertIn("Hint:", err_git.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1391,6 +1391,135 @@ class EvaluationTests(unittest.TestCase):
                 )
             )
 
+    def test_evaluations_and_reference_adapter_complexity_and_nesting_bounds(
+        self,
+    ) -> None:
+        import ast
+
+        def mccabe_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.comprehension):
+                    complexity += len(child.ifs)
+                elif isinstance(child, ast.match_case) and (
+                    child.guard is not None
+                    or not isinstance(child.pattern, ast.MatchAs)
+                    or child.pattern.name is not None
+                ):
+                    complexity += 1
+            return complexity
+
+        def strict_ast_complexity(node: ast.AST) -> int:
+            complexity = 1
+            for child in ast.walk(node):
+                if isinstance(
+                    child,
+                    (
+                        ast.If,
+                        ast.While,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.ExceptHandler,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.IfExp,
+                    ),
+                ):
+                    complexity += 1
+                elif isinstance(child, ast.BoolOp):
+                    complexity += len(child.values) - 1
+                elif isinstance(child, ast.comprehension):
+                    complexity += len(child.ifs)
+            return complexity
+
+        def max_nesting_depth(stmts: list[ast.stmt], depth: int = 0) -> int:
+            deepest = depth
+            for stmt in stmts:
+                if isinstance(
+                    stmt,
+                    (
+                        ast.If,
+                        ast.For,
+                        ast.AsyncFor,
+                        ast.While,
+                        ast.With,
+                        ast.AsyncWith,
+                        ast.Try,
+                        ast.TryStar,
+                    ),
+                ):
+                    orelse = getattr(stmt, "orelse", [])
+                    branches: list[tuple[list[ast.stmt], int]] = [
+                        (stmt.body, depth + 1),
+                        (getattr(stmt, "finalbody", []), depth + 1),
+                    ]
+                    for handler in getattr(stmt, "handlers", []):
+                        branches.append((handler.body, depth + 1))
+                    if orelse:
+                        is_elif = len(orelse) == 1 and isinstance(orelse[0], ast.If)
+                        branches.append((orelse, depth if is_elif else depth + 1))
+                    for branch_body, next_depth in branches:
+                        if branch_body:
+                            deepest = max(
+                                deepest, max_nesting_depth(branch_body, next_depth)
+                            )
+            return deepest
+
+        for rel_path in (
+            "scripts/fredlib/evaluations.py",
+            "evals/reference_adapter.py",
+        ):
+            with self.subTest(module=rel_path):
+                tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"))
+                functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+                for item in tree.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        functions[item.name] = item
+                        for sub in ast.walk(item):
+                            if sub is not item and isinstance(
+                                sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                            ):
+                                functions[f"{item.name}.{sub.name}"] = sub
+                    elif isinstance(item, ast.ClassDef):
+                        for method in item.body:
+                            if isinstance(
+                                method, (ast.FunctionDef, ast.AsyncFunctionDef)
+                            ):
+                                functions[f"{item.name}.{method.name}"] = method
+
+                self.assertGreater(len(functions), 0)
+                for name, func_node in functions.items():
+                    c901 = mccabe_complexity(func_node)
+                    self.assertLessEqual(
+                        c901,
+                        10,
+                        f"{rel_path}:{name} exceeds C901 McCabe complexity limit of 10 (score: {c901})",
+                    )
+                    strict_score = strict_ast_complexity(func_node)
+                    self.assertLessEqual(
+                        strict_score,
+                        10,
+                        f"{rel_path}:{name} exceeds AST complexity limit of 10 (score: {strict_score})",
+                    )
+                    nesting = max_nesting_depth(func_node.body)
+                    self.assertLessEqual(
+                        nesting,
+                        3,
+                        f"{rel_path}:{name} exceeds control-flow nesting limit of 3 (depth: {nesting})",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
