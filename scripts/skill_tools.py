@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import unquote, urlsplit
 
-import yaml
-
 __all__ = [
     "DOMAIN_KIND_KEY_SETS",
     "DOMAIN_KIND_TO_SUITE",
@@ -336,6 +334,200 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
     return violations
 
 
+_YAML_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+|\"[^\"]+\"|'[^']+')\s*:(.*)$")
+
+
+def _strip_yaml_inline_comment(raw: str) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+    for idx, ch in enumerate(raw):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and in_double:
+            escaped = True
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif (
+            ch == "#"
+            and not in_single
+            and not in_double
+            and (idx == 0 or raw[idx - 1].isspace())
+        ):
+            return raw[:idx].rstrip()
+    return raw.strip()
+
+
+def _parse_yaml_scalar_stdlib(raw: str, path: Path) -> Any:
+    cleaned = _strip_yaml_inline_comment(raw.strip())
+    if not cleaned:
+        return None
+    if cleaned.startswith('"'):
+        if len(cleaned) < 2 or not cleaned.endswith('"'):
+            raise ValueError(f"{path}: unterminated double-quoted YAML scalar")
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}: invalid double-quoted YAML scalar") from exc
+    if cleaned.startswith("'"):
+        if len(cleaned) < 2 or not cleaned.endswith("'"):
+            raise ValueError(f"{path}: unterminated single-quoted YAML scalar")
+        return cleaned[1:-1].replace("''", "'")
+    if cleaned in {"true", "True", "TRUE"}:
+        return True
+    if cleaned in {"false", "False", "FALSE"}:
+        return False
+    if cleaned in {"null", "Null", "NULL", "~"}:
+        return None
+    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", cleaned):
+        return int(cleaned)
+    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)\.[0-9]+", cleaned):
+        return float(cleaned)
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        inner = cleaned[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_yaml_scalar_stdlib(item, path) for item in inner.split(",")]
+    return cleaned
+
+
+def _parse_frontmatter_stdlib(frontmatter_text: str, path: Path) -> Any:
+    raw_lines = frontmatter_text.splitlines()
+    result: dict[str, Any] = {}
+    saw_content = False
+    idx = 0
+    total = len(raw_lines)
+    while idx < total:
+        line = raw_lines[idx]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        saw_content = True
+        if "\t" in line[: len(line) - len(line.lstrip())]:
+            raise ValueError(
+                f"{path}: tab indentation is not allowed in YAML frontmatter"
+            )
+        if line[0].isspace() or stripped.startswith("- "):
+            return stripped
+        match = _YAML_KEY_RE.match(line)
+        if match is None:
+            if ":" not in stripped:
+                return _parse_yaml_scalar_stdlib(stripped, path)
+            raise ValueError(f"{path}: invalid YAML frontmatter line: {line!r}")
+        raw_key, raw_rest = match.group(1), match.group(2)
+        key = str(_parse_yaml_scalar_stdlib(raw_key, path))
+        rest = _strip_yaml_inline_comment(raw_rest.strip())
+        idx += 1
+
+        if rest in {"|", "|-", "|+", ">", ">-", ">+"}:
+            block_lines: list[tuple[int, str]] = []
+            block_indent: int | None = None
+            while idx < total:
+                sub = raw_lines[idx]
+                sub_stripped = sub.strip()
+                if not sub_stripped:
+                    block_lines.append((0, ""))
+                    idx += 1
+                    continue
+                indent = len(sub) - len(sub.lstrip(" "))
+                if indent == 0:
+                    break
+                if block_indent is None:
+                    block_indent = indent
+                content = (
+                    sub[block_indent:] if indent >= block_indent else sub.lstrip(" ")
+                )
+                block_lines.append((indent, content))
+                idx += 1
+            while block_lines and block_lines[-1][1] == "" and rest.endswith("-"):
+                block_lines.pop()
+            if rest.startswith("|"):
+                joined = "\n".join(part for _, part in block_lines)
+            else:
+                folded_parts: list[str] = []
+                for _, part in block_lines:
+                    if not part:
+                        folded_parts.append("\n")
+                    elif folded_parts and not folded_parts[-1].endswith("\n"):
+                        folded_parts.append(" " + part)
+                    else:
+                        folded_parts.append(part)
+                joined = "".join(folded_parts)
+            if not rest.endswith("-") and block_lines:
+                joined = joined.rstrip("\n") + "\n"
+            result[key] = joined
+            continue
+
+        if rest == "":
+            sub_lines: list[str] = []
+            while idx < total:
+                sub = raw_lines[idx]
+                sub_stripped = sub.strip()
+                if not sub_stripped or sub_stripped.startswith("#"):
+                    idx += 1
+                    continue
+                if not sub[0].isspace():
+                    break
+                sub_lines.append(sub)
+                idx += 1
+            if not sub_lines:
+                result[key] = None
+            elif sub_lines[0].lstrip().startswith("- "):
+                seq: list[Any] = []
+                for item_line in sub_lines:
+                    item_str = item_line.lstrip()
+                    if not item_str.startswith("- "):
+                        raise ValueError(
+                            f"{path}: invalid YAML sequence item: {item_line!r}"
+                        )
+                    seq.append(_parse_yaml_scalar_stdlib(item_str[2:], path))
+                result[key] = seq
+            else:
+                nested: dict[str, Any] = {}
+                for map_line in sub_lines:
+                    sub_match = _YAML_KEY_RE.match(map_line.lstrip(" "))
+                    if sub_match is None:
+                        raise ValueError(
+                            f"{path}: invalid nested YAML mapping: {map_line!r}"
+                        )
+                    nk = str(_parse_yaml_scalar_stdlib(sub_match.group(1), path))
+                    nv = _parse_yaml_scalar_stdlib(sub_match.group(2), path)
+                    nested[nk] = nv
+                result[key] = nested
+            continue
+
+        scalar_val = _parse_yaml_scalar_stdlib(raw_rest, path)
+        if (
+            isinstance(scalar_val, str)
+            and not raw_rest.lstrip().startswith(('"', "'"))
+            and idx < total
+        ):
+            cont_parts = [scalar_val]
+            while idx < total:
+                sub = raw_lines[idx]
+                sub_stripped = sub.strip()
+                if not sub_stripped:
+                    break
+                if sub_stripped.startswith("#"):
+                    idx += 1
+                    continue
+                if not sub[0].isspace():
+                    break
+                cont_parts.append(_strip_yaml_inline_comment(sub_stripped))
+                idx += 1
+            scalar_val = " ".join(p for p in cont_parts if p)
+        result[key] = scalar_val
+
+    if not saw_content:
+        return None
+    return result
+
+
 def read_frontmatter(path: Path) -> tuple[dict, str]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
@@ -344,7 +536,13 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
     if end is None:
         raise ValueError(f"{path}: unterminated YAML frontmatter")
-    metadata = yaml.safe_load("".join(lines[1:end]))
+    frontmatter_text = "".join(lines[1:end])
+    try:
+        import yaml as _yaml
+    except ModuleNotFoundError:
+        metadata = _parse_frontmatter_stdlib(frontmatter_text, path)
+    else:
+        metadata = _yaml.safe_load(frontmatter_text)
     if not isinstance(metadata, dict):
         raise TypeError(f"{path}: frontmatter must be a mapping")
     return metadata, "".join(lines[end + 1 :])

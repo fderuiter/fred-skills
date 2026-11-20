@@ -720,12 +720,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
 
     def _run_checksum_step(self, cwd: Path) -> subprocess.CompletedProcess[str]:
+        for repo_subdir in ("scripts", "catalog"):
+            dest_link = cwd / repo_subdir
+            if not dest_link.exists():
+                dest_link.symlink_to(ROOT / repo_subdir, target_is_directory=True)
         release_steps = self.workflow_data["jobs"]["release"]["steps"]
         checksum_step = next(
             s
             for s in release_steps
             if s.get("name") == "Verify downloaded artifact checksums"
         )
+        self.assertIn("scripts/fred.py verify-release", checksum_step["run"])
+        self.assertNotIn("<<'PY'", checksum_step["run"])
         return self._run_shell_script(
             checksum_step["run"],
             cwd=cwd,

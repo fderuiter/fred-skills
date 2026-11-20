@@ -1648,6 +1648,35 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertIn("docs/runbooks.md:L3:", drift_errs[0])
             self.assertIn("validate_run", drift_errs[0])
 
+    def test_verify_release_snippet_executes_against_partial_download_fixture(
+        self,
+    ) -> None:
+        ver = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        ok_arch, msg_arch = execute_snippet_command(
+            f"python3 scripts/fred.py verify-release manifest.json --archive fred-skills-{ver}-starter.tar",
+            root=ROOT,
+        )
+        self.assertTrue(ok_arch, msg_arch)
+
+        ok_ign, msg_ign = execute_snippet_command(
+            "python3 scripts/fred.py verify-release manifest.json --ignore-missing",
+            root=ROOT,
+        )
+        self.assertTrue(ok_ign, msg_ign)
+
+        ok_local, msg_local = execute_snippet_command(
+            "python scripts/fred.py verify-release dist/starter/manifest.json",
+            root=ROOT,
+        )
+        self.assertTrue(ok_local, msg_local)
+
+        ok_unfiltered, msg_unfiltered = execute_snippet_command(
+            "python3 scripts/fred.py verify-release manifest.json",
+            root=ROOT,
+        )
+        self.assertFalse(ok_unfiltered)
+        self.assertIn("Missing release archive", msg_unfiltered)
+
 
 if __name__ == "__main__":
     unittest.main()

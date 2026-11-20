@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import hashlib
 import io
 import json
 import re
@@ -13,6 +14,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -1665,6 +1667,104 @@ def _validate_fred_catalog_flags(
     return True, ""
 
 
+def _stage_verify_release_fixture(
+    fixture_root: Path,
+    manifest_arg: str,
+    expected_ver: str,
+) -> None:
+    """Create a release verification fixture simulating either a local pack build or partial release download."""
+    rel = Path(manifest_arg)
+    if rel.is_absolute():
+        return
+    bundle_dir = (
+        (fixture_root / rel).parent
+        if rel.name == "manifest.json"
+        else (fixture_root / rel)
+    )
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    is_local_pack_dir = rel.parts[:1] == ("dist",) and len(rel.parts) >= 2
+    if is_local_pack_dir:
+        pack_label = rel.parts[1] if rel.parts[1] != "manifest.json" else "starter"
+        file_specs: list[tuple[str, bool]] = [
+            (f"fred-skills-{expected_ver}-{pack_label}.tar", True),
+            (f"fred-skills-{expected_ver}-{pack_label}.zip", True),
+        ]
+    else:
+        file_specs = [
+            (f"fred-skills-{expected_ver}-starter.tar", True),
+            (f"fred-skills-{expected_ver}-starter.zip", False),
+            (f"fred-skills-{expected_ver}-complete.tar", False),
+            (f"fred-skills-{expected_ver}-cli.tar.gz", True),
+        ]
+
+    archives_manifest: list[dict[str, Any]] = []
+    checksum_lines: list[str] = []
+    for filename, present_on_disk in file_specs:
+        payload = f"fixture:{filename}\n".encode()
+        digest = hashlib.sha256(payload).hexdigest()
+        if present_on_disk:
+            (bundle_dir / filename).write_bytes(payload)
+        archives_manifest.append(
+            {
+                "file": filename,
+                "sha256": digest,
+                "bytes": len(payload),
+                "skills": [],
+            }
+        )
+        checksum_lines.append(f"{digest}  {filename}\n")
+
+    manifest_doc = {
+        "schema_version": "1.0",
+        "version": expected_ver,
+        "pack": "starter" if is_local_pack_dir else "all",
+        "licensing": "See repository LICENSE",
+        "archives": archives_manifest,
+    }
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(manifest_doc, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    joined_checksums = "".join(checksum_lines)
+    (bundle_dir / "SHA256SUMS").write_text(joined_checksums, encoding="utf-8")
+    (bundle_dir / "checksums.sha256").write_text(joined_checksums, encoding="utf-8")
+
+
+def _execute_fred_verify_release(
+    norm_args: list[str],
+    script_path: Path,
+    root: Path,
+) -> tuple[bool, str]:
+    """Execute scripts/fred.py verify-release against an existing bundle or temporary partial fixture."""
+    manifest_arg = next(
+        (arg for arg in norm_args[1:] if not arg.startswith("-")),
+        "manifest.json",
+    )
+    candidate_target = root / manifest_arg
+    resolved_script = script_path.resolve()
+    if not Path(manifest_arg).is_absolute() and candidate_target.exists():
+        return _run_readonly_check(
+            [sys.executable, "-S", str(resolved_script), *norm_args],
+            root,
+            "scripts/fred.py verify-release",
+        )
+    expected_ver = _read_expected_version(root)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        _stage_verify_release_fixture(tmp_path, manifest_arg, expected_ver)
+        proc = subprocess.run(
+            [sys.executable, "-S", str(resolved_script), *norm_args],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip()
+            return False, f"scripts/fred.py verify-release failed: {detail}"
+    return True, ""
+
+
 def _validate_python_fred(
     parts: list[str],
     script_path: Path,
@@ -1687,6 +1787,9 @@ def _validate_python_fred(
             root,
             "scripts/fred.py search",
         )
+    if len(parts) >= 3 and parts[2] == "verify-release":
+        verify_args = [normalize_cli_token(arg) for arg in parts[2:]]
+        return _execute_fred_verify_release(verify_args, script_path, root)
     return True, ""
 
 
@@ -1868,10 +1971,18 @@ def _validate_pre_commit(parts: list[str], root: Path, _cmd: str) -> tuple[bool,
 
 
 STATIC_RELEASE_ASSETS: frozenset[str] = frozenset(
-    {"SHA256SUMS", "checksums.sha256", "manifest.json", "fred-skills-suite.tar.gz"}
+    {
+        "SHA256SUMS",
+        "checksums.sha256",
+        "manifest.json",
+        "fred-skills-suite.tar.gz",
+        "darwin.fred-skills.tar.gz",
+        "linux.fred-skills.tar.gz",
+        "win32.fred-skills.zip",
+    }
 )
 _PACK_ARCHIVE_RE = re.compile(
-    r"^fred-skills-(?P<ver>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-(?P<pack>[a-z0-9-]+)\.(?:tar|zip)$"
+    r"^fred-skills-(?P<ver>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)-(?P<pack>[a-z0-9-]+)\.(?:tar\.gz|tar|zip)$"
 )
 
 
@@ -1905,12 +2016,15 @@ def _split_pack_archive_stem(
     filename: str,
     expected_version: str,
 ) -> tuple[str, str] | None:
-    """Extract (version, pack_name) from a fred-skills-<version>-<pack>.(tar|zip) filename."""
-    stem = (
-        filename.removesuffix(".tar")
-        if filename.endswith(".tar")
-        else filename.removesuffix(".zip")
-    )
+    """Extract (version, pack_name) from a fred-skills-<version>-<pack|cli>.(tar.gz|tar|zip) filename."""
+    if filename.endswith(".tar.gz"):
+        stem = filename.removesuffix(".tar.gz")
+    elif filename.endswith(".tar"):
+        stem = filename.removesuffix(".tar")
+    elif filename.endswith(".zip"):
+        stem = filename.removesuffix(".zip")
+    else:
+        stem = filename
     exact_prefix = f"fred-skills-{expected_version}-"
     if stem != filename and stem.startswith(exact_prefix):
         pack_part = stem.removeprefix(exact_prefix)
@@ -1920,7 +2034,7 @@ def _split_pack_archive_stem(
 
 
 def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
-    """Verify pack archive version and canonical pack name against VERSION and catalog/packs.json."""
+    """Verify pack or CLI archive version and canonical pack name against VERSION and catalog/packs.json."""
     expected_ver = _read_expected_version(root)
     parsed = _split_pack_archive_stem(filename, expected_ver)
     if parsed is None:
@@ -1931,6 +2045,10 @@ def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
             False,
             f"Pack archive '{filename}' version '{found_ver}' does not match VERSION '{expected_ver}'",
         )
+    if pack_name == "cli" and filename.endswith((".tar.gz", ".zip")):
+        return True, ""
+    if filename.endswith(".tar.gz"):
+        return False, f"Pack archive '{filename}' must use .tar or .zip extension"
     known_packs = _load_known_packs(root)
     if known_packs and pack_name not in known_packs:
         return (
