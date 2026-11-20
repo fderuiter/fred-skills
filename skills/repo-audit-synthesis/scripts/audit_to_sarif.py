@@ -759,6 +759,20 @@ def _validate_review_findings_list(findings: object) -> str | None:
     return None
 
 
+def _validate_review_verdict_alignment(
+    verdict: object, findings: list[dict[str, Any]]
+) -> str | None:
+    if verdict == "approve":
+        blocking = [
+            str(f["id"]) for f in findings if f.get("severity") in {"critical", "high"}
+        ]
+        if blocking:
+            return f"Verdict 'approve' conflicts with critical/high findings: {', '.join(blocking)}"
+    if verdict == "request_changes" and not findings:
+        return "Verdict 'request_changes' requires at least one finding in findings"
+    return None
+
+
 def _validate_review_payload(data: dict[str, Any]) -> str | None:
     unknown = sorted(set(data) - _REVIEW_TOP_KEYS)
     if unknown:
@@ -772,9 +786,12 @@ def _validate_review_payload(data: dict[str, Any]) -> str | None:
         return "invalid 'verdict'"
     if not _is_nonempty_str(data.get("summary")):
         return "'summary' must be a non-empty string"
-    return _validate_review_optional_sections(data) or _validate_review_findings_list(
+    err = _validate_review_optional_sections(data) or _validate_review_findings_list(
         data.get("findings")
     )
+    if err:
+        return err
+    return _validate_review_verdict_alignment(data.get("verdict"), data["findings"])
 
 
 def _require_valid_review_payload(data: dict[str, Any]) -> None:

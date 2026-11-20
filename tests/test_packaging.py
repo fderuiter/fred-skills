@@ -4408,6 +4408,57 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Error [subprocess_timeout]:", err_demo.getvalue())
         self.assertNotIn("Traceback", err_demo.getvalue())
 
+    def test_validate_skill_executes_bundled_validator_under_isolated_stdlib(
+        self,
+    ) -> None:
+        import shutil
+
+        from _markdown_utils import scan_markdown_fences
+
+        # 1. Verify bundled validator runs with -B and -S (no_site=1, dont_write_bytecode=1)
+        self.validator_script.write_text(
+            "#!/usr/bin/env python3\n"
+            '"""Verify isolated stdlib execution flags."""\n'
+            "import sys\n"
+            "if not sys.flags.no_site or not sys.flags.dont_write_bytecode:\n"
+            "    sys.stderr.write('expected -B -S flags\\n')\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_skill(self.skill))
+        self.assertEqual([], list(self.skill.rglob("__pycache__")))
+
+        # 2. Verify domain invariant failure in worked example is caught even when JSON Schema passes
+        review_pkg = self.root / "skills/review-actionable-feedback"
+        shutil.copytree(ROOT / "skills/review-actionable-feedback", review_pkg)
+        self.assertEqual([], validate_skill(review_pkg))
+
+        examples_path = review_pkg / "references/method.md"
+        orig_lines = examples_path.read_text(encoding="utf-8").splitlines()
+        _, blocks = scan_markdown_fences(orig_lines)
+        json_block = next(
+            b for b in blocks if b.fence.language.lower() == "json" and b.closed
+        )
+        domain_invalid = {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Schema-valid payload that violates review verdict invariant.",
+            "findings": [],
+        }
+        mutated_lines = [
+            *orig_lines[: json_block.start_line],
+            *json.dumps(domain_invalid, indent=2).splitlines(),
+            *orig_lines[json_block.end_line - 1 :],
+        ]
+        examples_path.write_text("\n".join(mutated_lines) + "\n", encoding="utf-8")
+        errs = validate_skill(review_pkg)
+        self.assertTrue(
+            any("validate_review.py" in e and "request_changes" in e for e in errs),
+            errs,
+        )
+        self.assertEqual([], list(review_pkg.rglob("__pycache__")))
+
 
 if __name__ == "__main__":
     unittest.main()

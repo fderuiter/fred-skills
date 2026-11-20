@@ -4293,7 +4293,7 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             imported = read_json(obs_path)
             self.assertEqual(2, len(imported["observations"]))
 
-            # Without jsonschema (-S), reconcile exits cleanly with code 1 and clear missing-dependency message
+            # Reconcile on imported observations succeeds under pure stdlib (-S) via canonical workflow validator
             rec_proc = subprocess.run(
                 [
                     sys.executable,
@@ -4306,16 +4306,35 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
                     "--state",
                     "in-progress",
                     "--note",
-                    "Checking stdlib error path",
+                    "Checking stdlib observation reconciliation",
                 ],
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            self.assertEqual(1, rec_proc.returncode)
-            self.assertIn("Dependency missing: jsonschema", rec_proc.stderr)
-            self.assertNotIn("Traceback", rec_proc.stderr)
+            self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
+            self.assertTrue((work / "remediation.json").is_file())
+
+            # Commands requiring run.schema.json validation (validate-run) exit cleanly with code 1 and no traceback under -S
+            run_ws = work / "run-ws"
+            runs.initialize(self.repo, run_ws, "apply-fix")
+            val_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "validate-run",
+                    str(run_ws),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, val_proc.returncode)
+            self.assertIn("Dependency missing: jsonschema", val_proc.stderr)
+            self.assertNotIn("Traceback", val_proc.stderr)
 
 
 if __name__ == "__main__":

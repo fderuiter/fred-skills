@@ -3057,6 +3057,337 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("Hint:", err_raw.getvalue())
             self.assertNotIn("Traceback", err_raw.getvalue())
 
+    def test_cli_validate_run_advance_and_report_enforce_canonical_validators(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            (repo / "app.py").write_text(
+                "def run() -> int:\n    return 1\n", encoding="utf-8"
+            )
+            for argv in (
+                ["init", "-q"],
+                ["config", "user.name", "Fixture"],
+                ["config", "user.email", "fixture@example.invalid"],
+                ["add", "."],
+                ["commit", "-qm", "initial"],
+            ):
+                subprocess.run(["git", "-C", str(repo), *argv], check=True)
+            base_rev = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "app.py").write_text(
+                "def run() -> int:\n    return 2\n", encoding="utf-8"
+            )
+
+            def assert_rejected(ws: Path, deliverable_file: Path | None = None) -> None:
+                val_proc = self.run_cli("validate-run", str(ws))
+                self.assertNotEqual(
+                    0, val_proc.returncode, f"validate-run accepted {ws}"
+                )
+                adv_proc = self.run_cli("advance", str(ws), "--note", "Attempt advance")
+                self.assertNotEqual(0, adv_proc.returncode, f"advance accepted {ws}")
+                rep_out = tmp_path / f"rep-{ws.name}.html"
+                rep_proc = self.run_cli("report", str(ws), "--output", str(rep_out))
+                self.assertNotEqual(0, rep_proc.returncode, f"report accepted {ws}")
+                if deliverable_file is not None:
+                    rep_file_proc = self.run_cli(
+                        "report", str(deliverable_file), "--output", str(rep_out)
+                    )
+                    self.assertNotEqual(
+                        0,
+                        rep_file_proc.returncode,
+                        f"report accepted {deliverable_file}",
+                    )
+
+            # 1. Code review: approved critical review & empty request_changes review
+            ws_rev = tmp_path / "ws-review"
+            init_rev = self.run_cli(
+                "init",
+                str(repo),
+                "--task",
+                "review-code-changes",
+                "--base",
+                base_rev,
+                "--single-task",
+                "--output",
+                str(ws_rev),
+            )
+            self.assertEqual(0, init_rev.returncode, init_rev.stderr)
+            rev_file = ws_rev / "review.json"
+            for bad_review in (
+                {
+                    "schema_version": "1.0",
+                    "verdict": "approve",
+                    "summary": "Approving despite critical issue.",
+                    "findings": [
+                        {
+                            "id": "REV-1",
+                            "title": "SQL injection",
+                            "severity": "critical",
+                            "file": "app.py",
+                            "line": 1,
+                            "description": "Unparameterized SQL.",
+                            "recommendation": "Parameterize query.",
+                        }
+                    ],
+                },
+                {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Requesting changes with zero findings.",
+                    "findings": [],
+                },
+            ):
+                rev_file.write_text(json.dumps(bad_review), encoding="utf-8")
+                assert_rejected(ws_rev, rev_file)
+
+            # 2. Spec: vacuous converged & out_of_scope overlapping new_file_scopes
+            ws_spec = tmp_path / "ws-spec"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "specify-feature",
+                    "--single-task",
+                    "--output",
+                    str(ws_spec),
+                ).returncode,
+            )
+            spec_file = ws_spec / "spec.json"
+            base_spec = {
+                "schema_version": "1.0",
+                "title": "Exporter Spec",
+                "status": "converged",
+                "interview_decisions": [
+                    {
+                        "id": "DEC-1",
+                        "category": "scope",
+                        "question": "Format?",
+                        "decision": "NDJSON.",
+                    }
+                ],
+                "requirements": [{"id": "REQ-1", "description": "Emit NDJSON."}],
+                "new_file_scopes": ["src/exporter/ndjson.py"],
+                "out_of_scope": ["src/legacy/csv.py"],
+                "verification_commands": ["python -m unittest"],
+                "convergence_checks": [
+                    {"id": "CHK-1", "target": "REQ-1", "status": "aligned"}
+                ],
+            }
+            for bad_spec in (
+                {**base_spec, "convergence_checks": []},
+                {**base_spec, "out_of_scope": ["src/exporter/"]},
+            ):
+                spec_file.write_text(json.dumps(bad_spec), encoding="utf-8")
+                assert_rejected(ws_spec, spec_file)
+
+            # 3. Architecture: duplicate boundary names
+            ws_arch = tmp_path / "ws-arch"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "design-architecture",
+                    "--single-task",
+                    "--output",
+                    str(ws_arch),
+                ).returncode,
+            )
+            arch_file = ws_arch / "architecture.json"
+            dup_boundary = {
+                "name": "billing",
+                "responsibility": "Charge invoices",
+                "owned_state": ["invoices"],
+                "interfaces": ["charge"],
+            }
+            arch_file.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "summary": "Duplicate boundary names.",
+                        "boundaries": [dup_boundary, dict(dup_boundary)],
+                        "decisions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_rejected(ws_arch, arch_file)
+
+            # 4. Unsafe paths in testing deliverable and workflow companion
+            ws_test = tmp_path / "ws-testing"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "expand-automated-tests",
+                    "--single-task",
+                    "--output",
+                    str(ws_test),
+                ).returncode,
+            )
+            test_file = ws_test / "testing.json"
+            test_file.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "component": "../outside/app.py",
+                        "framework": "unittest",
+                        "test_cases": [
+                            {
+                                "id": "TC-1",
+                                "name": "test_run",
+                                "description": "Check return value.",
+                                "oracle_type": "exact",
+                                "verified": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_rejected(ws_test, test_file)
+
+            ws_fix = tmp_path / "ws-fix"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "apply-fix",
+                    "--allow-fixes",
+                    "--single-task",
+                    "--output",
+                    str(ws_fix),
+                ).returncode,
+            )
+            (ws_fix / "fix.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "finding_ids": ["F-1"],
+                        "summary": "Unsafe modified path.",
+                        "modified_files": [".git/hooks/pre-commit"],
+                        "contract_preserved": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            val_fix = self.run_cli("validate-run", str(ws_fix))
+            self.assertNotEqual(0, val_fix.returncode)
+            adv_fix = self.run_cli("advance", str(ws_fix), "--note", "Attempt advance")
+            self.assertNotEqual(0, adv_fix.returncode)
+
+            # 5. Standalone workflow companions (session-handoff, terse-output-commit)
+            if str(ROOT / "scripts") not in sys.path:
+                sys.path.insert(0, str(ROOT / "scripts"))
+            from fredlib import common as fred_common
+
+            valid_handoff = {
+                "schema_version": "1.0",
+                "objective": "Resume audit verification",
+                "repository": {"path": ".", "revision": "abc1234", "dirty": False},
+                "verified_facts": ["Unit tests pass"],
+                "assumptions": [],
+                "completed_steps": ["Inspected run.json"],
+                "dead_ends": [],
+                "touched_files": ["src/app.py"],
+                "untouched_scope": ["docs/"],
+                "commands_run": [
+                    {"command": "python -m unittest", "outcome": "passed"}
+                ],
+                "next_action": "Validate remaining findings",
+            }
+            for alias in ("session-handoff.json", "handoff.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_handoff, artifact_name=alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {**valid_handoff, "touched_files": ["../escape.py"]},
+                        artifact_name=alias,
+                    )
+                )
+
+            valid_commit = {
+                "schema_version": "1.0",
+                "compression_level": "full",
+                "terse_response": "Fixed validator dispatch.",
+                "preserved_exact_spans": ["scripts/fredlib/common.py"],
+                "commit_type": "fix",
+                "commit_subject": "fix: unify validator dispatch",
+                "commit_body_bullets": ["Route companions to canonical validators"],
+                "git_mutated": False,
+            }
+            for alias in ("terse-output-commit.json", "commit.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_commit, artifact_name=alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {**valid_commit, "commit_type": "feat"},
+                        artifact_name=alias,
+                    )
+                )
+
+            obs_item: dict[str, object] = {
+                "id": "OBS-1",
+                "tool": "semgrep",
+                "tool_version": "1.90.0",
+                "rule": "python.eval",
+                "reported_level": "warning",
+                "message": "Avoid eval",
+                "locations": [{"path": "src/app.py", "line": 1}],
+                "evidence_state": "scanner-reported; agent verification not performed",
+            }
+            valid_observations: dict[str, object] = {
+                "schema_version": "1.0",
+                "observations": [obs_item],
+                "limitations": ["Scanner claims require verification."],
+            }
+            for obs_alias in ("observations.json", "scanner-observations.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_observations, artifact_name=obs_alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {
+                            **valid_observations,
+                            "observations": [
+                                {
+                                    **obs_item,
+                                    "locations": [{"path": "../escape.py", "line": 1}],
+                                }
+                            ],
+                        },
+                        artifact_name=obs_alias,
+                    )
+                )
+            self.assertEqual(
+                [],
+                fred_common._validate_canonical_artifact(
+                    valid_observations, schema_rel="schemas/observations.schema.json"
+                ),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

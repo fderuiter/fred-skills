@@ -100,5 +100,5 @@ declaring a boundary defect or recommending decomposition:
 3. Run the bundled validator locally before concluding:
    `python3 <this-skill>/scripts/validate_architecture.py <architecture.json>`
    This script verifies Draft 2020-12 schema conformance, unique boundary names, and unique
-   decision IDs. If `jsonschema` is unavailable in the host environment, report the skipped
-   automated check and verify each required field manually.
+   decision IDs using only the Python 3.12 standard library. If Python 3.12 is unavailable in
+   the host environment, report the skipped automated check and verify each required field manually.

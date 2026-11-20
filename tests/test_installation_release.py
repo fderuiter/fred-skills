@@ -1831,7 +1831,10 @@ class InstallationTests(unittest.TestCase):
         probe = (
             "import sys; sys.path.insert(0, 'scripts'); "
             "import fredlib, skill_tools; "
-            "from fredlib import installation, releases, vetting; "
+            "from fredlib import common, evaluations, installation, releases, reports, repository, runs, vetting; "
+            "review_starter = common._DEFAULT_SUITE_CONTRACTS['code-review']['starter']; "
+            "assert runs.audit_errors({}) and common._validate_canonical_artifact(review_starter, artifact_name='review.json') == []; "
+            "reports._validate_domain_payload(review_starter, 'review'); "
             "assert 'yaml' not in sys.modules; "
             "assert 'jsonschema' not in sys.modules"
         )
