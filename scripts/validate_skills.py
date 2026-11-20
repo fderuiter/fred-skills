@@ -2195,29 +2195,30 @@ def _skills_at_commit(root: Path, commit_sha: str) -> set[str]:
     return skills
 
 
+def _fallback_parent_commit(root: Path) -> tuple[str | None, str, list[str]]:
+    parent_sha = _resolve_commit_sha(root, "HEAD~1")
+    if parent_sha is None:
+        return None, "initial-commit", []
+    return parent_sha, "git-diff", []
+
+
 def _resolve_explicit_base_commit(
     root: Path, head_sha: str, explicit_ref: str
 ) -> tuple[str | None, str, list[str]]:
     if not explicit_ref or explicit_ref == ZERO_GIT_SHA:
-        parent_sha = _resolve_commit_sha(root, "HEAD~1")
-        if parent_sha is None:
-            return None, "initial-commit", []
-        return parent_sha, "git-diff", []
+        return _fallback_parent_commit(root)
 
     target_sha = _resolve_commit_sha(root, explicit_ref)
     if target_sha is None:
-        return (
-            None,
-            "git-diff",
-            [f"Could not resolve git base ref '{explicit_ref}'"],
-        )
+        return _fallback_parent_commit(root)
+
     merge_base = _git_output(root, "merge-base", target_sha, head_sha)
-    if not merge_base or not re.fullmatch(r"[0-9a-f]{40,64}", merge_base):
-        return (
-            None,
-            "git-diff",
-            [f"Could not resolve git merge-base between '{explicit_ref}' and HEAD"],
-        )
+    if (
+        not merge_base
+        or not re.fullmatch(r"[0-9a-f]{40,64}", merge_base)
+        or merge_base == head_sha
+    ):
+        return _fallback_parent_commit(root)
     return merge_base, "git-diff", []
 
 
