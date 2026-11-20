@@ -57,10 +57,10 @@ variant, controlled overlap/cancellation, and synchronous abort reentrancy. It p
 schema-valid audit, report, local issue draft, and separate proof/remediation record. This
 is a synthetic demonstration, not an agent audit or correction of a user's application.
 
-The reference evaluation adapter executed 75 raw cases across 25 skills and all six
-suites in baseline and with-skill configurations (150 runs), validating audit,
+The reference evaluation adapter executed 171 raw cases across all 57 skills and all six
+suites in baseline and with-skill configurations (342 runs), validating audit,
 architecture, code-review, automated-testing, spec-driven-development, and repository-workflow contracts,
-scoped `writable_paths` source edits, token summaries, and paired `skill_lift` deltas.
+property-anchor matching, suite semantic validators, scoped `writable_paths` source edits, token caps and summaries, and paired `skill_lift` deltas.
 Its deterministic contract matching passed in both configurations; this verifies harness
 plumbing and is not evidence of a model-quality improvement.
 

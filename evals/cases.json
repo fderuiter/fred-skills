@@ -5,83 +5,146 @@
       "id": "concurrency-a",
       "fixture": "fixtures/concurrency/a",
       "skill": "repo-audit-concurrency",
-      "prompt": "Audit asynchronous publication and cancellation in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": [
-        "stale-publication"
+      "prompt": "Audit this supplied repository for concurrency and race conditions.",
+      "expected_anchors": [
+        {
+          "topic": "concurrency",
+          "root_cause": "stale-publication",
+          "locations": [
+            [
+              "session.mjs",
+              "Session.start"
+            ]
+          ]
+        }
       ]
     },
     {
       "id": "trust-a",
       "fixture": "fixtures/trust/a",
       "skill": "repo-audit-trust-boundaries",
-      "prompt": "Audit object-level authorization for the documented contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": [
-        "authorization-bypass"
+      "prompt": "Audit this supplied repository for trust and authorization boundaries.",
+      "expected_anchors": [
+        {
+          "topic": "trust-boundaries",
+          "root_cause": "authorization-bypass",
+          "locations": [
+            [
+              "records.py",
+              "read_record"
+            ]
+          ]
+        }
       ]
     },
     {
       "id": "transactions-a",
       "fixture": "fixtures/transactions/a",
       "skill": "repo-audit-transactions",
-      "prompt": "Audit the documented transaction boundary and failure behavior. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": [
-        "partial-commit"
+      "prompt": "Audit this supplied repository for implicit transaction boundaries.",
+      "expected_anchors": [
+        {
+          "topic": "transactions",
+          "root_cause": "partial-commit",
+          "locations": [
+            [
+              "transfer.py",
+              "transfer"
+            ]
+          ]
+        }
       ]
     },
     {
       "id": "oracles-a",
       "fixture": "fixtures/oracles/a",
       "skill": "repo-audit-test-oracles",
-      "prompt": "Audit whether the test independently checks its stated contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": [
-        "circular-oracle"
+      "prompt": "Audit this supplied repository for test oracle quality.",
+      "expected_anchors": [
+        {
+          "topic": "test-oracles",
+          "root_cause": "circular-oracle",
+          "locations": [
+            [
+              "test_fee.py",
+              "test_fee"
+            ]
+          ]
+        }
       ]
     },
     {
       "id": "synthesis-a",
       "fixture": "fixtures/synthesis/a",
       "skill": "repo-audit-synthesis",
-      "prompt": "Consolidate these supplied supported findings by independent corrective mechanism. Return one grouped record per cause using root_cause as key; do not publish issues. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": [
-        "publication-guard"
+      "prompt": "Audit this supplied repository for findings synthesis and issue planning.",
+      "expected_anchors": [
+        {
+          "topic": "synthesis",
+          "root_cause": "publication-guard",
+          "locations": [
+            [
+              "candidates.json",
+              "publication-guard"
+            ]
+          ]
+        }
       ]
     },
     {
       "id": "concurrency-b",
       "fixture": "fixtures/concurrency/b",
       "skill": "repo-audit-concurrency",
-      "prompt": "Audit asynchronous publication and cancellation in this source. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
+      "prompt": "Audit this supplied repository for concurrency and race conditions.",
+      "expected_anchors": []
     },
     {
       "id": "trust-b",
       "fixture": "fixtures/trust/b",
       "skill": "repo-audit-trust-boundaries",
-      "prompt": "Audit object-level authorization for the documented contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
+      "prompt": "Audit this supplied repository for trust and authorization boundaries.",
+      "expected_anchors": []
     },
     {
       "id": "transactions-b",
       "fixture": "fixtures/transactions/b",
       "skill": "repo-audit-transactions",
-      "prompt": "Audit the documented transaction boundary and failure behavior. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
+      "prompt": "Audit this supplied repository for implicit transaction boundaries.",
+      "expected_anchors": []
     },
     {
       "id": "oracles-b",
       "fixture": "fixtures/oracles/b",
       "skill": "repo-audit-test-oracles",
-      "prompt": "Audit whether the test independently checks its stated contract. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": []
+      "prompt": "Audit this supplied repository for test oracle quality.",
+      "expected_anchors": []
     },
     {
       "id": "synthesis-b",
       "fixture": "fixtures/synthesis/b",
       "skill": "repo-audit-synthesis",
-      "prompt": "Consolidate these supplied supported findings by independent corrective mechanism. Return one grouped record per cause using root_cause as key; do not publish issues. Classify only the requested scope. Use concise evidence tied to source paths. Allowed category keys are stale-publication, authorization-bypass, partial-commit, circular-oracle, publication-guard, and authorization. Return no actionable findings when the existing mechanism establishes the requested contract.",
-      "expected_keys": [
-        "publication-guard",
-        "authorization"
+      "prompt": "Audit this supplied repository for findings synthesis and issue planning.",
+      "expected_anchors": [
+        {
+          "topic": "synthesis",
+          "root_cause": "authorization",
+          "locations": [
+            [
+              "candidates.json",
+              "authorization"
+            ]
+          ]
+        },
+        {
+          "topic": "synthesis",
+          "root_cause": "publication-guard",
+          "locations": [
+            [
+              "candidates.json",
+              "publication-guard"
+            ]
+          ]
+        }
       ]
     },
     {
@@ -89,51 +152,1074 @@
       "fixture": "fixtures/concurrency/a",
       "skill": "repo-audit-concurrency",
       "prompt": "Audit abort signal propagation, background task draining, and post-cancellation side effects during request shutdown.",
-      "expected_keys": []
+      "expected_anchors": []
     },
     {
       "id": "trust-routing",
       "fixture": "fixtures/trust/a",
       "skill": "repo-audit-trust-boundaries",
       "prompt": "Audit URL path normalization, percent-encoding ambiguity, and Unicode canonicalization before allowlist checks.",
-      "expected_keys": []
+      "expected_anchors": []
     },
     {
       "id": "transactions-routing",
       "fixture": "fixtures/transactions/a",
       "skill": "repo-audit-transactions",
       "prompt": "Audit duplicate webhook delivery handling, retry safety, and idempotency key scoping on payment endpoints.",
-      "expected_keys": []
+      "expected_anchors": []
     },
     {
       "id": "oracles-routing",
       "fixture": "fixtures/oracles/a",
       "skill": "repo-audit-test-oracles",
       "prompt": "Audit critical recovery and negative behavioral contracts that have zero automated test coverage.",
-      "expected_keys": []
+      "expected_anchors": []
     },
     {
       "id": "synthesis-routing",
       "fixture": "fixtures/synthesis/a",
       "skill": "repo-audit-synthesis",
       "prompt": "Select initial specialist passes and initialize an audit workspace plan before any findings exist.",
-      "expected_keys": []
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-program-a",
+      "fixture": "fixtures/audit_program/a",
+      "skill": "repo-audit-program",
+      "prompt": "Audit this supplied repository for multi-topic coordination.",
+      "expected_anchors": [
+        {
+          "topic": "program",
+          "root_cause": "uncoordinated-shared-ledger-overwrite",
+          "locations": [
+            [
+              "coordinator.py",
+              "run_passes"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-program-b",
+      "fixture": "fixtures/audit_program/b",
+      "skill": "repo-audit-program",
+      "prompt": "Audit this supplied repository for multi-topic coordination.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-program-routing",
+      "fixture": "fixtures/audit_program/a",
+      "skill": "repo-audit-program",
+      "prompt": "Consolidate completed specialist audit findings into deduplicated root causes, issue drafts, and ordered remediation handoffs.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-diagnostics-a",
+      "fixture": "fixtures/audit_diagnostics/a",
+      "skill": "repo-audit-diagnostics",
+      "prompt": "Diagnose this stalled repository audit session and generate a recovery bundle.",
+      "expected_anchors": [
+        {
+          "topic": "diagnostics",
+          "root_cause": "unredacted-bundle-secret",
+          "locations": [
+            [
+              "triage_bundle.py",
+              "export_bundle"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-diagnostics-b",
+      "fixture": "fixtures/audit_diagnostics/b",
+      "skill": "repo-audit-diagnostics",
+      "prompt": "Diagnose this stalled repository audit session and generate a recovery bundle.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-diagnostics-routing",
+      "fixture": "fixtures/audit_diagnostics/a",
+      "skill": "repo-audit-diagnostics",
+      "prompt": "Plan and coordinate multi-phase specialist audit passes with bounded ID allocations for a fresh repository investigation.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-behavioral-contracts-a",
+      "fixture": "fixtures/behavioral_contracts/a",
+      "skill": "repo-audit-behavioral-contracts",
+      "prompt": "Audit this supplied repository for behavioral contract reconstruction.",
+      "expected_anchors": [
+        {
+          "topic": "behavioral-contracts",
+          "root_cause": "superseded-operation-event",
+          "locations": [
+            [
+              "job_runner.mjs",
+              "JobRunner.replace"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-behavioral-contracts-b",
+      "fixture": "fixtures/behavioral_contracts/b",
+      "skill": "repo-audit-behavioral-contracts",
+      "prompt": "Audit this supplied repository for behavioral contract reconstruction.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-behavioral-contracts-routing",
+      "fixture": "fixtures/behavioral_contracts/a",
+      "skill": "repo-audit-behavioral-contracts",
+      "prompt": "Audit implicit domain capacity and conservation invariants that can be violated by concurrent reservations.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-invariants-a",
+      "fixture": "fixtures/invariants/a",
+      "skill": "repo-audit-invariants",
+      "prompt": "Audit this supplied repository for implicit invariants.",
+      "expected_anchors": [
+        {
+          "topic": "invariants",
+          "root_cause": "capacity-overcommit",
+          "locations": [
+            [
+              "seat_allocator.py",
+              "reserve_seat"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-invariants-b",
+      "fixture": "fixtures/invariants/b",
+      "skill": "repo-audit-invariants",
+      "prompt": "Audit this supplied repository for implicit invariants.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-invariants-routing",
+      "fixture": "fixtures/invariants/a",
+      "skill": "repo-audit-invariants",
+      "prompt": "Audit implicit boolean flag combinations and missing lifecycle state transitions in workflow status records.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-state-machines-a",
+      "fixture": "fixtures/state_machines/a",
+      "skill": "repo-audit-state-machines",
+      "prompt": "Audit this supplied repository for implicit state machines.",
+      "expected_anchors": [
+        {
+          "topic": "state-machines",
+          "root_cause": "contradictory-status-flags",
+          "locations": [
+            [
+              "upload_status.py",
+              "retry_upload"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-state-machines-b",
+      "fixture": "fixtures/state_machines/b",
+      "skill": "repo-audit-state-machines",
+      "prompt": "Audit this supplied repository for implicit state machines.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-state-machines-routing",
+      "fixture": "fixtures/state_machines/a",
+      "skill": "repo-audit-state-machines",
+      "prompt": "Audit hidden call-order dependencies and required initialization sequencing across service startup methods.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-lifecycle-a",
+      "fixture": "fixtures/lifecycle/a",
+      "skill": "repo-audit-lifecycle",
+      "prompt": "Audit this supplied repository for ownership and lifecycle boundaries.",
+      "expected_anchors": [
+        {
+          "topic": "lifecycle",
+          "root_cause": "post-unmount-resource-leak",
+          "locations": [
+            [
+              "camera_preview.mjs",
+              "CameraPreview.mount"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-lifecycle-b",
+      "fixture": "fixtures/lifecycle/b",
+      "skill": "repo-audit-lifecycle",
+      "prompt": "Audit this supplied repository for ownership and lifecycle boundaries.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-lifecycle-routing",
+      "fixture": "fixtures/lifecycle/a",
+      "skill": "repo-audit-lifecycle",
+      "prompt": "Audit unbounded queue growth, fan-out amplification, and missing backpressure controls under sustained load.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-temporal-coupling-a",
+      "fixture": "fixtures/temporal_coupling/a",
+      "skill": "repo-audit-temporal-coupling",
+      "prompt": "Audit this supplied repository for temporal coupling.",
+      "expected_anchors": [
+        {
+          "topic": "temporal-coupling",
+          "root_cause": "premature-ready-publication",
+          "locations": [
+            [
+              "worker_client.mjs",
+              "WorkerClient.initialize"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-temporal-coupling-b",
+      "fixture": "fixtures/temporal_coupling/b",
+      "skill": "repo-audit-temporal-coupling",
+      "prompt": "Audit this supplied repository for temporal coupling.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-temporal-coupling-routing",
+      "fixture": "fixtures/temporal_coupling/a",
+      "skill": "repo-audit-temporal-coupling",
+      "prompt": "Audit resource disposal ownership, leaked event listeners, and use-after-close hazards across session teardown.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-domain-models-a",
+      "fixture": "fixtures/domain_models/a",
+      "skill": "repo-audit-domain-models",
+      "prompt": "Audit this supplied repository for implicit domain models.",
+      "expected_anchors": [
+        {
+          "topic": "domain-models",
+          "root_cause": "primitive-identifier-transposition",
+          "locations": [
+            [
+              "enrollment.py",
+              "assign_participant"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-domain-models-b",
+      "fixture": "fixtures/domain_models/b",
+      "skill": "repo-audit-domain-models",
+      "prompt": "Audit this supplied repository for implicit domain models.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-domain-models-routing",
+      "fixture": "fixtures/domain_models/a",
+      "skill": "repo-audit-domain-models",
+      "prompt": "Audit lossy serialization mappings, rounding truncation, and schema precision loss across wire-to-storage transforms.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-failure-modes-a",
+      "fixture": "fixtures/failure_modes/a",
+      "skill": "repo-audit-failure-modes",
+      "prompt": "Audit this supplied repository for failure-mode completeness.",
+      "expected_anchors": [
+        {
+          "topic": "failure-modes",
+          "root_cause": "unacknowledged-commit-duplicate-retry",
+          "locations": [
+            [
+              "payout_sender.py",
+              "submit_payout"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-failure-modes-b",
+      "fixture": "fixtures/failure_modes/b",
+      "skill": "repo-audit-failure-modes",
+      "prompt": "Audit this supplied repository for failure-mode completeness.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-failure-modes-routing",
+      "fixture": "fixtures/failure_modes/a",
+      "skill": "repo-audit-failure-modes",
+      "prompt": "Audit swallowed exceptions, misleading error classifications, and collapsed retryable versus fatal error codes.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-agent-configs-a",
+      "fixture": "fixtures/agent_configs/a",
+      "skill": "repo-audit-agent-configs",
+      "prompt": "Audit this supplied repository for agent configuration, skill bundle, and MCP server security risks.",
+      "expected_anchors": [
+        {
+          "topic": "agent-configs",
+          "root_cause": "credential-exfiltration-and-plaintext-mcp",
+          "locations": [
+            [
+              "skill_upload_helper.py",
+              "upload_diagnostics"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-agent-configs-b",
+      "fixture": "fixtures/agent_configs/b",
+      "skill": "repo-audit-agent-configs",
+      "prompt": "Audit this supplied repository for agent configuration, skill bundle, and MCP server security risks.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-agent-configs-routing",
+      "fixture": "fixtures/agent_configs/a",
+      "skill": "repo-audit-agent-configs",
+      "prompt": "Audit HTTP API handlers and background jobs where authenticated tenant A can pass tenant B's resource ID without object-level authorization checks.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-idempotency-a",
+      "fixture": "fixtures/idempotency/a",
+      "skill": "repo-audit-idempotency",
+      "prompt": "Audit this supplied repository for idempotency and replay safety.",
+      "expected_anchors": [
+        {
+          "topic": "idempotency",
+          "root_cause": "non-atomic-dedup-check",
+          "locations": [
+            [
+              "webhook_charger.py",
+              "process_charge_event"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-idempotency-b",
+      "fixture": "fixtures/idempotency/b",
+      "skill": "repo-audit-idempotency",
+      "prompt": "Audit this supplied repository for idempotency and replay safety.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-idempotency-routing",
+      "fixture": "fixtures/idempotency/a",
+      "skill": "repo-audit-idempotency",
+      "prompt": "Audit multi-step database writes and partial-commit rollback guarantees when an intermediate step raises an error.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-error-semantics-a",
+      "fixture": "fixtures/error_semantics/a",
+      "skill": "repo-audit-error-semantics",
+      "prompt": "Audit this supplied repository for error semantics and taxonomy.",
+      "expected_anchors": [
+        {
+          "topic": "error-semantics",
+          "root_cause": "write-error-collapsed-to-empty-result",
+          "locations": [
+            [
+              "order_store.py",
+              "persist_and_list_orders"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-error-semantics-b",
+      "fixture": "fixtures/error_semantics/b",
+      "skill": "repo-audit-error-semantics",
+      "prompt": "Audit this supplied repository for error semantics and taxonomy.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-error-semantics-routing",
+      "fixture": "fixtures/error_semantics/a",
+      "skill": "repo-audit-error-semantics",
+      "prompt": "Audit mid-workflow timeout handling, downstream dependency outages, and stuck recovery states across external calls.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-capacity-a",
+      "fixture": "fixtures/capacity/a",
+      "skill": "repo-audit-capacity",
+      "prompt": "Audit this supplied repository for resource bounds and backpressure.",
+      "expected_anchors": [
+        {
+          "topic": "capacity",
+          "root_cause": "unbounded-frame-queue",
+          "locations": [
+            [
+              "frame_ingestor.py",
+              "enqueue_frame"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-capacity-b",
+      "fixture": "fixtures/capacity/b",
+      "skill": "repo-audit-capacity",
+      "prompt": "Audit this supplied repository for resource bounds and backpressure.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-capacity-routing",
+      "fixture": "fixtures/capacity/a",
+      "skill": "repo-audit-capacity",
+      "prompt": "Audit quadratic nested lookups and pathological input costs capable of causing CPU exhaustion on large payloads.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-cancellation-a",
+      "fixture": "fixtures/cancellation/a",
+      "skill": "repo-audit-cancellation",
+      "prompt": "Audit this supplied repository for cancellation propagation.",
+      "expected_anchors": [
+        {
+          "topic": "cancellation",
+          "root_cause": "unpropagated-abort-side-effect",
+          "locations": [
+            [
+              "search_fetcher.mjs",
+              "SearchFetcher.run"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-cancellation-b",
+      "fixture": "fixtures/cancellation/b",
+      "skill": "repo-audit-cancellation",
+      "prompt": "Audit this supplied repository for cancellation propagation.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-cancellation-routing",
+      "fixture": "fixtures/cancellation/a",
+      "skill": "repo-audit-cancellation",
+      "prompt": "Audit shared-memory lock ordering, unsynchronized read-modify-write races, and lost updates across concurrent workers.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-cache-coherence-a",
+      "fixture": "fixtures/cache_coherence/a",
+      "skill": "repo-audit-cache-coherence",
+      "prompt": "Audit this supplied repository for cache coherence.",
+      "expected_anchors": [
+        {
+          "topic": "cache-coherence",
+          "root_cause": "stale-read-repopulation",
+          "locations": [
+            [
+              "profile_cache.mjs",
+              "ProfileCache.getProfile"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-cache-coherence-b",
+      "fixture": "fixtures/cache_coherence/b",
+      "skill": "repo-audit-cache-coherence",
+      "prompt": "Audit this supplied repository for cache coherence.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-cache-coherence-routing",
+      "fixture": "fixtures/cache_coherence/a",
+      "skill": "repo-audit-cache-coherence",
+      "prompt": "Audit duplicated persistent domain authorities and independently mutated derived balance columns in storage.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-data-integrity-a",
+      "fixture": "fixtures/data_integrity/a",
+      "skill": "repo-audit-data-integrity",
+      "prompt": "Audit this supplied repository for data transformation integrity.",
+      "expected_anchors": [
+        {
+          "topic": "data-integrity",
+          "root_cause": "binary-float-precision-loss",
+          "locations": [
+            [
+              "dosage_serializer.py",
+              "serialize_ledger_amount"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-data-integrity-b",
+      "fixture": "fixtures/data_integrity/b",
+      "skill": "repo-audit-data-integrity",
+      "prompt": "Audit this supplied repository for data transformation integrity.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-data-integrity-routing",
+      "fixture": "fixtures/data_integrity/a",
+      "skill": "repo-audit-data-integrity",
+      "prompt": "Audit producer-consumer message schema versioning and wire field interpretation drift between service versions.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-boundary-conditions-a",
+      "fixture": "fixtures/boundary_conditions/a",
+      "skill": "repo-audit-boundary-conditions",
+      "prompt": "Audit this supplied repository for boundary-condition correctness.",
+      "expected_anchors": [
+        {
+          "topic": "boundary-conditions",
+          "root_cause": "inclusive-upper-bound-overflow",
+          "locations": [
+            [
+              "packet_framer.py",
+              "write_chunk"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-boundary-conditions-b",
+      "fixture": "fixtures/boundary_conditions/b",
+      "skill": "repo-audit-boundary-conditions",
+      "prompt": "Audit this supplied repository for boundary-condition correctness.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-boundary-conditions-routing",
+      "fixture": "fixtures/boundary_conditions/a",
+      "skill": "repo-audit-boundary-conditions",
+      "prompt": "Audit primitive string identifiers mixing incompatible currency and tenant units across domain method signatures.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-protocol-drift-a",
+      "fixture": "fixtures/protocol_drift/a",
+      "skill": "repo-audit-protocol-drift",
+      "prompt": "Audit this supplied repository for protocol contract drift.",
+      "expected_anchors": [
+        {
+          "topic": "protocol-drift",
+          "root_cause": "char-vs-byte-length-drift",
+          "locations": [
+            [
+              "frame_codec.py",
+              "encode_frame"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-protocol-drift-b",
+      "fixture": "fixtures/protocol_drift/b",
+      "skill": "repo-audit-protocol-drift",
+      "prompt": "Audit this supplied repository for protocol contract drift.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-protocol-drift-routing",
+      "fixture": "fixtures/protocol_drift/a",
+      "skill": "repo-audit-protocol-drift",
+      "prompt": "Audit persisted database migration backward compatibility and rolling-deploy state readers across N-1 releases.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-configuration-a",
+      "fixture": "fixtures/configuration/a",
+      "skill": "repo-audit-configuration",
+      "prompt": "Audit this supplied repository for configuration combinatorics.",
+      "expected_anchors": [
+        {
+          "topic": "configuration",
+          "root_cause": "incompatible-codec-flag-pair",
+          "locations": [
+            [
+              "codec_flags.py",
+              "build_pipeline_config"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-configuration-b",
+      "fixture": "fixtures/configuration/b",
+      "skill": "repo-audit-configuration",
+      "prompt": "Audit this supplied repository for configuration combinatorics.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-configuration-routing",
+      "fixture": "fixtures/configuration/a",
+      "skill": "repo-audit-configuration",
+      "prompt": "Audit permanently disabled legacy feature flags, unreachable compatibility branches, and unused exported symbols.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-compatibility-a",
+      "fixture": "fixtures/compatibility/a",
+      "skill": "repo-audit-compatibility",
+      "prompt": "Audit this supplied repository for compatibility and migration contracts.",
+      "expected_anchors": [
+        {
+          "topic": "compatibility",
+          "root_cause": "downgrade-overwrite-field-loss",
+          "locations": [
+            [
+              "checkpoint_migrator.py",
+              "save_client_record"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-compatibility-b",
+      "fixture": "fixtures/compatibility/b",
+      "skill": "repo-audit-compatibility",
+      "prompt": "Audit this supplied repository for compatibility and migration contracts.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-compatibility-routing",
+      "fixture": "fixtures/compatibility/a",
+      "skill": "repo-audit-compatibility",
+      "prompt": "Audit conflicting environment variable overrides, feature-flag combinations, and runtime reload precedence rules.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-complexity-a",
+      "fixture": "fixtures/complexity/a",
+      "skill": "repo-audit-complexity",
+      "prompt": "Audit this supplied repository for algorithmic complexity.",
+      "expected_anchors": [
+        {
+          "topic": "complexity",
+          "root_cause": "quadratic-chunk-reassembly",
+          "locations": [
+            [
+              "chunk_assembler.py",
+              "append_chunk"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-complexity-b",
+      "fixture": "fixtures/complexity/b",
+      "skill": "repo-audit-complexity",
+      "prompt": "Audit this supplied repository for algorithmic complexity.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-complexity-routing",
+      "fixture": "fixtures/complexity/a",
+      "skill": "repo-audit-complexity",
+      "prompt": "Audit empty slice handling, off-by-one pagination bounds, and integer overflow at minimum and maximum input limits.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-canonicalization-a",
+      "fixture": "fixtures/canonicalization/a",
+      "skill": "repo-audit-canonicalization",
+      "prompt": "Audit this supplied repository for security-sensitive canonicalization.",
+      "expected_anchors": [
+        {
+          "topic": "canonicalization",
+          "root_cause": "userinfo-host-allowlist-bypass",
+          "locations": [
+            [
+              "webhook_allowlist.py",
+              "is_allowed_target"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-canonicalization-b",
+      "fixture": "fixtures/canonicalization/b",
+      "skill": "repo-audit-canonicalization",
+      "prompt": "Audit this supplied repository for security-sensitive canonicalization.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-canonicalization-routing",
+      "fixture": "fixtures/canonicalization/a",
+      "skill": "repo-audit-canonicalization",
+      "prompt": "Audit object-level tenant ownership binding and privilege checks on authenticated record lookup endpoints.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-side-effects-a",
+      "fixture": "fixtures/side_effects/a",
+      "skill": "repo-audit-side-effects",
+      "prompt": "Audit this supplied repository for hidden side effects.",
+      "expected_anchors": [
+        {
+          "topic": "side-effects",
+          "root_cause": "query-mutates-export-state",
+          "locations": [
+            [
+              "export_dashboard.py",
+              "get_pending_preview"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-side-effects-b",
+      "fixture": "fixtures/side_effects/b",
+      "skill": "repo-audit-side-effects",
+      "prompt": "Audit this supplied repository for hidden side effects.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-side-effects-routing",
+      "fixture": "fixtures/side_effects/a",
+      "skill": "repo-audit-side-effects",
+      "prompt": "Audit unseeded randomness, wall-clock dependence, and dictionary iteration order sensitivity in workflow outputs.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-sources-of-truth-a",
+      "fixture": "fixtures/sources_of_truth/a",
+      "skill": "repo-audit-sources-of-truth",
+      "prompt": "Audit this supplied repository for duplicated sources of truth.",
+      "expected_anchors": [
+        {
+          "topic": "sources-of-truth",
+          "root_cause": "divergent-completion-authority",
+          "locations": [
+            [
+              "transfer_tracker.py",
+              "is_transfer_complete"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-sources-of-truth-b",
+      "fixture": "fixtures/sources_of_truth/b",
+      "skill": "repo-audit-sources-of-truth",
+      "prompt": "Audit this supplied repository for duplicated sources of truth.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-sources-of-truth-routing",
+      "fixture": "fixtures/sources_of_truth/a",
+      "skill": "repo-audit-sources-of-truth",
+      "prompt": "Audit TTL invalidation races, missing tenant prefixes in cache keys, and stale read-through cache entries.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-architecture-a",
+      "fixture": "fixtures/audit_architecture/a",
+      "skill": "repo-audit-architecture",
+      "prompt": "Audit this supplied repository for architectural boundaries and dependency direction.",
+      "expected_anchors": [
+        {
+          "topic": "architecture",
+          "root_cause": "direct-cross-module-table-write",
+          "locations": [
+            [
+              "reporting_writer.py",
+              "record_adjustment"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-architecture-b",
+      "fixture": "fixtures/audit_architecture/b",
+      "skill": "repo-audit-architecture",
+      "prompt": "Audit this supplied repository for architectural boundaries and dependency direction.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-architecture-routing",
+      "fixture": "fixtures/audit_architecture/a",
+      "skill": "repo-audit-architecture",
+      "prompt": "Audit god classes mixing unrelated billing, notification, and formatting responsibilities with divergent reasons to change.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-test-contracts-a",
+      "fixture": "fixtures/test_contracts/a",
+      "skill": "repo-audit-test-contracts",
+      "prompt": "Audit this supplied repository for untested behavioral contracts.",
+      "expected_anchors": [
+        {
+          "topic": "test-contracts",
+          "root_cause": "untested-interruption-resume-contract",
+          "locations": [
+            [
+              "transfer_checks.py",
+              "verify_transfer_suite"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-test-contracts-b",
+      "fixture": "fixtures/test_contracts/b",
+      "skill": "repo-audit-test-contracts",
+      "prompt": "Audit this supplied repository for untested behavioral contracts.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-test-contracts-routing",
+      "fixture": "fixtures/test_contracts/a",
+      "skill": "repo-audit-test-contracts",
+      "prompt": "Audit existing unit tests whose assertions recompute expected values by calling the same production formula under test.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-cohesion-a",
+      "fixture": "fixtures/cohesion/a",
+      "skill": "repo-audit-cohesion",
+      "prompt": "Audit this supplied repository for cohesion and responsibility.",
+      "expected_anchors": [
+        {
+          "topic": "cohesion",
+          "root_cause": "formatter-mutates-auth-policy",
+          "locations": [
+            [
+              "report_renderer.py",
+              "render_summary_csv"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-cohesion-b",
+      "fixture": "fixtures/cohesion/b",
+      "skill": "repo-audit-cohesion",
+      "prompt": "Audit this supplied repository for cohesion and responsibility.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-cohesion-routing",
+      "fixture": "fixtures/cohesion/a",
+      "skill": "repo-audit-cohesion",
+      "prompt": "Audit cyclic package imports and domain modules importing outer HTTP transport adapters against layer direction.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-observability-a",
+      "fixture": "fixtures/observability/a",
+      "skill": "repo-audit-observability",
+      "prompt": "Audit this supplied repository for observability gaps.",
+      "expected_anchors": [
+        {
+          "topic": "observability",
+          "root_cause": "missing-retry-correlation-context",
+          "locations": [
+            [
+              "payment_retrier.py",
+              "execute_with_retry"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-observability-b",
+      "fixture": "fixtures/observability/b",
+      "skill": "repo-audit-observability",
+      "prompt": "Audit this supplied repository for observability gaps.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-observability-routing",
+      "fixture": "fixtures/observability/a",
+      "skill": "repo-audit-observability",
+      "prompt": "Audit inconsistent pagination cursors, error envelope shapes, and cancellation semantics across public endpoints.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-nondeterminism-a",
+      "fixture": "fixtures/nondeterminism/a",
+      "skill": "repo-audit-nondeterminism",
+      "prompt": "Audit this supplied repository for nondeterministic behavior.",
+      "expected_anchors": [
+        {
+          "topic": "nondeterminism",
+          "root_cause": "wall-clock-tick-assumption",
+          "locations": [
+            [
+              "ttl_expiry_check.py",
+              "verify_token_ttl"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-nondeterminism-b",
+      "fixture": "fixtures/nondeterminism/b",
+      "skill": "repo-audit-nondeterminism",
+      "prompt": "Audit this supplied repository for nondeterministic behavior.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-nondeterminism-routing",
+      "fixture": "fixtures/nondeterminism/a",
+      "skill": "repo-audit-nondeterminism",
+      "prompt": "Audit getters and pure-named query helpers that silently mutate session state or trigger network writes.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-api-consistency-a",
+      "fixture": "fixtures/api_consistency/a",
+      "skill": "repo-audit-api-consistency",
+      "prompt": "Audit this supplied repository for api design consistency.",
+      "expected_anchors": [
+        {
+          "topic": "api-consistency",
+          "root_cause": "inconsistent-delete-completion-semantics",
+          "locations": [
+            [
+              "resource_deleter.py",
+              "purge_tenant_assets"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-api-consistency-b",
+      "fixture": "fixtures/api_consistency/b",
+      "skill": "repo-audit-api-consistency",
+      "prompt": "Audit this supplied repository for api design consistency.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-api-consistency-routing",
+      "fixture": "fixtures/api_consistency/a",
+      "skill": "repo-audit-api-consistency",
+      "prompt": "Reconstruct undocumented end-to-end behavioral guarantees and caller obligations from reachable implementation code.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-accessibility-state-a",
+      "fixture": "fixtures/accessibility_state/a",
+      "skill": "repo-audit-accessibility-state",
+      "prompt": "Audit this supplied repository for accessibility state consistency.",
+      "expected_anchors": [
+        {
+          "topic": "accessibility-state",
+          "root_cause": "hidden-modal-focus-and-expanded-desync",
+          "locations": [
+            [
+              "modal_controller.mjs",
+              "ModalController.dismissOnError"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-accessibility-state-b",
+      "fixture": "fixtures/accessibility_state/b",
+      "skill": "repo-audit-accessibility-state",
+      "prompt": "Audit this supplied repository for accessibility state consistency.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-accessibility-state-routing",
+      "fixture": "fixtures/accessibility_state/a",
+      "skill": "repo-audit-accessibility-state",
+      "prompt": "Audit missing request correlation IDs, dropped structured failure context, and silent background worker crashes.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-dead-code-a",
+      "fixture": "fixtures/dead_code/a",
+      "skill": "repo-audit-dead-code",
+      "prompt": "Audit this supplied repository for dead code and obsolete compatibility paths.",
+      "expected_anchors": [
+        {
+          "topic": "dead-code",
+          "root_cause": "retired-flag-import-listener-leak",
+          "locations": [
+            [
+              "legacy_poller.py",
+              "register_import_hooks"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo-audit-dead-code-b",
+      "fixture": "fixtures/dead_code/b",
+      "skill": "repo-audit-dead-code",
+      "prompt": "Audit this supplied repository for dead code and obsolete compatibility paths.",
+      "expected_anchors": []
+    },
+    {
+      "id": "repo-audit-dead-code-routing",
+      "fixture": "fixtures/dead_code/a",
+      "skill": "repo-audit-dead-code",
+      "prompt": "Audit divergence between modal open state, keyboard focus trapping, and aria-expanded attributes in UI components.",
+      "expected_anchors": []
     },
     {
       "id": "arch-decision-record-a",
       "fixture": "fixtures/architecture/decision_record/a",
       "skill": "arch-decision-record",
       "contract": "architecture",
-      "schema": "skills/arch-decision-record/assets/architecture.schema.json",
-      "prompt": "Record an architectural decision record evaluating the supplied event dispatch trade-offs and operational consequences. Emit accepted decision ADR-001 when an unresolved architectural trade-off is present, or keep a draft with empty decisions when already settled.",
-      "expected_keys": [
-        "ADR-001"
+      "prompt": "Create, evaluate, or record an architectural decision record and system trade-offs for this repository.",
+      "expected_anchors": [
+        {
+          "kind": "decision",
+          "min_consequences": 2
+        }
       ],
       "expected_assertions": {
         "status": "accepted",
-        "decision_ids": [
-          "ADR-001"
-        ],
         "min_consequences": 2
       }
     },
@@ -142,13 +1228,10 @@
       "fixture": "fixtures/architecture/decision_record/b",
       "skill": "arch-decision-record",
       "contract": "architecture",
-      "schema": "skills/arch-decision-record/assets/architecture.schema.json",
-      "prompt": "Record an architectural decision record evaluating the supplied event dispatch trade-offs and operational consequences. Emit accepted decision ADR-001 when an unresolved architectural trade-off is present, or keep a draft with empty decisions when already settled.",
-      "expected_keys": [],
+      "prompt": "Create, evaluate, or record an architectural decision record and system trade-offs for this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "decision_ids": [],
-        "boundary_names": []
+        "status": "draft"
       }
     },
     {
@@ -156,13 +1239,10 @@
       "fixture": "fixtures/architecture/decision_record/a",
       "skill": "arch-decision-record",
       "contract": "architecture",
-      "schema": "skills/arch-decision-record/assets/architecture.schema.json",
       "prompt": "Specify trust boundary validation guards and gateway interfaces where untrusted HTTP requests enter the order repository.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "decision_ids": [],
-        "boundary_names": []
+        "status": "draft"
       }
     },
     {
@@ -170,19 +1250,16 @@
       "fixture": "fixtures/architecture/boundary_spec/a",
       "skill": "arch-boundary-specification",
       "contract": "architecture",
-      "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
-      "prompt": "Specify trust and module boundaries and required entry invariants for this order repository source. Report boundary http-to-order-repository when raw transport inputs cross into storage unvalidated, or return empty boundaries when gateway invariants already isolate the repository.",
-      "expected_keys": [
-        "http-to-order-repository"
+      "prompt": "Define, document, or verify system, service, module, and trust boundaries for this repository.",
+      "expected_anchors": [
+        {
+          "kind": "boundary",
+          "type": "trust",
+          "min_invariants": 1
+        }
       ],
       "expected_assertions": {
         "status": "accepted",
-        "boundary_names": [
-          "http-to-order-repository"
-        ],
-        "boundary_types": {
-          "http-to-order-repository": "trust"
-        },
         "min_invariants": 1
       }
     },
@@ -191,13 +1268,10 @@
       "fixture": "fixtures/architecture/boundary_spec/b",
       "skill": "arch-boundary-specification",
       "contract": "architecture",
-      "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
-      "prompt": "Specify trust and module boundaries and required entry invariants for this order repository source. Report boundary http-to-order-repository when raw transport inputs cross into storage unvalidated, or return empty boundaries when gateway invariants already isolate the repository.",
-      "expected_keys": [],
+      "prompt": "Define, document, or verify system, service, module, and trust boundaries for this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "accepted",
-        "boundary_names": [],
-        "decision_ids": []
+        "status": "accepted"
       }
     },
     {
@@ -205,13 +1279,10 @@
       "fixture": "fixtures/architecture/boundary_spec/a",
       "skill": "arch-boundary-specification",
       "contract": "architecture",
-      "schema": "skills/arch-boundary-specification/assets/architecture.schema.json",
       "prompt": "Decompose this monolithic billing pipeline into cohesive ingestion, calculation, and notification components with acyclic interfaces.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "boundary_names": [],
-        "decision_ids": []
+        "status": "draft"
       }
     },
     {
@@ -219,23 +1290,18 @@
       "fixture": "fixtures/architecture/decomposition/a",
       "skill": "arch-component-decomposition",
       "contract": "architecture",
-      "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
-      "prompt": "Decompose tangled billing pipeline responsibilities into cohesive module boundaries and record decomposition decision ADR-DECOMP-1 with boundary billing-ingestion-module. Return empty boundaries and decisions when components are already cleanly separated.",
-      "expected_keys": [
-        "billing-ingestion-module",
-        "ADR-DECOMP-1"
+      "prompt": "Decompose system capabilities into cohesive components, interfaces, and domain models for this repository.",
+      "expected_anchors": [
+        {
+          "kind": "boundary",
+          "type": "module"
+        },
+        {
+          "kind": "decision"
+        }
       ],
       "expected_assertions": {
-        "status": "accepted",
-        "boundary_names": [
-          "billing-ingestion-module"
-        ],
-        "boundary_types": {
-          "billing-ingestion-module": "module"
-        },
-        "decision_ids": [
-          "ADR-DECOMP-1"
-        ]
+        "status": "accepted"
       }
     },
     {
@@ -243,13 +1309,10 @@
       "fixture": "fixtures/architecture/decomposition/b",
       "skill": "arch-component-decomposition",
       "contract": "architecture",
-      "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
-      "prompt": "Decompose tangled billing pipeline responsibilities into cohesive module boundaries and record decomposition decision ADR-DECOMP-1 with boundary billing-ingestion-module. Return empty boundaries and decisions when components are already cleanly separated.",
-      "expected_keys": [],
+      "prompt": "Decompose system capabilities into cohesive components, interfaces, and domain models for this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "accepted",
-        "boundary_names": [],
-        "decision_ids": []
+        "status": "accepted"
       }
     },
     {
@@ -257,13 +1320,10 @@
       "fixture": "fixtures/architecture/decomposition/a",
       "skill": "arch-component-decomposition",
       "contract": "architecture",
-      "schema": "skills/arch-component-decomposition/assets/architecture.schema.json",
       "prompt": "Author an architectural decision record comparing transactional outbox queues against synchronous RPC for checkout event delivery.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "boundary_names": [],
-        "decision_ids": []
+        "status": "draft"
       }
     },
     {
@@ -271,19 +1331,15 @@
       "fixture": "fixtures/review/diff_analysis/a",
       "skill": "review-diff-analysis",
       "contract": "review",
-      "schema": "skills/review-diff-analysis/assets/review.schema.json",
-      "prompt": "Analyze the supplied diff and downstream caller impact surface. Report finding DIFF-001 with request_changes when a signature change breaks existing callers, or approve with empty findings when backward compatible.",
-      "expected_keys": [
-        "DIFF-001"
+      "prompt": "Analyze pull request diffs, change impact surfaces, and affected interface contracts in this repository.",
+      "expected_anchors": [
+        {
+          "file": "invoice_client.py",
+          "severity": "high"
+        }
       ],
       "expected_assertions": {
         "verdict": "request_changes",
-        "finding_ids": [
-          "DIFF-001"
-        ],
-        "severities": {
-          "DIFF-001": "high"
-        },
         "files": [
           "invoice_client.py"
         ]
@@ -294,12 +1350,10 @@
       "fixture": "fixtures/review/diff_analysis/b",
       "skill": "review-diff-analysis",
       "contract": "review",
-      "schema": "skills/review-diff-analysis/assets/review.schema.json",
-      "prompt": "Analyze the supplied diff and downstream caller impact surface. Report finding DIFF-001 with request_changes when a signature change breaks existing callers, or approve with empty findings when backward compatible.",
-      "expected_keys": [],
+      "prompt": "Analyze pull request diffs, change impact surfaces, and affected interface contracts in this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "verdict": "approve",
-        "finding_ids": []
+        "verdict": "approve"
       }
     },
     {
@@ -307,12 +1361,10 @@
       "fixture": "fixtures/review/diff_analysis/a",
       "skill": "review-diff-analysis",
       "contract": "review",
-      "schema": "skills/review-diff-analysis/assets/review.schema.json",
       "prompt": "Verify that state transitions and lock lifecycles in the escrow module preserve behavioral invariants across error paths.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "verdict": "comment",
-        "finding_ids": []
+        "verdict": "comment"
       }
     },
     {
@@ -320,19 +1372,15 @@
       "fixture": "fixtures/review/invariants/a",
       "skill": "review-invariant-violations",
       "contract": "review",
-      "schema": "skills/review-invariant-violations/assets/review.schema.json",
-      "prompt": "Review state transitions in escrow_state.py against behavioral invariants. Report finding INV-001 with request_changes when disputed escrows can release funds unguarded, or approve when the invariant precondition is enforced.",
-      "expected_keys": [
-        "INV-001"
+      "prompt": "Review code changes against behavioral invariants, state machines, and system invariants in this repository.",
+      "expected_anchors": [
+        {
+          "file": "escrow_state.py",
+          "severity": "critical"
+        }
       ],
       "expected_assertions": {
         "verdict": "request_changes",
-        "finding_ids": [
-          "INV-001"
-        ],
-        "severities": {
-          "INV-001": "critical"
-        },
         "files": [
           "escrow_state.py"
         ]
@@ -343,12 +1391,10 @@
       "fixture": "fixtures/review/invariants/b",
       "skill": "review-invariant-violations",
       "contract": "review",
-      "schema": "skills/review-invariant-violations/assets/review.schema.json",
-      "prompt": "Review state transitions in escrow_state.py against behavioral invariants. Report finding INV-001 with request_changes when disputed escrows can release funds unguarded, or approve when the invariant precondition is enforced.",
-      "expected_keys": [],
+      "prompt": "Review code changes against behavioral invariants, state machines, and system invariants in this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "verdict": "approve",
-        "finding_ids": []
+        "verdict": "approve"
       }
     },
     {
@@ -356,12 +1402,10 @@
       "fixture": "fixtures/review/invariants/a",
       "skill": "review-invariant-violations",
       "contract": "review",
-      "schema": "skills/review-invariant-violations/assets/review.schema.json",
       "prompt": "Consolidate overlapping raw review comments into deduplicated, severity-ranked remediation guidance with replacement code examples.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "verdict": "comment",
-        "finding_ids": []
+        "verdict": "comment"
       }
     },
     {
@@ -369,16 +1413,18 @@
       "fixture": "fixtures/review/feedback/a",
       "skill": "review-actionable-feedback",
       "contract": "review",
-      "schema": "skills/review-actionable-feedback/assets/review.schema.json",
-      "prompt": "Synthesize supplied raw review comments into deduplicated, actionable feedback with concrete remediation advice. Consolidate overlapping expiry comments into finding FB-001 with request_changes, or approve when no raw comments remain.",
-      "expected_keys": [
-        "FB-001"
+      "prompt": "Synthesize review findings into prioritized, actionable feedback with correction guidance for this repository.",
+      "expected_anchors": [
+        {
+          "file": "auth_token.py",
+          "severity": [
+            "high",
+            "medium"
+          ]
+        }
       ],
       "expected_assertions": {
         "verdict": "request_changes",
-        "finding_ids": [
-          "FB-001"
-        ],
         "require_recommendations": true,
         "files": [
           "auth_token.py"
@@ -390,12 +1436,10 @@
       "fixture": "fixtures/review/feedback/b",
       "skill": "review-actionable-feedback",
       "contract": "review",
-      "schema": "skills/review-actionable-feedback/assets/review.schema.json",
-      "prompt": "Synthesize supplied raw review comments into deduplicated, actionable feedback with concrete remediation advice. Consolidate overlapping expiry comments into finding FB-001 with request_changes, or approve when no raw comments remain.",
-      "expected_keys": [],
+      "prompt": "Synthesize review findings into prioritized, actionable feedback with correction guidance for this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "verdict": "approve",
-        "finding_ids": []
+        "verdict": "approve"
       }
     },
     {
@@ -403,12 +1447,10 @@
       "fixture": "fixtures/review/feedback/a",
       "skill": "review-actionable-feedback",
       "contract": "review",
-      "schema": "skills/review-actionable-feedback/assets/review.schema.json",
       "prompt": "Inspect the pull request diff hunks to map altered function signatures and downstream caller blast radius across modules.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "verdict": "comment",
-        "finding_ids": []
+        "verdict": "comment"
       }
     },
     {
@@ -416,19 +1458,20 @@
       "fixture": "fixtures/testing/gap_analysis/a",
       "skill": "test-gap-analysis",
       "contract": "testing",
-      "schema": "skills/test-gap-analysis/assets/testing.schema.json",
-      "prompt": "Analyze test coverage gaps for component discount_calc under unittest. Report GAP-NEG-SUBTOTAL (exception oracle) and GAP-MAX-CAP (boundary oracle) when unasserted, or return empty test_cases when already covered.",
-      "expected_keys": [
-        "GAP-NEG-SUBTOTAL",
-        "GAP-MAX-CAP"
+      "prompt": "Discover test coverage gaps, unexercised error paths, and missing boundary assertions in this repository.",
+      "expected_anchors": [
+        {
+          "oracle_type": "exception",
+          "verified": false
+        },
+        {
+          "oracle_type": "boundary",
+          "verified": false
+        }
       ],
       "expected_assertions": {
         "component": "discount_calc",
-        "framework": "unittest",
-        "oracle_types": {
-          "GAP-NEG-SUBTOTAL": "exception",
-          "GAP-MAX-CAP": "boundary"
-        }
+        "framework": "unittest"
       }
     },
     {
@@ -436,13 +1479,11 @@
       "fixture": "fixtures/testing/gap_analysis/b",
       "skill": "test-gap-analysis",
       "contract": "testing",
-      "schema": "skills/test-gap-analysis/assets/testing.schema.json",
-      "prompt": "Analyze test coverage gaps for component discount_calc under unittest. Report GAP-NEG-SUBTOTAL (exception oracle) and GAP-MAX-CAP (boundary oracle) when unasserted, or return empty test_cases when already covered.",
-      "expected_keys": [],
+      "prompt": "Discover test coverage gaps, unexercised error paths, and missing boundary assertions in this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
         "component": "discount_calc",
-        "framework": "unittest",
-        "test_case_ids": []
+        "framework": "unittest"
       }
     },
     {
@@ -450,35 +1491,31 @@
       "fixture": "fixtures/testing/gap_analysis/a",
       "skill": "test-gap-analysis",
       "contract": "testing",
-      "schema": "skills/test-gap-analysis/assets/testing.schema.json",
       "prompt": "Write runnable unit tests with independent boundary and exception oracles for the uncovered rate limiter module.",
-      "expected_keys": [],
-      "expected_assertions": {
-        "test_case_ids": []
-      }
+      "expected_anchors": [],
+      "expected_assertions": {}
     },
     {
       "id": "test-case-generation-a",
       "fixture": "fixtures/testing/case_generation/a",
       "skill": "test-case-generation",
       "contract": "testing",
-      "schema": "skills/test-case-generation/assets/testing.schema.json",
       "writable_paths": [
         "tests/test_rate_limiter_*.py"
       ],
-      "prompt": "Generate automated unit test cases for component rate_limiter under unittest. When burst boundary assertions are missing, write a runnable test module under ./source/tests/ without modifying production code and record verified test case TC-BURST-LIMIT.",
-      "expected_keys": [
-        "TC-BURST-LIMIT"
+      "prompt": "Generate automated regression and unit test cases for uncovered behavioral contracts in this repository.",
+      "expected_anchors": [
+        {
+          "oracle_type": "boundary",
+          "verified": true
+        }
       ],
       "expected_assertions": {
         "component": "rate_limiter",
         "framework": "unittest",
-        "oracle_types": {
-          "TC-BURST-LIMIT": "boundary"
-        },
         "verified": true,
-        "generated_files": [
-          "tests/test_rate_limiter_generated.py"
+        "generated_globs": [
+          "tests/test_rate_limiter_*.py"
         ]
       }
     },
@@ -487,13 +1524,11 @@
       "fixture": "fixtures/testing/case_generation/b",
       "skill": "test-case-generation",
       "contract": "testing",
-      "schema": "skills/test-case-generation/assets/testing.schema.json",
-      "prompt": "Generate automated unit test cases for component rate_limiter under unittest. When burst boundary assertions are already present, leave source files unchanged and return empty test_cases.",
-      "expected_keys": [],
+      "prompt": "Generate automated regression and unit test cases for uncovered behavioral contracts in this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
         "component": "rate_limiter",
-        "framework": "unittest",
-        "test_case_ids": []
+        "framework": "unittest"
       }
     },
     {
@@ -501,29 +1536,25 @@
       "fixture": "fixtures/testing/case_generation/a",
       "skill": "test-case-generation",
       "contract": "testing",
-      "schema": "skills/test-case-generation/assets/testing.schema.json",
       "prompt": "Execute the existing generated test suite across reordered runs to check for shared state leakage and seeded regression detection.",
-      "expected_keys": [],
-      "expected_assertions": {
-        "test_case_ids": []
-      }
+      "expected_anchors": [],
+      "expected_assertions": {}
     },
     {
       "id": "test-suite-verification-a",
       "fixture": "fixtures/testing/suite_verification/a",
       "skill": "test-suite-verification",
       "contract": "testing",
-      "schema": "skills/test-suite-verification/assets/testing.schema.json",
-      "prompt": "Verify test suite isolation and failure oracles for component cache_store under unittest. Report VERIFY-STATE-ISOLATION (state oracle, verified=false) when global state leaks across runs, or return empty test_cases when hermetic.",
-      "expected_keys": [
-        "VERIFY-STATE-ISOLATION"
+      "prompt": "Execute and verify generated test suites against regressions and failure oracles in this repository.",
+      "expected_anchors": [
+        {
+          "oracle_type": "state",
+          "verified": false
+        }
       ],
       "expected_assertions": {
         "component": "cache_store",
         "framework": "unittest",
-        "oracle_types": {
-          "VERIFY-STATE-ISOLATION": "state"
-        },
         "verified": false
       }
     },
@@ -532,13 +1563,11 @@
       "fixture": "fixtures/testing/suite_verification/b",
       "skill": "test-suite-verification",
       "contract": "testing",
-      "schema": "skills/test-suite-verification/assets/testing.schema.json",
-      "prompt": "Verify test suite isolation and failure oracles for component cache_store under unittest. Report VERIFY-STATE-ISOLATION (state oracle, verified=false) when global state leaks across runs, or return empty test_cases when hermetic.",
-      "expected_keys": [],
+      "prompt": "Execute and verify generated test suites against regressions and failure oracles in this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
         "component": "cache_store",
-        "framework": "unittest",
-        "test_case_ids": []
+        "framework": "unittest"
       }
     },
     {
@@ -546,25 +1575,23 @@
       "fixture": "fixtures/testing/suite_verification/a",
       "skill": "test-suite-verification",
       "contract": "testing",
-      "schema": "skills/test-suite-verification/assets/testing.schema.json",
       "prompt": "Inventory untested exception branches and missing boundary assertions across the discount calculation module without running suites.",
-      "expected_keys": [],
-      "expected_assertions": {
-        "test_case_ids": []
-      }
+      "expected_anchors": [],
+      "expected_assertions": {}
     },
     {
       "id": "repo-verify-finding-a",
       "fixture": "fixtures/workflows/verify_finding/a",
       "skill": "repo-verify-finding",
       "contract": "workflow",
-      "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
-      "prompt": "Verify candidate finding F-101 in ledger_writer.py against reachable safeguards. Confirm F-101 when appends lack synchronization, or mark refuted when protected by an internal lock.",
-      "expected_keys": [
-        "F-101"
+      "prompt": "Verify, reproduce, or refute the reported repository finding with evidence.",
+      "expected_anchors": [
+        {
+          "kind": "finding_verification",
+          "reproduction_status": "confirmed"
+        }
       ],
       "expected_assertions": {
-        "finding_id": "F-101",
         "reproduction_status": "confirmed",
         "confidence_rating": "high",
         "safe_controls_all_passed": true
@@ -575,11 +1602,9 @@
       "fixture": "fixtures/workflows/verify_finding/b",
       "skill": "repo-verify-finding",
       "contract": "workflow",
-      "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
-      "prompt": "Verify candidate finding F-101 in ledger_writer.py against reachable safeguards. Confirm F-101 when appends lack synchronization, or mark refuted when protected by an internal lock.",
-      "expected_keys": [],
+      "prompt": "Verify, reproduce, or refute the reported repository finding with evidence.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "finding_id": "F-101",
         "reproduction_status": "refuted",
         "confidence_rating": "high",
         "safe_controls_all_passed": true
@@ -590,9 +1615,8 @@
       "fixture": "fixtures/workflows/verify_finding/a",
       "skill": "repo-verify-finding",
       "contract": "workflow",
-      "schema": "skills/repo-verify-finding/assets/finding-verification.schema.json",
       "prompt": "Run before-and-after verification checks on a proposed patch to confirm the defect is resolved without breaking safe controls.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "finding_id": "none",
         "reproduction_status": "needs-validation"
@@ -603,19 +1627,19 @@
       "fixture": "fixtures/workflows/specify_regression/a",
       "skill": "repo-specify-regression",
       "contract": "workflow",
-      "schema": "skills/repo-specify-regression/assets/regression.schema.json",
       "writable_paths": [
         "tests/test_quota_regression_*.py"
       ],
-      "prompt": "Specify and write an independent regression test for defect F-201 in quota_ledger.py without modifying production code. Record finding_id F-201 and the generated test module path when overdrafts are unguarded.",
-      "expected_keys": [
-        "F-201"
+      "prompt": "Specify an independent regression test for the supported behavioral defect in this repository.",
+      "expected_anchors": [
+        {
+          "kind": "regression",
+          "test_glob": "tests/test_quota_regression_*.py"
+        }
       ],
       "expected_assertions": {
-        "finding_id": "F-201",
-        "test_file": "tests/test_quota_regression_spec.py",
-        "generated_files": [
-          "tests/test_quota_regression_spec.py"
+        "generated_globs": [
+          "tests/test_quota_regression_*.py"
         ]
       }
     },
@@ -624,9 +1648,8 @@
       "fixture": "fixtures/workflows/specify_regression/b",
       "skill": "repo-specify-regression",
       "contract": "workflow",
-      "schema": "skills/repo-specify-regression/assets/regression.schema.json",
-      "prompt": "Specify an independent regression test for defect F-201 in quota_ledger.py only if overdrafts lack regression coverage; otherwise leave ./source unchanged and report finding_id none.",
-      "expected_keys": [],
+      "prompt": "Specify an independent regression test for the supported behavioral defect in this repository.",
+      "expected_anchors": [],
       "expected_assertions": {
         "finding_id": "none"
       }
@@ -636,9 +1659,8 @@
       "fixture": "fixtures/workflows/specify_regression/a",
       "skill": "repo-specify-regression",
       "contract": "workflow",
-      "schema": "skills/repo-specify-regression/assets/regression.schema.json",
       "prompt": "Reproduce or refute the unverified concurrency candidate finding against existing caller mutex safeguards before writing new tests.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "finding_id": "none"
       }
@@ -648,16 +1670,31 @@
       "fixture": "fixtures/workflows/plan_fix/a",
       "skill": "repo-plan-fix",
       "contract": "workflow",
-      "schema": "skills/repo-plan-fix/assets/plan.schema.json",
-      "prompt": "Plan bounded, acyclic implementation tasks from verified_findings.json. Emit ordered tasks for confirmed findings, or emit a noop placeholder task with empty dependency_order when no findings are confirmed.",
-      "expected_keys": [
-        "T-1",
-        "T-2"
+      "prompt": "Plan bounded implementation tasks and a handoff for verified repository findings.",
+      "expected_anchors": [
+        {
+          "kind": "task",
+          "file_scopes": [
+            "token_store.py"
+          ],
+          "has_blockers": false
+        },
+        {
+          "kind": "task",
+          "file_scopes": [
+            "session_gate.py"
+          ],
+          "has_blockers": true
+        }
       ],
       "expected_assertions": {
-        "dependency_order": [
-          "T-1",
-          "T-2"
+        "ordered_file_scopes": [
+          [
+            "token_store.py"
+          ],
+          [
+            "session_gate.py"
+          ]
         ],
         "acyclic": true
       }
@@ -667,11 +1704,10 @@
       "fixture": "fixtures/workflows/plan_fix/b",
       "skill": "repo-plan-fix",
       "contract": "workflow",
-      "schema": "skills/repo-plan-fix/assets/plan.schema.json",
-      "prompt": "Plan bounded, acyclic implementation tasks from verified_findings.json. Emit ordered tasks for confirmed findings, or emit a noop placeholder task with empty dependency_order when no findings are confirmed.",
-      "expected_keys": [],
+      "prompt": "Plan bounded implementation tasks and a handoff for verified repository findings.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "dependency_order": [],
+        "ordered_file_scopes": [],
         "acyclic": true
       }
     },
@@ -680,11 +1716,10 @@
       "fixture": "fixtures/workflows/plan_fix/a",
       "skill": "repo-plan-fix",
       "contract": "workflow",
-      "schema": "skills/repo-plan-fix/assets/plan.schema.json",
-      "prompt": "Implement the authorized minimal guard change in retry_budget.py and record diff and test execution results.",
-      "expected_keys": [],
+      "prompt": "Implement the authorized minimal guard change in the retry budget module and record diff and test execution results.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "dependency_order": []
+        "ordered_file_scopes": []
       }
     },
     {
@@ -692,13 +1727,15 @@
       "fixture": "fixtures/workflows/apply_fix/a",
       "skill": "repo-apply-fix",
       "contract": "workflow",
-      "schema": "skills/repo-apply-fix/assets/fix.schema.json",
       "writable_paths": [
         "retry_budget.py"
       ],
-      "prompt": "Apply an authorized bounded fix in retry_budget.py so attempts stop at max_attempts while keeping sibling modules untouched. Record modified file changes and verification execution results.",
-      "expected_keys": [
-        "retry_budget.py"
+      "prompt": "Apply an authorized correction for the reported retry bound defect while preserving unrelated modules.",
+      "expected_anchors": [
+        {
+          "kind": "file_change",
+          "path": "retry_budget.py"
+        }
       ],
       "expected_assertions": {
         "changed_files": [
@@ -712,9 +1749,8 @@
       "fixture": "fixtures/workflows/apply_fix/b",
       "skill": "repo-apply-fix",
       "contract": "workflow",
-      "schema": "skills/repo-apply-fix/assets/fix.schema.json",
-      "prompt": "Apply an authorized bounded fix in retry_budget.py only if the max_attempts guard is missing; otherwise leave ./source unchanged and report file_changes as none.",
-      "expected_keys": [],
+      "prompt": "Apply an authorized correction for the reported retry bound defect while preserving unrelated modules.",
+      "expected_anchors": [],
       "expected_assertions": {
         "changed_files": []
       }
@@ -724,9 +1760,8 @@
       "fixture": "fixtures/workflows/apply_fix/a",
       "skill": "repo-apply-fix",
       "contract": "workflow",
-      "schema": "skills/repo-apply-fix/assets/fix.schema.json",
       "prompt": "Convert verified repository findings into an acyclic implementation task breakdown and agent handoff without editing source code.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "changed_files": []
       }
@@ -736,10 +1771,12 @@
       "fixture": "fixtures/workflows/verify_fix/a",
       "skill": "repo-verify-fix",
       "contract": "workflow",
-      "schema": "skills/repo-verify-fix/assets/verification.schema.json",
-      "prompt": "Verify the proposed fix from verification_inputs.json. Record result verified-fixed when original failure reproduced, regression passed, and safe controls passed, or safe-control-regression when safe controls broke.",
-      "expected_keys": [
-        "safe-control-regression"
+      "prompt": "Verify whether the proposed correction resolves the reported defect without regressing safe behavior.",
+      "expected_anchors": [
+        {
+          "kind": "verification",
+          "result": "safe-control-regression"
+        }
       ],
       "expected_assertions": {
         "original_reproduced": true,
@@ -753,10 +1790,12 @@
       "fixture": "fixtures/workflows/verify_fix/b",
       "skill": "repo-verify-fix",
       "contract": "workflow",
-      "schema": "skills/repo-verify-fix/assets/verification.schema.json",
-      "prompt": "Verify the proposed fix from verification_inputs.json. Record result verified-fixed when original failure reproduced, regression passed, and safe controls passed, or safe-control-regression when safe controls broke.",
-      "expected_keys": [
-        "verified-fixed"
+      "prompt": "Verify whether the proposed correction resolves the reported defect without regressing safe behavior.",
+      "expected_anchors": [
+        {
+          "kind": "verification",
+          "result": "verified-fixed"
+        }
       ],
       "expected_assertions": {
         "original_reproduced": true,
@@ -770,9 +1809,8 @@
       "fixture": "fixtures/workflows/verify_fix/a",
       "skill": "repo-verify-fix",
       "contract": "workflow",
-      "schema": "skills/repo-verify-fix/assets/verification.schema.json",
       "prompt": "Reconcile finding fingerprints, verification proofs, and remediation state transitions across prior and current run ledgers.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "result": "abstained"
       }
@@ -782,11 +1820,20 @@
       "fixture": "fixtures/workflows/reconcile_findings/a",
       "skill": "repo-reconcile-findings",
       "contract": "workflow",
-      "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
-      "prompt": "Reconcile finding fingerprints and remediation state transitions from reconcile_inputs.json. Transition findings to verified-fixed only when verification proof exists, keep unproved findings open, and list unmapped records.",
-      "expected_keys": [
-        "F-401:verified-fixed",
-        "F-402:open"
+      "prompt": "Reconcile audit findings, verified fixes, and issue state across runs for this repository.",
+      "expected_anchors": [
+        {
+          "kind": "transition",
+          "fingerprint": "fp-auth-bind",
+          "previous_state": "in-progress",
+          "new_state": "verified-fixed"
+        },
+        {
+          "kind": "transition",
+          "fingerprint": "fp-stale-cache",
+          "previous_state": "open",
+          "new_state": "open"
+        }
       ],
       "expected_assertions": {
         "unmapped_count": 1
@@ -797,10 +1844,14 @@
       "fixture": "fixtures/workflows/reconcile_findings/b",
       "skill": "repo-reconcile-findings",
       "contract": "workflow",
-      "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
-      "prompt": "Reconcile finding fingerprints and remediation state transitions from reconcile_inputs.json. Transition findings to verified-fixed only when verification proof exists, keep unproved findings open, and list unmapped records.",
-      "expected_keys": [
-        "F-401:verified-fixed"
+      "prompt": "Reconcile audit findings, verified fixes, and issue state across runs for this repository.",
+      "expected_anchors": [
+        {
+          "kind": "transition",
+          "fingerprint": "fp-auth-bind",
+          "previous_state": "in-progress",
+          "new_state": "verified-fixed"
+        }
       ],
       "expected_assertions": {
         "unmapped_count": 0
@@ -811,9 +1862,8 @@
       "fixture": "fixtures/workflows/reconcile_findings/a",
       "skill": "repo-reconcile-findings",
       "contract": "workflow",
-      "schema": "skills/repo-reconcile-findings/assets/reconciliation.schema.json",
       "prompt": "Define a deterministic, sleep-free regression test with an independent oracle that fails against the uncorrected quota defect.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "unmapped_count": 0
       }
@@ -823,16 +1873,15 @@
       "fixture": "fixtures/spec/interview/a",
       "skill": "spec-interview",
       "contract": "spec",
-      "schema": "skills/spec-interview/assets/spec.schema.json",
-      "prompt": "Pause code generation and conduct a pre-code interview from webhook_context.json. Record DEC-RETRY-001 with status interviewing when ambiguous is true, or return approved with empty decisions when already settled.",
-      "expected_keys": [
-        "DEC-RETRY-001"
+      "prompt": "Pause code generation and conduct a pre-code specification interview for a new webhook retry feature.",
+      "expected_anchors": [
+        {
+          "kind": "interview_decision",
+          "category": "edge-case"
+        }
       ],
       "expected_assertions": {
         "status": "interviewing",
-        "interview_decision_ids": [
-          "DEC-RETRY-001"
-        ],
         "new_file_scopes": [
           "webhooks/dispatcher.py"
         ]
@@ -843,12 +1892,10 @@
       "fixture": "fixtures/spec/interview/b",
       "skill": "spec-interview",
       "contract": "spec",
-      "schema": "skills/spec-interview/assets/spec.schema.json",
-      "prompt": "Pause code generation and conduct a pre-code interview from webhook_context.json. Record DEC-RETRY-001 with status interviewing when ambiguous is true, or return approved with empty decisions when already settled.",
-      "expected_keys": [],
+      "prompt": "Pause code generation and conduct a pre-code specification interview for a new webhook retry feature.",
+      "expected_anchors": [],
       "expected_assertions": {
         "status": "approved",
-        "interview_decision_ids": [],
         "new_file_scopes": [
           "webhooks/dispatcher.py"
         ]
@@ -859,12 +1906,10 @@
       "fixture": "fixtures/spec/interview/a",
       "skill": "spec-interview",
       "contract": "spec",
-      "schema": "skills/spec-interview/assets/spec.schema.json",
-      "prompt": "Synthesize these settled interview decisions into a complete SPEC.md file and validate spec.json against the specification schema.",
-      "expected_keys": [],
+      "prompt": "Synthesize these settled interview decisions into a complete feature specification document.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "interview_decision_ids": []
+        "status": "draft"
       }
     },
     {
@@ -872,19 +1917,22 @@
       "fixture": "fixtures/spec/authoring/a",
       "skill": "spec-authoring",
       "contract": "spec",
-      "schema": "skills/spec-authoring/assets/spec.schema.json",
       "writable_paths": [
         "SPEC.md"
       ],
-      "prompt": "Author SPEC.md and validate spec.json from spec_notes.json without modifying exporter.py. When ready is true, write SPEC.md and emit approved spec.json with DEC-EXPORT-001; otherwise keep status draft.",
-      "expected_keys": [
-        "DEC-EXPORT-001"
+      "prompt": "Author the feature specification from the settled interview notes for this export endpoint.",
+      "expected_anchors": [
+        {
+          "kind": "interview_decision",
+          "category": "architecture"
+        },
+        {
+          "kind": "requirement",
+          "priority": "must"
+        }
       ],
       "expected_assertions": {
         "status": "approved",
-        "interview_decision_ids": [
-          "DEC-EXPORT-001"
-        ],
         "new_file_scopes": [
           "exporter.py"
         ],
@@ -898,12 +1946,10 @@
       "fixture": "fixtures/spec/authoring/b",
       "skill": "spec-authoring",
       "contract": "spec",
-      "schema": "skills/spec-authoring/assets/spec.schema.json",
-      "prompt": "Author SPEC.md and validate spec.json from spec_notes.json without modifying exporter.py. When ready is true, write SPEC.md and emit approved spec.json with DEC-EXPORT-001; otherwise keep status draft.",
-      "expected_keys": [],
+      "prompt": "Author the feature specification from the settled interview notes for this export endpoint.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "interview_decision_ids": []
+        "status": "draft"
       }
     },
     {
@@ -911,12 +1957,10 @@
       "fixture": "fixtures/spec/authoring/a",
       "skill": "spec-authoring",
       "contract": "spec",
-      "schema": "skills/spec-authoring/assets/spec.schema.json",
-      "prompt": "Verify whether the planned implementation tasks and modified source files stay within SPEC.md file scopes and pass all verification commands.",
-      "expected_keys": [],
+      "prompt": "Verify whether the planned implementation tasks and modified source files stay within the feature specification scopes and pass all verification commands.",
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "interview_decision_ids": []
+        "status": "draft"
       }
     },
     {
@@ -924,16 +1968,15 @@
       "fixture": "fixtures/spec/convergence/a",
       "skill": "spec-convergence",
       "contract": "spec",
-      "schema": "skills/spec-convergence/assets/spec.schema.json",
-      "prompt": "Verify planned and touched files in convergence_inputs.json against spec_scopes and out_of_scope. Record CHK-SCOPE-001 out-of-scope and status diverged on scope drift, or CHK-ALIGNED-001 aligned and status converged when clean.",
-      "expected_keys": [
-        "CHK-SCOPE-001"
+      "prompt": "Verify whether the planned tasks and modified files converge with the specification boundaries and verification commands.",
+      "expected_anchors": [
+        {
+          "kind": "convergence_check",
+          "status": "out-of-scope"
+        }
       ],
       "expected_assertions": {
-        "status": "diverged",
-        "convergence_check_ids": [
-          "CHK-SCOPE-001"
-        ]
+        "status": "diverged"
       }
     },
     {
@@ -941,16 +1984,15 @@
       "fixture": "fixtures/spec/convergence/b",
       "skill": "spec-convergence",
       "contract": "spec",
-      "schema": "skills/spec-convergence/assets/spec.schema.json",
-      "prompt": "Verify planned and touched files in convergence_inputs.json against spec_scopes and out_of_scope. Record CHK-SCOPE-001 out-of-scope and status diverged on scope drift, or CHK-ALIGNED-001 aligned and status converged when clean.",
-      "expected_keys": [
-        "CHK-ALIGNED-001"
+      "prompt": "Verify whether the planned tasks and modified files converge with the specification boundaries and verification commands.",
+      "expected_anchors": [
+        {
+          "kind": "convergence_check",
+          "status": "aligned"
+        }
       ],
       "expected_assertions": {
-        "status": "converged",
-        "convergence_check_ids": [
-          "CHK-ALIGNED-001"
-        ]
+        "status": "converged"
       }
     },
     {
@@ -958,12 +2000,10 @@
       "fixture": "fixtures/spec/convergence/a",
       "skill": "spec-convergence",
       "contract": "spec",
-      "schema": "skills/spec-convergence/assets/spec.schema.json",
       "prompt": "Pause implementation and interview me on non-obvious UX, architectural trade-offs, and edge cases before drafting a feature specification.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
-        "status": "draft",
-        "convergence_check_ids": []
+        "status": "draft"
       }
     },
     {
@@ -971,14 +2011,20 @@
       "fixture": "fixtures/workflows/session_handoff/a",
       "skill": "session-handoff",
       "contract": "workflow",
-      "schema": "skills/session-handoff/assets/session-handoff.schema.json",
-      "prompt": "Synthesize a validated session handoff artifact from session_state.json separating verified facts from assumptions, recording rejected dead ends, touched_files, commands_run, and next_action.",
-      "expected_keys": [
-        "retry_policy.py"
+      "prompt": "Compact this debugging session into a handoff document so a fresh context window can continue cleanly.",
+      "expected_anchors": [
+        {
+          "kind": "handoff_file",
+          "path": "retry_policy.py"
+        }
       ],
       "expected_assertions": {
+        "repository_dirty": true,
+        "touched_files": [
+          "retry_policy.py"
+        ],
         "dead_end_count": 1,
-        "next_action": "Clamp jittered delay to max_delay_ms in retry_policy.py"
+        "abstained": false
       }
     },
     {
@@ -986,12 +2032,13 @@
       "fixture": "fixtures/workflows/session_handoff/b",
       "skill": "session-handoff",
       "contract": "workflow",
-      "schema": "skills/session-handoff/assets/session-handoff.schema.json",
-      "prompt": "Synthesize a validated session handoff artifact from session_state.json separating verified facts from assumptions, recording rejected dead ends, touched_files, commands_run, and next_action.",
-      "expected_keys": [],
+      "prompt": "Compact this debugging session into a handoff document so a fresh context window can continue cleanly.",
+      "expected_anchors": [],
       "expected_assertions": {
+        "repository_dirty": false,
+        "touched_files": [],
         "dead_end_count": 0,
-        "next_action": "No source changes needed; close reconnaissance pass"
+        "abstained": false
       }
     },
     {
@@ -999,12 +2046,11 @@
       "fixture": "fixtures/workflows/session_handoff/a",
       "skill": "session-handoff",
       "contract": "workflow",
-      "schema": "skills/session-handoff/assets/session-handoff.schema.json",
       "prompt": "Switch replies to ultra-brief mode while keeping code blocks exact and format a 50-character Conventional Commit subject for the current diff.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "dead_end_count": 0,
-        "next_action": "abstained"
+        "abstained": true
       }
     },
     {
@@ -1012,10 +2058,12 @@
       "fixture": "fixtures/workflows/terse_output_commit/a",
       "skill": "terse-output-commit",
       "contract": "workflow",
-      "schema": "skills/terse-output-commit/assets/terse-output-commit.schema.json",
-      "prompt": "Draft a terse summary and non-mutating Conventional Commit artifact from commit_context.json preserving exact code spans, keeping commit_subject <= 50 characters, and setting git_mutated false.",
-      "expected_keys": [
-        "fix"
+      "prompt": "Reply tersely with the fix snippet and draft a Conventional Commit message for the current working diff.",
+      "expected_anchors": [
+        {
+          "kind": "commit",
+          "commit_type": "fix"
+        }
       ],
       "expected_assertions": {
         "compression_level": "full",
@@ -1029,9 +2077,8 @@
       "fixture": "fixtures/workflows/terse_output_commit/b",
       "skill": "terse-output-commit",
       "contract": "workflow",
-      "schema": "skills/terse-output-commit/assets/terse-output-commit.schema.json",
-      "prompt": "Draft a terse summary and non-mutating Conventional Commit artifact from commit_context.json when active_change is true, or abstain with chore: abstain when working tree has no diff.",
-      "expected_keys": [],
+      "prompt": "Reply tersely with the fix snippet and draft a Conventional Commit message for the current working diff.",
+      "expected_anchors": [],
       "expected_assertions": {
         "compression_level": "lite",
         "max_subject_length": 50,
@@ -1043,9 +2090,8 @@
       "fixture": "fixtures/workflows/terse_output_commit/a",
       "skill": "terse-output-commit",
       "contract": "workflow",
-      "schema": "skills/terse-output-commit/assets/terse-output-commit.schema.json",
       "prompt": "Package our multi-hour debugging investigation, dead-end hypotheses, dirty files, and next steps into a structured handoff for a fresh context window.",
-      "expected_keys": [],
+      "expected_anchors": [],
       "expected_assertions": {
         "max_subject_length": 50,
         "git_mutated": false
