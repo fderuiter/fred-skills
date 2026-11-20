@@ -8,14 +8,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from .common import (
     DOMAIN_DELIVERABLE_SCHEMAS,
-    ROOT,
     FredCliError,
     _detect_domain_kind,
-    read_json,
+    _validate_canonical_artifact,
 )
 from .runs import audit_errors, compare, fingerprint
 
@@ -109,12 +106,13 @@ def _page_shell(title: str, body_html: str, include_script: bool = True) -> str:
 
 
 def _validate_domain_payload(payload: dict, kind: str) -> None:
-    schema_rel = DOMAIN_DELIVERABLE_SCHEMAS[f"{kind}.json"]
-    schema = read_json(ROOT / schema_rel)
-    errors = [
-        str(err.message)
-        for err in jsonschema.Draft202012Validator(schema).iter_errors(payload)
-    ]
+    filename = f"{kind}.json"
+    schema_rel = DOMAIN_DELIVERABLE_SCHEMAS[filename]
+    errors = _validate_canonical_artifact(
+        payload,
+        artifact_name=filename,
+        schema_rel=schema_rel,
+    )
     if errors:
         raise ValueError(f"Invalid {kind} artifact: " + "; ".join(errors[:5]))
 
@@ -388,6 +386,15 @@ def _index_remediation(
         raise ValueError(
             "Invalid remediation ledger: expected a 'remediation_state_transitions' list"
         )
+    if isinstance(remediation, dict) and (
+        "finding_fingerprint_matches" in remediation
+        or "unmapped_records" in remediation
+    ):
+        rem_errors = _validate_canonical_artifact(
+            remediation, artifact_name="reconciliation.json"
+        )
+        if rem_errors:
+            raise ValueError("Invalid remediation ledger: " + "; ".join(rem_errors[:5]))
     raw_records = remediation.get("records") or []
     raw_transitions = remediation.get("remediation_state_transitions") or []
     finding_ids = {f["id"] for f in audit["findings"]}

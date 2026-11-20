@@ -125,7 +125,7 @@ commands only after checking the repository's tooling; otherwise label them prop
 
 Keep the canonical machine-readable run in `audit.json` conforming to `assets/audit.schema.json`,
 and validate it locally with `python3 <this-skill>/scripts/validate_audit.py <audit.json>`
-when Python 3 and `jsonschema` are available (reporting any blocked check if unavailable).
+when Python 3.12 is available in the host environment (reporting any blocked check if unavailable).
 Add a topic report using `assets/report-template.md` with inventory, contract table, coverage,
 prioritized findings, healthy counterexamples, limitations, and next steps. Reference
 evidence by IDs and summarize in human-readable prose so reports stand alone.

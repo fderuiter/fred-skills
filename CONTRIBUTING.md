@@ -101,7 +101,7 @@ python scripts/validate_skills.py --base-ref main --telemetry validation-telemet
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
 All commands above run without network access once the development dependencies are installed (`check_workflow_pins.py` and `verify_workflow_actions.py` verify workflow action SHAs and version comments against `.github/action-pins.json`); CI additionally runs `python scripts/check_workflow_pins.py --verify-remote` to confirm upstream commit and tag resolution via `git ls-remote`.
-The ledger validator also needs jsonschema; instruction-only use does not need Python.
+The ledger validator runs on the Python 3.12 standard library; instruction-only use does not need Python.
 
 ## Change a skill
 

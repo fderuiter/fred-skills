@@ -155,7 +155,7 @@ class AuditValidatorTests(unittest.TestCase):
     def test_cli_accepts_valid_fixture_and_rejects_malformed_json(self):
         fixture = ROOT / "tests/fixtures/audit-valid.json"
         valid = subprocess.run(
-            [sys.executable, str(SCRIPT), str(fixture)],
+            [sys.executable, "-B", "-S", str(SCRIPT), str(fixture)],
             check=False,
             capture_output=True,
             text=True,
@@ -163,17 +163,41 @@ class AuditValidatorTests(unittest.TestCase):
         self.assertEqual(0, valid.returncode, valid.stderr)
         with tempfile.TemporaryDirectory() as temp:
             bad = Path(temp) / "bad.json"
-            bad.write_text("{")
+            bad.write_text("{", encoding="utf-8")
             invalid = subprocess.run(
-                [sys.executable, str(SCRIPT), str(bad)],
+                [sys.executable, "-B", "-S", str(SCRIPT), str(bad)],
                 check=False,
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(2, invalid.returncode)
-        missing_dep = subprocess.run(
+            bad_schema_audit = Path(temp) / "invalid-audit.json"
+            bad_schema_audit.write_text(
+                json.dumps({"schema_version": "1.0"}), encoding="utf-8"
+            )
+            rejected = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-c",
+                    (
+                        "import sys, runpy; sys.modules['jsonschema'] = None; "
+                        "sys.argv = sys.argv[1:]; "
+                        "runpy.run_path(sys.argv[0], run_name='__main__')"
+                    ),
+                    str(SCRIPT),
+                    str(bad_schema_audit),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, rejected.returncode)
+            self.assertNotIn("requirements-dev.txt", rejected.stderr)
+        no_jsonschema_valid = subprocess.run(
             [
                 sys.executable,
+                "-B",
                 "-c",
                 (
                     "import sys, runpy; sys.modules['jsonschema'] = None; "
@@ -187,9 +211,63 @@ class AuditValidatorTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(2, missing_dep.returncode)
-        self.assertIn("Dependency missing: jsonschema", missing_dep.stderr)
-        self.assertIn("pip install", missing_dep.stderr)
+        self.assertEqual(0, no_jsonschema_valid.returncode, no_jsonschema_valid.stderr)
+        self.assertNotIn("requirements-dev.txt", no_jsonschema_valid.stderr)
+
+    def test_diagnostics_validator_auto_selects_bundle_or_audit_schema(self):
+        import re
+
+        diag_pkg = ROOT / "skills/repo-audit-diagnostics"
+        diag_script = diag_pkg / "scripts/validate_audit.py"
+        examples_text = (diag_pkg / "references/examples.md").read_text(
+            encoding="utf-8"
+        )
+        blocks = [
+            json.loads(m.group(1))
+            for m in re.finditer(r"```json\s*\n(.*?)\n```", examples_text, re.DOTALL)
+        ]
+        self.assertGreaterEqual(len(blocks), 2)
+        bundle_blocks = [b for b in blocks if "session_id" in b]
+        audit_blocks = [b for b in blocks if "run_id" in b]
+        self.assertTrue(bundle_blocks)
+        self.assertTrue(audit_blocks)
+
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            for idx, payload in enumerate([*bundle_blocks, *audit_blocks]):
+                artifact = tmp / f"example-{idx}.json"
+                artifact.write_text(json.dumps(payload), encoding="utf-8")
+                proc = subprocess.run(
+                    [sys.executable, "-B", "-S", str(diag_script), str(artifact)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(0, proc.returncode, proc.stderr)
+
+            bad_bundle = copy.deepcopy(bundle_blocks[0])
+            bad_bundle["redaction"]["by_category"] = {"bearer_token": -1}
+            bad_bundle_path = tmp / "bad-bundle.json"
+            bad_bundle_path.write_text(json.dumps(bad_bundle), encoding="utf-8")
+            bad_bundle_proc = subprocess.run(
+                [sys.executable, "-B", "-S", str(diag_script), str(bad_bundle_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, bad_bundle_proc.returncode)
+
+            bad_audit = copy.deepcopy(audit_blocks[0])
+            bad_audit["evidence"][0]["path"] = ".git/config"
+            bad_audit_path = tmp / "bad-audit.json"
+            bad_audit_path.write_text(json.dumps(bad_audit), encoding="utf-8")
+            bad_audit_proc = subprocess.run(
+                [sys.executable, "-B", "-S", str(diag_script), str(bad_audit_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(1, bad_audit_proc.returncode)
 
 
 if __name__ == "__main__":
