@@ -31,148 +31,211 @@ def _default_schema_path() -> pathlib.Path:
     return assets_dir / "workflow.schema.json"
 
 
-def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
+def _schema_errors(data: Any, schema: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema
     except ImportError as e:
         raise RuntimeError(
             "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."
         ) from e
-    errors = [
+    return [
         (("/".join(map(str, e.absolute_path)) or "root") + ": " + e.message)
         for e in jsonschema.Draft202012Validator(schema).iter_errors(data)
     ]
-    if errors or not isinstance(data, Mapping):
-        return errors
 
-    # 1. Repository-relative path checks across workflow artifacts
+
+def _check_path_list(items: Any, label: str) -> list[str]:
+    return [
+        f"Path must be repository-relative ({label}): {item}"
+        for item in items
+        if isinstance(item, str) and not _is_repo_relative(item)
+    ]
+
+
+def _extract_entry_path(entry: Any, allow_str: bool) -> Any:
+    if allow_str and isinstance(entry, str):
+        return entry
+    if isinstance(entry, Mapping):
+        return entry.get("path")
+    return None
+
+
+def _check_entry_paths(entries: Any, label: str, allow_str: bool) -> list[str]:
+    errors: list[str] = []
+    for entry in entries:
+        candidate = _extract_entry_path(entry, allow_str)
+        if isinstance(candidate, str) and not _is_repo_relative(candidate):
+            errors.append(f"Path must be repository-relative ({label}): {candidate}")
+    return errors
+
+
+def _check_workflow_paths(data: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
     test_file = data.get("test_file")
     if isinstance(test_file, str) and not _is_repo_relative(test_file):
         errors.append(f"Path must be repository-relative (test_file): {test_file}")
-
-    for scope_path in data.get("file_scopes", []):
-        if isinstance(scope_path, str) and not _is_repo_relative(scope_path):
-            errors.append(
-                f"Path must be repository-relative (file_scopes): {scope_path}"
-            )
-
-    for entry in data.get("file_changes", []):
-        candidate = (
-            entry
-            if isinstance(entry, str)
-            else entry.get("path")
-            if isinstance(entry, Mapping)
-            else None
+    errors.extend(_check_path_list(data.get("file_scopes", []), "file_scopes"))
+    errors.extend(
+        _check_entry_paths(data.get("file_changes", []), "file_changes", allow_str=True)
+    )
+    errors.extend(
+        _check_entry_paths(
+            data.get("diff_summaries", []), "diff_summaries", allow_str=False
         )
-        if isinstance(candidate, str) and not _is_repo_relative(candidate):
-            errors.append(
-                f"Path must be repository-relative (file_changes): {candidate}"
-            )
+    )
+    errors.extend(_check_path_list(data.get("touched_files", []), "touched_files"))
+    return errors
 
-    for diff_entry in data.get("diff_summaries", []):
-        if isinstance(diff_entry, Mapping):
-            diff_path = diff_entry.get("path")
-            if isinstance(diff_path, str) and not _is_repo_relative(diff_path):
-                errors.append(
-                    f"Path must be repository-relative (diff_summaries): {diff_path}"
-                )
 
-    for touched_path in data.get("touched_files", []):
-        if isinstance(touched_path, str) and not _is_repo_relative(touched_path):
-            errors.append(
-                f"Path must be repository-relative (touched_files): {touched_path}"
-            )
-
+def _check_commit_prefix(data: Mapping[str, Any]) -> list[str]:
     commit_type = data.get("commit_type")
     commit_subject = data.get("commit_subject")
-    if isinstance(commit_type, str) and isinstance(commit_subject, str):
-        commit_scope = data.get("commit_scope")
-        expected_prefixes: tuple[str, ...]
-        if isinstance(commit_scope, str):
-            expected_prefixes = (
-                f"{commit_type}({commit_scope}): ",
-                f"{commit_type}({commit_scope})!: ",
-            )
-        else:
-            expected_prefixes = (
-                f"{commit_type}: ",
-                f"{commit_type}!: ",
-                f"{commit_type}(",
-            )
-        if not commit_subject.startswith(expected_prefixes):
-            errors.append(
-                f"commit_subject must match commit_type/commit_scope prefix ({commit_type}): {commit_subject}"
-            )
+    if not (isinstance(commit_type, str) and isinstance(commit_subject, str)):
+        return []
+    commit_scope = data.get("commit_scope")
+    if isinstance(commit_scope, str):
+        expected_prefixes: tuple[str, ...] = (
+            f"{commit_type}({commit_scope}): ",
+            f"{commit_type}({commit_scope})!: ",
+        )
+    else:
+        expected_prefixes = (
+            f"{commit_type}: ",
+            f"{commit_type}!: ",
+            f"{commit_type}(",
+        )
+    if not commit_subject.startswith(expected_prefixes):
+        return [
+            f"commit_subject must match commit_type/commit_scope prefix ({commit_type}): {commit_subject}"
+        ]
+    return []
 
-    # 2. Finding verification execution consistency
-    if data.get("reproduction_status") == "confirmed":
-        if data.get("reproduced") is False:
-            errors.append(
-                "Confirmed finding verification cannot set reproduced to false"
-            )
-        commands = data.get("commands")
-        if commands is not None and len(commands) == 0:
-            errors.append(
-                "Confirmed finding verification requires non-empty commands when commands field is present"
-            )
 
-    # 3. Implementation plan task ID uniqueness, references, and cycle checks
+def _check_finding_status(data: Mapping[str, Any]) -> list[str]:
+    if data.get("reproduction_status") != "confirmed":
+        return []
+    errors: list[str] = []
+    if data.get("reproduced") is False:
+        errors.append("Confirmed finding verification cannot set reproduced to false")
+    commands = data.get("commands")
+    if commands is not None and len(commands) == 0:
+        errors.append(
+            "Confirmed finding verification requires non-empty commands when commands field is present"
+        )
+    return errors
+
+
+def _task_dependencies(task: Mapping[str, Any]) -> list[str]:
+    deps: list[str] = []
+    for dep_field in ("blocked_by", "dependencies"):
+        deps.extend(dep for dep in task.get(dep_field, []) if isinstance(dep, str))
+    return deps
+
+
+def _check_task_paths(task: Mapping[str, Any], tid: Any) -> list[str]:
+    errors: list[str] = []
+    for path_field in ("file_scopes", "files"):
+        errors.extend(_check_path_list(task.get(path_field, []), f"{tid}.{path_field}"))
+    return errors
+
+
+def _record_unique_task_id(
+    tid: str,
+    seen_tasks: set[str],
+    duplicate_tasks: set[str],
+    errors: list[str],
+) -> None:
+    if tid in seen_tasks and tid not in duplicate_tasks:
+        errors.append(f"Duplicate task_id in task_breakdowns: {tid}")
+        duplicate_tasks.add(tid)
+    seen_tasks.add(tid)
+
+
+def _index_tasks(
+    task_breakdowns: list[Any],
+) -> tuple[set[str], dict[str, list[str]], list[str]]:
+    seen_tasks: set[str] = set()
+    duplicate_tasks: set[str] = set()
+    task_deps: dict[str, list[str]] = {}
+    errors: list[str] = []
+    for task in task_breakdowns:
+        if not isinstance(task, Mapping):
+            continue
+        tid = task.get("task_id")
+        if isinstance(tid, str):
+            _record_unique_task_id(tid, seen_tasks, duplicate_tasks, errors)
+            task_deps[tid] = _task_dependencies(task)
+        errors.extend(_check_task_paths(task, tid))
+    return seen_tasks, task_deps, errors
+
+
+def _check_task_references(
+    data: Mapping[str, Any],
+    seen_tasks: set[str],
+    task_deps: Mapping[str, list[str]],
+) -> list[str]:
+    errors = [
+        f"Unknown task dependency {dep} in {tid}"
+        for tid, deps in task_deps.items()
+        for dep in deps
+        if dep not in seen_tasks
+    ]
+    dep_order = data.get("dependency_order")
+    if isinstance(dep_order, list):
+        errors.extend(
+            f"Unknown task_id in dependency_order: {ordered_id}"
+            for ordered_id in dep_order
+            if isinstance(ordered_id, str) and ordered_id not in seen_tasks
+        )
+    return errors
+
+
+def _visit_task(
+    node: str,
+    task_deps: Mapping[str, list[str]],
+    visiting: set[str],
+    done: set[str],
+    errors: list[str],
+) -> None:
+    if node in visiting:
+        errors.append(f"Task dependency cycle: {node}")
+        return
+    if node in done or node not in task_deps:
+        return
+    visiting.add(node)
+    for dep in task_deps[node]:
+        _visit_task(dep, task_deps, visiting, done, errors)
+    visiting.remove(node)
+    done.add(node)
+
+
+def _find_task_cycles(task_deps: Mapping[str, list[str]]) -> list[str]:
+    visiting: set[str] = set()
+    done: set[str] = set()
+    errors: list[str] = []
+    for tid in task_deps:
+        _visit_task(tid, task_deps, visiting, done, errors)
+    return errors
+
+
+def _check_tasks(data: Mapping[str, Any]) -> list[str]:
     task_breakdowns = data.get("task_breakdowns")
-    if isinstance(task_breakdowns, list):
-        seen_tasks: set[str] = set()
-        duplicate_tasks: set[str] = set()
-        task_deps: dict[str, list[str]] = {}
-        for task in task_breakdowns:
-            if not isinstance(task, Mapping):
-                continue
-            tid = task.get("task_id")
-            if isinstance(tid, str):
-                if tid in seen_tasks and tid not in duplicate_tasks:
-                    errors.append(f"Duplicate task_id in task_breakdowns: {tid}")
-                    duplicate_tasks.add(tid)
-                seen_tasks.add(tid)
-                deps: list[str] = []
-                for dep_field in ("blocked_by", "dependencies"):
-                    for dep in task.get(dep_field, []):
-                        if isinstance(dep, str):
-                            deps.append(dep)
-                task_deps[tid] = deps
-            for path_field in ("file_scopes", "files"):
-                for fpath in task.get(path_field, []):
-                    if isinstance(fpath, str) and not _is_repo_relative(fpath):
-                        errors.append(
-                            f"Path must be repository-relative ({tid}.{path_field}): {fpath}"
-                        )
+    if not isinstance(task_breakdowns, list):
+        return []
+    seen_tasks, task_deps, errors = _index_tasks(task_breakdowns)
+    errors.extend(_check_task_references(data, seen_tasks, task_deps))
+    errors.extend(_find_task_cycles(task_deps))
+    return errors
 
-        for tid, deps in task_deps.items():
-            for dep in deps:
-                if dep not in seen_tasks:
-                    errors.append(f"Unknown task dependency {dep} in {tid}")
 
-        dep_order = data.get("dependency_order")
-        if isinstance(dep_order, list):
-            for ordered_id in dep_order:
-                if isinstance(ordered_id, str) and ordered_id not in seen_tasks:
-                    errors.append(f"Unknown task_id in dependency_order: {ordered_id}")
-
-        visiting: set[str] = set()
-        done: set[str] = set()
-
-        def visit(node: str) -> None:
-            if node in visiting:
-                errors.append(f"Task dependency cycle: {node}")
-                return
-            if node in done or node not in task_deps:
-                return
-            visiting.add(node)
-            for dep in task_deps[node]:
-                visit(dep)
-            visiting.remove(node)
-            done.add(node)
-
-        for tid in task_deps:
-            visit(tid)
-
+def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
+    errors = _schema_errors(data, schema)
+    if errors or not isinstance(data, Mapping):
+        return errors
+    errors.extend(_check_workflow_paths(data))
+    errors.extend(_check_commit_prefix(data))
+    errors.extend(_check_finding_status(data))
+    errors.extend(_check_tasks(data))
     return errors
 
 

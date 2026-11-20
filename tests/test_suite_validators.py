@@ -13,6 +13,8 @@ from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import validate_architecture
@@ -22,6 +24,8 @@ import validate_skills
 import validate_spec
 import validate_testing
 import validate_workflow
+
+from tests.catalog_oracles import expected_total_skills
 
 
 class SuiteValidatorsTests(unittest.TestCase):
@@ -498,6 +502,145 @@ class SuiteValidatorsTests(unittest.TestCase):
                 self.assertRaises(RuntimeError),
             ):
                 mod.validate({}, {})
+
+    def test_refactored_validators_and_sync_stay_flat_and_portable(self) -> None:
+        import ast
+        import shutil
+
+        canonical_targets = [
+            ROOT / "scripts/sync_audit_resources.py",
+            ROOT / "scripts/validate_audit.py",
+            ROOT / "scripts/validate_workflow.py",
+            ROOT / "scripts/validate_architecture.py",
+            ROOT / "scripts/validate_review.py",
+            ROOT / "scripts/validate_testing.py",
+            ROOT / "scripts/validate_spec.py",
+        ]
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
+        self.assertEqual(expected_skills, len(synced_validators))
+
+        for path in canonical_targets:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.stmt) and sub is not node:
+                            self.assertLessEqual(
+                                sub.col_offset,
+                                12,
+                                f"{path.name}:{node.name}@L{sub.lineno} exceeds 3 statement indentation levels",
+                            )
+            if path.name.startswith("validate_"):
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            self.assertNotIn("fredlib", alias.name)
+                    elif isinstance(node, ast.ImportFrom):
+                        self.assertEqual(0, node.level)
+                        self.assertNotIn("fredlib", node.module or "")
+
+        ruff_bin = shutil.which("ruff")
+        ruff_cmd = (
+            [ruff_bin] if ruff_bin is not None else [sys.executable, "-m", "ruff"]
+        )
+        proc = subprocess.run(
+            [
+                *ruff_cmd,
+                "check",
+                "--select",
+                "C901,PLR0912,PLR0915",
+                *(str(p) for p in canonical_targets),
+                *(str(p) for p in synced_validators),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+
+    def test_sync_supports_dict_and_mapping_list_script_entries(self) -> None:
+        import sync_audit_resources
+
+        (self.tmp_dir / "catalog").mkdir(parents=True)
+        suites_doc = {
+            "schema_version": "1.0",
+            "suites": [
+                {
+                    "name": "repository-audits",
+                    "phases": [
+                        {
+                            "id": 1,
+                            "title": "Phase",
+                            "skills": ["skill-alpha", "skill-beta"],
+                        }
+                    ],
+                }
+            ],
+        }
+        (self.tmp_dir / "catalog/suites.json").write_text(
+            json.dumps(suites_doc), encoding="utf-8"
+        )
+        for sk in ("skill-alpha", "skill-beta"):
+            sk_dir = self.tmp_dir / "skills" / sk
+            sk_dir.mkdir(parents=True)
+            (sk_dir / "SKILL.md").write_text(
+                f"---\nname: {sk}\ndescription: Test\n---\n", encoding="utf-8"
+            )
+
+        (self.tmp_dir / "scripts").mkdir(parents=True)
+        (self.tmp_dir / "scripts/validate_a.py").write_text(
+            "#!/usr/bin/env python3\nprint('a')\n", encoding="utf-8"
+        )
+        (self.tmp_dir / "scripts/validate_b.py").write_text(
+            "#!/usr/bin/env python3\nprint('b')\n", encoding="utf-8"
+        )
+        shared_dir = self.tmp_dir / "shared/repo-audit"
+        shared_dir.mkdir(parents=True)
+
+        # 1. dict script mapping
+        (shared_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "files": [],
+                    "scripts": {"scripts/validate_a.py": ["skill-alpha"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual([], sync_audit_resources.sync(self.tmp_dir, check=False))
+        self.assertTrue(
+            (self.tmp_dir / "skills/skill-alpha/scripts/validate_a.py").is_file()
+        )
+        self.assertFalse(
+            (self.tmp_dir / "skills/skill-beta/scripts/validate_a.py").exists()
+        )
+        self.assertEqual([], sync_audit_resources.sync(self.tmp_dir, check=True))
+
+        # 2. list[dict] script mapping
+        (shared_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "files": [],
+                    "scripts": [
+                        {
+                            "path": "scripts/validate_b.py",
+                            "skills": ["skill-beta"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual([], sync_audit_resources.sync(self.tmp_dir, check=False))
+        self.assertTrue(
+            (self.tmp_dir / "skills/skill-beta/scripts/validate_b.py").is_file()
+        )
+        self.assertFalse(
+            (self.tmp_dir / "skills/skill-alpha/scripts/validate_b.py").exists()
+        )
+        self.assertEqual([], sync_audit_resources.sync(self.tmp_dir, check=True))
 
 
 if __name__ == "__main__":

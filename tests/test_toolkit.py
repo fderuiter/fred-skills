@@ -3818,6 +3818,87 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             ["ADR-10", "COMP-EDGE", "COMP-CORE"], drifted_rev["stale_finding_ids"]
         )
 
+    def test_repository_git_timeout_falls_back_in_snapshot_and_raises_when_required(
+        self,
+    ) -> None:
+        import skill_tools
+
+        self.assertEqual(30, skill_tools.DEFAULT_GIT_TIMEOUT)
+
+        # Verify python -S imports skill_tools using only the standard library
+        stdlib_import = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-S",
+                "-c",
+                "import sys; sys.path.insert(0, 'scripts'); import skill_tools; assert skill_tools.DEFAULT_GIT_TIMEOUT == 30",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, stdlib_import.returncode, stdlib_import.stderr)
+
+        # Verify skill_tools bounded helpers enforce core.fsmonitor=false and convert TimeoutExpired
+        captured_cmds: list[list[str]] = []
+
+        def fake_timeout_run(
+            cmd: list[str], *_args: Any, **kwargs: Any
+        ) -> subprocess.CompletedProcess[Any]:
+            captured_cmds.append(list(cmd))
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 30))
+
+        with unittest.mock.patch(
+            "skill_tools.subprocess.run", side_effect=fake_timeout_run
+        ):
+            with self.assertRaises(FredCliError) as sub_ctx:
+                skill_tools.run_bounded_subprocess(
+                    ["echo", "stalled"], timeout=5, text=True
+                )
+            self.assertEqual("subprocess_timeout", sub_ctx.exception.code)
+            self.assertTrue(sub_ctx.exception.hint)
+
+            with self.assertRaises(FredCliError) as git_ctx:
+                skill_tools.run_local_git(self.repo, "status", text=True)
+            self.assertEqual("git_timeout", git_ctx.exception.code)
+            self.assertTrue(git_ctx.exception.hint)
+            self.assertEqual(
+                ["git", "-c", "core.fsmonitor=false", "-C", str(self.repo), "status"],
+                captured_cmds[-1],
+            )
+
+        # Verify repository.git(required=False) returns None on TimeoutExpired so snapshot() falls back to os.walk
+        (self.repo / "nested").mkdir()
+        (self.repo / "nested/module.py").write_text("x = 42\n", encoding="utf-8")
+        with (
+            unittest.mock.patch(
+                "fredlib.repository.shutil.which", return_value="/usr/bin/git"
+            ),
+            unittest.mock.patch(
+                "fredlib.repository.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["git", "-c", "core.fsmonitor=false", "ls-files"],
+                    timeout=30,
+                ),
+            ),
+        ):
+            self.assertIsNone(repository.git(self.repo, "rev-parse", "HEAD"))
+            snap = repository.snapshot(self.repo)
+            self.assertTrue(snap["complete"])
+            self.assertIn("app.py", snap["files"])
+            self.assertIn("nested/module.py", snap["files"])
+
+            pre = repository.preflight(self.repo)
+            self.assertEqual("unversioned", pre["repository"]["revision"])
+            self.assertFalse(pre["repository"]["dirty"])
+
+            with self.assertRaises(FredCliError) as req_ctx:
+                repository.git(self.repo, "rev-parse", "HEAD", required=True)
+            self.assertEqual("git_timeout", req_ctx.exception.code)
+            self.assertTrue(req_ctx.exception.hint)
+
 
 if __name__ == "__main__":
     unittest.main()

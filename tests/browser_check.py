@@ -624,12 +624,87 @@ with tempfile.TemporaryDirectory() as temporary:
             root_resp = web_page.goto(f"{server_origin}/fred-skills/")
             assert root_resp is not None and root_resp.status == 200
             assert "text/html" in (root_resp.headers.get("content-type") or "")
-            assert web_page.locator("header nav a").count() >= 5
+            assert (
+                web_page.locator('header nav[aria-label="Site navigation"] a').count()
+                >= 15
+            )
+            assert web_page.locator("main").count() == 1
+            assert web_page.locator("script").count() == 0
             assert web_page.locator("h1").first.inner_text() == "fred-skills"
+            pre_bg = web_page.locator("pre").first.evaluate(
+                "el => getComputedStyle(el).backgroundColor"
+            )
+            assert pre_bg not in ("", "rgba(0, 0, 0, 0)", "transparent"), pre_bg
             web_page.screenshot(path="/tmp/site_index.png")
 
-            web_page.locator('header nav a[href="docs/explorer.html"]').click()
+            # Navigate to /docs/ hub from header navigation and verify every guide route
+            web_page.locator('header nav a[href="docs/index.html"]').click()
+            web_page.wait_for_url(f"{server_origin}/fred-skills/docs/index.html")
+            assert web_page.locator("main").count() == 1
+            assert web_page.locator("script").count() == 0
+            assert web_page.locator("h1").first.inner_text() == "Documentation"
+            web_page.screenshot(path="/tmp/site_docs_hub.png")
+
+            docs_dir_resp = web_page.goto(f"{server_origin}/fred-skills/docs/")
+            assert docs_dir_resp is not None and docs_dir_resp.status == 200
+            assert "text/html" in (docs_dir_resp.headers.get("content-type") or "")
+            assert web_page.locator("h1").first.inner_text() == "Documentation"
+            docs_hub_hrefs: list[str] = web_page.evaluate(
+                """() => Array.from(document.querySelectorAll('main a[href]'))
+                    .map(a => a.getAttribute('href'))
+                    .filter(h => h && !h.startsWith('#') && !h.startsWith('http:') && !h.startsWith('https:'))"""
+            )
+            assert "release-notes-0.2.0.html" in docs_hub_hrefs
+            assert "../README.html" in docs_hub_hrefs
+            for g_href in docs_hub_hrefs:
+                assert not g_href.split("#")[0].endswith(".md"), g_href
+                g_url = urllib.parse.urljoin(
+                    f"{server_origin}/fred-skills/docs/index.html", g_href
+                )
+                g_resp = web_page.goto(g_url)
+                assert g_resp is not None and g_resp.status == 200, g_url
+                assert "text/html" in (g_resp.headers.get("content-type") or ""), g_url
+                assert web_page.locator("main").count() == 1, g_url
+                assert (
+                    web_page.locator('nav[aria-label="Site navigation"]').count() == 1
+                ), g_url
+
+            rn_resp = web_page.goto(
+                f"{server_origin}/fred-skills/docs/release-notes-0.2.0.html"
+            )
+            assert rn_resp is not None and rn_resp.status == 200
+            assert web_page.locator("script").count() == 0
+            assert "0.2.0" in web_page.locator("h1").first.inner_text()
+
+            # Verify /skills/ directory route and all 57 /skills/<name>/ and /skills/<name>/SKILL.html routes
+            skills_dir_resp = web_page.goto(f"{server_origin}/fred-skills/skills/")
+            assert skills_dir_resp is not None and skills_dir_resp.status == 200
+            assert "text/html" in (skills_dir_resp.headers.get("content-type") or "")
+            assert web_page.locator("main").count() == 1
+            assert web_page.locator("script").count() == 0
+            assert web_page.locator("h1").first.inner_text() == "Skill packages"
+            web_page.screenshot(path="/tmp/site_skills_hub.png")
+
+            skill_names = sorted(
+                p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")
+            )
+            assert len(skill_names) == expected_total
+            for s_name in skill_names:
+                for s_route in (
+                    f"{server_origin}/fred-skills/skills/{s_name}/",
+                    f"{server_origin}/fred-skills/skills/{s_name}/SKILL.html",
+                ):
+                    with urllib.request.urlopen(s_route, timeout=5) as http_resp:
+                        assert http_resp.status == 200, s_route
+                        assert "text/html" in http_resp.headers.get(
+                            "Content-Type", ""
+                        ), s_route
+                        http_resp.read()
+
+            web_page.locator("header nav a", has_text="Skill explorer").click()
             web_page.wait_for_url(f"{server_origin}/fred-skills/docs/explorer.html")
+            assert web_page.locator("main").count() == 1
+            assert web_page.locator("script").count() == 1
             assert (
                 web_page.locator("article.pack-card").count()
                 == len(expected_packs)
@@ -646,6 +721,22 @@ with tempfile.TemporaryDirectory() as temporary:
                 assert "not-executed" in host_cfg["behavior_test"]
             assert "not-executed" in hosts_text
             web_page.screenshot(path="/tmp/site_explorer_packs_hosts.png")
+
+            # Verify 375x812 mobile viewport bounds on web explorer with unified navigation
+            web_page.set_viewport_size({"width": 375, "height": 812})
+            web_mobile_query = web_page.locator("#query").bounding_box()
+            web_mobile_status = web_page.locator("#status").bounding_box()
+            assert web_mobile_query is not None and web_mobile_query["y"] < 650, (
+                web_mobile_query
+            )
+            assert (
+                web_mobile_status is not None
+                and web_mobile_status["y"] + web_mobile_status["height"] < 812
+            ), web_mobile_status
+            assert web_page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth"
+            )
+            web_page.set_viewport_size({"width": 1100, "height": 850})
 
             explorer_base = f"{server_origin}/fred-skills/docs/explorer.html"
             file_hrefs: list[str] = web_page.evaluate(
@@ -664,6 +755,7 @@ with tempfile.TemporaryDirectory() as temporary:
                     assert http_resp.status == 200, target_url
                     content_type = http_resp.headers.get("Content-Type", "")
                     assert "text/html" in content_type, (target_url, content_type)
+                    http_resp.read()
 
             web_page.locator("header nav a", has_text="Task guide").click()
             web_page.wait_for_url(f"{server_origin}/fred-skills/docs/experience.html")
@@ -686,6 +778,12 @@ with tempfile.TemporaryDirectory() as temporary:
             web_page.wait_for_url(
                 f"{server_origin}/fred-skills/skills/repo-audit-concurrency/SKILL.html"
             )
+            skill_dir_resp = web_page.goto(
+                f"{server_origin}/fred-skills/skills/repo-audit-concurrency/"
+            )
+            assert skill_dir_resp is not None and skill_dir_resp.status == 200
+            assert web_page.locator("main").count() == 1
+            assert web_page.locator("script").count() == 0
             meta_text = web_page.locator("section.skill-metadata").inner_text()
             assert "repo-audit-concurrency" in meta_text
             assert "repository-audits" in meta_text

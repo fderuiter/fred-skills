@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   workflow_run:
-    workflows: [Release]
+    workflows: [Validate skill packages]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -10,16 +10,12 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: skills-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   PYTHONDONTWRITEBYTECODE: '1'
   PYTHONIOENCODING: utf-8
 
 jobs:
-  build:
+  preflight:
     if: >-
       (
         github.event_name == 'workflow_run' &&
@@ -31,20 +27,25 @@ jobs:
         github.ref == 'refs/heads/main'
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       contents: read
-      pages: read
+      actions: read
+    outputs:
+      should_deploy: ${{ steps.gate.outputs.should_deploy }}
+      target_sha: ${{ steps.gate.outputs.target_sha }}
     steps:
-      - name: Checkout verified commit
+      - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: refs/heads/main
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify Pages deployment gate and target commit
+      - name: Evaluate Pages preflight gate
+        id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REF_VALUE: ${{ github.ref }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
@@ -55,17 +56,29 @@ jobs:
         run: |
           set -eu
 
+          write_summary() {
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "### Pages Preflight"
+                echo "- **Event**: \`${EVENT_NAME:-unknown}\`"
+                echo "- **Decision**: $1"
+                echo "- **Should deploy**: \`$2\`"
+                echo "- **Target SHA**: \`$3\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+
           if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
             if [ "${WORKFLOW_CONCLUSION:-}" != "success" ]; then
-              echo "Error: Refusing Pages build for non-successful workflow_run conclusion '${WORKFLOW_CONCLUSION:-none}'" >&2
+              echo "Error: Refusing Pages preflight for non-successful workflow_run conclusion '${WORKFLOW_CONCLUSION:-none}'" >&2
               exit 1
             fi
             if [ "${WORKFLOW_EVENT:-}" != "push" ]; then
-              echo "Error: Refusing Pages build for workflow_run event '${WORKFLOW_EVENT:-none}' (expected push)" >&2
+              echo "Error: Refusing Pages preflight for workflow_run event '${WORKFLOW_EVENT:-none}' (expected push)" >&2
               exit 1
             fi
             if [ "${WORKFLOW_HEAD_BRANCH:-}" != "main" ]; then
-              echo "Error: Refusing Pages build for workflow_run branch '${WORKFLOW_HEAD_BRANCH:-none}' (expected main)" >&2
+              echo "Error: Refusing Pages preflight for workflow_run branch '${WORKFLOW_HEAD_BRANCH:-none}' (expected main)" >&2
               exit 1
             fi
           elif [ "${EVENT_NAME:-}" = "workflow_dispatch" ]; then
@@ -93,7 +106,10 @@ jobs:
           fi
 
           FETCH_ERR_FILE="$(mktemp)"
-          trap 'rm -f "$FETCH_ERR_FILE"' EXIT
+          API_OUT_FILE="$(mktemp)"
+          API_ERR_FILE="$(mktemp)"
+          DESCENDANTS_FILE="$(mktemp)"
+          trap 'rm -f "$FETCH_ERR_FILE" "$API_OUT_FILE" "$API_ERR_FILE" "$DESCENDANTS_FILE"' EXIT
           FETCH_OK="true"
           if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
             git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
@@ -111,16 +127,156 @@ jobs:
             exit 1
           fi
 
-          if ! git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
-            echo "Error: Trigger commit '$TARGET_SHA' is not an ancestor of refs/remotes/origin/main ('$ORIGIN_MAIN_SHA')" >&2
+          if ! git cat-file -e "${TARGET_SHA}^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
+            echo "Error: Target commit '$TARGET_SHA' is not an ancestor of refs/remotes/origin/main ('$ORIGIN_MAIN_SHA')" >&2
             exit 1
           fi
 
-          git checkout --detach refs/remotes/origin/main >/dev/null 2>&1
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Error: GH_TOKEN is required to query completed validate.yml runs" >&2
+            exit 1
+          fi
+          if [ -z "${GH_REPO:-}" ] || ! printf '%s' "$GH_REPO" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+            echo "Error: GH_REPO is missing or invalid ('${GH_REPO:-none}')" >&2
+            exit 1
+          fi
+
+          PY_BIN="${PYTHON_BIN:-}"
+          if [ -z "$PY_BIN" ]; then
+            for CANDIDATE in python3 python; do
+              if command -v "$CANDIDATE" >/dev/null 2>&1 && "$CANDIDATE" -S -c "import sys" >/dev/null 2>&1; then
+                PY_BIN="$CANDIDATE"
+                break
+              fi
+            done
+          fi
+          if [ -z "$PY_BIN" ]; then
+            echo "Error: python3 or python is required to evaluate Pages preflight gate" >&2
+            exit 1
+          fi
+
+          if ! gh api "repos/${GH_REPO}/actions/workflows/validate.yml/runs?branch=main&status=completed&per_page=100" >"$API_OUT_FILE" 2>"$API_ERR_FILE"; then
+            echo "Error: Failed to query completed validate.yml runs via GitHub Actions API: $(cat "$API_ERR_FILE")" >&2
+            exit 1
+          fi
+
+          for CANDIDATE_SHA in $(git rev-list "${TARGET_SHA}..refs/remotes/origin/main"); do
+            if git merge-base --is-ancestor "$TARGET_SHA" "$CANDIDATE_SHA" >/dev/null 2>&1; then
+              printf '%s\n' "$CANDIDATE_SHA" >> "$DESCENDANTS_FILE"
+            fi
+          done
+
+          DECISION_LINES="$(
+            API_RESPONSE_PATH="$API_OUT_FILE" \
+            DESCENDANTS_PATH="$DESCENDANTS_FILE" \
+            EVENT_MODE="$EVENT_NAME" \
+            CHECK_TARGET_SHA="$TARGET_SHA" \
+            "$PY_BIN" -S - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          sha_re = re.compile(r"^[0-9a-f]{40}$")
+          raw_json = Path(os.environ["API_RESPONSE_PATH"]).read_text(encoding="utf-8")
+          try:
+              payload = json.loads(raw_json)
+          except json.JSONDecodeError as exc:
+              sys.stderr.write(f"Error: Invalid JSON from GitHub Actions API: {exc}\n")
+              sys.exit(1)
+
+          runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+          if not isinstance(runs, list):
+              sys.stderr.write("Error: GitHub Actions API response missing 'workflow_runs' list\n")
+              sys.exit(1)
+
+          validated_shas = set()
+          for run in runs:
+              if not isinstance(run, dict):
+                  continue
+              if run.get("status", "completed") != "completed":
+                  continue
+              if run.get("conclusion") != "success":
+                  continue
+              if run.get("head_branch", "main") != "main":
+                  continue
+              if run.get("event") == "pull_request":
+                  continue
+              head_sha = run.get("head_sha", "")
+              if isinstance(head_sha, str) and sha_re.fullmatch(head_sha):
+                  validated_shas.add(head_sha)
+
+          event_mode = os.environ["EVENT_MODE"]
+          target_sha = os.environ["CHECK_TARGET_SHA"]
+          descendants_raw = Path(os.environ["DESCENDANTS_PATH"]).read_text(encoding="utf-8")
+          descendants = [
+              tok for tok in descendants_raw.splitlines() if sha_re.fullmatch(tok.strip())
+          ]
+
+          if event_mode == "workflow_dispatch" and target_sha not in validated_shas:
+              sys.stderr.write(
+                  f"Error: Refusing workflow_dispatch Pages deploy for unvalidated commit '{target_sha}' "
+                  "(no completed 'Validate skill packages' run with conclusion 'success' on main)\n"
+              )
+              sys.exit(1)
+
+          superseded_by = next((sha.strip() for sha in descendants if sha.strip() in validated_shas), "")
+          if superseded_by:
+              print("false")
+              print(f"Skipping superseded commit; newer validated descendant {superseded_by} exists on origin/main")
+          else:
+              print("true")
+              print("Verified commit is the newest validated commit on origin/main; scheduling deployment")
+          PY
+          )"
+
+          SHOULD_DEPLOY="$(printf '%s\n' "$DECISION_LINES" | tr -d '\r' | sed -n '1p')"
+          DECISION_TEXT="$(printf '%s\n' "$DECISION_LINES" | tr -d '\r' | sed -n '2p')"
+          if [ "$SHOULD_DEPLOY" != "true" ] && [ "$SHOULD_DEPLOY" != "false" ]; then
+            echo "Error: Unexpected preflight decision '${SHOULD_DEPLOY:-none}'" >&2
+            exit 1
+          fi
+
+          if [ -n "${GITHUB_OUTPUT:-}" ]; then
+            {
+              echo "should_deploy=$SHOULD_DEPLOY"
+              echo "target_sha=$TARGET_SHA"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          write_summary "$DECISION_TEXT" "$SHOULD_DEPLOY" "$TARGET_SHA"
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: skills-pages-build-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Checkout verified commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          persist-credentials: false
+      - name: Verify checked-out target commit
+        env:
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -eu
+
+          if [ -z "${TARGET_SHA:-}" ] || ! printf '%s' "$TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Error: Verified 40-character TARGET_SHA is missing or invalid ('${TARGET_SHA:-none}')" >&2
+            exit 1
+          fi
 
           HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
-          if [ "$HEAD_SHA" != "$ORIGIN_MAIN_SHA" ]; then
-            echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified refs/remotes/origin/main '$ORIGIN_MAIN_SHA'" >&2
+          if [ "$HEAD_SHA" != "$TARGET_SHA" ]; then
+            echo "Error: Checked-out HEAD '${HEAD_SHA:-none}' does not match verified target commit '$TARGET_SHA'" >&2
             exit 1
           fi
       - name: Set up Python 3.12
@@ -136,7 +292,6 @@ jobs:
           set -eu
           python scripts/build_catalog.py --check
           python scripts/build_experience.py --check --stage-site dist/site
-          python scripts/build_site.py --output dist/site
           python scripts/check_doc_links.py
           test -f dist/site/.nojekyll
           test -s dist/site/index.html
@@ -150,19 +305,13 @@ jobs:
           include-hidden-files: true
 
   deploy:
-    needs: build
-    if: >-
-      (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'main'
-      ) || (
-        github.event_name == 'workflow_dispatch' &&
-        github.ref == 'refs/heads/main'
-      )
+    needs: [preflight, build]
+    if: needs.preflight.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: skills-pages-deploy-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

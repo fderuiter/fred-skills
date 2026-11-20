@@ -24,7 +24,7 @@ import build_site
 from check_doc_links import check_docs, check_file_links
 from fredlib.common import read_json
 from fredlib.reports import SCRIPT, STYLE, _csp_value
-from skill_tools import extract_relative_links
+from skill_tools import extract_relative_links, resolve_relative_link_target
 
 from tests.catalog_oracles import (
     expected_host_count,
@@ -66,20 +66,85 @@ class BuildSiteTests(unittest.TestCase):
     def test_compiled_site_contains_index_readme_guides_explorer_and_51_skills(
         self,
     ) -> None:
-        """build_site.py compiles index.html, README.html, docs/explorer.html, 14 guides, and 51 skills."""
+        """build_site.py compiles directory hubs, guides, explorer, and 57 skills while pruning raw .md/.py/yaml."""
         self.assertTrue((self.site_dir / ".nojekyll").is_file())
         self.assertTrue((self.site_dir / "index.html").is_file())
         self.assertTrue((self.site_dir / "README.html").is_file())
+        self.assertTrue((self.site_dir / "docs/index.html").is_file())
         self.assertTrue((self.site_dir / "docs/explorer.html").is_file())
+        self.assertTrue((self.site_dir / "skills/index.html").is_file())
+
+        # Retained static manifests, schemas, SVGs, LICENSE, and VERSION
+        for retained_rel in (
+            "LICENSE",
+            "VERSION",
+            "gemini-extension.json",
+            ".claude-plugin/marketplace.json",
+            ".cursor-plugin/marketplace.json",
+        ):
+            self.assertTrue(
+                (self.site_dir / retained_rel).is_file(),
+                retained_rel,
+            )
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertGreaterEqual(
+            len(list((self.site_dir / "catalog").glob("*.json"))), 7
+        )
+        self.assertGreaterEqual(
+            len(list((self.site_dir / "schemas").glob("*.json"))), 2
+        )
+        self.assertEqual(
+            expected_skills,
+            len(list((self.site_dir / "skills").glob("*/.cursor-plugin/plugin.json"))),
+        )
+        self.assertEqual(
+            expected_skills,
+            len(list((self.site_dir / "skills").glob("*/assets/*.svg"))),
+        )
+        self.assertGreaterEqual(
+            len(list((self.site_dir / "skills").glob("*/assets/*.schema.json"))),
+            expected_skills,
+        )
+
+        # Zero raw .md, .py, agents/openai.yaml, or skills/*/assets/*.html
+        all_site_files = [
+            p.relative_to(self.site_dir).as_posix()
+            for p in self.site_dir.rglob("*")
+            if p.is_file()
+        ]
+        self.assertEqual([], [f for f in all_site_files if f.endswith(".md")])
+        self.assertEqual([], [f for f in all_site_files if f.endswith(".py")])
+        self.assertEqual([], [f for f in all_site_files if f.endswith("openai.yaml")])
+        self.assertEqual(
+            [],
+            [
+                f
+                for f in all_site_files
+                if f.startswith("skills/") and "/assets/" in f and f.endswith(".html")
+            ],
+        )
 
         index_html = (self.site_dir / "index.html").read_text(encoding="utf-8")
         readme_html = (self.site_dir / "README.html").read_text(encoding="utf-8")
         self.assertEqual(index_html, readme_html)
         self.assertIn('href="docs/explorer.html"', index_html)
+        self.assertIn('href="docs/index.html"', index_html)
+        self.assertIn('href="skills/index.html"', index_html)
         self.assertIn('href="docs/experience.html"', index_html)
         self.assertIn('href="docs/catalog.html"', index_html)
 
-        source_guides = sorted((ROOT / "docs").glob("*.md"))
+        docs_hub_html = (self.site_dir / "docs/index.html").read_text(encoding="utf-8")
+        docs_hub_links = set(extract_relative_links(docs_hub_html))
+        self.assertIn("explorer.html", docs_hub_links)
+        self.assertIn("../README.html", docs_hub_links)
+        self.assertIn("../CONTRIBUTING.html", docs_hub_links)
+        self.assertIn("../AGENTS.html", docs_hub_links)
+        self.assertIn("../SECURITY.html", docs_hub_links)
+        self.assertIn("../evals/README.html", docs_hub_links)
+        self.assertIn("../skills/index.html", docs_hub_links)
+
+        source_guides = sorted((ROOT / "docs").rglob("*.md"))
         non_release_guides = [
             g for g in source_guides if not g.name.startswith("release-notes-")
         ]
@@ -94,26 +159,51 @@ class BuildSiteTests(unittest.TestCase):
         compiled_guides = sorted(
             p
             for p in (self.site_dir / "docs").glob("*.html")
-            if p.name != "explorer.html"
+            if p.name not in {"explorer.html", "index.html"}
         )
         self.assertEqual(len(source_guides), len(compiled_guides))
         for guide_md in source_guides:
-            guide_html_path = self.site_dir / "docs" / f"{guide_md.stem}.html"
-            self.assertTrue(guide_html_path.is_file(), guide_md.name)
-            guide_html = guide_html_path.read_text(encoding="utf-8")
-            for target in extract_relative_links(guide_html):
-                self.assertFalse(
-                    target.split("#")[0].split("?")[0].lower().endswith(".md"),
-                    f"{guide_html_path.name} retained .md link: {target}",
-                )
+            rel_guide_html = (
+                guide_md.relative_to(ROOT / "docs").with_suffix(".html").as_posix()
+            )
+            guide_html_path = self.site_dir / "docs" / rel_guide_html
+            self.assertTrue(guide_html_path.is_file(), rel_guide_html)
+            self.assertIn(rel_guide_html, docs_hub_links)
 
-        expected_skills = expected_total_skills(ROOT)
-        self.assertGreaterEqual(expected_skills, 1)
         skill_dirs = sorted(p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md"))
         self.assertEqual(expected_skills, len(skill_dirs))
+        skills_hub_html = (self.site_dir / "skills/index.html").read_text(
+            encoding="utf-8"
+        )
         for skill_name in skill_dirs:
             skill_html_path = self.site_dir / "skills" / skill_name / "SKILL.html"
+            skill_index_path = self.site_dir / "skills" / skill_name / "index.html"
             self.assertTrue(skill_html_path.is_file(), skill_name)
+            self.assertTrue(skill_index_path.is_file(), skill_name)
+            self.assertEqual(
+                skill_html_path.read_text(encoding="utf-8"),
+                skill_index_path.read_text(encoding="utf-8"),
+                skill_name,
+            )
+            self.assertIn(f'href="{skill_name}/index.html"', skills_hub_html)
+
+        # Every compiled HTML file in site_dir has zero .md links and stays within site_dir
+        all_html_files = sorted(self.site_dir.rglob("*.html"))
+        self.assertGreaterEqual(len(all_html_files), 280)
+        for html_path in all_html_files:
+            html_content = html_path.read_text(encoding="utf-8")
+            for target in extract_relative_links(html_content):
+                clean_target = target.split("#")[0].split("?")[0]
+                self.assertFalse(
+                    clean_target.lower().endswith(".md"),
+                    f"{html_path} retained .md link: {target}",
+                )
+                resolved = resolve_relative_link_target(target, html_path.parent)
+                if resolved is not None:
+                    self.assertTrue(
+                        resolved.is_relative_to(self.site_dir.resolve()),
+                        f"{html_path}: link '{target}' escaped site_dir -> {resolved}",
+                    )
 
     def test_compiled_skill_pages_strip_frontmatter_and_render_metadata(self) -> None:
         """All 57 compiled skill pages expose structured metadata and zero raw YAML frontmatter blocks."""
@@ -129,23 +219,113 @@ class BuildSiteTests(unittest.TestCase):
             self.assertNotIn("---", stripped_tags, skill_name)
 
     def test_csp_style_and_script_reused_across_compiled_pages(self) -> None:
-        """Compiled pages reuse STYLE, SCRIPT, and SHA-256 CSP headers with default-src/connect-src 'none'."""
-        expected_csp = escape(_csp_value(), quote=True)
-        self.assertIn("default-src &#x27;none&#x27;", expected_csp)
-        self.assertIn("connect-src &#x27;none&#x27;", expected_csp)
+        """Static pages omit <script> with script-src 'none', explorer retains SHA-256 CSP, and all render <main> and <nav>."""
+        explorer_csp = escape(_csp_value(include_script=True), quote=True)
+        static_csp = escape(_csp_value(include_script=False), quote=True)
+        self.assertIn("default-src &#x27;none&#x27;", explorer_csp)
+        self.assertIn("script-src &#x27;sha256-", explorer_csp)
+        self.assertIn("connect-src &#x27;none&#x27;", explorer_csp)
+        self.assertIn("default-src &#x27;none&#x27;", static_csp)
+        self.assertIn("script-src &#x27;none&#x27;", static_csp)
+        self.assertNotIn("sha256-", static_csp)
+        self.assertIn("main{display:block}", STYLE)
+        self.assertIn("pre{background:", STYLE)
+        self.assertIn("pre code{background:none", STYLE)
 
-        sample_pages = [
-            self.site_dir / "index.html",
-            self.site_dir / "docs/explorer.html",
-            self.site_dir / "docs/catalog.html",
-            self.site_dir / "docs/api.html",
-            self.site_dir / "skills/repo-audit-concurrency/SKILL.html",
-        ]
-        for page_path in sample_pages:
+        offline_explorer = (ROOT / "docs/explorer.html").read_text(encoding="utf-8")
+        self.assertIn(explorer_csp, offline_explorer)
+        self.assertIn(f"<script>{SCRIPT}</script>", offline_explorer)
+        self.assertIn("<main>", offline_explorer)
+        self.assertIn('<nav aria-label="Site navigation">', offline_explorer)
+
+        explorer_path = (self.site_dir / "docs/explorer.html").resolve()
+        for page_path in sorted(self.site_dir.rglob("*.html")):
             content = page_path.read_text(encoding="utf-8")
-            self.assertIn(expected_csp, content, page_path.as_posix())
-            self.assertIn(f"<style>{STYLE}</style>", content, page_path.as_posix())
-            self.assertIn(f"<script>{SCRIPT}</script>", content, page_path.as_posix())
+            rel = page_path.relative_to(self.site_dir).as_posix()
+            self.assertIn(f"<style>{STYLE}</style>", content, rel)
+            self.assertIn("<main>", content, rel)
+            self.assertIn("</main>", content, rel)
+            self.assertIn('<nav aria-label="Site navigation">', content, rel)
+            if page_path.resolve() == explorer_path:
+                self.assertIn(explorer_csp, content, rel)
+                self.assertIn(f"<script>{SCRIPT}</script>", content, rel)
+            else:
+                self.assertIn(static_csp, content, rel)
+                self.assertNotIn("<script", content, rel)
+
+    def test_recursive_docs_discovery_and_skill_resource_blob_rewriting(self) -> None:
+        """_discover_compilable_markdown_paths scans docs/** recursively, skips skills/*/assets/*.md, and rewrites blob links."""
+        self.assertEqual(
+            "https://github.com/fderuiter/fred-skills/blob/main/skills/repo-audit-concurrency/assets/prompt.md",
+            build_site.rewrite_link_target(
+                "assets/prompt.md",
+                source_rel_path="skills/repo-audit-concurrency/SKILL.md",
+                compiled_md_paths=frozenset(),
+                root=ROOT,
+            ),
+        )
+        self.assertEqual(
+            "https://github.com/fderuiter/fred-skills/blob/main/skills/repo-audit-concurrency/scripts/validate_audit.py#L10",
+            build_site.rewrite_link_target(
+                "scripts/validate_audit.py#L10",
+                source_rel_path="skills/repo-audit-concurrency/SKILL.md",
+                compiled_md_paths=frozenset(),
+                root=ROOT,
+            ),
+        )
+        concurrency_html = (
+            self.site_dir / "skills/repo-audit-concurrency/SKILL.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'href="https://github.com/fderuiter/fred-skills/blob/main/skills/repo-audit-concurrency/assets/prompt.md"',
+            concurrency_html,
+        )
+        self.assertIn(
+            'href="https://github.com/fderuiter/fred-skills/blob/main/skills/repo-audit-concurrency/scripts/validate_audit.py"',
+            concurrency_html,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir) / "repo"
+            out_dir = Path(tmp_dir) / "out"
+            (tmp_root / "catalog").mkdir(parents=True)
+            for cat_name in ("skills", "recipes", "packs", "hosts", "suites"):
+                (tmp_root / "catalog" / f"{cat_name}.json").write_bytes(
+                    (ROOT / "catalog" / f"{cat_name}.json").read_bytes()
+                )
+            (tmp_root / "README.md").write_text("# Root\n", encoding="utf-8")
+            (tmp_root / "docs/nested").mkdir(parents=True)
+            (tmp_root / "docs/nested/deep-guide.md").write_text(
+                "# Deep Guide\n\nSee [Root](../../README.md).\n",
+                encoding="utf-8",
+            )
+            (tmp_root / "skills/demo/assets").mkdir(parents=True)
+            (tmp_root / "skills/demo/scripts").mkdir(parents=True)
+            (tmp_root / "skills/demo/SKILL.md").write_text(
+                "---\nname: demo\ndescription: Demo.\n---\n# Demo\n\n"
+                "Prompt [p](assets/prompt.md) and [v](scripts/check.py).\n",
+                encoding="utf-8",
+            )
+            (tmp_root / "skills/demo/assets/prompt.md").write_text(
+                "Prompt body\n", encoding="utf-8"
+            )
+            (tmp_root / "skills/demo/scripts/check.py").write_text(
+                "x = 1\n", encoding="utf-8"
+            )
+
+            discovered = build_site._discover_compilable_markdown_paths(tmp_root)
+            self.assertIn("docs/nested/deep-guide.md", discovered)
+            self.assertIn("skills/demo/SKILL.md", discovered)
+            self.assertNotIn("skills/demo/assets/prompt.md", discovered)
+
+            build_site.build_site(out_dir, root=tmp_root)
+            self.assertTrue((out_dir / "docs/nested/deep-guide.html").is_file())
+            self.assertFalse((out_dir / "skills/demo/assets/prompt.html").exists())
+            self.assertTrue((out_dir / "skills/demo/index.html").is_file())
+            self.assertIn(
+                'href="nested/deep-guide.html"',
+                (out_dir / "docs/index.html").read_text(encoding="utf-8"),
+            )
 
     def test_heading_slugs_match_api_guide_anchors_and_deduplicate(self) -> None:
         """Heading IDs match test_api_guide.py slugify rules so all TOC anchors resolve."""
@@ -251,18 +431,44 @@ class BuildSiteTests(unittest.TestCase):
                 "/fred-skills/",
                 "/fred-skills/index.html",
                 "/fred-skills/README.html",
+                "/fred-skills/docs/",
+                "/fred-skills/docs/index.html",
                 "/fred-skills/docs/explorer.html",
+                "/fred-skills/docs/release-notes-0.2.0.html",
+                "/fred-skills/skills/",
+                "/fred-skills/skills/index.html",
             ):
                 with urllib.request.urlopen(f"{base_origin}{route}", timeout=5) as resp:
                     self.assertEqual(200, resp.status, route)
                     self.assertIn("text/html", resp.headers.get("Content-Type", ""))
 
+            expected_skills = expected_total_skills(ROOT)
+            self.assertGreaterEqual(expected_skills, 1)
+            for marketplace_rel in (
+                ".cursor-plugin/marketplace.json",
+                ".claude-plugin/marketplace.json",
+            ):
+                mp = read_json(ROOT / marketplace_rel)
+                skill_paths = mp["plugins"][0]["skills"]
+                self.assertEqual(expected_skills, len(skill_paths), marketplace_rel)
+                for rel_skill_dir in skill_paths:
+                    clean_rel = rel_skill_dir.removeprefix("./").strip("/")
+                    for suffix in ("/", "/SKILL.html"):
+                        skill_route = f"/fred-skills/{clean_rel}{suffix}"
+                        with urllib.request.urlopen(
+                            f"{base_origin}{skill_route}", timeout=5
+                        ) as resp:
+                            self.assertEqual(200, resp.status, skill_route)
+                            self.assertIn(
+                                "text/html",
+                                resp.headers.get("Content-Type", ""),
+                                skill_route,
+                            )
+
             explorer_url = f"{base_origin}/fred-skills/docs/explorer.html"
             web_explorer = (self.site_dir / "docs/explorer.html").read_text(
                 encoding="utf-8"
             )
-            expected_skills = expected_total_skills(ROOT)
-            self.assertGreaterEqual(expected_skills, 1)
             links = extract_relative_links(web_explorer)
             self.assertGreaterEqual(len(links), expected_skills)
             for href in links:
@@ -306,6 +512,60 @@ class BuildSiteTests(unittest.TestCase):
 
             dir_errs = check_docs(root=tmp_path, target_files=[tmp_path])
             self.assertEqual(2, len(dir_errs))
+
+            # Verify boundary escapes and unrewritten .md links in dist/site/ fail check_doc_links.py CLI
+            fake_repo = tmp_path / "repo_checkout"
+            (fake_repo / "scripts").mkdir(parents=True)
+            (fake_repo / "scripts/fred.py").write_text("x = 1\n", encoding="utf-8")
+            (fake_repo / "README.md").write_text("# Readme\n", encoding="utf-8")
+            staged = fake_repo / "dist/site"
+            (staged / "docs").mkdir(parents=True)
+            (staged / ".nojekyll").write_text("", encoding="utf-8")
+            (staged / "index.html").write_text(
+                '<!doctype html><html><body><a href="docs/index.html">Docs</a></body></html>\n',
+                encoding="utf-8",
+            )
+            (staged / "docs/index.html").write_text(
+                '<!doctype html><html><body><a href="../index.html">Home</a></body></html>\n',
+                encoding="utf-8",
+            )
+            self.assertEqual([], check_docs(root=fake_repo))
+
+            for bad_href in ("../../scripts/fred.py", "../../README.md", "guide.md"):
+                (staged / "docs/index.html").write_text(
+                    f'<!doctype html><html><body><a href="{bad_href}">Bad</a></body></html>\n',
+                    encoding="utf-8",
+                )
+                cli_proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import sys; sys.path.insert(0, 'scripts'); "
+                            "import check_doc_links; from pathlib import Path; "
+                            f"errs = check_doc_links.check_docs(root=Path({str(fake_repo)!r})); "
+                            "sys.exit(1 if errs else 0)"
+                        ),
+                    ],
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, cli_proc.returncode, bad_href)
+
+                direct_cli = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts/check_doc_links.py"),
+                        str(staged),
+                    ],
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, direct_cli.returncode, bad_href)
 
     def test_compile_markdown_renders_yaml_frontmatter_and_full_guide_navigation(
         self,
