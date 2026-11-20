@@ -981,48 +981,11 @@ jobs:
                 exit 1
               fi
             fi
-            "$PY_BIN" -S - <<'PY'
-          import hashlib
-          import json
-          import sys
-          from pathlib import Path
-
-          dist = Path("dist/release").resolve()
-          manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
-          if manifest.get("schema_version") != "1.0":
-              raise SystemExit("Error: Unsupported manifest schema_version")
-          if manifest.get("licensing") != "See repository LICENSE":
-              raise SystemExit("Error: Release manifest licensing does not report repository LICENSE")
-          version_file = Path("VERSION")
-          if version_file.is_file():
-              expected_version = version_file.read_text(encoding="utf-8").strip()
-              if manifest.get("version") != expected_version:
-                  raise SystemExit(
-                      f"Error: Manifest version '{manifest.get('version')}' does not match VERSION '{expected_version}'"
-                  )
-          archives = manifest.get("archives")
-          if not isinstance(archives, list) or not archives:
-              raise SystemExit("Error: Manifest archives list is missing or empty")
-          expected_lines = []
-          for entry in archives:
-              name = entry.get("file", "")
-              digest = entry.get("sha256", "")
-              size = entry.get("bytes")
-              if not name or "/" in name or name.startswith("."):
-                  raise SystemExit(f"Error: Invalid archive filename in manifest: {name!r}")
-              target = dist / name
-              if target.is_symlink() or not target.resolve().is_relative_to(dist) or not target.is_file():
-                  raise SystemExit(f"Error: Missing or unsafe archive file: {name}")
-              raw = target.read_bytes()
-              if isinstance(size, int) and len(raw) != size:
-                  raise SystemExit(f"Error: Byte length mismatch for {name}")
-              if hashlib.sha256(raw).hexdigest() != digest:
-                  raise SystemExit(f"Error: Manifest SHA-256 mismatch for {name}")
-              expected_lines.append(f"{digest}  {name}\n")
-          if "".join(expected_lines) != (dist / "SHA256SUMS").read_text(encoding="utf-8"):
-              raise SystemExit("Error: manifest.json archives do not match SHA256SUMS")
-          sys.exit(0)
-          PY
+            set -- "$PY_BIN" -S scripts/fred.py verify-release dist/release/manifest.json --require-licensing
+            if [ -f VERSION ]; then
+              set -- "$@" --expected-version "$(tr -d '[:space:]' < VERSION)"
+            fi
+            "$@"
           fi
 
           (
