@@ -46,12 +46,54 @@ _FAKE_GH_PY = textwrap.dedent(
     """\
     import json
     import os
+    import subprocess
     import sys
     from pathlib import Path
 
     state_path = Path(os.environ["FAKE_GH_STATE"])
     state = json.loads(state_path.read_text(encoding="utf-8"))
     args = sys.argv[1:]
+
+    def _has_origin() -> bool:
+        if not (Path.cwd() / ".git").exists():
+            return False
+        res = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return res.returncode == 0
+
+    def _origin_has_tag(tag_name: str) -> bool:
+        res = subprocess.run(
+            [
+                "git",
+                "ls-remote",
+                "--exit-code",
+                "--refs",
+                "origin",
+                f"refs/tags/{tag_name}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return res.returncode == 0
+
+    def _mint_origin_tag(tag_name: str, target_sha: str | None) -> None:
+        if not _has_origin() or _origin_has_tag(tag_name):
+            return
+        ref_target = target_sha or "HEAD"
+        res = subprocess.run(
+            ["git", "push", "origin", f"{ref_target}:refs/tags/{tag_name}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0:
+            sys.stderr.write(f"failed to mint tag {tag_name}: {res.stderr}\\n")
+            sys.exit(1)
 
     if len(args) < 2 or args[0] != "release":
         sys.stderr.write(f"unexpected gh invocation: {args!r}\\n")
@@ -77,6 +119,24 @@ _FAKE_GH_PY = textwrap.dedent(
                 sys.stdout.write("true\\n" if latest["draft"] else "false\\n")
             else:
                 sys.stdout.write(json.dumps({"isDraft": latest["draft"]}) + "\\n")
+        elif "--json" in args and "assets" in args:
+            if state.get("view_assets_error"):
+                sys.stderr.write(state["view_assets_error"] + "\\n")
+                sys.exit(1)
+            raw_assets = latest.get("assets", {})
+            if isinstance(raw_assets, dict):
+                asset_names = list(raw_assets.keys())
+            else:
+                asset_names = [
+                    a["name"] if isinstance(a, dict) else str(a) for a in raw_assets
+                ]
+            if "--jq" in args or "-q" in args:
+                for name in asset_names:
+                    sys.stdout.write(f"{name}\\n")
+            else:
+                sys.stdout.write(
+                    json.dumps({"assets": [{"name": n} for n in asset_names]}) + "\\n"
+                )
         sys.exit(0)
 
     if subcmd == "create":
@@ -119,6 +179,32 @@ _FAKE_GH_PY = textwrap.dedent(
                 p = Path(tok)
                 assets.append({"name": p.name, "content": p.read_text(encoding="utf-8")})
                 i += 1
+        if verify_tag and _has_origin() and not _origin_has_tag(tag):
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            sys.stderr.write(f"tag {tag} does not exist on origin (--verify-tag)\\n")
+            sys.exit(1)
+        if state.get("create_error"):
+            if state.get("create_partial_draft_assets") is not None:
+                state.setdefault("releases", []).append(
+                    {
+                        "tag": tag,
+                        "draft": True,
+                        "prerelease": prerelease,
+                        "verify_tag": False,
+                        "generate_notes": generate_notes,
+                        "notes_file": notes_file,
+                        "notes_body": notes_body,
+                        "target": target,
+                        "title": title,
+                        "assets": dict(state["create_partial_draft_assets"]),
+                    }
+                )
+            err_msg = state["create_error"]
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            sys.stderr.write(err_msg + "\\n")
+            sys.exit(1)
+        if not draft:
+            _mint_origin_tag(tag, target)
         state.setdefault("releases", []).append(
             {
                 "tag": tag,
@@ -133,6 +219,34 @@ _FAKE_GH_PY = textwrap.dedent(
                 "assets": {a["name"]: a["content"] for a in assets},
             }
         )
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        sys.exit(0)
+
+    if subcmd == "delete-asset":
+        if len(args) < 4:
+            sys.stderr.write("delete-asset requires <tag> <asset-name>\\n")
+            sys.exit(2)
+        tag = args[2]
+        asset_name = args[3]
+        if "--yes" not in args[4:] and "-y" not in args[4:]:
+            sys.stderr.write("delete-asset requires --yes in non-interactive mode\\n")
+            sys.exit(2)
+        if state.get("delete_asset_error"):
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            sys.stderr.write(state["delete_asset_error"] + "\\n")
+            sys.exit(1)
+        matches = [r for r in state.get("releases", []) if r["tag"] == tag]
+        if not matches:
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            sys.stderr.write("release not found\\n")
+            sys.exit(1)
+        rel = matches[-1]
+        if asset_name not in rel.get("assets", {}):
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            sys.stderr.write(f"asset not found: {asset_name}\\n")
+            sys.exit(1)
+        del rel["assets"][asset_name]
+        rel.setdefault("deleted_assets", []).append(asset_name)
         state_path.write_text(json.dumps(state), encoding="utf-8")
         sys.exit(0)
 
@@ -163,6 +277,7 @@ _FAKE_GH_PY = textwrap.dedent(
             sys.stderr.write("release not found\\n")
             sys.exit(1)
         rel = matches[-1]
+        verify_tag = False
         i = 3
         while i < len(args):
             tok = args[i]
@@ -173,7 +288,7 @@ _FAKE_GH_PY = textwrap.dedent(
                 rel["draft"] = True
                 i += 1
             elif tok == "--verify-tag":
-                rel["verify_tag"] = True
+                verify_tag = True
                 i += 1
             elif tok in ("--prerelease", "-p", "--prerelease=true"):
                 rel["prerelease"] = True
@@ -191,6 +306,13 @@ _FAKE_GH_PY = textwrap.dedent(
             else:
                 sys.stderr.write(f"unsupported edit flag: {tok}\\n")
                 sys.exit(2)
+        rel["verify_tag"] = verify_tag
+        if verify_tag and _has_origin() and not _origin_has_tag(tag):
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            sys.stderr.write(f"tag {tag} does not exist on origin (--verify-tag)\\n")
+            sys.exit(1)
+        if not rel.get("draft", False):
+            _mint_origin_tag(tag, rel.get("target"))
         state_path.write_text(json.dumps(state), encoding="utf-8")
         sys.exit(0)
 
@@ -368,7 +490,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             preflight_checkout.get("with", {}).get("persist-credentials"), False
         )
 
-        expected_handoff_ref = "${{ needs.prepare.outputs.target_sha || needs.preflight.outputs.target_sha }}"
+        expected_handoff_ref = "${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}"
 
         validate_job = jobs["validate"]
         self.assertNotIn("concurrency", validate_job)
@@ -564,7 +686,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_job_verifies_prerequisites_and_checksums_before_attestation(
         self,
     ) -> None:
-        """The release job must verify prerequisites and downloaded checksums before SLSA attestation."""
+        """The release job must verify prerequisites, gate on release_state, and verify checksums before SLSA attestation."""
         release_steps = self.workflow_data["jobs"]["release"]["steps"]
         step_names = [s.get("name", "") for s in release_steps]
         prereq_idx = next(
@@ -572,12 +694,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
             for i, name in enumerate(step_names)
             if "verify" in name.lower() and "prerequisite" in name.lower()
         )
+        state_idx = step_names.index("Check release publication state")
+        download_idx = next(
+            i
+            for i, s in enumerate(release_steps)
+            if str(s.get("uses", "")).startswith("actions/download-artifact@")
+        )
         checksum_idx = step_names.index("Verify downloaded artifact checksums")
         attest_idx = step_names.index("Attest build provenance")
         publish_idx = step_names.index("Publish GitHub Release")
-        self.assertLess(prereq_idx, checksum_idx)
+        self.assertLess(prereq_idx, state_idx)
+        self.assertLess(state_idx, download_idx)
+        self.assertLess(download_idx, checksum_idx)
         self.assertLess(checksum_idx, attest_idx)
         self.assertLess(attest_idx, publish_idx)
+
+        self.assertEqual(release_steps[state_idx].get("id"), "release_state")
+        expected_gate = "steps.release_state.outputs.should_publish == 'true'"
+        for idx in (download_idx, checksum_idx, attest_idx, publish_idx):
+            self.assertEqual(release_steps[idx].get("if"), expected_gate)
 
     def test_attest_provenance_step_pins_valid_v4_2_2_sha_and_permissions(self) -> None:
         """The release job must pin actions/attest-build-provenance to v4.2.2 SHA and retain SLSA permissions."""
@@ -637,6 +772,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('--target "$TARGET_SHA"', script)
         self.assertIn('--notes-file "$NOTES_FILE"', script)
         self.assertIn("--generate-notes", script)
+        self.assertIn("gh release delete-asset", script)
+        self.assertIn("--yes", script)
+        self.assertNotIn('git push origin "refs/tags/$TAG"', script)
         self.assertNotIn("--draft ", script)
         self.assertNotIn("--draft\n", script)
 
@@ -718,6 +856,30 @@ class ReleaseWorkflowTests(unittest.TestCase):
             cwd=cwd,
             env=_isolated_env(cwd, env_vars),
         )
+
+    def _run_release_state_script(
+        self, cwd: Path, env_vars: dict[str, str]
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        release_steps = self.workflow_data["jobs"]["release"]["steps"]
+        state_step = next(s for s in release_steps if s.get("id") == "release_state")
+        output_file = cwd / ".gh-release-state-output"
+        output_file.unlink(missing_ok=True)
+        summary_file = cwd / ".gh-release-state-summary.md"
+        summary_file.unlink(missing_ok=True)
+        merged_env = _isolated_env(
+            cwd,
+            {
+                "GITHUB_OUTPUT": str(output_file),
+                "GITHUB_STEP_SUMMARY": str(summary_file),
+                **env_vars,
+            },
+        )
+        proc = self._run_shell_script(
+            state_step["run"],
+            cwd=cwd,
+            env=merged_env,
+        )
+        return proc, _parse_github_output(output_file)
 
     def _run_checksum_step(self, cwd: Path) -> subprocess.CompletedProcess[str]:
         release_steps = self.workflow_data["jobs"]["release"]["steps"]
@@ -1351,7 +1513,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 )
 
     def test_publish_pushes_missing_tag_on_main_and_selects_notes(self) -> None:
-        """On main with missing tag, Publish GitHub Release pushes v<VERSION> and selects --notes-file or --generate-notes."""
+        """On main with missing tag, Publish GitHub Release mints v<VERSION> atomically via --target, retries failed creates cleanly, and selects notes."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir)
             origin, workspace, head_sha = self._setup_origin_and_clone(
@@ -1366,28 +1528,47 @@ class ReleaseWorkflowTests(unittest.TestCase):
             dist_dir.mkdir(parents=True)
             _write_lf(dist_dir / "pack.tar.gz", "archive-v1")
 
-            gh_env, state_path = _install_fake_gh(base / "curated")
-            summary_file = base / "curated-summary.md"
-            res = self._run_publish_script(
-                workspace,
-                {
-                    **gh_env,
-                    "GH_REPO": "fderuiter/fred-skills",
-                    "GH_TOKEN": "synthetic-token",
-                    "GITHUB_STEP_SUMMARY": str(summary_file),
-                    "RELEASE_TAG": "v0.2.0",
-                    "TARGET_SHA": head_sha,
-                    "INPUT_TAG": "",
-                    "REF_TYPE": "branch",
-                    "REF_NAME": "main",
-                },
+            # 1. Failed gh release create does NOT strand refs/tags/v0.2.0 on origin, allowing clean retry.
+            gh_env, state_path = _install_fake_gh(
+                base / "curated",
+                {"releases": [], "create_error": "HTTP 502 Bad Gateway"},
             )
+            summary_file = base / "curated-summary.md"
+            publish_env = {
+                **gh_env,
+                "GH_REPO": "fderuiter/fred-skills",
+                "GH_TOKEN": "synthetic-token",
+                "GITHUB_STEP_SUMMARY": str(summary_file),
+                "RELEASE_TAG": "v0.2.0",
+                "TARGET_SHA": head_sha,
+                "INPUT_TAG": "",
+                "REF_TYPE": "branch",
+                "REF_NAME": "main",
+            }
+            failed_create = self._run_publish_script(workspace, publish_env)
+            self.assertNotEqual(failed_create.returncode, 0)
+            self.assertIn("502", failed_create.stderr)
+            self.assertEqual(
+                "",
+                _git(
+                    workspace,
+                    "ls-remote",
+                    "--refs",
+                    origin.as_uri(),
+                    "refs/tags/v0.2.0",
+                ),
+            )
+
+            # Retry after transient failure mints refs/tags/v0.2.0 atomically without --verify-tag.
+            _write_lf(state_path, json.dumps({"releases": []}))
+            res = self._run_publish_script(workspace, publish_env)
             self.assertEqual(res.returncode, 0, msg=res.stderr)
 
             remote_tags = _git(
                 workspace, "ls-remote", "--refs", origin.as_uri(), "refs/tags/v0.2.0"
             )
             self.assertIn("refs/tags/v0.2.0", remote_tags)
+            self.assertIn(head_sha, remote_tags)
             self.assertIn(
                 "Published new GitHub Release",
                 summary_file.read_text(encoding="utf-8"),
@@ -1399,17 +1580,83 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(created["tag"], "v0.2.0")
             self.assertFalse(created["draft"])
             self.assertFalse(created["prerelease"])
-            self.assertTrue(created["verify_tag"])
+            self.assertFalse(created["verify_tag"])
             self.assertFalse(created["generate_notes"])
             self.assertEqual(created["notes_file"], "docs/release-notes-0.2.0.md")
             self.assertEqual(created["target"], head_sha)
 
-            # Without docs/release-notes-<VERSION>.md, falls back to --generate-notes; pre-release sets --prerelease.
+            # 2. Failed gh release create leaving an untagged partial draft cleans up stale partial assets and mints tag on retry.
+            origin_retry, workspace_retry, retry_sha = self._setup_origin_and_clone(
+                base / "partial-retry",
+                version_text="0.2.1\n",
+                license_text="MIT License\n",
+                remote_tag=None,
+            )
+            dist_retry = workspace_retry / "dist" / "release"
+            dist_retry.mkdir(parents=True)
+            _write_lf(dist_retry / "pack.tar.gz", "verified-v0.2.1")
+            gh_env_retry, state_retry_path = _install_fake_gh(
+                base / "partial-retry",
+                {
+                    "releases": [],
+                    "create_error": "asset upload interrupted",
+                    "create_partial_draft_assets": {
+                        "partial-corrupt.tar.gz": "corrupt",
+                        "pack.tar.gz": "partial-old",
+                    },
+                },
+            )
+            retry_env = {
+                **gh_env_retry,
+                "GH_REPO": "fderuiter/fred-skills",
+                "RELEASE_TAG": "v0.2.1",
+                "TARGET_SHA": retry_sha,
+                "INPUT_TAG": "",
+                "REF_TYPE": "branch",
+                "REF_NAME": "main",
+            }
+            interrupted = self._run_publish_script(workspace_retry, retry_env)
+            self.assertNotEqual(interrupted.returncode, 0)
+            self.assertEqual(
+                "",
+                _git(
+                    workspace_retry,
+                    "ls-remote",
+                    "--refs",
+                    origin_retry.as_uri(),
+                    "refs/tags/v0.2.1",
+                ),
+            )
+            interrupted_state = json.loads(state_retry_path.read_text(encoding="utf-8"))
+            interrupted_state.pop("create_error", None)
+            interrupted_state.pop("create_partial_draft_assets", None)
+            _write_lf(state_retry_path, json.dumps(interrupted_state))
+
+            recovered = self._run_publish_script(workspace_retry, retry_env)
+            self.assertEqual(recovered.returncode, 0, msg=recovered.stderr)
+            self.assertIn(
+                retry_sha,
+                _git(
+                    workspace_retry,
+                    "ls-remote",
+                    "--refs",
+                    origin_retry.as_uri(),
+                    "refs/tags/v0.2.1",
+                ),
+            )
+            recovered_state = json.loads(state_retry_path.read_text(encoding="utf-8"))
+            promoted_rel = recovered_state["releases"][0]
+            self.assertFalse(promoted_rel["draft"])
+            self.assertFalse(promoted_rel["verify_tag"])
+            self.assertEqual(promoted_rel["deleted_assets"], ["partial-corrupt.tar.gz"])
+            self.assertEqual(promoted_rel["assets"], {"pack.tar.gz": "verified-v0.2.1"})
+
+            # 3. Without docs/release-notes-<VERSION>.md, falls back to --generate-notes; pre-release sets --prerelease; existing tag sets --verify-tag.
             origin_gen, workspace_gen, gen_sha = self._setup_origin_and_clone(
                 base / "generated",
                 version_text="0.3.0-rc.1\n",
                 license_text="MIT License\n",
-                remote_tag=None,
+                remote_tag="v0.3.0-rc.1",
             )
             dist_gen = workspace_gen / "dist" / "release"
             dist_gen.mkdir(parents=True)
@@ -1423,8 +1670,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     "RELEASE_TAG": "v0.3.0-rc.1",
                     "TARGET_SHA": gen_sha,
                     "INPUT_TAG": "",
-                    "REF_TYPE": "branch",
-                    "REF_NAME": "main",
+                    "REF_TYPE": "tag",
+                    "REF_NAME": "v0.3.0-rc.1",
                 },
             )
             self.assertEqual(res_gen.returncode, 0, msg=res_gen.stderr)
@@ -1439,13 +1686,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 ),
             )
             state_gen = json.loads(state_gen_path.read_text(encoding="utf-8"))
+            self.assertTrue(state_gen["releases"][0]["verify_tag"])
             self.assertTrue(state_gen["releases"][0]["generate_notes"])
             self.assertIsNone(state_gen["releases"][0]["notes_file"])
             self.assertFalse(state_gen["releases"][0]["draft"])
             self.assertTrue(state_gen["releases"][0]["prerelease"])
 
     def test_publish_promotes_draft_skips_published_and_handles_errors(self) -> None:
-        """Publish GitHub Release promotes existing drafts with --clobber + edit --draft=false, skips published, and fails on API errors."""
+        """Publish GitHub Release prunes stale draft assets, promotes drafts, rejects unsafe asset names, skips published, and fails on API errors."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir)
             _, workspace, tag_sha = self._setup_origin_and_clone(
@@ -1467,7 +1715,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
                         {
                             "tag": "v0.2.0",
                             "draft": True,
-                            "assets": {"pack.tar.gz": "archive-v1"},
+                            "assets": {
+                                "pack.tar.gz": "archive-v1",
+                                "stale-unverified.tar.gz": "unattested-draft-file",
+                            },
                         }
                     ]
                 },
@@ -1482,7 +1733,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "REF_TYPE": "tag",
             }
 
-            # 1. Existing draft is updated via --clobber and promoted via gh release edit --draft=false --verify-tag.
+            # 1. Existing draft prunes unlisted stale assets, updates listed assets via --clobber, and promotes via gh release edit --draft=false --verify-tag.
             res_draft = self._run_publish_script(workspace, base_env)
             self.assertEqual(res_draft.returncode, 0, msg=res_draft.stderr)
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -1491,7 +1742,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertFalse(rel["draft"])
             self.assertTrue(rel.get("verify_tag"))
             self.assertTrue(rel.get("last_upload_clobber"))
-            self.assertEqual(rel["assets"]["pack.tar.gz"], "archive-v2")
+            self.assertEqual(rel.get("deleted_assets"), ["stale-unverified.tar.gz"])
+            self.assertEqual(rel["assets"], {"pack.tar.gz": "archive-v2"})
             self.assertEqual(rel["notes_file"], "docs/release-notes-0.2.0.md")
 
             # 2. Subsequent run on already-published release exits 0 without overwriting assets.
@@ -1500,19 +1752,62 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertEqual(res_pub.returncode, 0, msg=res_pub.stderr)
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(
-                state["releases"][0]["assets"]["pack.tar.gz"], "archive-v2"
+                state["releases"][0]["assets"], {"pack.tar.gz": "archive-v2"}
             )
 
-            # 3. Unexpected gh release view errors fail non-zero without creating duplicate releases.
-            state["view_error"] = "HTTP 502 Bad Gateway"
-            _write_lf(state_path, json.dumps(state))
+            # 3. Draft asset names containing '/' or '..' are rejected before delete-asset or upload.
+            for bad_asset_name in (
+                "../evil.tar.gz",
+                "nested/evil.tar.gz",
+                "bad..name.tar.gz",
+            ):
+                with self.subTest(bad_asset_name=bad_asset_name):
+                    _write_lf(
+                        state_path,
+                        json.dumps(
+                            {
+                                "releases": [
+                                    {
+                                        "tag": "v0.2.0",
+                                        "draft": True,
+                                        "assets": {bad_asset_name: "untrusted"},
+                                    }
+                                ]
+                            }
+                        ),
+                    )
+                    res_bad_asset = self._run_publish_script(workspace, base_env)
+                    self.assertNotEqual(res_bad_asset.returncode, 0)
+                    self.assertIn("Unsafe draft asset name", res_bad_asset.stderr)
+                    bad_state = json.loads(state_path.read_text(encoding="utf-8"))
+                    subcommands = [c[1] for c in bad_state.get("calls", [])]
+                    self.assertNotIn("delete-asset", subcommands)
+                    self.assertNotIn("upload", subcommands)
+                    self.assertNotIn("edit", subcommands)
+
+            # 4. Unexpected gh release view errors fail non-zero without creating duplicate releases.
+            _write_lf(
+                state_path,
+                json.dumps(
+                    {
+                        "releases": [
+                            {
+                                "tag": "v0.2.0",
+                                "draft": False,
+                                "assets": {"pack.tar.gz": "archive-v2"},
+                            }
+                        ],
+                        "view_error": "HTTP 502 Bad Gateway",
+                    }
+                ),
+            )
             res_err = self._run_publish_script(workspace, base_env)
             self.assertNotEqual(res_err.returncode, 0)
             self.assertIn("502", res_err.stderr)
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(len(state["releases"]), 1)
 
-            # 4. Defense in depth: non-main ref with missing remote tag is rejected in Publish GitHub Release.
+            # 5. Defense in depth: non-main ref with missing remote tag is rejected in Publish GitHub Release.
             _, untagged_ws, untagged_sha = self._setup_origin_and_clone(
                 base / "untagged-branch",
                 remote_tag=None,
@@ -1532,6 +1827,232 @@ class ReleaseWorkflowTests(unittest.TestCase):
             )
             self.assertNotEqual(res_untagged.returncode, 0)
             self.assertIn("origin", res_untagged.stderr)
+
+    def test_concurrent_main_pushes_bind_version_commit_and_gate_duplicate_signing(
+        self,
+    ) -> None:
+        """Concurrent untagged main pushes bind target_sha to the first-parent VERSION commit and gate duplicate SLSA signing."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            origin, _, v010_sha = self._setup_origin_and_clone(
+                base,
+                version_text="0.1.0\n",
+                license_text="MIT License\n",
+                remote_tag="v0.1.0",
+            )
+            seed = base / "seed"
+
+            # Merge a PR branch with multiple commits changing VERSION so --first-parent binds to the main merge commit.
+            _git(seed, "checkout", "-b", "feature/bump-020")
+            _write_lf(seed / "VERSION", "0.2.0\n")
+            _git(seed, "add", "VERSION")
+            _git(seed, "commit", "-m", "PR commit 1: set VERSION 0.2.0")
+            pr_inner_sha = _git(seed, "rev-parse", "HEAD")
+            _write_lf(seed / "NOTES.txt", "pr follow-up\n")
+            _git(seed, "add", "NOTES.txt")
+            _git(seed, "commit", "-m", "PR commit 2: add notes")
+
+            _git(seed, "checkout", "main")
+            _git(
+                seed,
+                "merge",
+                "--no-ff",
+                "feature/bump-020",
+                "-m",
+                "Merge PR setting VERSION 0.2.0",
+            )
+            version_commit_sha = _git(seed, "rev-parse", "HEAD")
+            self.assertNotEqual(pr_inner_sha, version_commit_sha)
+            self.assertNotEqual(v010_sha, version_commit_sha)
+
+            # Consecutive non-version pushes arriving seconds later on main before v0.2.0 is tagged.
+            _write_lf(seed / "README.md", "# Docs update 1\n")
+            _git(seed, "add", "README.md")
+            _git(seed, "commit", "-m", "docs: update readme")
+            push_2_sha = _git(seed, "rev-parse", "HEAD")
+
+            _write_lf(seed / "README.md", "# Docs update 2\n")
+            _git(seed, "add", "README.md")
+            _git(seed, "commit", "-m", "docs: second update")
+            push_3_sha = _git(seed, "rev-parse", "HEAD")
+            _git(seed, "push", "origin", "HEAD:refs/heads/main")
+
+            gh_env, state_path = _install_fake_gh(base, {"releases": []})
+
+            # Shallow clones for all three concurrent main push runs resolve the exact same version_commit_sha.
+            for idx, push_sha in enumerate(
+                (version_commit_sha, push_2_sha, push_3_sha), start=1
+            ):
+                ws = base / f"shallow-run-{idx}"
+                _git(
+                    base,
+                    "clone",
+                    "--depth=1",
+                    "--no-tags",
+                    origin.as_uri(),
+                    str(ws),
+                )
+                pf_proc, pf_out = self._run_preflight_script(
+                    ws,
+                    {
+                        **gh_env,
+                        "EVENT_NAME": "push",
+                        "WORKFLOW_SHA": push_sha,
+                        "INPUT_PUBLISH": "",
+                        "INPUT_TAG": "",
+                        "REF_NAME": "main",
+                        "REF_TYPE": "branch",
+                    },
+                )
+                self.assertEqual(pf_proc.returncode, 0, msg=pf_proc.stderr)
+                self.assertEqual(
+                    pf_out,
+                    {
+                        "should_build": "true",
+                        "should_publish": "true",
+                        "release_tag": "v0.2.0",
+                        "target_sha": version_commit_sha,
+                    },
+                )
+
+            # Prepare release workspace checked out at version_commit_sha (matching jobs.release checkout).
+            release_ws = base / "release-ws"
+            _git(base, "clone", origin.as_uri(), str(release_ws))
+            _git(release_ws, "checkout", "--detach", version_commit_sha)
+            dist_dir = release_ws / "dist" / "release"
+            dist_dir.mkdir(parents=True)
+            _write_lf(dist_dir / "pack.tar.gz", "verified-archive-0.2.0")
+
+            rel_env = {
+                **gh_env,
+                "EVENT_NAME": "push",
+                "GH_REPO": "fderuiter/fred-skills",
+                "GITHUB_SHA": push_2_sha,
+                "INPUT_TAG": "",
+                "REF_NAME": "main",
+                "REF_TYPE": "branch",
+                "RELEASE_TAG": "v0.2.0",
+                "TARGET_SHA": version_commit_sha,
+            }
+
+            # Run 1 under release lock: prerequisites pass, release_state outputs should_publish=true, publish creates tag & release.
+            prereq_1 = self._run_verification_script(release_ws, rel_env)
+            self.assertEqual(prereq_1.returncode, 0, msg=prereq_1.stderr)
+            state_1_proc, state_1_out = self._run_release_state_script(
+                release_ws, rel_env
+            )
+            self.assertEqual(state_1_proc.returncode, 0, msg=state_1_proc.stderr)
+            self.assertEqual(state_1_out, {"should_publish": "true"})
+
+            pub_1 = self._run_publish_script(release_ws, rel_env)
+            self.assertEqual(pub_1.returncode, 0, msg=pub_1.stderr)
+            self.assertIn(
+                version_commit_sha,
+                _git(
+                    release_ws,
+                    "ls-remote",
+                    "--refs",
+                    origin.as_uri(),
+                    "refs/tags/v0.2.0",
+                ),
+            )
+
+            # Run 2 under release lock after Run 1 published: prerequisites pass and release_state gates off SLSA signing.
+            prereq_2 = self._run_verification_script(release_ws, rel_env)
+            self.assertEqual(prereq_2.returncode, 0, msg=prereq_2.stderr)
+            state_2_proc, state_2_out = self._run_release_state_script(
+                release_ws, rel_env
+            )
+            self.assertEqual(state_2_proc.returncode, 0, msg=state_2_proc.stderr)
+            self.assertEqual(state_2_out, {"should_publish": "false"})
+
+            # Even if an in-flight main push bound a different origin/main commit SHA than an already-published tag,
+            # Verify release prerequisites allows it on main ONLY when isDraft=false and rejects drafts/5xx/tag/dispatch/unmerged.
+            later_ws = base / "later-main-ws"
+            _git(base, "clone", origin.as_uri(), str(later_ws))
+            _git(later_ws, "checkout", "--detach", push_3_sha)
+            mismatch_main_env = {
+                **gh_env,
+                "EVENT_NAME": "push",
+                "GH_REPO": "fderuiter/fred-skills",
+                "GITHUB_SHA": push_3_sha,
+                "INPUT_TAG": "",
+                "REF_NAME": "main",
+                "REF_TYPE": "branch",
+                "RELEASE_TAG": "v0.2.0",
+                "TARGET_SHA": push_3_sha,
+            }
+            prereq_published_mismatch = self._run_verification_script(
+                later_ws, mismatch_main_env
+            )
+            self.assertEqual(
+                prereq_published_mismatch.returncode,
+                0,
+                msg=prereq_published_mismatch.stderr,
+            )
+
+            # v* tag push and workflow_dispatch still exit 1 on tag mismatch even when already published.
+            for bad_trigger_env in (
+                {
+                    **mismatch_main_env,
+                    "EVENT_NAME": "push",
+                    "REF_TYPE": "tag",
+                    "REF_NAME": "v0.2.0",
+                },
+                {
+                    **mismatch_main_env,
+                    "EVENT_NAME": "workflow_dispatch",
+                    "REF_TYPE": "branch",
+                    "REF_NAME": "main",
+                },
+            ):
+                bad_trig = self._run_verification_script(later_ws, bad_trigger_env)
+                self.assertNotEqual(bad_trig.returncode, 0)
+                self.assertIn("expected", bad_trig.stderr)
+
+            # Draft release or HTTP 5xx error on tag mismatch exits 1 even on main push.
+            _write_lf(
+                state_path,
+                json.dumps({"releases": [{"tag": "v0.2.0", "draft": True}]}),
+            )
+            prereq_draft_mismatch = self._run_verification_script(
+                later_ws, mismatch_main_env
+            )
+            self.assertNotEqual(prereq_draft_mismatch.returncode, 0)
+            self.assertIn("expected", prereq_draft_mismatch.stderr)
+
+            _write_lf(
+                state_path,
+                json.dumps(
+                    {
+                        "releases": [{"tag": "v0.2.0", "draft": False}],
+                        "view_error": "HTTP 503 Service Unavailable",
+                    }
+                ),
+            )
+            prereq_503 = self._run_verification_script(later_ws, mismatch_main_env)
+            self.assertNotEqual(prereq_503.returncode, 0)
+            self.assertIn("503", prereq_503.stderr)
+            state_503, _ = self._run_release_state_script(release_ws, rel_env)
+            self.assertNotEqual(state_503.returncode, 0)
+            self.assertIn("503", state_503.stderr)
+
+            # Unmerged remote tag outside origin/main exits 1 even on main push when isDraft=false.
+            _write_lf(
+                state_path,
+                json.dumps({"releases": [{"tag": "v0.2.0", "draft": False}]}),
+            )
+            _git(seed, "checkout", "-b", "feature/rogue-tag", v010_sha)
+            _write_lf(seed / "VERSION", "0.2.0\n")
+            _git(seed, "add", "VERSION")
+            _git(seed, "commit", "-m", "Unmerged commit")
+            _git(seed, "tag", "-f", "v0.2.0", "HEAD")
+            _git(seed, "push", "--force", "origin", "refs/tags/v0.2.0")
+            prereq_unmerged_tag = self._run_verification_script(
+                later_ws, mismatch_main_env
+            )
+            self.assertNotEqual(prereq_unmerged_tag.returncode, 0)
+            self.assertIn("expected", prereq_unmerged_tag.stderr)
 
     def test_reusable_validate_workflow_blocks_release_across_all_ci_gates(
         self,
@@ -1814,6 +2335,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("[LICENSE](../LICENSE)", doc_text)
         self.assertIn("scripts/bump_version.py", doc_text)
         self.assertIn("prepare", doc_text)
+        self.assertIn("--first-parent", doc_text)
+        self.assertIn("Check release publication state", doc_text)
+        self.assertIn("gh release delete-asset", doc_text)
 
     def _create_bump_fixture_repo(self, base_dir: Path) -> tuple[Path, Path]:
         """Build a self-contained 2-skill git repository + bare origin for SemVer bump tests."""
