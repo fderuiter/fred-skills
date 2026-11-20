@@ -57,10 +57,18 @@ class PhysicalLocationResult(dict):
 
 def _extract_region(line_start: Any, line_end: Any) -> dict[str, int] | None:
     """Normalize start and end line numbers into a SARIF region descriptor."""
-    if not isinstance(line_start, int) or line_start < 1:
+    if (
+        isinstance(line_start, bool)
+        or not isinstance(line_start, int)
+        or line_start < 1
+    ):
         return None
     end = (
-        line_end if isinstance(line_end, int) and line_end >= line_start else line_start
+        line_end
+        if not isinstance(line_end, bool)
+        and isinstance(line_end, int)
+        and line_end >= line_start
+        else line_start
     )
     return {"startLine": line_start, "endLine": end}
 

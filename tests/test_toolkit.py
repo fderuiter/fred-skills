@@ -2635,7 +2635,26 @@ class ReportTests(unittest.TestCase):
                 "version": "2.1.0",
                 "runs": [
                     {
-                        "tool": {"driver": {"name": "CodeQL", "version": "2.19.0"}},
+                        "tool": {
+                            "driver": {
+                                "name": "CodeQL",
+                                "version": "2.19.0",
+                                "rules": [
+                                    {
+                                        "id": "py/fallback-rule",
+                                        "defaultConfiguration": {"level": "note"},
+                                    },
+                                    {
+                                        "id": "py/wrong-bool-rule",
+                                        "defaultConfiguration": {"level": "error"},
+                                    },
+                                ],
+                            }
+                        },
+                        "logicalLocations": [
+                            {"name": "zero_sym"},
+                            {"name": "bool_indexed_sym"},
+                        ],
                         "results": [
                             {
                                 "ruleId": "py/suppressed-empty-status",
@@ -2658,7 +2677,8 @@ class ReportTests(unittest.TestCase):
                                         "physicalLocation": {
                                             "artifactLocation": {"uri": "app.py"},
                                             "region": {"startLine": 0, "endLine": 5},
-                                        }
+                                        },
+                                        "logicalLocations": [{"index": True}],
                                     },
                                     {
                                         "physicalLocation": {
@@ -2668,6 +2688,21 @@ class ReportTests(unittest.TestCase):
                                     },
                                 ],
                             },
+                            {
+                                "ruleId": "py/fallback-rule",
+                                "ruleIndex": True,
+                                "invocationIndex": True,
+                                "level": "HIGH",
+                                "message": {"text": "non-standard level falls back"},
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "app.py"},
+                                            "region": {"startLine": 4, "endLine": 4},
+                                        }
+                                    }
+                                ],
+                            },
                         ],
                     }
                 ],
@@ -2675,7 +2710,7 @@ class ReportTests(unittest.TestCase):
             edge_sarif_path = root / "edge.sarif"
             atomic_json(edge_sarif_path, edge_sarif)
             edge_imported = runs.import_sarif(edge_sarif_path)
-            self.assertEqual(1, len(edge_imported["observations"]))
+            self.assertEqual(2, len(edge_imported["observations"]))
             edge_obs = edge_imported["observations"][0]
             self.assertEqual(
                 [
@@ -2684,6 +2719,9 @@ class ReportTests(unittest.TestCase):
                 ],
                 edge_obs["locations"],
             )
+            fallback_obs = edge_imported["observations"][1]
+            self.assertEqual("py/fallback-rule", fallback_obs["rule"])
+            self.assertEqual("note", fallback_obs["reported_level"])
             edge_dir = root / "obs-edge"
             edge_dir.mkdir()
             atomic_json(edge_dir / "observations.json", edge_imported)

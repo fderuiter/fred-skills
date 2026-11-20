@@ -593,6 +593,25 @@ class AuditToSarifTests(unittest.TestCase):
         self.assertEqual("2.1.0", data["version"])
         self.assertEqual(1, len(data["runs"][0]["results"]))
 
+    def test_boolean_line_bounds_do_not_emit_boolean_sarif_regions(self):
+        audit_bool_start = copy.deepcopy(self.base_audit)
+        audit_bool_start["evidence"][0]["line_start"] = True
+        audit_bool_start["evidence"][0]["line_end"] = True
+        sarif_bool_start = audit_to_sarif(audit_bool_start)
+        phys_start = sarif_bool_start["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"
+        ]
+        self.assertNotIn("region", phys_start)
+
+        audit_bool_end = copy.deepcopy(self.base_audit)
+        audit_bool_end["evidence"][0]["line_start"] = 7
+        audit_bool_end["evidence"][0]["line_end"] = True
+        sarif_bool_end = audit_to_sarif(audit_bool_end)
+        phys_end = sarif_bool_end["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"
+        ]
+        self.assertEqual({"startLine": 7, "endLine": 7}, phys_end["region"])
+
     def test_large_audit_performance(self):
         """Metric 3: The conversion script converts complex audit ledgers in less than two seconds."""
         audit = copy.deepcopy(self.base_audit)

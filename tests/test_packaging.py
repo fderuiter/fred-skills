@@ -4459,6 +4459,24 @@ class PackageTests(unittest.TestCase):
         )
         self.assertEqual([], list(review_pkg.rglob("__pycache__")))
 
+        # 3. Verify multi-package batch -B -S pass still flags invalid worked examples via fallback
+        from validate_skills import _inspect_packages_batch
+
+        batch_results = {
+            pkg.name: parsed.errors
+            for pkg, parsed in _inspect_packages_batch(
+                [self.skill, review_pkg], scenario_schema=None
+            )
+        }
+        self.assertEqual([], batch_results["sample-audit"])
+        self.assertTrue(
+            any(
+                "validate_review.py" in e and "request_changes" in e
+                for e in batch_results["review-actionable-feedback"]
+            ),
+            batch_results["review-actionable-feedback"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
