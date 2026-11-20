@@ -19,112 +19,160 @@ def _is_repo_relative(raw_path: str) -> bool:
     return not (posix.is_absolute() or win.is_absolute() or ".." in posix.parts)
 
 
-def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
+def _schema_errors(data: Any, schema: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema
     except ImportError as e:
         raise RuntimeError(
             "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."
         ) from e
-    errors = [
+    return [
         (("/".join(map(str, e.absolute_path)) or "root") + ": " + e.message)
         for e in jsonschema.Draft202012Validator(schema).iter_errors(data)
     ]
-    if errors or not isinstance(data, Mapping):
-        return errors
 
-    for top_path in data.get("paths", []):
-        if isinstance(top_path, str) and not _is_repo_relative(top_path):
-            errors.append(
-                f"Deliverable path must be repository-relative (paths): {top_path}"
-            )
 
+def _check_deliverable_paths(paths: Any, label: str) -> list[str]:
+    return [
+        f"Deliverable path must be repository-relative ({label}): {raw_path}"
+        for raw_path in paths
+        if isinstance(raw_path, str) and not _is_repo_relative(raw_path)
+    ]
+
+
+def _check_top_and_coverage_paths(data: Mapping[str, Any]) -> list[str]:
+    errors = _check_deliverable_paths(data.get("paths", []), "paths")
     for cov in data.get("coverage", []):
         if isinstance(cov, Mapping):
-            for cov_path in cov.get("paths", []):
-                if isinstance(cov_path, str) and not _is_repo_relative(cov_path):
-                    errors.append(
-                        f"Deliverable path must be repository-relative (coverage.paths): {cov_path}"
-                    )
+            errors.extend(
+                _check_deliverable_paths(cov.get("paths", []), "coverage.paths")
+            )
+    return errors
 
-    seen_boundaries: set[str] = set()
-    dup_boundaries: set[str] = set()
-    for boundary in data.get("boundaries", []):
-        if not isinstance(boundary, Mapping):
+
+def _record_unique_key(
+    key: Any,
+    seen: set[str],
+    duplicates: set[str],
+    dup_prefix: str,
+    errors: list[str],
+) -> None:
+    if not isinstance(key, str):
+        return
+    if key in seen and key not in duplicates:
+        errors.append(f"{dup_prefix}: {key}")
+        duplicates.add(key)
+    seen.add(key)
+
+
+def _check_keyed_records(
+    records: Any, key_field: str, dup_prefix: str, fallback_label: str
+) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    errors: list[str] = []
+    for record in records:
+        if not isinstance(record, Mapping):
             continue
-        b_name = boundary.get("name")
-        if isinstance(b_name, str):
-            if b_name in seen_boundaries and b_name not in dup_boundaries:
-                errors.append(f"Duplicate names in boundaries: {b_name}")
-                dup_boundaries.add(b_name)
-            seen_boundaries.add(b_name)
-        for b_path in boundary.get("paths", []):
-            if isinstance(b_path, str) and not _is_repo_relative(b_path):
-                errors.append(
-                    f"Deliverable path must be repository-relative ({b_name or 'boundary'}.paths): {b_path}"
-                )
+        key = record.get(key_field)
+        _record_unique_key(key, seen, duplicates, dup_prefix, errors)
+        errors.extend(
+            _check_deliverable_paths(
+                record.get("paths", []), f"{key or fallback_label}.paths"
+            )
+        )
+    return errors
 
+
+def _index_components(
+    components: Any,
+) -> tuple[set[str], dict[str, list[str]], list[str]]:
     seen_components: set[str] = set()
     dup_components: set[str] = set()
     component_deps: dict[str, list[str]] = {}
-    for component in data.get("components", []):
+    errors: list[str] = []
+    for component in components:
         if not isinstance(component, Mapping):
             continue
         cid = component.get("id")
+        _record_unique_key(
+            cid, seen_components, dup_components, "Duplicate IDs in components", errors
+        )
         if isinstance(cid, str):
-            if cid in seen_components and cid not in dup_components:
-                errors.append(f"Duplicate IDs in components: {cid}")
-                dup_components.add(cid)
-            seen_components.add(cid)
             component_deps[cid] = [
                 dep for dep in component.get("depends_on", []) if isinstance(dep, str)
             ]
-        for c_path in component.get("paths", []):
-            if isinstance(c_path, str) and not _is_repo_relative(c_path):
-                errors.append(
-                    f"Deliverable path must be repository-relative ({cid or 'component'}.paths): {c_path}"
-                )
+        errors.extend(
+            _check_deliverable_paths(
+                component.get("paths", []), f"{cid or 'component'}.paths"
+            )
+        )
+    return seen_components, component_deps, errors
 
-    for cid, deps in component_deps.items():
-        for dep in deps:
-            if dep not in seen_components:
-                errors.append(f"Unknown component dependency {dep} in {cid}")
 
+def _visit_component(
+    node: str,
+    component_deps: Mapping[str, list[str]],
+    visiting: set[str],
+    done: set[str],
+    errors: list[str],
+) -> None:
+    if node in visiting:
+        errors.append(f"Component dependency cycle: {node}")
+        return
+    if node in done or node not in component_deps:
+        return
+    visiting.add(node)
+    for dep in component_deps[node]:
+        _visit_component(dep, component_deps, visiting, done, errors)
+    visiting.remove(node)
+    done.add(node)
+
+
+def _check_component_dependencies(
+    seen_components: set[str], component_deps: Mapping[str, list[str]]
+) -> list[str]:
+    errors = [
+        f"Unknown component dependency {dep} in {cid}"
+        for cid, deps in component_deps.items()
+        for dep in deps
+        if dep not in seen_components
+    ]
     visiting: set[str] = set()
     done: set[str] = set()
-
-    def visit_component(node: str) -> None:
-        if node in visiting:
-            errors.append(f"Component dependency cycle: {node}")
-            return
-        if node in done or node not in component_deps:
-            return
-        visiting.add(node)
-        for dep in component_deps[node]:
-            visit_component(dep)
-        visiting.remove(node)
-        done.add(node)
-
     for cid in component_deps:
-        visit_component(cid)
+        _visit_component(cid, component_deps, visiting, done, errors)
+    return errors
 
-    seen_decisions: set[str] = set()
-    dup_decisions: set[str] = set()
-    for decision in data.get("decisions", []):
-        if not isinstance(decision, Mapping):
-            continue
-        did = decision.get("id")
-        if isinstance(did, str):
-            if did in seen_decisions and did not in dup_decisions:
-                errors.append(f"Duplicate IDs in decisions: {did}")
-                dup_decisions.add(did)
-            seen_decisions.add(did)
-        for d_path in decision.get("paths", []):
-            if isinstance(d_path, str) and not _is_repo_relative(d_path):
-                errors.append(
-                    f"Deliverable path must be repository-relative ({did or 'decision'}.paths): {d_path}"
-                )
 
+def _check_components(components: Any) -> list[str]:
+    seen_components, component_deps, errors = _index_components(components)
+    errors.extend(_check_component_dependencies(seen_components, component_deps))
+    return errors
+
+
+def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
+    errors = _schema_errors(data, schema)
+    if errors or not isinstance(data, Mapping):
+        return errors
+    errors.extend(_check_top_and_coverage_paths(data))
+    errors.extend(
+        _check_keyed_records(
+            data.get("boundaries", []),
+            "name",
+            "Duplicate names in boundaries",
+            "boundary",
+        )
+    )
+    errors.extend(_check_components(data.get("components", [])))
+    errors.extend(
+        _check_keyed_records(
+            data.get("decisions", []),
+            "id",
+            "Duplicate IDs in decisions",
+            "decision",
+        )
+    )
     return errors
 
 

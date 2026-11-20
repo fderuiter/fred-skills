@@ -22,53 +22,75 @@ def _is_repo_relative_scope(raw_path: str) -> bool:
     return bool(posix.parts) and ".." not in posix.parts and posix.parts != (".",)
 
 
-def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
+def _schema_errors(data: Any, schema: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema
     except ImportError as e:
         raise RuntimeError(
             "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."
         ) from e
-    errors = [
+    return [
         (("/".join(map(str, e.absolute_path)) or "root") + ": " + e.message)
         for e in jsonschema.Draft202012Validator(schema).iter_errors(data)
     ]
+
+
+def _check_field_unique_ids(items: Any, field: str) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    errors: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = item.get("id")
+        if not isinstance(item_id, str):
+            continue
+        if item_id in seen and item_id not in duplicates:
+            errors.append(f"Duplicate IDs in {field}: {item_id}")
+            duplicates.add(item_id)
+        seen.add(item_id)
+    return errors
+
+
+def _check_unique_ids(data: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for field in ("interview_decisions", "requirements", "convergence_checks"):
+        errors.extend(_check_field_unique_ids(data.get(field), field))
+    return errors
+
+
+def _check_scope_paths(scopes: Any) -> list[str]:
+    return [
+        f"Specification file scope must be repository-relative: {scope_path}"
+        for scope_path in scopes
+        if isinstance(scope_path, str) and not _is_repo_relative_scope(scope_path)
+    ]
+
+
+def _check_convergence_status(data: Mapping[str, Any]) -> list[str]:
+    if data.get("status") != "converged":
+        return []
+    non_aligned = [
+        str(chk.get("id", "unknown"))
+        for chk in data.get("convergence_checks", [])
+        if isinstance(chk, Mapping) and chk.get("status") != "aligned"
+    ]
+    if non_aligned:
+        return [
+            f"Status 'converged' conflicts with non-aligned convergence_checks: {', '.join(non_aligned)}"
+        ]
+    return []
+
+
+def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
+    errors = _schema_errors(data, schema)
     if errors or not isinstance(data, Mapping):
         return errors
-
-    for field in ("interview_decisions", "requirements", "convergence_checks"):
-        items = data.get(field)
-        if not isinstance(items, list):
-            continue
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for item in items:
-            if not isinstance(item, Mapping):
-                continue
-            item_id = item.get("id")
-            if isinstance(item_id, str):
-                if item_id in seen and item_id not in duplicates:
-                    errors.append(f"Duplicate IDs in {field}: {item_id}")
-                    duplicates.add(item_id)
-                seen.add(item_id)
-
-    for scope_path in data.get("new_file_scopes", []):
-        if isinstance(scope_path, str) and not _is_repo_relative_scope(scope_path):
-            errors.append(
-                f"Specification file scope must be repository-relative: {scope_path}"
-            )
-
-    if data.get("status") == "converged":
-        non_aligned = [
-            str(chk.get("id", "unknown"))
-            for chk in data.get("convergence_checks", [])
-            if isinstance(chk, Mapping) and chk.get("status") != "aligned"
-        ]
-        if non_aligned:
-            errors.append(
-                f"Status 'converged' conflicts with non-aligned convergence_checks: {', '.join(non_aligned)}"
-            )
-
+    errors.extend(_check_unique_ids(data))
+    errors.extend(_check_scope_paths(data.get("new_file_scopes", [])))
+    errors.extend(_check_convergence_status(data))
     return errors
 
 
