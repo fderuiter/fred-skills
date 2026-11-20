@@ -4160,6 +4160,116 @@ class PackageTests(unittest.TestCase):
             guarded_errors,
         )
 
+    def test_all_non_test_subprocess_sites_set_explicit_timeouts_and_handle_cli_exits(
+        self,
+    ) -> None:
+        import ast
+        import contextlib
+        import importlib.util
+        import io
+
+        import validate_skills
+
+        # 1. Every direct subprocess.run(...) call across scripts/ and examples/ must specify timeout=
+        missing_timeout: list[str] = []
+        for search_dir in (ROOT / "scripts", ROOT / "examples"):
+            for py_path in sorted(search_dir.rglob("*.py")):
+                tree = ast.parse(py_path.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    is_subproc_run = (
+                        isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "subprocess"
+                        and node.func.attr == "run"
+                    )
+                    if is_subproc_run and not any(
+                        kw.arg == "timeout" for kw in node.keywords
+                    ):
+                        rel = py_path.relative_to(ROOT).as_posix()
+                        missing_timeout.append(f"{rel}:L{node.lineno}")
+        self.assertEqual(
+            [],
+            missing_timeout,
+            f"Unbounded subprocess.run call(s) missing timeout=: {missing_timeout}",
+        )
+
+        # 2. validate_skills.py routes Git timeouts to FredCliError and returns exit code 2 cleanly
+        err_val_git = io.StringIO()
+        with (
+            patch(
+                "skill_tools.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["git", "rev-parse"], timeout=30
+                ),
+            ),
+            contextlib.redirect_stderr(err_val_git),
+        ):
+            rc_val_git = validate_skills.main(["--root", str(ROOT), "--no-ledger"])
+        self.assertEqual(2, rc_val_git)
+        self.assertIn("Error [git_timeout]:", err_val_git.getvalue())
+        self.assertIn("Hint:", err_val_git.getvalue())
+
+        err_val_raw = io.StringIO()
+        with (
+            patch(
+                "validate_skills.validate_with_telemetry",
+                side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=30),
+            ),
+            contextlib.redirect_stderr(err_val_raw),
+        ):
+            rc_val_raw = validate_skills.main(["--root", str(self.root), "--no-ledger"])
+        self.assertEqual(2, rc_val_raw)
+        self.assertIn("Error [subprocess_timeout]:", err_val_raw.getvalue())
+
+        # 3. run_checks.py enforces 300s fast phases, 900s tests phase, and returns non-zero cleanly on timeout
+        observed_timeouts: list[tuple[str, object]] = []
+
+        def record_timeout_run(
+            cmd: list[str], *_args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            observed_timeouts.append((cmd[-1], kwargs.get("timeout")))
+            if "-v" in cmd:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=900)
+            return subprocess.CompletedProcess(cmd, returncode=0)
+
+        out_chk, err_chk = io.StringIO(), io.StringIO()
+        with (
+            patch("run_checks.subprocess.run", side_effect=record_timeout_run),
+            contextlib.redirect_stdout(out_chk),
+            contextlib.redirect_stderr(err_chk),
+        ):
+            rc_chk = run_checks(["lint", "tests"], root=ROOT)
+        self.assertNotEqual(0, rc_chk)
+        self.assertEqual([(".", 300), ("-v", 900)], observed_timeouts)
+        self.assertIn("timed out after 900s", err_chk.getvalue())
+        self.assertNotIn("Traceback", err_chk.getvalue())
+
+        # 4. examples/walkthrough/run_demo.py enforces timeout=30 and returns exit code 1 cleanly on timeout
+        demo_path = ROOT / "examples/walkthrough/run_demo.py"
+        spec = importlib.util.spec_from_file_location("run_demo_mod", demo_path)
+        assert spec is not None and spec.loader is not None
+        run_demo_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(run_demo_mod)
+
+        demo_out = self.root / "demo-timeout-out"
+        err_demo = io.StringIO()
+        with (
+            patch.object(
+                run_demo_mod.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["node", "check.mjs"], timeout=30
+                ),
+            ),
+            contextlib.redirect_stderr(err_demo),
+        ):
+            rc_demo = run_demo_mod.main(["--output", str(demo_out)])
+        self.assertEqual(1, rc_demo)
+        self.assertIn("Error [subprocess_timeout]:", err_demo.getvalue())
+        self.assertNotIn("Traceback", err_demo.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

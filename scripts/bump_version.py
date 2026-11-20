@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -16,6 +17,16 @@ from typing import Any, Literal
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from skill_tools import (
+    FredCliError,
+    git_blob_bytes,
+    git_tag_exists,
+    run_local_git,
+)
 
 DISTRIBUTABLE_PATHS: tuple[str, ...] = (
     "skills/",
@@ -115,28 +126,11 @@ def _has_git_repo(root: Path) -> bool:
 
 
 def _tag_exists(root: Path, tag: str) -> bool:
-    if not _has_git_repo(root):
-        return False
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
+    return git_tag_exists(root, tag)
 
 
 def _git_blob_bytes(root: Path, rev_path: str) -> bytes | None:
-    proc = subprocess.run(
-        ["git", "cat-file", "blob", rev_path],
-        cwd=root,
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
+    return git_blob_bytes(root, rev_path)
 
 
 def _git_json_dict(root: Path, tag: str, rel_path: str) -> dict[str, Any] | None:
@@ -157,17 +151,13 @@ def _worktree_json_dict(root: Path, rel_path: str) -> dict[str, Any] | None:
 
 def detect_distributable_changes(root: Path, tag: str) -> list[str]:
     """Return sorted distributable file paths modified between refs/tags/<tag> and HEAD."""
-    proc = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--name-only",
-            f"refs/tags/{tag}..HEAD",
-            "--",
-            *DISTRIBUTABLE_PATHS,
-        ],
-        cwd=root,
-        capture_output=True,
+    proc = run_local_git(
+        root,
+        "diff",
+        "--name-only",
+        f"refs/tags/{tag}..HEAD",
+        "--",
+        *DISTRIBUTABLE_PATHS,
         text=True,
         check=True,
     )
@@ -573,12 +563,13 @@ def render_release_notes(root: Path, version: str) -> str:
 
 
 def _list_semver_tags(root: Path) -> list[str]:
-    if not _has_git_repo(root):
+    if not _has_git_repo(root) or not shutil.which("git"):
         return []
-    proc = subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/v*"],
-        cwd=root,
-        capture_output=True,
+    proc = run_local_git(
+        root,
+        "for-each-ref",
+        "--format=%(refname:strip=2)",
+        "refs/tags/v*",
         text=True,
         check=False,
     )
@@ -747,10 +738,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _format_timeout_cmd(cmd: object) -> str:
+    if isinstance(cmd, bytes):
+        return cmd.decode("utf-8", errors="replace")
+    if isinstance(cmd, str):
+        return cmd
+    if isinstance(cmd, (list, tuple)):
+        return " ".join(str(part) for part in cmd)
+    return str(cmd)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         result = bump_repository_version(args.root.resolve(), dry_run=args.dry_run)
+    except FredCliError as exc:
+        print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
+        if exc.hint:
+            print(f"Hint: {exc.hint}", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired as exc:
+        print(
+            f"Error [subprocess_timeout]: Command timed out after {exc.timeout:g}s: {_format_timeout_cmd(exc.cmd)}",
+            file=sys.stderr,
+        )
+        return 1
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

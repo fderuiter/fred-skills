@@ -5,16 +5,17 @@ from __future__ import annotations
 import json
 import math
 import re
+import shutil
+import subprocess
 from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from html import unescape
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar, overload
 from urllib.parse import unquote, urlsplit
 
-import yaml
-
 __all__ = [
+    "DEFAULT_GIT_TIMEOUT",
     "DOMAIN_KIND_KEY_SETS",
     "DOMAIN_KIND_TO_SUITE",
     "ROOT",
@@ -29,6 +30,8 @@ __all__ = [
     "extract_link_fragment",
     "extract_relative_links",
     "find_deep_reference_chains",
+    "git_blob_bytes",
+    "git_tag_exists",
     "infer_suite_and_siblings",
     "infer_suite_name",
     "is_audit_ledger_shape",
@@ -37,6 +40,8 @@ __all__ = [
     "read_suites_catalog",
     "recipe_to_suite_map",
     "resolve_relative_link_target",
+    "run_bounded_subprocess",
+    "run_local_git",
     "skill_to_suite_map",
     "slugify_markdown_heading",
     "suite_for_skills",
@@ -47,6 +52,7 @@ __all__ = [
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_GIT_TIMEOUT = 30
 
 
 class FredCliError(ValueError):
@@ -70,6 +76,167 @@ class FredCliError(ValueError):
             "message": self.message,
             "hint": self.hint,
         }
+
+
+@overload
+def run_bounded_subprocess(
+    cmd: Sequence[str],
+    *,
+    timeout: float,
+    cwd: Path | str | None = None,
+    env: Mapping[str, str] | None = None,
+    text: Literal[True],
+    check: bool = False,
+    capture_output: bool = True,
+    timeout_code: str = "subprocess_timeout",
+    timeout_hint: str | None = None,
+) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_bounded_subprocess(
+    cmd: Sequence[str],
+    *,
+    timeout: float,
+    cwd: Path | str | None = None,
+    env: Mapping[str, str] | None = None,
+    text: Literal[False] = False,
+    check: bool = False,
+    capture_output: bool = True,
+    timeout_code: str = "subprocess_timeout",
+    timeout_hint: str | None = None,
+) -> subprocess.CompletedProcess[bytes]: ...
+
+
+def run_bounded_subprocess(
+    cmd: Sequence[str],
+    *,
+    timeout: float,
+    cwd: Path | str | None = None,
+    env: Mapping[str, str] | None = None,
+    text: bool = False,
+    check: bool = False,
+    capture_output: bool = True,
+    timeout_code: str = "subprocess_timeout",
+    timeout_hint: str | None = None,
+) -> subprocess.CompletedProcess[Any]:
+    """Run a child process with an explicit timeout, converting TimeoutExpired to FredCliError."""
+    argv = [str(part) for part in cmd]
+    try:
+        return subprocess.run(
+            argv,
+            cwd=cwd,
+            env=env,
+            capture_output=capture_output,
+            text=text,
+            timeout=timeout,
+            check=check,
+        )
+    except subprocess.TimeoutExpired as exc:
+        display = " ".join(argv)
+        raise FredCliError(
+            f"Command timed out after {timeout:g}s: {display}",
+            code=timeout_code,
+            hint=timeout_hint
+            or "Retry once background filesystem locks or stalled child processes clear.",
+        ) from exc
+
+
+@overload
+def run_local_git(
+    repo: Path,
+    *args: str,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+    text: Literal[True],
+    check: bool = False,
+) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_local_git(
+    repo: Path,
+    *args: str,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+    text: Literal[False] = False,
+    check: bool = False,
+) -> subprocess.CompletedProcess[bytes]: ...
+
+
+def run_local_git(
+    repo: Path,
+    *args: str,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+    text: bool = False,
+    check: bool = False,
+) -> subprocess.CompletedProcess[Any]:
+    """Execute a local Git command with core.fsmonitor=false and a bounded timeout."""
+    cmd = ["git", "-c", "core.fsmonitor=false", "-C", str(repo), *args]
+    hint = (
+        "Git timed out inspecting the local repository; check for stale "
+        ".git/index.lock files or stalled filesystem monitors and retry."
+    )
+    if text:
+        return run_bounded_subprocess(
+            cmd,
+            timeout=timeout,
+            text=True,
+            check=check,
+            timeout_code="git_timeout",
+            timeout_hint=hint,
+        )
+    return run_bounded_subprocess(
+        cmd,
+        timeout=timeout,
+        text=False,
+        check=check,
+        timeout_code="git_timeout",
+        timeout_hint=hint,
+    )
+
+
+def git_blob_bytes(
+    repo: Path,
+    rev_path: str,
+    *,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+) -> bytes | None:
+    """Read raw blob bytes at rev_path from the local repository, or None when absent."""
+    if not (repo / ".git").exists() or not shutil.which("git"):
+        return None
+    proc = run_local_git(
+        repo,
+        "cat-file",
+        "blob",
+        rev_path,
+        timeout=timeout,
+        text=False,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def git_tag_exists(
+    repo: Path,
+    tag: str,
+    *,
+    timeout: float = DEFAULT_GIT_TIMEOUT,
+) -> bool:
+    """Return True when refs/tags/<tag> resolves to a commit in the local repository."""
+    if not (repo / ".git").exists() or not shutil.which("git"):
+        return False
+    proc = run_local_git(
+        repo,
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        f"refs/tags/{tag}^{{commit}}",
+        timeout=timeout,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0
 
 
 def read_json_object(
@@ -337,6 +504,8 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
 
 
 def read_frontmatter(path: Path) -> tuple[dict, str]:
+    import yaml
+
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":

@@ -36,12 +36,24 @@ def git(repo: Path, *args: str, required: bool = False) -> str | None:
                 hint="Install Git or run in a non-diff mode such as --mode investigate.",
             )
         return None
-    result = subprocess.run(
-        ["git", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
-        check=False,
-        capture_output=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if required:
+            raise FredCliError(
+                f"Git command timed out after {exc.timeout:g}s in '{repo}'",
+                code="git_timeout",
+                hint=(
+                    "Check for stale .git/index.lock files or stalled filesystem "
+                    "monitors, or run in a non-diff mode without --base."
+                ),
+            ) from exc
+        return None
     if result.returncode:
         if required:
             raise FredCliError(
