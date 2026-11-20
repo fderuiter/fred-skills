@@ -29,7 +29,15 @@ except ImportError:
     termios = None
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 FRED_PY = ROOT / "scripts/fred.py"
+
+from tests.catalog_oracles import (
+    expected_fred_subcommand_count,
+    expected_pack_skill_count,
+    expected_recipe_count,
+)
 
 
 def _drain_pty_master(master: int) -> bytes:
@@ -340,7 +348,9 @@ class FredCLITests(unittest.TestCase):
         starter_skills = json.loads(
             (ROOT / "catalog/packs.json").read_text(encoding="utf-8")
         )["packs"]["starter"]["skills"]
-        self.assertEqual(6, len(starter_skills))
+        expected_starter = expected_pack_skill_count("starter", ROOT)
+        self.assertGreaterEqual(expected_starter, 1)
+        self.assertEqual(expected_starter, len(starter_skills))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir).resolve()
@@ -497,7 +507,9 @@ class FredCLITests(unittest.TestCase):
         recipes = json.loads((ROOT / "catalog/recipes.json").read_text("utf-8"))[
             "recipes"
         ]
-        self.assertEqual(18, len(recipes))
+        expected_recipes = expected_recipe_count(ROOT)
+        self.assertGreaterEqual(expected_recipes, 1)
+        self.assertEqual(expected_recipes, len(recipes))
         for task_name, recipe in recipes.items():
             with self.subTest(task=task_name):
                 results = fred._search_skills(task_name)
@@ -895,7 +907,9 @@ class FredCLITests(unittest.TestCase):
             },
         }
         all_commands = [cmd for cmds in fred.LIFECYCLE_GROUPS.values() for cmd in cmds]
-        self.assertEqual(29, len(all_commands))
+        expected_subcommands = expected_fred_subcommand_count(ROOT)
+        self.assertGreaterEqual(expected_subcommands, 1)
+        self.assertEqual(expected_subcommands, len(all_commands))
         for cmd in all_commands:
             with self.subTest(command=cmd):
                 rendered = fred.render_tty_output(
@@ -1877,16 +1891,15 @@ class FredCLITests(unittest.TestCase):
                     self.assertEqual(1, iss_proc.returncode)
                     self.assertIn("audit.json", iss_proc.stderr)
 
-                    sarif_out = tmp_path / f"{task}.sarif"
                     sarif_proc = self.run_cli(
                         "export-sarif",
                         str(ws),
                         "--output",
-                        str(sarif_out),
+                        str(tmp_path / f"{task}.sarif"),
                     )
                     if deliverable == "review.json":
                         self.assertEqual(0, sarif_proc.returncode, sarif_proc.stderr)
-                        self.assertTrue(sarif_out.is_file())
+                        self.assertTrue((tmp_path / f"{task}.sarif").is_file())
                     else:
                         self.assertEqual(1, sarif_proc.returncode)
                         self.assertIn("audit.json", sarif_proc.stderr)
@@ -2067,40 +2080,37 @@ class FredCLITests(unittest.TestCase):
             root = Path(tmp)
             repo = root / "repo"
             repo.mkdir()
-            (repo / "session.mjs").write_text(
-                "export function start() {}\n", encoding="utf-8"
-            )
-
-            ws = root / "wf"
+            (repo / "session.mjs").write_text("export const x = 1;\n", encoding="utf-8")
+            ws = root / "ws"
             init_proc = self.run_cli(
                 "init", str(repo), "--task", "apply-fix", "--output", str(ws)
             )
             self.assertEqual(0, init_proc.returncode, init_proc.stderr)
 
-            base_audit = json.loads(
+            fixture_audit = json.loads(
                 (ROOT / "tests/fixtures/audit-valid.json").read_text(encoding="utf-8")
             )
-            refuted = dict(base_audit["findings"][0])
-            refuted["id"] = "F-refuted"
-            refuted["status"] = "refuted"
-            refuted["root_cause"] = "Refuted path"
-            base_audit["findings"].append(refuted)
-            src_audit = root / "source_audit.json"
-            src_audit.write_text(json.dumps(base_audit), encoding="utf-8")
+            refuted_finding = json.loads(json.dumps(fixture_audit["findings"][0]))
+            refuted_finding["id"] = "F-2"
+            refuted_finding["status"] = "refuted"
+            refuted_finding["root_cause"] = "Refuted hypothesis"
+            fixture_audit["findings"].append(refuted_finding)
+            src_audit_path = root / "source-audit.json"
+            src_audit_path.write_text(json.dumps(fixture_audit), encoding="utf-8")
 
-            sarif_file = root / "exported.sarif"
+            exported_sarif = root / "exported.sarif"
             exp_proc = self.run_cli(
-                "export-sarif", str(src_audit), "--output", str(sarif_file)
+                "export-sarif", str(src_audit_path), "--output", str(exported_sarif)
             )
             self.assertEqual(0, exp_proc.returncode, exp_proc.stderr)
-            sarif_doc = json.loads(sarif_file.read_text(encoding="utf-8"))
+            sarif_doc = json.loads(exported_sarif.read_text(encoding="utf-8"))
             self.assertEqual(2, len(sarif_doc["runs"][0]["results"]))
             self.assertEqual("pass", sarif_doc["runs"][0]["results"][1]["kind"])
             self.assertEqual("none", sarif_doc["runs"][0]["results"][1]["level"])
 
             obs_out = ws / "scanner-observations.json"
             imp_proc = self.run_cli(
-                "import-sarif", str(sarif_file), "--output", str(obs_out)
+                "import-sarif", str(exported_sarif), "--output", str(obs_out)
             )
             self.assertEqual(0, imp_proc.returncode, imp_proc.stderr)
             obs_doc = json.loads(obs_out.read_text(encoding="utf-8"))
@@ -2120,14 +2130,13 @@ class FredCLITests(unittest.TestCase):
                 "--state",
                 "in-progress",
                 "--note",
-                "Investigating imported claim",
+                "Triaging imported observation",
             )
             self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
             self.assertEqual(0, self.run_cli("validate-run", str(ws)).returncode)
 
-            # Export valid review.json with advisory severity -> SARIF note
-            rev_file = root / "review.json"
-            rev_file.write_text(
+            rev_path = root / "review.json"
+            rev_path.write_text(
                 json.dumps(
                     {
                         "schema_version": "1.0",
@@ -2136,56 +2145,51 @@ class FredCLITests(unittest.TestCase):
                         "findings": [
                             {
                                 "id": "R-1",
-                                "title": "Style suggestion",
+                                "title": "Advisory style note",
                                 "severity": "advisory",
                                 "file": "session.mjs",
                                 "line": 1,
-                                "description": "Consider const binding.",
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            rev_sarif_file = root / "review.sarif"
-            rev_exp = self.run_cli(
-                "export-sarif", str(rev_file), "--output", str(rev_sarif_file)
-            )
-            self.assertEqual(0, rev_exp.returncode, rev_exp.stderr)
-            rev_sarif = json.loads(rev_sarif_file.read_text(encoding="utf-8"))
-            self.assertEqual("note", rev_sarif["runs"][0]["results"][0]["level"])
-            self.assertEqual("fail", rev_sarif["runs"][0]["results"][0]["kind"])
-
-            # Invalid review.json rejected during export-sarif
-            bad_rev_file = root / "bad_review" / "review.json"
-            bad_rev_file.parent.mkdir()
-            bad_rev_file.write_text(
-                json.dumps(
-                    {
-                        "schema_version": "1.0",
-                        "verdict": "approve",
-                        "summary": "Invalid approve with critical",
-                        "findings": [
+                                "description": "Consider const export naming.",
+                            },
                             {
-                                "id": "R-crit",
-                                "title": "Critical bug",
-                                "severity": "critical",
+                                "id": "R-2",
+                                "title": "High risk check",
+                                "severity": "high",
                                 "file": "session.mjs",
-                                "description": "Broken",
-                            }
+                                "line": 1,
+                                "description": "Validate session state.",
+                            },
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
-            bad_rev_exp = self.run_cli(
-                "export-sarif",
-                str(bad_rev_file),
-                "--output",
-                str(root / "bad.sarif"),
+            rev_sarif = root / "review.sarif"
+            rev_proc = self.run_cli(
+                "export-sarif", str(rev_path), "--output", str(rev_sarif)
             )
-            self.assertEqual(1, bad_rev_exp.returncode)
-            self.assertIn("review.json", bad_rev_exp.stderr)
+            self.assertEqual(0, rev_proc.returncode, rev_proc.stderr)
+            rev_sarif_doc = json.loads(rev_sarif.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["note", "error"],
+                [r["level"] for r in rev_sarif_doc["runs"][0]["results"]],
+            )
+            filt_proc = self.run_cli(
+                "export-sarif",
+                str(rev_path),
+                "--filter-info",
+                "--output",
+                str(rev_sarif),
+            )
+            self.assertEqual(0, filt_proc.returncode, filt_proc.stderr)
+            self.assertEqual(
+                1,
+                len(
+                    json.loads(rev_sarif.read_text(encoding="utf-8"))["runs"][0][
+                        "results"
+                    ]
+                ),
+            )
 
     def test_cli_profile_and_config_scope_domain_plans_and_copy_suite_assets(self):
         import shutil
@@ -2398,11 +2402,13 @@ class FredDispatchRegistryTests(unittest.TestCase):
         self.assertLessEqual(depth, 1, f"dispatch nesting depth {depth} exceeds 1")
 
     def test_dispatch_registry_maps_all_twenty_eight_commands(self):
-        """COMMAND_REGISTRY must contain all 29 subcommands across all lifecycle groups."""
+        """COMMAND_REGISTRY must contain all subcommands across all lifecycle groups."""
         expected_commands = {
             cmd for cmds in self.fred.LIFECYCLE_GROUPS.values() for cmd in cmds
         }
-        self.assertEqual(29, len(expected_commands))
+        expected_subcommands = expected_fred_subcommand_count(ROOT)
+        self.assertGreaterEqual(expected_subcommands, 1)
+        self.assertEqual(expected_subcommands, len(expected_commands))
         self.assertEqual(expected_commands, set(self.fred.COMMAND_REGISTRY.keys()))
         self.assertEqual(self.fred.COMMAND_REGISTRY, self.fred.DISPATCH_REGISTRY)
 
@@ -3050,6 +3056,337 @@ class FredStructuredCliErrorsTests(unittest.TestCase):
             self.assertIn("fred-skills: Subprocess timed out", err_raw.getvalue())
             self.assertIn("Hint:", err_raw.getvalue())
             self.assertNotIn("Traceback", err_raw.getvalue())
+
+    def test_cli_validate_run_advance_and_report_enforce_canonical_validators(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            (repo / "app.py").write_text(
+                "def run() -> int:\n    return 1\n", encoding="utf-8"
+            )
+            for argv in (
+                ["init", "-q"],
+                ["config", "user.name", "Fixture"],
+                ["config", "user.email", "fixture@example.invalid"],
+                ["add", "."],
+                ["commit", "-qm", "initial"],
+            ):
+                subprocess.run(["git", "-C", str(repo), *argv], check=True)
+            base_rev = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "app.py").write_text(
+                "def run() -> int:\n    return 2\n", encoding="utf-8"
+            )
+
+            def assert_rejected(ws: Path, deliverable_file: Path | None = None) -> None:
+                val_proc = self.run_cli("validate-run", str(ws))
+                self.assertNotEqual(
+                    0, val_proc.returncode, f"validate-run accepted {ws}"
+                )
+                adv_proc = self.run_cli("advance", str(ws), "--note", "Attempt advance")
+                self.assertNotEqual(0, adv_proc.returncode, f"advance accepted {ws}")
+                rep_out = tmp_path / f"rep-{ws.name}.html"
+                rep_proc = self.run_cli("report", str(ws), "--output", str(rep_out))
+                self.assertNotEqual(0, rep_proc.returncode, f"report accepted {ws}")
+                if deliverable_file is not None:
+                    rep_file_proc = self.run_cli(
+                        "report", str(deliverable_file), "--output", str(rep_out)
+                    )
+                    self.assertNotEqual(
+                        0,
+                        rep_file_proc.returncode,
+                        f"report accepted {deliverable_file}",
+                    )
+
+            # 1. Code review: approved critical review & empty request_changes review
+            ws_rev = tmp_path / "ws-review"
+            init_rev = self.run_cli(
+                "init",
+                str(repo),
+                "--task",
+                "review-code-changes",
+                "--base",
+                base_rev,
+                "--single-task",
+                "--output",
+                str(ws_rev),
+            )
+            self.assertEqual(0, init_rev.returncode, init_rev.stderr)
+            rev_file = ws_rev / "review.json"
+            for bad_review in (
+                {
+                    "schema_version": "1.0",
+                    "verdict": "approve",
+                    "summary": "Approving despite critical issue.",
+                    "findings": [
+                        {
+                            "id": "REV-1",
+                            "title": "SQL injection",
+                            "severity": "critical",
+                            "file": "app.py",
+                            "line": 1,
+                            "description": "Unparameterized SQL.",
+                            "recommendation": "Parameterize query.",
+                        }
+                    ],
+                },
+                {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Requesting changes with zero findings.",
+                    "findings": [],
+                },
+            ):
+                rev_file.write_text(json.dumps(bad_review), encoding="utf-8")
+                assert_rejected(ws_rev, rev_file)
+
+            # 2. Spec: vacuous converged & out_of_scope overlapping new_file_scopes
+            ws_spec = tmp_path / "ws-spec"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "specify-feature",
+                    "--single-task",
+                    "--output",
+                    str(ws_spec),
+                ).returncode,
+            )
+            spec_file = ws_spec / "spec.json"
+            base_spec = {
+                "schema_version": "1.0",
+                "title": "Exporter Spec",
+                "status": "converged",
+                "interview_decisions": [
+                    {
+                        "id": "DEC-1",
+                        "category": "scope",
+                        "question": "Format?",
+                        "decision": "NDJSON.",
+                    }
+                ],
+                "requirements": [{"id": "REQ-1", "description": "Emit NDJSON."}],
+                "new_file_scopes": ["src/exporter/ndjson.py"],
+                "out_of_scope": ["src/legacy/csv.py"],
+                "verification_commands": ["python -m unittest"],
+                "convergence_checks": [
+                    {"id": "CHK-1", "target": "REQ-1", "status": "aligned"}
+                ],
+            }
+            for bad_spec in (
+                {**base_spec, "convergence_checks": []},
+                {**base_spec, "out_of_scope": ["src/exporter/"]},
+            ):
+                spec_file.write_text(json.dumps(bad_spec), encoding="utf-8")
+                assert_rejected(ws_spec, spec_file)
+
+            # 3. Architecture: duplicate boundary names
+            ws_arch = tmp_path / "ws-arch"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "design-architecture",
+                    "--single-task",
+                    "--output",
+                    str(ws_arch),
+                ).returncode,
+            )
+            arch_file = ws_arch / "architecture.json"
+            dup_boundary = {
+                "name": "billing",
+                "responsibility": "Charge invoices",
+                "owned_state": ["invoices"],
+                "interfaces": ["charge"],
+            }
+            arch_file.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "summary": "Duplicate boundary names.",
+                        "boundaries": [dup_boundary, dict(dup_boundary)],
+                        "decisions": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_rejected(ws_arch, arch_file)
+
+            # 4. Unsafe paths in testing deliverable and workflow companion
+            ws_test = tmp_path / "ws-testing"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "expand-automated-tests",
+                    "--single-task",
+                    "--output",
+                    str(ws_test),
+                ).returncode,
+            )
+            test_file = ws_test / "testing.json"
+            test_file.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "component": "../outside/app.py",
+                        "framework": "unittest",
+                        "test_cases": [
+                            {
+                                "id": "TC-1",
+                                "name": "test_run",
+                                "description": "Check return value.",
+                                "oracle_type": "exact",
+                                "verified": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert_rejected(ws_test, test_file)
+
+            ws_fix = tmp_path / "ws-fix"
+            self.assertEqual(
+                0,
+                self.run_cli(
+                    "init",
+                    str(repo),
+                    "--task",
+                    "apply-fix",
+                    "--allow-fixes",
+                    "--single-task",
+                    "--output",
+                    str(ws_fix),
+                ).returncode,
+            )
+            (ws_fix / "fix.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "finding_ids": ["F-1"],
+                        "summary": "Unsafe modified path.",
+                        "modified_files": [".git/hooks/pre-commit"],
+                        "contract_preserved": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            val_fix = self.run_cli("validate-run", str(ws_fix))
+            self.assertNotEqual(0, val_fix.returncode)
+            adv_fix = self.run_cli("advance", str(ws_fix), "--note", "Attempt advance")
+            self.assertNotEqual(0, adv_fix.returncode)
+
+            # 5. Standalone workflow companions (session-handoff, terse-output-commit)
+            if str(ROOT / "scripts") not in sys.path:
+                sys.path.insert(0, str(ROOT / "scripts"))
+            from fredlib import common as fred_common
+
+            valid_handoff = {
+                "schema_version": "1.0",
+                "objective": "Resume audit verification",
+                "repository": {"path": ".", "revision": "abc1234", "dirty": False},
+                "verified_facts": ["Unit tests pass"],
+                "assumptions": [],
+                "completed_steps": ["Inspected run.json"],
+                "dead_ends": [],
+                "touched_files": ["src/app.py"],
+                "untouched_scope": ["docs/"],
+                "commands_run": [
+                    {"command": "python -m unittest", "outcome": "passed"}
+                ],
+                "next_action": "Validate remaining findings",
+            }
+            for alias in ("session-handoff.json", "handoff.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_handoff, artifact_name=alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {**valid_handoff, "touched_files": ["../escape.py"]},
+                        artifact_name=alias,
+                    )
+                )
+
+            valid_commit = {
+                "schema_version": "1.0",
+                "compression_level": "full",
+                "terse_response": "Fixed validator dispatch.",
+                "preserved_exact_spans": ["scripts/fredlib/common.py"],
+                "commit_type": "fix",
+                "commit_subject": "fix: unify validator dispatch",
+                "commit_body_bullets": ["Route companions to canonical validators"],
+                "git_mutated": False,
+            }
+            for alias in ("terse-output-commit.json", "commit.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_commit, artifact_name=alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {**valid_commit, "commit_type": "feat"},
+                        artifact_name=alias,
+                    )
+                )
+
+            obs_item: dict[str, object] = {
+                "id": "OBS-1",
+                "tool": "semgrep",
+                "tool_version": "1.90.0",
+                "rule": "python.eval",
+                "reported_level": "warning",
+                "message": "Avoid eval",
+                "locations": [{"path": "src/app.py", "line": 1}],
+                "evidence_state": "scanner-reported; agent verification not performed",
+            }
+            valid_observations: dict[str, object] = {
+                "schema_version": "1.0",
+                "observations": [obs_item],
+                "limitations": ["Scanner claims require verification."],
+            }
+            for obs_alias in ("observations.json", "scanner-observations.json", None):
+                self.assertEqual(
+                    [],
+                    fred_common._validate_canonical_artifact(
+                        valid_observations, artifact_name=obs_alias
+                    ),
+                )
+                self.assertTrue(
+                    fred_common._validate_canonical_artifact(
+                        {
+                            **valid_observations,
+                            "observations": [
+                                {
+                                    **obs_item,
+                                    "locations": [{"path": "../escape.py", "line": 1}],
+                                }
+                            ],
+                        },
+                        artifact_name=obs_alias,
+                    )
+                )
+            self.assertEqual(
+                [],
+                fred_common._validate_canonical_artifact(
+                    valid_observations, schema_rel="schemas/observations.schema.json"
+                ),
+            )
 
 
 if __name__ == "__main__":

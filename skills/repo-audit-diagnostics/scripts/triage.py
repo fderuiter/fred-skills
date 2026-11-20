@@ -454,7 +454,6 @@ _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
             }
         ),
     ),
-    ("observations", frozenset({"observations"})),
     ("review", frozenset({"verdict"})),
     ("testing", frozenset({"test_cases"})),
     (
@@ -469,6 +468,7 @@ _DOMAIN_KIND_KEY_SETS: tuple[tuple[str, frozenset[str]], ...] = (
         ),
     ),
     ("architecture", frozenset({"boundaries", "decisions", "components"})),
+    ("observations", frozenset({"observations"})),
     ("run", frozenset({"plan", "authority", "checkpoints"})),
 )
 

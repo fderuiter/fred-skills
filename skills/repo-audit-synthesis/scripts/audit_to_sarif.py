@@ -365,32 +365,30 @@ def _build_sarif_result(
         title, finding.get("impact", ""), finding.get("actual", ""), remedy
     )
 
-    status = finding.get("status", "")
-    is_refuted = status == "refuted"
-    result_kind = "pass" if is_refuted else "fail"
-    result_level = "none" if is_refuted and sarif_level is None else level
-
     props: dict[str, Any] = {
         "findingId": fid,
         "topic": topic,
-        "status": status,
+        "status": finding.get("status", ""),
         "severity": sev,
         "confidence": finding.get("confidence", "unknown"),
     }
     if remedy:
         props["remedy"] = remedy
 
-    return {
+    is_refuted = finding.get("status") == "refuted"
+    result: dict[str, Any] = {
         "ruleId": resolved_rule_id,
         "ruleIndex": rule_index,
-        "kind": result_kind,
-        "level": result_level,
+        "level": "none" if is_refuted else level,
         "message": {"text": msg},
         "locations": [] if locations is None else locations,
         "partialFingerprints": {FINGERPRINT_KEY: fp},
         "fingerprints": {FINGERPRINT_KEY: fp},
         "properties": props,
     }
+    if is_refuted:
+        result["kind"] = "pass"
+    return result
 
 
 def _build_evidence_map(evidence_list: Any) -> dict[str, dict[str, Any]]:
@@ -528,7 +526,6 @@ _NON_AUDIT_ARTIFACT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
             }
         ),
     ),
-    ("observations.json", frozenset({"observations"})),
     ("review.json", frozenset({"verdict"})),
     ("testing.json", frozenset({"test_cases"})),
     (
@@ -543,6 +540,7 @@ _NON_AUDIT_ARTIFACT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
         ),
     ),
     ("architecture.json", frozenset({"boundaries", "decisions", "components"})),
+    ("observations.json", frozenset({"observations"})),
     ("run.json", frozenset({"plan", "authority", "checkpoints"})),
 )
 
@@ -608,7 +606,7 @@ def _detect_domain_artifact(data: object) -> str | None:
     return None
 
 
-_REVIEW_ALLOWED_KEYS = frozenset(
+_REVIEW_TOP_KEYS = frozenset(
     {
         "schema_version",
         "run_id",
@@ -620,10 +618,10 @@ _REVIEW_ALLOWED_KEYS = frozenset(
         "findings",
     }
 )
-_REVIEW_REQUIRED_KEYS = frozenset({"schema_version", "verdict", "summary", "findings"})
+_REVIEW_REQUIRED_KEYS = ("schema_version", "verdict", "summary", "findings")
 _REVIEW_VERDICTS = frozenset({"approve", "request_changes", "comment"})
 _REVIEW_SEVERITIES = frozenset({"critical", "high", "medium", "low", "advisory"})
-_REVIEW_FINDING_ALLOWED_KEYS = frozenset(
+_REVIEW_FINDING_KEYS = frozenset(
     {
         "id",
         "title",
@@ -635,213 +633,218 @@ _REVIEW_FINDING_ALLOWED_KEYS = frozenset(
         "recommendation",
     }
 )
-_REVIEW_FINDING_REQUIRED_KEYS = frozenset(
-    {"id", "title", "severity", "file", "description"}
-)
-_REVIEW_COVERAGE_ALLOWED_KEYS = frozenset(
+_REVIEW_FINDING_REQUIRED = ("id", "title", "severity", "file", "description")
+_REVIEW_COVERAGE_KEYS = frozenset(
     {"topic", "scope", "status", "notes", "next_action", "paths"}
 )
 _REVIEW_COVERAGE_STATUSES = frozenset(
     {"reviewed", "partial", "not-reviewed", "out-of-scope"}
 )
+_UNSUPPORTED_SUITE_DELIVERABLES = frozenset(
+    {"architecture.json", "testing.json", "spec.json"}
+)
 
 
-def _is_repo_relative_path(raw_path: object) -> bool:
-    if not isinstance(raw_path, str) or not raw_path or "\\" in raw_path:
+def _is_nonempty_str(val: object) -> bool:
+    return isinstance(val, str) and bool(val)
+
+
+def _is_safe_rel_path(val: object) -> bool:
+    if not isinstance(val, str) or not val or "\\" in val:
         return False
-    posix = PurePosixPath(raw_path)
-    win = PureWindowsPath(raw_path)
+    posix = PurePosixPath(val)
+    win = PureWindowsPath(val)
     return not (
-        posix.is_absolute()
+        not posix.parts
+        or posix.is_absolute()
         or win.is_absolute()
-        or not posix.parts
-        or posix.parts == (".",)
+        or bool(win.drive)
         or any(part in {"..", ".git"} for part in posix.parts)
     )
 
 
-def _invalid_review_error(detail: str) -> ValueError:
-    return ValueError(
-        f"Invalid 'review.json' artifact for SARIF export ('export-sarif' requires a valid 'audit.json' or 'review.json'): {detail}"
-    )
+def _validate_review_path_list(items: object, label: str) -> str | None:
+    if not isinstance(items, list):
+        return f"'{label}' must be a JSON array"
+    for entry in items:
+        if not _is_safe_rel_path(entry):
+            return f"'{label}' entries must be repository-relative POSIX paths"
+    return None
 
 
-def _validate_review_path_list(raw_paths: object, label: str) -> None:
-    if not isinstance(raw_paths, list):
-        raise _invalid_review_error(f"'{label}' must be an array of relative paths")
-    for item in raw_paths:
-        if not _is_repo_relative_path(item):
-            raise _invalid_review_error(
-                f"path in '{label}' must be repository-relative: {item!r}"
-            )
+def _validate_review_coverage_entry(item: object) -> str | None:
+    if not isinstance(item, dict):
+        return "'coverage' entries must be JSON objects"
+    unknown = sorted(set(item) - _REVIEW_COVERAGE_KEYS)
+    if unknown:
+        return f"unexpected coverage property {unknown[0]!r}"
+    if not _is_nonempty_str(item.get("topic")) or not _is_nonempty_str(
+        item.get("scope")
+    ):
+        return "coverage entries require non-empty 'topic' and 'scope'"
+    if item.get("status") not in _REVIEW_COVERAGE_STATUSES:
+        return "invalid coverage 'status'"
+    for opt_str in ("notes", "next_action"):
+        if opt_str in item and not isinstance(item[opt_str], str):
+            return f"coverage '{opt_str}' must be a string"
+    if "paths" in item:
+        return _validate_review_path_list(item["paths"], "coverage.paths")
+    return None
 
 
-def _validate_review_coverage(raw_coverage: object) -> None:
-    if not isinstance(raw_coverage, list):
-        raise _invalid_review_error("'coverage' must be a JSON array")
-    for entry in raw_coverage:
-        if not isinstance(entry, dict):
-            raise _invalid_review_error("each coverage entry must be a JSON object")
-        extra = set(entry) - _REVIEW_COVERAGE_ALLOWED_KEYS
-        if extra:
-            raise _invalid_review_error(
-                f"unexpected coverage properties: {sorted(extra)}"
-            )
-        for req_str in ("topic", "scope"):
-            val = entry.get(req_str)
-            if not isinstance(val, str) or not val:
-                raise _invalid_review_error(
-                    f"coverage '{req_str}' must be a nonempty string"
-                )
-        if entry.get("status") not in _REVIEW_COVERAGE_STATUSES:
-            raise _invalid_review_error(
-                f"invalid coverage status: {entry.get('status')!r}"
-            )
-        for opt_str in ("notes", "next_action"):
-            if opt_str in entry and not isinstance(entry[opt_str], str):
-                raise _invalid_review_error(f"coverage '{opt_str}' must be a string")
-        if "paths" in entry:
-            _validate_review_path_list(entry["paths"], "coverage.paths")
-
-
-def _validate_review_data(data: dict[str, Any]) -> None:
-    missing = sorted(_REVIEW_REQUIRED_KEYS - set(data))
-    if missing:
-        raise _invalid_review_error(f"missing required properties: {missing}")
-    extra_top = set(data) - _REVIEW_ALLOWED_KEYS
-    if extra_top:
-        raise _invalid_review_error(f"unexpected properties: {sorted(extra_top)}")
-    if data.get("schema_version") != "1.0":
-        raise _invalid_review_error("'schema_version' must be '1.0'")
-    verdict = data.get("verdict")
-    if verdict not in _REVIEW_VERDICTS:
-        raise _invalid_review_error(f"invalid 'verdict': {verdict!r}")
-    summary = data.get("summary")
-    if not isinstance(summary, str) or not summary:
-        raise _invalid_review_error("'summary' must be a nonempty string")
-    for opt_nonempty in ("run_id", "snapshot"):
-        if opt_nonempty in data:
-            val = data[opt_nonempty]
-            if not isinstance(val, str) or not val:
-                raise _invalid_review_error(
-                    f"'{opt_nonempty}' must be a nonempty string"
-                )
+def _validate_review_optional_sections(data: dict[str, Any]) -> str | None:
+    for opt_id in ("run_id", "snapshot"):
+        if opt_id in data and not _is_nonempty_str(data[opt_id]):
+            return f"'{opt_id}' must be a non-empty string"
     if "paths" in data:
-        _validate_review_path_list(data["paths"], "paths")
+        path_err = _validate_review_path_list(data["paths"], "paths")
+        if path_err:
+            return path_err
     if "coverage" in data:
-        _validate_review_coverage(data["coverage"])
-    findings = data.get("findings")
-    if not isinstance(findings, list):
-        raise _invalid_review_error("'findings' must be a JSON array")
+        cov = data["coverage"]
+        if not isinstance(cov, list):
+            return "'coverage' must be a JSON array"
+        for item in cov:
+            cov_err = _validate_review_coverage_entry(item)
+            if cov_err:
+                return cov_err
+    return None
 
+
+def _validate_review_finding_shape(item: dict[str, Any]) -> str | None:
+    unknown = sorted(set(item) - _REVIEW_FINDING_KEYS)
+    if unknown:
+        return f"unexpected finding property {unknown[0]!r}"
+    missing = [k for k in _REVIEW_FINDING_REQUIRED if k not in item]
+    if missing:
+        return f"finding missing required property {missing[0]!r}"
+    for req_str in ("id", "title", "description"):
+        if not _is_nonempty_str(item.get(req_str)):
+            return f"finding '{req_str}' must be a non-empty string"
+    if item.get("severity") not in _REVIEW_SEVERITIES:
+        return f"invalid finding severity {item.get('severity')!r}"
+    if not _is_safe_rel_path(item.get("file")):
+        return f"finding file path must be repository-relative ({item.get('id')})"
+    return None
+
+
+def _validate_review_finding_optionals(item: dict[str, Any]) -> str | None:
+    if "line" in item:
+        line = item["line"]
+        if not isinstance(line, int) or isinstance(line, bool) or line < 1:
+            return "finding 'line' must be an integer >= 1"
+    if "recommendation" in item and not isinstance(item["recommendation"], str):
+        return "finding 'recommendation' must be a string"
+    if "paths" in item:
+        return _validate_review_path_list(item["paths"], "finding.paths")
+    return None
+
+
+def _validate_review_findings_list(findings: object) -> str | None:
+    if not isinstance(findings, list):
+        return "'findings' must be a JSON array"
     seen_ids: set[str] = set()
-    blocking_ids: list[str] = []
-    for finding in findings:
-        if not isinstance(finding, dict):
-            raise _invalid_review_error("each finding in 'findings' must be an object")
-        missing_f = sorted(_REVIEW_FINDING_REQUIRED_KEYS - set(finding))
-        if missing_f:
-            raise _invalid_review_error(
-                f"finding missing required properties: {missing_f}"
-            )
-        extra_f = set(finding) - _REVIEW_FINDING_ALLOWED_KEYS
-        if extra_f:
-            raise _invalid_review_error(
-                f"finding has unexpected properties: {sorted(extra_f)}"
-            )
-        fid = finding.get("id")
-        if not isinstance(fid, str) or not fid:
-            raise _invalid_review_error("finding 'id' must be a nonempty string")
+    for item in findings:
+        if not isinstance(item, dict):
+            return "'findings' entries must be JSON objects"
+        err = _validate_review_finding_shape(
+            item
+        ) or _validate_review_finding_optionals(item)
+        if err:
+            return err
+        fid = str(item["id"])
         if fid in seen_ids:
-            raise _invalid_review_error(f"duplicate finding ID: {fid}")
+            return f"duplicate finding id {fid!r}"
         seen_ids.add(fid)
-        for str_field in ("title", "description"):
-            fval = finding.get(str_field)
-            if not isinstance(fval, str) or not fval:
-                raise _invalid_review_error(
-                    f"finding '{str_field}' must be a nonempty string"
-                )
-        sev = finding.get("severity")
-        if sev not in _REVIEW_SEVERITIES:
-            raise _invalid_review_error(f"invalid finding severity: {sev!r}")
-        if sev in {"critical", "high"}:
-            blocking_ids.append(fid)
-        if not _is_repo_relative_path(finding.get("file")):
-            raise _invalid_review_error(
-                f"finding 'file' must be repository-relative: {finding.get('file')!r}"
-            )
-        if "paths" in finding:
-            _validate_review_path_list(finding["paths"], f"{fid}.paths")
-        if "line" in finding:
-            line_val = finding["line"]
-            if (
-                not isinstance(line_val, int)
-                or isinstance(line_val, bool)
-                or line_val < 1
-            ):
-                raise _invalid_review_error(
-                    f"finding 'line' must be a positive integer: {line_val!r}"
-                )
-        if "recommendation" in finding and not isinstance(
-            finding["recommendation"], str
-        ):
-            raise _invalid_review_error("finding 'recommendation' must be a string")
-    if verdict == "approve" and blocking_ids:
-        raise _invalid_review_error(
-            f"verdict 'approve' conflicts with critical/high findings: {', '.join(blocking_ids)}"
+    return None
+
+
+def _validate_review_verdict_alignment(
+    verdict: object, findings: list[dict[str, Any]]
+) -> str | None:
+    if verdict == "approve":
+        blocking = [
+            str(f["id"]) for f in findings if f.get("severity") in {"critical", "high"}
+        ]
+        if blocking:
+            return f"Verdict 'approve' conflicts with critical/high findings: {', '.join(blocking)}"
+    if verdict == "request_changes" and not findings:
+        return "Verdict 'request_changes' requires at least one finding in findings"
+    return None
+
+
+def _validate_review_payload(data: dict[str, Any]) -> str | None:
+    unknown = sorted(set(data) - _REVIEW_TOP_KEYS)
+    if unknown:
+        return f"unexpected top-level property {unknown[0]!r}"
+    missing = [k for k in _REVIEW_REQUIRED_KEYS if k not in data]
+    if missing:
+        return f"missing required property {missing[0]!r}"
+    if data.get("schema_version") != "1.0":
+        return "'schema_version' must equal '1.0'"
+    if data.get("verdict") not in _REVIEW_VERDICTS:
+        return "invalid 'verdict'"
+    if not _is_nonempty_str(data.get("summary")):
+        return "'summary' must be a non-empty string"
+    err = _validate_review_optional_sections(data) or _validate_review_findings_list(
+        data.get("findings")
+    )
+    if err:
+        return err
+    return _validate_review_verdict_alignment(data.get("verdict"), data["findings"])
+
+
+def _require_valid_review_payload(data: dict[str, Any]) -> None:
+    err = _validate_review_payload(data)
+    if err is not None:
+        raise ValueError(
+            f"SARIF export ('export-sarif') requires a valid 'audit.json' or 'review.json' artifact; invalid 'review.json': {err}"
         )
 
 
-def _collect_review_finding_locations(finding: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_review_locations(finding: dict[str, Any]) -> list[dict[str, Any]]:
     locations: list[dict[str, Any]] = []
-    line_num = finding.get("line")
     primary_file = str(finding["file"])
-    primary_phys = _extract_physical_location(
-        {"path": primary_file, "line_start": line_num, "line_end": line_num}
-    )
-    seen_uris: set[str] = set()
+    line = finding.get("line")
+    primary_phys = _extract_physical_location(primary_file, line, line)
     if primary_phys is not None:
         locations.append({"physicalLocation": primary_phys})
-        seen_uris.add(primary_phys["artifactLocation"]["uri"])
-    for extra_path in finding.get("paths", []) or []:
-        extra_phys = _extract_physical_location({"path": str(extra_path)})
-        if (
-            extra_phys is not None
-            and extra_phys["artifactLocation"]["uri"] not in seen_uris
-        ):
-            locations.append({"physicalLocation": extra_phys})
-            seen_uris.add(extra_phys["artifactLocation"]["uri"])
+    seen_paths = {primary_file}
+    for extra_path in finding.get("paths") or []:
+        if isinstance(extra_path, str) and extra_path not in seen_paths:
+            seen_paths.add(extra_path)
+            extra_phys = _extract_physical_location(extra_path)
+            if extra_phys is not None:
+                locations.append({"physicalLocation": extra_phys})
     return locations
 
 
-def _review_to_sarif(
-    data: dict[str, Any],
-    *,
-    filter_info: bool = False,
+def _normalize_review_finding(finding: dict[str, Any]) -> dict[str, Any]:
+    description = str(finding["description"])
+    return {
+        "id": str(finding["id"]),
+        "title": str(finding["title"]),
+        "severity": str(finding["severity"]),
+        "topic": "code-review",
+        "impact": description,
+        "root_cause": description,
+        "remedy": str(finding.get("recommendation") or ""),
+    }
+
+
+def _convert_review_to_sarif(
+    data: dict[str, Any], *, filter_info: bool = False
 ) -> dict[str, Any]:
-    _validate_review_data(data)
+    _require_valid_review_payload(data)
     rules: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     rule_indices: dict[str, int] = {}
-
-    for finding in data["findings"]:
-        if _should_skip_finding(finding, False, filter_info):
+    for raw_finding in data["findings"]:
+        if _should_skip_finding(raw_finding, False, filter_info):
             continue
-        finding_id = str(finding["id"])
-        description = str(finding["description"])
-        remedy = str(finding.get("recommendation") or "")
-        normalized: dict[str, Any] = {
-            "id": finding_id,
-            "topic": "code-review",
-            "title": str(finding["title"]),
-            "severity": str(finding["severity"]),
-            "status": "",
-            "confidence": "unknown",
-            "impact": description,
-            "root_cause": description,
-            "remedy": remedy,
-        }
-        locations = _collect_review_finding_locations(finding)
+        normalized = _normalize_review_finding(raw_finding)
+        locations = _build_review_locations(raw_finding)
+        finding_id = normalized["id"]
         fp = _finding_fingerprint(normalized, locations=locations)
         rule_id = _derive_rule_id(normalized, fp)
         rule_index = _ensure_rule(
@@ -862,7 +865,6 @@ def _review_to_sarif(
                 finding_fingerprint=fp,
             )
         )
-
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -881,10 +883,15 @@ def audit_to_sarif(
         raise TypeError("Audit data must be a JSON object")
     domain_artifact = _detect_domain_artifact(data)
     if domain_artifact == "review.json":
-        return _review_to_sarif(data, filter_info=filter_info)
+        return _convert_review_to_sarif(data, filter_info=filter_info)
     if domain_artifact is not None:
+        artifact_desc = (
+            "'observations.json' ('scanner-observations.json')"
+            if domain_artifact == "observations.json"
+            else f"'{domain_artifact}'"
+        )
         raise ValueError(
-            f"SARIF export ('export-sarif') requires an 'audit.json' ledger; domain artifact '{domain_artifact}' is not supported"
+            f"SARIF export ('export-sarif') requires an 'audit.json' ledger; domain artifact {artifact_desc} is not supported"
         )
     if "findings" not in data:
         raise ValueError(
@@ -934,20 +941,17 @@ def audit_to_sarif(
     }
 
 
-def _resolve_directory_sarif_target(input_path: Path, target: Path) -> Path:
-    ledger_path = target / "audit.json"
+def _resolve_directory_sarif_target(directory: Path, input_path: Path) -> Path:
+    ledger_path = directory / "audit.json"
     if ledger_path.is_file():
         return ledger_path
-    review_path = target / "review.json"
-    other_primary = [
-        name
-        for name in ("architecture.json", "testing.json", "spec.json")
-        if (target / name).is_file()
-    ]
-    if review_path.is_file() and not other_primary:
+    review_path = directory / "review.json"
+    if review_path.is_file() and not any(
+        (directory / other).is_file() for other in _UNSUPPORTED_SUITE_DELIVERABLES
+    ):
         return review_path
     for domain_name in _NON_AUDIT_ARTIFACT_NAMES:
-        if domain_name != "review.json" and (target / domain_name).is_file():
+        if domain_name != "review.json" and (directory / domain_name).is_file():
             raise ValueError(
                 f"Audit ledger 'audit.json' not found in directory: {input_path}; SARIF export ('export-sarif') requires 'audit.json' and does not support domain artifact '{domain_name}'"
             )
@@ -958,7 +962,7 @@ def _load_audit_file(input_path: Path) -> dict[str, Any]:
     """Read and parse audit.json or review.json from a file or directory path."""
     target = Path(input_path)
     if target.is_dir():
-        target = _resolve_directory_sarif_target(input_path, target)
+        target = _resolve_directory_sarif_target(target, input_path)
 
     try:
         content = target.read_text(encoding="utf-8")
@@ -973,7 +977,7 @@ def _load_audit_file(input_path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise TypeError(f"Input file '{input_path}' must contain a JSON object")
     if target.name == "review.json":
-        _validate_review_data(data)
+        _require_valid_review_payload(data)
         return data
     if target.name in _NON_AUDIT_ARTIFACT_NAMES:
         raise ValueError(

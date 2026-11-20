@@ -578,7 +578,7 @@ class RunTests(unittest.TestCase):
         self.assertNotIn("partial_fingerprints", obs[2])
         self.assertNotIn("findings", result)
 
-    def test_sarif_import_filters_non_actionable_results_and_preserves_state_metadata(
+    def test_sarif_import_filters_non_actionable_kinds_and_suppressions_and_keeps_properties(
         self,
     ):
         import jsonschema
@@ -589,11 +589,11 @@ class RunTests(unittest.TestCase):
                 {
                     "tool": {
                         "driver": {
-                            "name": "fred-skills",
-                            "version": "1.0",
+                            "name": "Semgrep",
+                            "version": "1.90.0",
                             "rules": [
                                 {
-                                    "id": "fred/auth/rule-1",
+                                    "id": "rule/check",
                                     "defaultConfiguration": {"level": "error"},
                                     "properties": {
                                         "topic": "auth",
@@ -605,272 +605,171 @@ class RunTests(unittest.TestCase):
                     },
                     "results": [
                         {
-                            "ruleId": "fred/auth/rule-1",
+                            "ruleId": "rule/pass",
                             "kind": "pass",
-                            "level": "error",
-                            "message": {"text": "refuted pass result"},
+                            "level": "none",
+                            "message": {"text": "passed check"},
                             "locations": [],
                         },
                         {
-                            "ruleId": "fred/auth/rule-1",
+                            "ruleId": "rule/na",
                             "kind": "notApplicable",
-                            "level": "warning",
+                            "level": "none",
                             "message": {"text": "not applicable"},
                             "locations": [],
                         },
                         {
-                            "ruleId": "fred/auth/rule-1",
-                            "kind": "fail",
+                            "ruleId": "rule/suppressed-accepted",
                             "level": "error",
-                            "suppressions": [
-                                {"kind": "inSource", "status": "accepted"}
-                            ],
                             "message": {"text": "accepted suppression"},
+                            "suppressions": [
+                                {
+                                    "kind": "external",
+                                    "status": "accepted",
+                                    "justification": "false positive",
+                                }
+                            ],
                             "locations": [],
                         },
                         {
-                            "ruleId": "fred/auth/rule-1",
-                            "kind": "fail",
-                            "level": "error",
-                            "suppressions": [{"kind": "external"}],
-                            "message": {"text": "implicit accepted suppression"},
+                            "ruleId": "rule/suppressed-implicit",
+                            "level": "warning",
+                            "message": {
+                                "text": "in-source suppression defaults to accepted"
+                            },
+                            "suppressions": [{"kind": "inSource"}],
                             "locations": [],
                         },
                         {
-                            "ruleId": "fred/auth/rule-1",
+                            "ruleId": "rule/open-item",
                             "kind": "open",
                             "level": "error",
+                            "message": {"text": "open evaluation item"},
+                            "locations": [],
+                        },
+                        {
+                            "ruleId": "rule/check",
+                            "kind": "review",
+                            "level": "warning",
+                            "message": {"text": "needs human review"},
                             "suppressions": [
                                 {
                                     "kind": "external",
                                     "status": "underReview",
-                                    "justification": "Pending security review",
+                                    "justification": "pending triage",
                                 }
                             ],
-                            "properties": {
-                                "findingId": "F-open",
-                                "status": "needs-validation",
-                                "severity": "high",
-                                "remedy": "Validate session token",
-                            },
-                            "message": {"text": "open result overrides explicit level"},
                             "locations": [
                                 {
                                     "physicalLocation": {
                                         "artifactLocation": {"uri": "source.py"},
-                                        "region": {"startLine": 3},
+                                        "region": {"startLine": 2},
                                     }
                                 }
                             ],
                         },
                         {
-                            "ruleId": "fred/review/rule-2",
-                            "kind": "review",
-                            "level": "warning",
+                            "ruleId": "rule/info-kind",
+                            "kind": "informational",
+                            "level": "note",
+                            "message": {"text": "informational item"},
                             "suppressions": [
-                                {"kind": "inSource", "status": "rejected"}
+                                {
+                                    "kind": "inSource",
+                                    "status": "rejected",
+                                    "justification": "suppression rejected",
+                                }
                             ],
-                            "message": {"text": "review kind"},
                             "locations": [],
                         },
                         {
-                            "ruleId": "fred/info/rule-3",
-                            "kind": "informational",
-                            "level": "note",
-                            "message": {"text": "informational kind"},
-                            "locations": [],
+                            "ruleId": "rule/check",
+                            "kind": "fail",
+                            "level": "error",
+                            "message": {"text": "actionable failure"},
+                            "suppressions": [],
+                            "properties": {
+                                "findingId": "F-99",
+                                "status": "supported",
+                                "severity": "high",
+                                "remedy": "Validate caller token",
+                            },
+                            "locations": [
+                                {
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": "source.py"},
+                                        "region": {"startLine": 1},
+                                    }
+                                }
+                            ],
                         },
                     ],
                 }
             ],
         }
-        sarif_file = self.root / "states.sarif"
+        sarif_file = self.root / "filtered.sarif"
         atomic_json(sarif_file, sarif)
         imported = runs.import_sarif(sarif_file)
+        obs_schema = read_json(ROOT / "schemas/observations.schema.json")
+        self.assertEqual(
+            [],
+            [
+                e.message
+                for e in jsonschema.Draft202012Validator(obs_schema).iter_errors(
+                    imported
+                )
+            ],
+        )
+
         obs = imported["observations"]
-        self.assertEqual(3, len(obs))
+        self.assertEqual(4, len(obs))
 
         self.assertEqual("open", obs[0]["kind"])
         self.assertEqual("none", obs[0]["reported_level"])
+
+        self.assertEqual("review", obs[1]["kind"])
+        self.assertEqual("none", obs[1]["reported_level"])
         self.assertEqual(
             [
                 {
                     "kind": "external",
                     "status": "underReview",
-                    "justification": "Pending security review",
+                    "justification": "pending triage",
                 }
             ],
-            obs[0]["suppressions"],
-        )
-        self.assertEqual(
-            {
-                "findingId": "F-open",
-                "topic": "auth",
-                "status": "needs-validation",
-                "severity": "high",
-                "confidence": "medium",
-                "remedy": "Validate session token",
-            },
-            obs[0]["properties"],
-        )
-        self.assertEqual(
-            "scanner-reported; agent verification not performed",
-            obs[0]["evidence_state"],
-        )
-
-        self.assertEqual("review", obs[1]["kind"])
-        self.assertEqual("none", obs[1]["reported_level"])
-        self.assertEqual(
-            [{"kind": "inSource", "status": "rejected"}], obs[1]["suppressions"]
+            obs[1]["suppressions"],
         )
 
         self.assertEqual("informational", obs[2]["kind"])
         self.assertEqual("none", obs[2]["reported_level"])
-
-        obs_schema = json.loads(
-            (ROOT / "schemas/observations.schema.json").read_text(encoding="utf-8")
-        )
-        schema_errs = list(
-            jsonschema.Draft202012Validator(obs_schema).iter_errors(imported)
-        )
-        self.assertEqual([], schema_errs, [e.message for e in schema_errs])
-
-        bad_sup = copy.deepcopy(sarif)
-        bad_sup["runs"][0]["results"] = [
-            {
-                "ruleId": "r1",
-                "message": {"text": "bad"},
-                "suppressions": "not-an-array",
-                "locations": [],
-            }
-        ]
-        atomic_json(self.root / "bad-sup.sarif", bad_sup)
-        with self.assertRaises(FredCliError) as sup_err:
-            runs.import_sarif(self.root / "bad-sup.sarif")
-        self.assertEqual("invalid_sarif", sup_err.exception.code)
-
-    def test_observations_validate_classify_and_reconcile(self):
-        from fredlib import common
-
-        ws = self.root / "wf-obs"
-        runs.initialize(self.root, ws, task="apply-fix")
-
-        obs_payload = {
-            "schema_version": "1.0",
-            "observations": [
+        self.assertEqual(
+            [
                 {
-                    "tool": "CodeQL",
-                    "tool_version": "2.19.0",
-                    "rule": "py/sql-injection",
-                    "kind": "fail",
-                    "reported_level": "error",
-                    "message": "Unsanitized query string",
-                    "locations": [{"path": "source.py", "line": 1}],
-                    "evidence_state": "scanner-reported; agent verification not performed",
-                    "fingerprints": {"fred-skills/v1": "fp-sql-123"},
-                    "properties": {
-                        "findingId": "OBS-1",
-                        "topic": "security",
-                        "severity": "high",
-                    },
-                },
-                {
-                    "tool": "Semgrep",
-                    "tool_version": "1.90.0",
-                    "rule": "semgrep/open-redirect",
-                    "reported_level": "warning",
-                    "message": "Unvalidated redirect URL",
-                    "locations": [{"path": "source.py", "line": 2}],
-                    "evidence_state": "scanner-reported; agent verification not performed",
-                },
+                    "kind": "inSource",
+                    "status": "rejected",
+                    "justification": "suppression rejected",
+                }
             ],
-            "limitations": ["Scanner claims require verification."],
-        }
-        atomic_json(ws / "scanner-observations.json", obs_payload)
-        atomic_json(
-            ws / "observations.json",
-            {
-                "schema_version": "1.0",
-                "observations": [],
-                "limitations": ["Empty manual observation slice."],
-            },
+            obs[2]["suppressions"],
         )
-        self.assertEqual([], runs.validate_run(ws))
 
-        # Domain classification & audit-only rejection
+        self.assertEqual("fail", obs[3]["kind"])
+        self.assertEqual("error", obs[3]["reported_level"])
+        self.assertNotIn("suppressions", obs[3])
         self.assertEqual(
-            "observations.json", common._detect_domain_artifact(obs_payload)
+            {
+                "findingId": "F-99",
+                "topic": "auth",
+                "status": "supported",
+                "severity": "high",
+                "confidence": "medium",
+                "remedy": "Validate caller token",
+            },
+            obs[3]["properties"],
         )
         self.assertEqual(
-            "repository-workflows", common._detect_artifact_suite(obs_payload)
-        )
-        with self.assertRaises(FredCliError) as rep_err:
-            reports.render(obs_payload, self.root / "obs-report.html")
-        self.assertIn("observations.json", rep_err.exception.message)
-        self.assertIn("audit.json", rep_err.exception.message)
-        with self.assertRaises(FredCliError) as iss_err:
-            reports.issue_drafts(obs_payload, self.root / "obs-issues")
-        self.assertIn("observations.json", iss_err.exception.message)
-        with self.assertRaises(FredCliError) as cmp_err:
-            runs.compare(obs_payload, obs_payload)
-        self.assertIn("observations.json", cmp_err.exception.message)
-
-        # Reconcile unique observation by properties.findingId and by rule
-        rec1 = runs.reconcile(
-            ws, "OBS-1", "in-progress", "Triaging CodeQL SQL injection claim"
-        )
-        self.assertEqual("OBS-1", rec1["finding_id"])
-        self.assertEqual("fp-sql-123", rec1["fingerprint"])
-
-        proof_path = self.root / "obs-proof.json"
-        atomic_json(
-            proof_path,
-            {
-                "before_revision": "aaa111",
-                "after_revision": "bbb222",
-                "original_reproduced": True,
-                "regression_passed": True,
-                "safe_controls_passed": True,
-                "commands": ["python -m unittest"],
-                "result": "passed",
-            },
-        )
-        rec2 = runs.reconcile(
-            ws,
-            "semgrep/open-redirect",
-            "verified-fixed",
-            "Added allowlist check",
-            verification=proof_path,
-        )
-        self.assertEqual("semgrep/open-redirect", rec2["finding_id"])
-        self.assertTrue(rec2["fingerprint"])
-        self.assertEqual([], runs.validate_run(ws))
-
-        # Duplicate rule/findingId observation rejected during reconcile
-        dup_obs = copy.deepcopy(obs_payload)
-        dup_obs["observations"].append(
-            {
-                "tool": "Semgrep",
-                "tool_version": "1.90.0",
-                "rule": "semgrep/open-redirect",
-                "reported_level": "warning",
-                "message": "Second occurrence with same rule",
-                "locations": [{"path": "source.py", "line": 10}],
-                "evidence_state": "scanner-reported; agent verification not performed",
-            }
-        )
-        atomic_json(ws / "scanner-observations.json", dup_obs)
-        with self.assertRaises(FredCliError) as dup_err:
-            runs.reconcile(ws, "semgrep/open-redirect", "open", "Ambiguous rule")
-        self.assertEqual("ambiguous_observation", dup_err.exception.code)
-
-        # Invalid path in scanner-observations.json caught by validate_run
-        bad_obs = copy.deepcopy(obs_payload)
-        bad_obs["observations"][0]["locations"] = [{"path": "../escape.py", "line": 1}]
-        atomic_json(ws / "scanner-observations.json", bad_obs)
-        val_errs = runs.validate_run(ws)
-        self.assertTrue(
-            any("scanner-observations.json" in err for err in val_errs), val_errs
+            "scanner-reported; agent verification not performed",
+            obs[3]["evidence_state"],
         )
 
     @unittest.skipUnless(shutil.which("git"), "Git unavailable")
@@ -2520,6 +2419,42 @@ class ReportTests(unittest.TestCase):
                     ],
                     "unmapped_records": [],
                 },
+                "observations.json": {
+                    "schema_version": "1.0",
+                    "observations": [
+                        {
+                            "id": "OBS-1",
+                            "tool": "semgrep",
+                            "tool_version": "1.90.0",
+                            "rule": "python.lang.security.audit.eval",
+                            "reported_level": "warning",
+                            "message": "Avoid eval on untrusted input",
+                            "locations": [{"path": "app.py", "line": 1}],
+                            "evidence_state": "scanner-reported; agent verification not performed",
+                        }
+                    ],
+                    "limitations": [
+                        "Imported scanner claims are not confirmed audit findings."
+                    ],
+                },
+                "scanner-observations.json": {
+                    "schema_version": "1.0",
+                    "observations": [
+                        {
+                            "tool": "bandit",
+                            "tool_version": "1.7.9",
+                            "rule": "B602",
+                            "reported_level": "error",
+                            "message": "subprocess call with shell=True",
+                            "locations": [{"path": "app.py", "line": 1}],
+                            "evidence_state": "scanner-reported; agent verification not performed",
+                            "properties": {"findingId": "SCAN-1", "severity": "high"},
+                        }
+                    ],
+                    "limitations": [
+                        "Imported scanner claims are not confirmed audit findings."
+                    ],
+                },
             }
             for fname, payload in valid_companions.items():
                 atomic_json(ws / fname, payload)
@@ -2572,6 +2507,16 @@ class ReportTests(unittest.TestCase):
                 },
                 "reconciliation.json": {"schema_version": "1.0"},
                 "remediation.json": {"schema_version": "1.0", "records": [{"bad": 1}]},
+                "observations.json": {
+                    **valid_companions["observations.json"],
+                    "observations": [
+                        {
+                            **valid_companions["observations.json"]["observations"][0],
+                            "locations": [{"path": "../escape.py", "line": 1}],
+                        }
+                    ],
+                },
+                "scanner-observations.json": {"schema_version": "1.0"},
             }
             for fname, bad_payload in invalid_overrides.items():
                 saved = read_json(ws / fname)
@@ -2618,6 +2563,168 @@ class ReportTests(unittest.TestCase):
                 resolve_audit_path(only_wf)
             self.assertIn("audit.json", str(res_ctx.exception))
             self.assertIn("verification.json", str(res_ctx.exception))
+
+            # Reconcile imported observation claims by unique findingId, id, or rule and reject duplicates
+            rec_obs_id = runs.reconcile(
+                ws,
+                "OBS-1",
+                "in-progress",
+                "Investigating semgrep observation",
+            )
+            self.assertEqual("OBS-1", rec_obs_id["finding_id"])
+            rec_scan_rule = runs.reconcile(
+                ws,
+                "B602",
+                "verified-fixed",
+                "Replaced shell=True with explicit argv",
+                verification=ws / "verification.json",
+            )
+            self.assertEqual("B602", rec_scan_rule["finding_id"])
+            self.assertEqual([], runs.validate_run(ws))
+
+            obs_only_dir = root / "obs-only"
+            obs_only_dir.mkdir()
+            dup_doc = {
+                "schema_version": "1.0",
+                "observations": [
+                    {
+                        "tool": "semgrep",
+                        "tool_version": "1.0",
+                        "rule": "dup/rule",
+                        "reported_level": "warning",
+                        "message": "first instance",
+                        "locations": [{"path": "app.py", "line": 1}],
+                        "evidence_state": "scanner-reported; agent verification not performed",
+                    },
+                    {
+                        "tool": "semgrep",
+                        "tool_version": "1.0",
+                        "rule": "dup/rule",
+                        "reported_level": "warning",
+                        "message": "second instance",
+                        "locations": [{"path": "app.py", "line": 2}],
+                        "evidence_state": "scanner-reported; agent verification not performed",
+                    },
+                ],
+                "limitations": ["Scanner claims require verification."],
+            }
+            atomic_json(obs_only_dir / "scanner-observations.json", dup_doc)
+            with self.assertRaises(FredCliError) as dup_rule_ctx:
+                runs.reconcile(obs_only_dir, "dup/rule", "open", "ambiguous rule")
+            self.assertEqual("ambiguous_observation", dup_rule_ctx.exception.code)
+
+            dup_doc["observations"][0]["properties"] = {"findingId": "DUP-ID"}
+            dup_doc["observations"][1]["properties"] = {"findingId": "DUP-ID"}
+            atomic_json(obs_only_dir / "scanner-observations.json", dup_doc)
+            with self.assertRaises(FredCliError) as dup_id_ctx:
+                runs.reconcile(obs_only_dir, "DUP-ID", "open", "ambiguous id")
+            self.assertEqual("ambiguous_observation", dup_id_ctx.exception.code)
+
+            dup_doc["observations"][0]["properties"] = {"findingId": "UNIQ-1"}
+            dup_doc["observations"][1]["properties"] = {"findingId": "UNIQ-2"}
+            atomic_json(obs_only_dir / "scanner-observations.json", dup_doc)
+            standalone_rec = runs.reconcile(
+                obs_only_dir, "UNIQ-2", "accepted-risk", "False positive documented"
+            )
+            self.assertEqual("UNIQ-2", standalone_rec["finding_id"])
+            self.assertEqual("accepted-risk", standalone_rec["state"])
+
+            # Reconcile handles mixed file-level (line: None) and line-level locations without TypeError,
+            # honors non-fred partial_fingerprints across line shifts, and rejects reversed observation end_line
+            edge_sarif = {
+                "version": "2.1.0",
+                "runs": [
+                    {
+                        "tool": {"driver": {"name": "CodeQL", "version": "2.19.0"}},
+                        "results": [
+                            {
+                                "ruleId": "py/suppressed-empty-status",
+                                "level": "warning",
+                                "message": {
+                                    "text": "empty status defaults to accepted"
+                                },
+                                "suppressions": [{"kind": "inSource", "status": ""}],
+                                "locations": [],
+                            },
+                            {
+                                "ruleId": "py/mixed-locations",
+                                "level": "error",
+                                "message": {"text": "mixed region lines"},
+                                "partialFingerprints": {
+                                    "primaryLocationLineHash": "codeql-hash-77"
+                                },
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "app.py"},
+                                            "region": {"startLine": 0, "endLine": 5},
+                                        }
+                                    },
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "app.py"},
+                                            "region": {"startLine": 8, "endLine": 3},
+                                        }
+                                    },
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+            edge_sarif_path = root / "edge.sarif"
+            atomic_json(edge_sarif_path, edge_sarif)
+            edge_imported = runs.import_sarif(edge_sarif_path)
+            self.assertEqual(1, len(edge_imported["observations"]))
+            edge_obs = edge_imported["observations"][0]
+            self.assertEqual(
+                [
+                    {"path": "app.py", "line": None},
+                    {"path": "app.py", "line": 8},
+                ],
+                edge_obs["locations"],
+            )
+            edge_dir = root / "obs-edge"
+            edge_dir.mkdir()
+            atomic_json(edge_dir / "observations.json", edge_imported)
+            rec_partial_fp = runs.reconcile(
+                edge_dir,
+                "py/mixed-locations",
+                "in-progress",
+                "Check partial_fingerprints fallback",
+            )
+            self.assertEqual("codeql-hash-77", rec_partial_fp["fingerprint"])
+
+            no_fp_doc = copy.deepcopy(edge_imported)
+            no_fp_doc["observations"][0].pop("partial_fingerprints", None)
+            atomic_json(edge_dir / "observations.json", no_fp_doc)
+            rec_mixed_lines = runs.reconcile(
+                edge_dir,
+                "py/mixed-locations",
+                "accepted-risk",
+                "Mixed None and int lines sort cleanly",
+            )
+            self.assertTrue(rec_mixed_lines["fingerprint"])
+
+            reversed_range_doc = copy.deepcopy(no_fp_doc)
+            reversed_range_doc["observations"][0]["locations"] = [
+                {"path": "app.py", "line": 10, "end_line": 4}
+            ]
+            atomic_json(ws / "observations.json", reversed_range_doc)
+            rev_errs = runs.validate_run(ws)
+            self.assertTrue(
+                any("observations.json" in e and "end_line" in e for e in rev_errs),
+                rev_errs,
+            )
+            with self.assertRaises(FredCliError) as bad_obs_ctx:
+                runs.reconcile(edge_dir, "missing", "open", "note")
+            self.assertEqual("invalid_reconciliation", bad_obs_ctx.exception.code)
+            atomic_json(edge_dir / "observations.json", reversed_range_doc)
+            with self.assertRaises(FredCliError) as rev_obs_ctx:
+                runs.reconcile(
+                    edge_dir, "py/mixed-locations", "open", "reversed end_line"
+                )
+            self.assertEqual("invalid_observations", rev_obs_ctx.exception.code)
 
 
 class BoundaryGuardAndContractTests(unittest.TestCase):
@@ -4193,6 +4300,138 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
                 repository.git(self.repo, "rev-parse", "HEAD", required=True)
             self.assertEqual("git_timeout", req_ctx.exception.code)
             self.assertTrue(req_ctx.exception.hint)
+
+    def test_sarif_export_import_and_reconcile_respect_stdlib_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            review_path = work / "review.json"
+            atomic_json(
+                review_path,
+                {
+                    "schema_version": "1.0",
+                    "verdict": "request_changes",
+                    "summary": "Found an advisory issue and a high issue.",
+                    "coverage": [
+                        {"topic": "bounds", "scope": "app.py", "status": "reviewed"}
+                    ],
+                    "findings": [
+                        {
+                            "id": "REV-1",
+                            "title": "High issue",
+                            "severity": "high",
+                            "file": "app.py",
+                            "line": 1,
+                            "description": "Missing bounds check.",
+                        },
+                        {
+                            "id": "REV-2",
+                            "title": "Advisory note",
+                            "severity": "advisory",
+                            "file": "app.py",
+                            "line": 1,
+                            "description": "Consider renaming variable.",
+                        },
+                    ],
+                },
+            )
+            sarif_path = work / "review.sarif"
+            obs_path = work / "observations.json"
+
+            # Verify runs, reports, and _sarif_import do not eagerly import yaml or jsonschema under -S
+            probe = (
+                "import sys; sys.path.insert(0, 'scripts'); "
+                "from fredlib import reports, runs, _sarif_import; "
+                "assert 'yaml' not in sys.modules; "
+                "assert 'jsonschema' not in sys.modules"
+            )
+            probe_proc = subprocess.run(
+                [sys.executable, "-S", "-c", probe],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, probe_proc.returncode, probe_proc.stderr)
+
+            # Both export-sarif (on review.json) and import-sarif succeed under pure stdlib (-S)
+            exp_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "export-sarif",
+                    str(review_path),
+                    "--output",
+                    str(sarif_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, exp_proc.returncode, exp_proc.stderr)
+
+            imp_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "import-sarif",
+                    str(sarif_path),
+                    "--output",
+                    str(obs_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, imp_proc.returncode, imp_proc.stderr)
+            imported = read_json(obs_path)
+            self.assertEqual(2, len(imported["observations"]))
+
+            # Reconcile on imported observations succeeds under pure stdlib (-S) via canonical workflow validator
+            rec_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "reconcile",
+                    str(work),
+                    "--finding",
+                    "REV-1",
+                    "--state",
+                    "in-progress",
+                    "--note",
+                    "Checking stdlib observation reconciliation",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
+            self.assertTrue((work / "remediation.json").is_file())
+
+            # Commands requiring run.schema.json validation (validate-run) exit cleanly with code 1 and no traceback under -S
+            run_ws = work / "run-ws"
+            runs.initialize(self.repo, run_ws, "apply-fix")
+            val_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "validate-run",
+                    str(run_ws),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, val_proc.returncode)
+            self.assertIn("Dependency missing: jsonschema", val_proc.stderr)
+            self.assertNotIn("Traceback", val_proc.stderr)
 
 
 if __name__ == "__main__":

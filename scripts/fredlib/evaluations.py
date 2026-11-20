@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import os
 import re
 import shutil
@@ -13,8 +12,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from .common import (
     ROOT,
@@ -23,6 +21,7 @@ from .common import (
     WORKFLOW_PHASE_SCHEMAS,
     WORKFLOW_SKILL_DELIVERABLES,
     _infer_suite_name,
+    _load_canonical_validator,
     _load_suite_contracts,
     _load_workflow_companions,
     _skill_to_suite_map,
@@ -61,18 +60,6 @@ _AUDIT_STATUSES: frozenset[str] = frozenset(
 )
 
 _ACTIONABLE_AUDIT_STATUSES: frozenset[str] = frozenset({"confirmed", "supported"})
-
-_CONTRACT_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
-    "audit": ("fred_audit_validator", "scripts/validate_audit.py"),
-    "architecture": (
-        "fred_architecture_validator",
-        "scripts/validate_architecture.py",
-    ),
-    "review": ("fred_review_validator", "scripts/validate_review.py"),
-    "testing": ("fred_testing_validator", "scripts/validate_testing.py"),
-    "spec": ("fred_spec_validator", "scripts/validate_spec.py"),
-    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
-}
 
 _PROMPT_CONFIG_LINES: dict[str, tuple[str, ...]] = {
     "with_skill": (
@@ -173,29 +160,9 @@ class _AdapterExecution:
 
 
 def _load_suite_validator(contract: str) -> _SuiteValidator:
-    entry = _CONTRACT_VALIDATOR_SCRIPTS.get(contract)
-    if entry is None:
+    if contract not in _VALID_CONTRACTS:
         raise ValueError(f"Unsupported evaluation contract: {contract!r}")
-    module_name, script_rel = entry
-    cached = sys.modules.get(module_name)
-    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
-        return cast(_SuiteValidator, cached)
-    script = ROOT / script_rel
-    spec = importlib.util.spec_from_file_location(module_name, script)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Unable to load suite validator from {script}")
-    module = importlib.util.module_from_spec(spec)
-    previous = sys.dont_write_bytecode
-    sys.modules[spec.name] = module
-    try:
-        sys.dont_write_bytecode = True
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    finally:
-        sys.dont_write_bytecode = previous
-    return cast(_SuiteValidator, module)
+    return _load_canonical_validator(contract, root=ROOT)
 
 
 def _resolve_case_contract(case: dict[str, Any], suite_map: dict[str, str]) -> str:

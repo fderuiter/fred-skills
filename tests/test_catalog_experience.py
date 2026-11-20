@@ -4,9 +4,14 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 from build_experience import build
 from fredlib.common import read_json
+from skill_tools import extract_markdown_preamble, extract_markdown_tables
+
+from tests.catalog_oracles import expected_pack_count
 
 
 class ExperienceTests(unittest.TestCase):
@@ -77,7 +82,9 @@ class ExperienceTests(unittest.TestCase):
         for suite in suites:
             self.assertIn(f'<option value="{suite["name"]}">', select_html)
         packs = read_json(ROOT / "catalog/packs.json")["packs"]
-        self.assertEqual(len(packs), 13)
+        expected_packs = expected_pack_count(ROOT)
+        self.assertGreaterEqual(expected_packs, 1)
+        self.assertEqual(len(packs), expected_packs)
         for pack_name in packs:
             self.assertIn(f'id="pack-{pack_name}"', page)
             self.assertIn(f"--pack {pack_name}", page)
@@ -263,15 +270,21 @@ class ExperienceTests(unittest.TestCase):
                     )
                     self.assertEqual([], errors, [e.message for e in errors])
 
-        readme_lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
-        quickstart_header = "\n".join(readme_lines[:28])
+        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme_preamble = extract_markdown_preamble(readme_text)
+        preamble_tables = extract_markdown_tables(readme_preamble)
+        self.assertGreaterEqual(len(preamble_tables), 1)
+        self.assertGreaterEqual(len(preamble_tables[0]), 1)
+        quickstart_cells = "\n".join(
+            row.get("Start here", "") for row in preamble_tables[0]
+        )
         for recipe_name in (
             "design-architecture",
             "specify-feature",
             "review-code-changes",
             "expand-automated-tests",
         ):
-            self.assertIn(f"`{recipe_name}`", quickstart_header)
+            self.assertIn(f"`{recipe_name}`", quickstart_cells)
 
     def test_workflow_recipes_companions_prompts_and_status_alignment(self):
         suites = {

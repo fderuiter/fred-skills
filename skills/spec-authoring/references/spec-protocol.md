@@ -107,5 +107,5 @@ controls before emitting deliverables:
 3. Run the bundled validator locally before concluding:
    `python3 <this-skill>/scripts/validate_spec.py <spec.json>`
    This script checks Draft 2020-12 schema conformance, unique decision/requirement/check IDs,
-   repository-relative `new_file_scopes`, and convergence status consistency. If `jsonschema`
-   is unavailable, report the skipped automated check and verify each required field manually.
+   repository-relative `new_file_scopes`, non-overlapping `out_of_scope` rules, and convergence
+   status consistency using only the Python 3.12 standard library.

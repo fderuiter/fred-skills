@@ -40,10 +40,10 @@ _NON_FAIL_RESULT_KINDS = frozenset(
         "informational",
     }
 )
-
 _SKIPPED_RESULT_KINDS = frozenset({"pass", "notApplicable"})
 _RETAINED_RESULT_KINDS = frozenset({"fail", "open", "review", "informational"})
 _ACTIVE_SUPPRESSION_STATUSES = frozenset({"underReview", "rejected"})
+_VALID_SUPPRESSION_KINDS = frozenset({"inSource", "external"})
 _AUDIT_PROPERTY_KEYS = (
     "findingId",
     "topic",
@@ -52,7 +52,7 @@ _AUDIT_PROPERTY_KEYS = (
     "confidence",
     "remedy",
 )
-_RULE_PROPERTY_KEYS = (
+_RULE_FALLBACK_PROPERTY_KEYS = (
     "topic",
     "status",
     "severity",
@@ -712,61 +712,10 @@ def _clean_fingerprint_map(raw_map: object) -> dict[str, str] | None:
     return cleaned or None
 
 
-def _extract_active_suppressions(
-    raw_suppressions: object, sarif_path: Path
-) -> tuple[bool, list[dict[str, str]] | None]:
-    if raw_suppressions is None:
-        return False, None
-    if not isinstance(raw_suppressions, list):
-        raise FredCliError(
-            f"Malformed SARIF file '{sarif_path}': 'suppressions' in result must be a JSON array",
-            code="invalid_sarif",
-            hint="Ensure each SARIF result's 'suppressions' property is a JSON array.",
-        )
-    if not raw_suppressions:
-        return False, None
-    retained: list[dict[str, str]] = []
-    for entry in raw_suppressions:
-        if not isinstance(entry, dict):
-            continue
-        status = entry.get("status")
-        if status is None or status == "" or status == "accepted":
-            return True, None
-        if isinstance(status, str) and status in _ACTIVE_SUPPRESSION_STATUSES:
-            raw_kind = entry.get("kind")
-            sup_kind = raw_kind if raw_kind in {"inSource", "external"} else "external"
-            sup_record: dict[str, str] = {
-                "kind": sup_kind,
-                "status": status,
-            }
-            for opt_key in ("justification", "guid"):
-                opt_val = entry.get(opt_key)
-                if isinstance(opt_val, str) and opt_val:
-                    sup_record[opt_key] = opt_val
-            retained.append(sup_record)
-    return False, (retained or None)
-
-
-def _extract_audit_properties(
-    result: dict[str, Any], matched_rule: dict[str, Any] | None
-) -> dict[str, str] | None:
-    res_props = result.get("properties")
-    rule_props = (
-        matched_rule.get("properties") if isinstance(matched_rule, dict) else None
-    )
-    extracted: dict[str, str] = {}
-    if isinstance(res_props, dict):
-        for key in _AUDIT_PROPERTY_KEYS:
-            val = res_props.get(key)
-            if isinstance(val, str) and val:
-                extracted[key] = val
-    if isinstance(rule_props, dict):
-        for key in _RULE_PROPERTY_KEYS:
-            if key not in extracted:
-                val = rule_props.get(key)
-                if isinstance(val, str) and val:
-                    extracted[key] = val
-    return extracted or None
+def _positive_int_or_none(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 def _build_location_record(
@@ -789,12 +738,14 @@ def _build_location_record(
         return None
     raw_region = physical.get("region")
     region: dict[str, Any] = raw_region if isinstance(raw_region, dict) else {}
+    start_line = _positive_int_or_none(region.get("startLine"))
+    end_line = _positive_int_or_none(region.get("endLine"))
     loc_record: dict[str, Any] = {
         "path": norm_path,
-        "line": region.get("startLine"),
+        "line": start_line,
     }
-    if region.get("endLine") is not None:
-        loc_record["end_line"] = region.get("endLine")
+    if start_line is not None and end_line is not None and end_line >= start_line:
+        loc_record["end_line"] = end_line
     symbol = _extract_logical_symbol(item, run)
     if symbol:
         loc_record["symbol"] = symbol
@@ -827,6 +778,117 @@ def _extract_result_locations(
     return locations
 
 
+def _normalize_active_suppression(
+    sup: dict[str, Any],
+) -> tuple[bool, dict[str, str] | None]:
+    status = sup.get("status")
+    if status is None or status == "" or status == "accepted":
+        return True, None
+    if not isinstance(status, str) or status not in _ACTIVE_SUPPRESSION_STATUSES:
+        return False, None
+    raw_kind = sup.get("kind")
+    sup_kind = (
+        raw_kind
+        if isinstance(raw_kind, str) and raw_kind in _VALID_SUPPRESSION_KINDS
+        else "external"
+    )
+    entry: dict[str, str] = {"kind": sup_kind, "status": status}
+    justification = sup.get("justification")
+    if isinstance(justification, str):
+        entry["justification"] = justification
+    guid = sup.get("guid")
+    if isinstance(guid, str) and guid:
+        entry["guid"] = guid
+    return False, entry
+
+
+def _inspect_result_suppressions(
+    result: dict[str, Any], sarif_path: Path
+) -> tuple[bool, list[dict[str, str]]]:
+    raw_suppressions = result.get("suppressions")
+    if raw_suppressions is None:
+        return False, []
+    if not isinstance(raw_suppressions, list):
+        raise FredCliError(
+            f"Malformed SARIF file '{sarif_path}': 'suppressions' in result must be a JSON array",
+            code="invalid_sarif",
+            hint="Ensure each SARIF result's 'suppressions' property is a JSON array.",
+        )
+    active: list[dict[str, str]] = []
+    for item in raw_suppressions:
+        if not isinstance(item, dict):
+            continue
+        accepted, normalized = _normalize_active_suppression(item)
+        if accepted:
+            return True, []
+        if normalized is not None:
+            active.append(normalized)
+    return False, active
+
+
+def _copy_nonempty_str_props(
+    source: object, keys: tuple[str, ...], dest: dict[str, str]
+) -> None:
+    if not isinstance(source, dict):
+        return
+    for key in keys:
+        val = source.get(key)
+        if key not in dest and isinstance(val, str) and val:
+            dest[key] = val
+
+
+def _extract_audit_properties(
+    result: dict[str, Any], matched_rule: dict[str, Any] | None
+) -> dict[str, str] | None:
+    extracted: dict[str, str] = {}
+    _copy_nonempty_str_props(result.get("properties"), _AUDIT_PROPERTY_KEYS, extracted)
+    if isinstance(matched_rule, dict):
+        _copy_nonempty_str_props(
+            matched_rule.get("properties"), _RULE_FALLBACK_PROPERTY_KEYS, extracted
+        )
+    return extracted or None
+
+
+def _attach_optional_observation_fields(
+    observation: dict[str, Any],
+    result: dict[str, Any],
+    matched_rule: dict[str, Any] | None,
+    active_suppressions: list[dict[str, str]],
+) -> None:
+    raw_kind = result.get("kind")
+    if isinstance(raw_kind, str) and raw_kind in _RETAINED_RESULT_KINDS:
+        observation["kind"] = raw_kind
+    sec_severity = _extract_security_severity(result, matched_rule)
+    if sec_severity is not None:
+        observation["security_severity"] = sec_severity
+    fps = _clean_fingerprint_map(result.get("fingerprints"))
+    if fps:
+        observation["fingerprints"] = fps
+    partial_fps = _clean_fingerprint_map(result.get("partialFingerprints"))
+    if partial_fps:
+        observation["partial_fingerprints"] = partial_fps
+    if active_suppressions:
+        observation["suppressions"] = active_suppressions
+    audit_props = _extract_audit_properties(result, matched_rule)
+    if audit_props:
+        observation["properties"] = audit_props
+
+
+def _resolve_rule_id(
+    result: dict[str, Any], matched_rule: dict[str, Any] | None
+) -> str:
+    raw_rule_ref = result.get("rule")
+    rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
+    for candidate in (
+        result.get("ruleId"),
+        rule_ref.get("id"),
+        matched_rule.get("id") if isinstance(matched_rule, dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return "unknown"
+
+
 def _import_sarif_result(
     result: dict[str, Any],
     sarif_path: Path,
@@ -836,9 +898,15 @@ def _import_sarif_result(
     base_map: dict[str, ParsedSarifUri | None],
     explicit_roots: list[str] | None,
     default_sarif_roots: list[str],
-    *,
-    active_suppressions: list[dict[str, str]] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    raw_kind = result.get("kind")
+    if isinstance(raw_kind, str) and raw_kind in _SKIPPED_RESULT_KINDS:
+        return None
+    is_suppressed, active_suppressions = _inspect_result_suppressions(
+        result, sarif_path
+    )
+    if is_suppressed:
+        return None
     inv_idx = result.get("invocationIndex")
     sarif_roots = (
         _collect_sarif_roots(run, base_map, inv_idx)
@@ -846,14 +914,7 @@ def _import_sarif_result(
         else default_sarif_roots
     )
     matched_rule = _find_sarif_rule(result, driver, extensions)
-    raw_rule_ref = result.get("rule")
-    rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
-    raw_rule_id = (
-        result.get("ruleId")
-        or rule_ref.get("id")
-        or (matched_rule.get("id") if isinstance(matched_rule, dict) else None)
-    )
-    rule_id = raw_rule_id if isinstance(raw_rule_id, str) and raw_rule_id else "unknown"
+    rule_id = _resolve_rule_id(result, matched_rule)
     reported_level = _resolve_sarif_level(
         result,
         matched_rule,
@@ -870,42 +931,21 @@ def _import_sarif_result(
     )
     raw_msg = result.get("message")
     msg_obj: dict[str, Any] = raw_msg if isinstance(raw_msg, dict) else {}
+    raw_tool = driver.get("name")
+    raw_ver = driver.get("version") or driver.get("semanticVersion")
     raw_text = msg_obj.get("text")
-    msg_text = raw_text if isinstance(raw_text, str) and raw_text else "No text message"
-    raw_tool_name = driver.get("name")
-    tool_name = (
-        raw_tool_name if isinstance(raw_tool_name, str) and raw_tool_name else "unknown"
-    )
-    raw_tool_ver = driver.get("version") or driver.get("semanticVersion")
-    tool_version = (
-        raw_tool_ver if isinstance(raw_tool_ver, str) and raw_tool_ver else "unknown"
-    )
     observation: dict[str, Any] = {
-        "tool": tool_name,
-        "tool_version": tool_version,
+        "tool": raw_tool if isinstance(raw_tool, str) and raw_tool else "unknown",
+        "tool_version": str(raw_ver) if raw_ver is not None else "unknown",
         "rule": rule_id,
         "reported_level": reported_level,
-        "message": msg_text,
+        "message": str(raw_text) if raw_text is not None else "No text message",
         "locations": locations,
         "evidence_state": "scanner-reported; agent verification not performed",
     }
-    kind = result.get("kind")
-    if isinstance(kind, str) and kind in _RETAINED_RESULT_KINDS:
-        observation["kind"] = kind
-    sec_severity = _extract_security_severity(result, matched_rule)
-    if sec_severity is not None:
-        observation["security_severity"] = sec_severity
-    fps = _clean_fingerprint_map(result.get("fingerprints"))
-    if fps:
-        observation["fingerprints"] = fps
-    partial_fps = _clean_fingerprint_map(result.get("partialFingerprints"))
-    if partial_fps:
-        observation["partial_fingerprints"] = partial_fps
-    if active_suppressions:
-        observation["suppressions"] = active_suppressions
-    audit_props = _extract_audit_properties(result, matched_rule)
-    if audit_props:
-        observation["properties"] = audit_props
+    _attach_optional_observation_fields(
+        observation, result, matched_rule, active_suppressions
+    )
     return observation
 
 
@@ -934,32 +974,23 @@ def _import_sarif_run(
             code="invalid_sarif",
             hint="Ensure each SARIF run's 'results' property is a JSON array.",
         )
-    imported_results: list[dict[str, Any]] = []
+    imported: list[dict[str, Any]] = []
     for result in raw_results:
         if not isinstance(result, dict):
             continue
-        kind = result.get("kind")
-        if isinstance(kind, str) and kind in _SKIPPED_RESULT_KINDS:
-            continue
-        skip_suppressed, active_suppressions = _extract_active_suppressions(
-            result.get("suppressions"), sarif_path
+        obs = _import_sarif_result(
+            result,
+            sarif_path,
+            run,
+            driver,
+            extensions,
+            base_map,
+            explicit_roots,
+            default_sarif_roots,
         )
-        if skip_suppressed:
-            continue
-        imported_results.append(
-            _import_sarif_result(
-                result,
-                sarif_path,
-                run,
-                driver,
-                extensions,
-                base_map,
-                explicit_roots,
-                default_sarif_roots,
-                active_suppressions=active_suppressions,
-            )
-        )
-    return imported_results
+        if obs is not None:
+            imported.append(obs)
+    return imported
 
 
 def import_sarif(path: Path, root: Path | None = None) -> dict:

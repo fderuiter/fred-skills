@@ -4,13 +4,11 @@ import copy
 import functools
 import importlib.util
 import re
-import sys
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from types import ModuleType
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import yaml
@@ -32,6 +30,7 @@ from .common import (
     _suite_for_skills,
     _suite_shared_assets,
     _suite_skills_by_suite,
+    _validate_canonical_artifact,
     _workflow_phase_order_map,
     atomic_json,
     digest,
@@ -653,9 +652,19 @@ when the selected work cannot be completed. Empty starter arrays are valid."""
     companion_guidance = ""
     if companions:
         pairs = ", ".join(f"{name} ({schema})" for name, schema in companions)
+        obs_pairs = ", ".join(
+            f"{obs_name} ({WORKFLOW_DELIVERABLE_SCHEMAS[obs_name]})"
+            for obs_name in ("observations.json", "scanner-observations.json")
+            if obs_name in WORKFLOW_DELIVERABLE_SCHEMAS
+        )
+        obs_note = (
+            f" Treat imported SARIF claims in {obs_pairs} as unconfirmed scanner observations until verified."
+            if obs_pairs
+            else ""
+        )
         companion_guidance = (
             f"\nWhen workflow steps produce companion deliverables, write and validate "
-            f"them against their schemas: {pairs}."
+            f"them against their schemas: {pairs}.{obs_note}"
         )
     return f"""Work in bounded slices. Validate the ledger against {schema_rel} and maintain the existing
 audit schema and IDs, evidence, coverage, counterevidence, uncertainty, and independent
@@ -1341,53 +1350,6 @@ commands before running them; record actual outcomes and unavailable capabilitie
 """
 
 
-class _AuditValidator(Protocol):
-    def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
-
-
-_AUDIT_VALIDATOR_MODULE_NAME = "fred_audit_validator"
-
-
-def _load_script_validator(module_name: str, script: Path) -> _AuditValidator:
-    cached = sys.modules.get(module_name)
-    if isinstance(cached, ModuleType) and callable(getattr(cached, "validate", None)):
-        return cast(_AuditValidator, cached)
-    spec = importlib.util.spec_from_file_location(module_name, script)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Unable to load validator from {script}")
-    module = importlib.util.module_from_spec(spec)
-    previous = sys.dont_write_bytecode
-    sys.modules[spec.name] = module
-    try:
-        sys.dont_write_bytecode = True
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    finally:
-        sys.dont_write_bytecode = previous
-    return cast(_AuditValidator, module)
-
-
-def _load_audit_validator() -> _AuditValidator:
-    return _load_script_validator(
-        _AUDIT_VALIDATOR_MODULE_NAME,
-        ROOT / "skills/repo-audit-program/scripts/validate_audit.py",
-    )
-
-
-_SUITE_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {
-    "architecture.json": (
-        "fred_architecture_validator",
-        "scripts/validate_architecture.py",
-    ),
-    "review.json": ("fred_review_validator", "scripts/validate_review.py"),
-    "testing.json": ("fred_testing_validator", "scripts/validate_testing.py"),
-    "spec.json": ("fred_spec_validator", "scripts/validate_spec.py"),
-    "workflow": ("fred_workflow_validator", "scripts/validate_workflow.py"),
-}
-
-
 @functools.lru_cache(maxsize=1)
 def _load_audit_schema() -> dict[str, Any]:
     return read_json_object(
@@ -1397,8 +1359,13 @@ def _load_audit_schema() -> dict[str, Any]:
 
 
 def audit_errors(audit: dict) -> list[str]:
-    validator = _load_audit_validator()
-    return validator.validate(audit, _load_audit_schema())
+    return _validate_canonical_artifact(
+        audit,
+        artifact_name="audit.json",
+        schema_rel="shared/repo-audit/resources/assets/audit.schema.json",
+        spec_factory=importlib.util.spec_from_file_location,
+        schema_obj=_load_audit_schema(),
+    )
 
 
 def _schema_errors(payload: object, schema_rel: str) -> list[str]:
@@ -1413,8 +1380,13 @@ def _schema_errors(payload: object, schema_rel: str) -> list[str]:
 def _require_audit_ledger(payload: object, command_name: str) -> dict:
     kind = _detect_domain_kind(payload)
     if kind is not None:
+        artifact_label = (
+            "'observations.json' ('scanner-observations.json')"
+            if kind == "observations"
+            else f"'{kind}.json'"
+        )
         raise FredCliError(
-            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain artifact '{kind}.json' is not supported",
+            f"Audit command '{command_name}' requires an 'audit.json' ledger; domain artifact {artifact_label} is not supported",
             code="unsupported_domain_artifact",
             hint="Pass an 'audit.json' ledger from a repository-audits or repository-workflows run.",
         )
@@ -1484,8 +1456,6 @@ def _require_audit_directory(directory: Path, command_name: str) -> dict:
 
 def _validate_present_workflow_companions(directory: Path) -> list[str]:
     errors: list[str] = []
-    wf_mod_name, wf_script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
-    wf_validator = _load_script_validator(wf_mod_name, ROOT / wf_script_rel)
     for name, companion_schema in WORKFLOW_DELIVERABLE_SCHEMAS.items():
         companion_path = directory / name
         if not companion_path.is_file():
@@ -1495,163 +1465,12 @@ def _validate_present_workflow_companions(directory: Path) -> list[str]:
         except (OSError, ValueError) as exc:
             errors.append(f"{name}: invalid JSON ({exc})")
             continue
-        schema_errs = _schema_errors(companion_payload, companion_schema)
-        if schema_errs:
-            for msg in schema_errs:
-                errors.append(f"{name}: {msg}")
-            continue
-        schema_obj = read_json_object(
-            ROOT / companion_schema, label=f"Workflow schema '{companion_schema}'"
-        )
-        for msg in wf_validator.validate(companion_payload, schema_obj):
+        for msg in _validate_canonical_artifact(
+            companion_payload,
+            artifact_name=name,
+            schema_rel=companion_schema,
+        ):
             errors.append(f"{name}: {msg}")
-    return errors
-
-
-def _check_relative_path_entry(raw_path: object, label: str, errors: list[str]) -> None:
-    if not isinstance(raw_path, str):
-        return
-    try:
-        checked = relative_path(raw_path)
-        if not checked.parts:
-            raise ValueError(f"Unsafe relative path: {raw_path!r}")
-    except ValueError as exc:
-        errors.append(f"{label}: {exc}")
-
-
-def _domain_deliverable_errors(deliverable: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    for field in (
-        "decisions",
-        "components",
-        "findings",
-        "test_cases",
-        "interview_decisions",
-        "requirements",
-        "convergence_checks",
-    ):
-        items = deliverable.get(field)
-        if not isinstance(items, list):
-            continue
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            item_id = item.get("id")
-            if isinstance(item_id, str):
-                if item_id in seen and item_id not in duplicates:
-                    errors.append(f"Duplicate IDs in {field}: {item_id}")
-                    duplicates.add(item_id)
-                seen.add(item_id)
-    findings = deliverable.get("findings")
-    if isinstance(findings, list):
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            fpath = finding.get("file")
-            fid = finding.get("id", "unknown")
-            _check_relative_path_entry(
-                fpath,
-                f"Finding file path must be repository-relative ({fid})",
-                errors,
-            )
-            for p in finding.get("paths", []) or []:
-                _check_relative_path_entry(
-                    p,
-                    f"Finding path must be repository-relative ({fid})",
-                    errors,
-                )
-    for top_p in deliverable.get("paths", []) or []:
-        _check_relative_path_entry(
-            top_p, "Deliverable path must be repository-relative", errors
-        )
-    for cov in deliverable.get("coverage", []) or []:
-        if isinstance(cov, dict):
-            for cov_p in cov.get("paths", []) or []:
-                _check_relative_path_entry(
-                    cov_p,
-                    f"Coverage path must be repository-relative ({cov.get('topic', 'unknown')})",
-                    errors,
-                )
-    for boundary in deliverable.get("boundaries", []) or []:
-        if isinstance(boundary, dict):
-            for bp in boundary.get("paths", []) or []:
-                _check_relative_path_entry(
-                    bp,
-                    f"Boundary path must be repository-relative ({boundary.get('name', 'unknown')})",
-                    errors,
-                )
-    for dec in deliverable.get("decisions", []) or []:
-        if isinstance(dec, dict):
-            for dp in dec.get("paths", []) or []:
-                _check_relative_path_entry(
-                    dp,
-                    f"Decision path must be repository-relative ({dec.get('id', 'unknown')})",
-                    errors,
-                )
-    components = deliverable.get("components")
-    if isinstance(components, list):
-        comp_deps: dict[str, list[str]] = {}
-        comp_ids = {
-            c["id"]
-            for c in components
-            if isinstance(c, dict) and isinstance(c.get("id"), str)
-        }
-        for comp in components:
-            if not isinstance(comp, dict):
-                continue
-            cid = str(comp.get("id", "unknown"))
-            for cp in comp.get("paths", []) or []:
-                _check_relative_path_entry(
-                    cp,
-                    f"Component path must be repository-relative ({cid})",
-                    errors,
-                )
-            deps = [d for d in (comp.get("depends_on") or []) if isinstance(d, str)]
-            comp_deps[cid] = deps
-            for dep in deps:
-                if dep not in comp_ids:
-                    errors.append(f"Unknown component dependency {dep} in {cid}")
-        visiting: set[str] = set()
-        done: set[str] = set()
-
-        def _visit_comp(node: str) -> None:
-            if node in visiting:
-                errors.append(f"Component dependency cycle: {node}")
-                return
-            if node in done or node not in comp_deps:
-                return
-            visiting.add(node)
-            for dep in comp_deps[node]:
-                _visit_comp(dep)
-            visiting.remove(node)
-            done.add(node)
-
-        for cid in comp_deps:
-            _visit_comp(cid)
-    for tc in deliverable.get("test_cases", []) or []:
-        if isinstance(tc, dict):
-            tid = str(tc.get("id", "unknown"))
-            _check_relative_path_entry(
-                tc.get("file"),
-                f"Test case file path must be repository-relative ({tid})",
-                errors,
-            )
-            for tp in tc.get("paths", []) or []:
-                _check_relative_path_entry(
-                    tp,
-                    f"Test case path must be repository-relative ({tid})",
-                    errors,
-                )
-    new_file_scopes = deliverable.get("new_file_scopes")
-    if isinstance(new_file_scopes, list):
-        for scope_path in new_file_scopes:
-            _check_relative_path_entry(
-                scope_path,
-                f"Specification file scope must be repository-relative ({scope_path!r})",
-                errors,
-            )
     return errors
 
 
@@ -1660,20 +1479,11 @@ def _deliverable_errors(
 ) -> list[str]:
     if expected_name == "audit.json":
         return audit_errors(deliverable)
-    schema_errs = _schema_errors(deliverable, schema_rel)
-    if schema_errs:
-        return schema_errs
-    domain_errs = _domain_deliverable_errors(deliverable)
-    if expected_name in _SUITE_VALIDATOR_SCRIPTS:
-        mod_name, script_rel = _SUITE_VALIDATOR_SCRIPTS[expected_name]
-        suite_validator = _load_script_validator(mod_name, ROOT / script_rel)
-        schema_obj = read_json_object(
-            ROOT / schema_rel, label=f"Deliverable schema '{schema_rel}'"
-        )
-        for msg in suite_validator.validate(deliverable, schema_obj):
-            if msg not in domain_errs:
-                domain_errs.append(msg)
-    return domain_errs
+    return _validate_canonical_artifact(
+        deliverable,
+        artifact_name=expected_name,
+        schema_rel=schema_rel,
+    )
 
 
 def validate_run(directory: Path) -> list[str]:
@@ -1988,12 +1798,12 @@ def revalidate(directory: Path) -> dict:
         domain_doc = read_json_object(
             target_path, label=f"Deliverable '{expected_name}'"
         )
-        schema_errs = _schema_errors(domain_doc, schema_rel)
-        if schema_errs:
+        deliverable_errs = _deliverable_errors(domain_doc, expected_name, schema_rel)
+        if deliverable_errs:
             raise FredCliError(
-                f"Invalid {expected_name}: " + "; ".join(schema_errs[:5]),
+                f"Invalid {expected_name}: " + "; ".join(deliverable_errs[:5]),
                 code="invalid_deliverable",
-                hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect schema errors in '{expected_name}'.",
+                hint=f"Run 'python scripts/fred.py validate-run {run_dir}' to inspect validation errors in '{expected_name}'.",
             )
         if expected_name in {"architecture.json", "review.json", "testing.json"}:
             provenance_drifted = (
@@ -2307,8 +2117,7 @@ def compare(before: dict, after: dict) -> dict:
     return result
 
 
-_OBSERVATION_COMPANION_NAMES = ("observations.json", "scanner-observations.json")
-_RECONCILE_STATES = frozenset(
+_VALID_REMEDIATION_STATES = frozenset(
     {
         "open",
         "in-progress",
@@ -2318,113 +2127,142 @@ _RECONCILE_STATES = frozenset(
         "accepted-risk",
     }
 )
+_OBSERVATION_COMPANION_NAMES = ("observations.json", "scanner-observations.json")
 
 
-def _observation_fingerprint(observation: Mapping[str, Any]) -> str:
-    for fp_field in ("fingerprints", "partial_fingerprints"):
-        fp_map = observation.get(fp_field)
-        if isinstance(fp_map, Mapping):
+def _first_fingerprint_value(fp_map: object) -> str | None:
+    if not isinstance(fp_map, dict):
+        return None
+    for _, val in sorted(fp_map.items()):
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
+def _normalized_location_line(loc: dict[str, Any]) -> int:
+    raw_line = loc.get("line")
+    if isinstance(raw_line, int) and not isinstance(raw_line, bool) and raw_line >= 1:
+        return raw_line
+    return 0
+
+
+def _observation_fingerprint(obs: dict[str, Any]) -> str:
+    for map_key in ("fingerprints", "partial_fingerprints"):
+        fp_map = obs.get(map_key)
+        if isinstance(fp_map, dict):
             fred_fp = fp_map.get("fred-skills/v1")
             if isinstance(fred_fp, str) and fred_fp:
                 return fred_fp
-    locations = sorted(
-        {
-            (str(loc.get("path", "")), str(loc.get("symbol", "")))
-            for loc in (observation.get("locations") or [])
-            if isinstance(loc, Mapping)
-        }
+    for map_key in ("fingerprints", "partial_fingerprints"):
+        fallback_fp = _first_fingerprint_value(obs.get(map_key))
+        if fallback_fp is not None:
+            return fallback_fp
+    loc_tuples = sorted(
+        (
+            str(loc.get("path", "")),
+            str(loc.get("symbol") or ""),
+            _normalized_location_line(loc),
+        )
+        for loc in (obs.get("locations") or [])
+        if isinstance(loc, dict)
     )
     return digest(
         {
-            "tool": str(observation.get("tool", "")),
-            "rule": str(observation.get("rule", "")),
-            "message": str(observation.get("message", "")),
-            "locations": locations,
-            "fingerprints": observation.get("fingerprints") or {},
-            "partial_fingerprints": observation.get("partial_fingerprints") or {},
+            "tool": str(obs.get("tool", "")),
+            "rule": str(obs.get("rule", "")),
+            "message": str(obs.get("message", "")),
+            "locations": loc_tuples,
         }
     )
 
 
-def _resolve_reconcile_observation(
-    directory: Path, finding_id: str
-) -> tuple[dict[str, Any], str | None]:
-    wf_mod_name, wf_script_rel = _SUITE_VALIDATOR_SCRIPTS["workflow"]
-    wf_validator = _load_script_validator(wf_mod_name, ROOT / wf_script_rel)
-    schema_rel = WORKFLOW_DELIVERABLE_SCHEMAS["observations.json"]
-    schema_obj = read_json_object(
-        ROOT / schema_rel, label=f"Observation schema '{schema_rel}'"
+def _validate_observation_companion(name: str, payload: dict[str, Any]) -> None:
+    schema_rel = WORKFLOW_DELIVERABLE_SCHEMAS[name]
+    obs_errs = _validate_canonical_artifact(
+        payload,
+        artifact_name=name,
+        schema_rel=schema_rel,
     )
-    matches: list[tuple[dict[str, Any], str | None]] = []
-    for obs_name in _OBSERVATION_COMPANION_NAMES:
-        obs_path = directory / obs_name
+    if obs_errs:
+        hint = (
+            f"Ensure paths in '{name}' are repository-relative."
+            if obs_errs[0].startswith("Path must be repository-relative")
+            else f"Ensure '{name}' conforms to '{schema_rel}'."
+        )
+        raise FredCliError(
+            f"Invalid observation artifact '{name}': {obs_errs[0]}",
+            code="invalid_observations",
+            hint=hint,
+        )
+
+
+def _load_directory_observations(
+    directory: Path,
+) -> tuple[list[dict[str, Any]], str | None]:
+    observations: list[dict[str, Any]] = []
+    obs_run_id: str | None = None
+    for name in _OBSERVATION_COMPANION_NAMES:
+        obs_path = directory / name
         if not obs_path.is_file():
             continue
-        payload = read_json_object(
-            obs_path,
-            label=f"Observation artifact '{obs_name}'",
-            hint=f"Ensure '{obs_name}' conforms to {schema_rel}.",
+        doc = read_json_object(obs_path, label=f"Observation ledger '{name}'")
+        _validate_observation_companion(name, doc)
+        doc_run_id = doc.get("run_id")
+        if obs_run_id is None and isinstance(doc_run_id, str) and doc_run_id:
+            obs_run_id = doc_run_id
+        observations.extend(
+            item for item in doc.get("observations", []) if isinstance(item, dict)
         )
-        schema_errs = _schema_errors(payload, schema_rel)
-        wf_errs = [] if schema_errs else wf_validator.validate(payload, schema_obj)
-        all_errs = [*schema_errs, *wf_errs]
-        if all_errs:
-            raise FredCliError(
-                f"Invalid observation artifact '{obs_name}': {all_errs[0]}",
-                code="invalid_observations",
-                hint=f"Ensure '{obs_name}' conforms to {schema_rel}.",
-            )
-        obs_run_id = (
-            payload.get("run_id") if isinstance(payload.get("run_id"), str) else None
-        )
-        for item in payload.get("observations", []):
-            if not isinstance(item, dict):
-                continue
-            props = item.get("properties")
-            prop_fid = props.get("findingId") if isinstance(props, dict) else None
-            if prop_fid == finding_id or item.get("rule") == finding_id:
-                matches.append((item, obs_run_id))
-    if len(matches) > 1:
+    return observations, obs_run_id
+
+
+def _observation_explicit_ids(obs: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    obs_id = obs.get("id")
+    if isinstance(obs_id, str) and obs_id:
+        ids.add(obs_id)
+    props = obs.get("properties")
+    if isinstance(props, dict):
+        prop_fid = props.get("findingId")
+        if isinstance(prop_fid, str) and prop_fid:
+            ids.add(prop_fid)
+    return ids
+
+
+def _match_unique_observation(
+    observations: list[dict[str, Any]], finding_id: str
+) -> dict[str, Any] | None:
+    id_matches = [
+        obs for obs in observations if finding_id in _observation_explicit_ids(obs)
+    ]
+    if len(id_matches) > 1:
         raise FredCliError(
-            f"Ambiguous observation identifier '{finding_id}': matched {len(matches)} observations; reconciliation requires a unique rule or finding ID",
+            f"Ambiguous observation identifier {finding_id!r}: multiple observations share this finding ID",
             code="ambiguous_observation",
-            hint="Ensure the reconciled observation has a unique 'properties.findingId' or 'rule' across observation artifacts.",
+            hint="Assign unique finding IDs ('id' or 'properties.findingId') before reconciling observations.",
         )
-    if not matches:
+    if len(id_matches) == 1:
+        return id_matches[0]
+    if finding_id == "unknown":
+        return None
+    rule_matches = [obs for obs in observations if obs.get("rule") == finding_id]
+    if len(rule_matches) > 1:
         raise FredCliError(
-            "Unknown finding or remediation state",
-            code="invalid_reconciliation",
-            hint="Verify the finding ID exists in 'audit.json' or imported observations and pass a valid remediation --state.",
+            f"Ambiguous observation rule {finding_id!r}: multiple observations share this rule ID",
+            code="ambiguous_observation",
+            hint="Assign unique finding IDs ('id' or 'properties.findingId') to disambiguate observations with the same rule.",
         )
-    return matches[0]
+    if len(rule_matches) == 1:
+        return rule_matches[0]
+    return None
 
 
-def _load_reconcile_audit_or_empty(directory: Path) -> dict[str, Any]:
-    p = Path(directory)
-    if (p / "audit.json").is_file():
-        return _require_audit_directory(p, "reconcile")
-    if p.is_dir() and not (p / "run.json").is_file():
-        has_obs = any((p / name).is_file() for name in _OBSERVATION_COMPANION_NAMES)
-        has_domain = any((p / dom).is_file() for dom in DOMAIN_DELIVERABLE_SCHEMAS)
-        if has_obs and not has_domain:
-            return {"findings": [], "evidence": []}
-    return _require_audit_directory(p, "reconcile")
-
-
-def reconcile(
-    directory: Path,
-    finding_id: str,
-    state: str,
-    note: str,
-    verification: Path | None = None,
-) -> dict:
-    audit = _load_reconcile_audit_or_empty(directory)
-    if state not in _RECONCILE_STATES:
-        raise FredCliError(
-            "Unknown finding or remediation state",
-            code="invalid_reconciliation",
-            hint="Verify the finding ID exists in 'audit.json' and pass a valid remediation --state.",
-        )
+def _resolve_reconcile_from_audit_dir(
+    directory: Path, finding_id: str
+) -> tuple[str | None, str | None]:
+    audit = _require_audit_directory(directory, "reconcile")
+    raw_run_id = audit.get("run_id")
+    audit_run_id = raw_run_id if isinstance(raw_run_id, str) and raw_run_id else None
     finding = next(
         (
             f
@@ -2434,59 +2272,82 @@ def reconcile(
         None,
     )
     if finding is not None:
-        fp = fingerprint(finding, audit)
-        obs_run_id = None
-    else:
-        matched_obs, obs_run_id = _resolve_reconcile_observation(directory, finding_id)
-        fp = _observation_fingerprint(matched_obs)
-    proof = None
-    if state == "verified-fixed":
-        if verification is None:
-            raise FredCliError(
-                "verified-fixed requires a verification JSON artifact",
-                code="missing_verification",
-                hint="Pass --verification <verification.json> matching verification.schema.json.",
-            )
-        jsonschema_mod = _require_jsonschema()
-        proof = read_json_object(verification, label="Verification artifact")
-        schema = read_json(
-            ROOT / "skills/repo-verify-fix/assets/verification.schema.json"
+        return fingerprint(finding, audit), audit_run_id
+    observations, obs_run_id = _load_directory_observations(directory)
+    matched = _match_unique_observation(observations, finding_id)
+    if matched is not None:
+        return _observation_fingerprint(matched), audit_run_id or obs_run_id
+    return None, audit_run_id
+
+
+def _resolve_reconcile_target(
+    directory: Path, finding_id: str
+) -> tuple[str | None, str | None]:
+    p = Path(directory)
+    if not p.is_dir() or (p / "audit.json").is_file():
+        return _resolve_reconcile_from_audit_dir(p, finding_id)
+    run_path = p / "run.json"
+    run_id: str | None = None
+    if run_path.is_file():
+        run_doc = read_json_object(run_path, label="Run metadata 'run.json'")
+        if _deliverable_for_run(run_doc) != "audit.json":
+            _require_audit_directory(p, "reconcile")
+        raw_rid = run_doc.get("run_id")
+        run_id = raw_rid if isinstance(raw_rid, str) and raw_rid else None
+    if any((p / name).is_file() for name in _OBSERVATION_COMPANION_NAMES):
+        observations, obs_run_id = _load_directory_observations(p)
+        matched = _match_unique_observation(observations, finding_id)
+        if matched is not None:
+            return _observation_fingerprint(matched), run_id or obs_run_id
+        return None, run_id or obs_run_id
+    _require_audit_directory(p, "reconcile")
+    return None, None
+
+
+def _validate_verified_fixed_proof(verification: Path | None) -> dict[str, Any]:
+    if verification is None:
+        raise FredCliError(
+            "verified-fixed requires a verification JSON artifact",
+            code="missing_verification",
+            hint="Pass --verification <verification.json> matching verification.schema.json.",
         )
-        failures = list(jsonschema_mod.Draft202012Validator(schema).iter_errors(proof))
-        if failures:
-            raise FredCliError(
-                "Verification artifact does not satisfy the proof schema: "
-                + failures[0].message,
-                code="invalid_verification",
-                hint="Update the verification artifact to satisfy skills/repo-verify-fix/assets/verification.schema.json.",
-            )
-        required = [
-            "before_revision",
-            "after_revision",
-            "original_reproduced",
-            "regression_passed",
-            "safe_controls_passed",
-            "commands",
-            "result",
-        ]
-        if (
-            any(key not in proof for key in required)
-            or any(
-                proof[k] is not True
-                for k in [
-                    "original_reproduced",
-                    "regression_passed",
-                    "safe_controls_passed",
-                ]
-            )
-            or not proof["commands"]
-        ):
-            raise FredCliError(
-                "Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result",
-                code="invalid_verification",
-                hint="Ensure original_reproduced, regression_passed, and safe_controls_passed are true and commands is nonempty.",
-            )
-    path = directory / "remediation.json"
+    proof = read_json_object(verification, label="Verification artifact")
+    proof_errors = _validate_canonical_artifact(
+        proof,
+        artifact_name="verification.json",
+        schema_rel="skills/repo-verify-fix/assets/verification.schema.json",
+    )
+    if proof_errors:
+        raise FredCliError(
+            "Verification artifact does not satisfy the proof schema: "
+            + proof_errors[0],
+            code="invalid_verification",
+            hint="Update the verification artifact to satisfy skills/repo-verify-fix/assets/verification.schema.json.",
+        )
+    required = (
+        "before_revision",
+        "after_revision",
+        "original_reproduced",
+        "regression_passed",
+        "safe_controls_passed",
+        "commands",
+        "result",
+    )
+    bool_flags = ("original_reproduced", "regression_passed", "safe_controls_passed")
+    if (
+        any(key not in proof for key in required)
+        or any(proof[k] is not True for k in bool_flags)
+        or not proof["commands"]
+    ):
+        raise FredCliError(
+            "Verification must record before/after source, executed reproduction/regression, safe controls, commands, and result",
+            code="invalid_verification",
+            hint="Ensure original_reproduced, regression_passed, and safe_controls_passed are true and commands is nonempty.",
+        )
+    return proof
+
+
+def _load_or_init_remediation_ledger(path: Path, run_id: str | None) -> dict[str, Any]:
     records: dict[str, Any] = (
         read_json_object(path, label="Remediation ledger 'remediation.json'")
         if path.exists()
@@ -2510,9 +2371,12 @@ def reconcile(
     records.setdefault("finding_fingerprint_matches", [])
     records.setdefault("remediation_state_transitions", [])
     records.setdefault("unmapped_records", [])
-    audit_run_id = audit.get("run_id") or obs_run_id
-    if isinstance(audit_run_id, str) and audit_run_id:
-        records.setdefault("run_id", audit_run_id)
+    if isinstance(run_id, str) and run_id:
+        records.setdefault("run_id", run_id)
+    return records
+
+
+def _latest_remediation_state(records: dict[str, Any], finding_id: str, fp: str) -> str:
     previous_state = "open"
     for prior_tr in records["remediation_state_transitions"]:
         if (
@@ -2534,6 +2398,31 @@ def reconcile(
             and isinstance(prior_rec.get("state"), str)
         ):
             previous_state = prior_rec["state"]
+    return previous_state
+
+
+def reconcile(
+    directory: Path,
+    finding_id: str,
+    state: str,
+    note: str,
+    verification: Path | None = None,
+) -> dict:
+    fp, target_run_id = _resolve_reconcile_target(directory, finding_id)
+    if fp is None or state not in _VALID_REMEDIATION_STATES:
+        raise FredCliError(
+            "Unknown finding or remediation state",
+            code="invalid_reconciliation",
+            hint="Verify the finding or observation ID exists in 'audit.json' or imported observations and pass a valid remediation --state.",
+        )
+    proof = (
+        _validate_verified_fixed_proof(verification)
+        if state == "verified-fixed"
+        else None
+    )
+    path = directory / "remediation.json"
+    records = _load_or_init_remediation_ledger(path, target_run_id)
+    previous_state = _latest_remediation_state(records, finding_id, fp)
     record: dict[str, Any] = {
         "at": now(),
         "finding_id": finding_id,
@@ -2566,8 +2455,10 @@ def reconcile(
     if verification is not None:
         transition["verification_proof"] = str(verification)
     records["remediation_state_transitions"].append(transition)
-    remediation_errors = _schema_errors(
-        records, WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"]
+    remediation_errors = _validate_canonical_artifact(
+        records,
+        artifact_name="remediation.json",
+        schema_rel=WORKFLOW_DELIVERABLE_SCHEMAS["remediation.json"],
     )
     if remediation_errors:
         raise FredCliError(

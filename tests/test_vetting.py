@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 
@@ -17,6 +19,8 @@ import fredlib
 from fredlib import installation, releases, vetting
 from fredlib.common import atomic_json, read_json
 from validate_skills import validate, validate_skill
+
+from tests.catalog_oracles import expected_total_skills
 
 
 def _write_valid_skill_fixture(pkg: Path, name: str = "sample-vetted") -> None:
@@ -926,10 +930,13 @@ class VettingModuleTests(unittest.TestCase):
             "CLAUDE.md",
             "GEMINI.md",
             ".cursor-plugin/marketplace.json",
+            ".claude-plugin/marketplace.json",
             "gemini-extension.json",
         ):
             self.assertIn(expected_cfg, root_payload["configs_scanned"])
-        self.assertEqual(57, len(root_payload["skills_scanned"]))
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        self.assertEqual(expected_skills, len(root_payload["skills_scanned"]))
 
     def test_markdown_fence_indentation_and_titled_reference_links(self) -> None:
         repo = self.root / "fence-and-reflink-repo"

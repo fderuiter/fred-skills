@@ -13,6 +13,8 @@ from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import validate_architecture
@@ -22,6 +24,8 @@ import validate_skills
 import validate_spec
 import validate_testing
 import validate_workflow
+
+from tests.catalog_oracles import expected_total_skills
 
 
 class SuiteValidatorsTests(unittest.TestCase):
@@ -99,17 +103,7 @@ class SuiteValidatorsTests(unittest.TestCase):
                     matched = False
                     for sp in schemas:
                         schema_obj = json.loads(sp.read_text(encoding="utf-8"))
-                        if sp.name == "bundle.schema.json":
-                            import jsonschema
-
-                            errs = [
-                                e.message
-                                for e in jsonschema.Draft202012Validator(
-                                    schema_obj
-                                ).iter_errors(data)
-                            ]
-                        else:
-                            errs = validator_mod.validate(data, schema_obj)
+                        errs = validator_mod.validate(data, schema_obj)
                         if not errs:
                             matched = True
                             break
@@ -379,6 +373,41 @@ class SuiteValidatorsTests(unittest.TestCase):
             self._run_cli("validate_review.py", contradictory, schema_path).returncode,
         )
 
+        empty_request_changes: dict[str, Any] = {
+            **valid,
+            "verdict": "request_changes",
+            "findings": [],
+        }
+        rc_errs = validate_review.validate(empty_request_changes, schema)
+        self.assertTrue(
+            any("Verdict 'request_changes' requires" in e for e in rc_errs),
+            rc_errs,
+        )
+        self.assertEqual(
+            1,
+            self._run_cli(
+                "validate_review.py", empty_request_changes, schema_path
+            ).returncode,
+        )
+
+        for unsafe_path in (
+            "",
+            ".",
+            "../escape.py",
+            "/abs/guard.py",
+            "C:/win/guard.py",
+            "src\\guard.py",
+            ".git/config",
+            "sub/.git/hooks/pre-commit",
+        ):
+            unsafe_review = {
+                **valid,
+                "findings": [{**finding, "file": unsafe_path}],
+            }
+            self.assertTrue(
+                validate_review.validate(unsafe_review, schema), unsafe_path
+            )
+
     def test_validate_testing_enforces_unique_ids_and_relative_component_paths(
         self,
     ) -> None:
@@ -465,8 +494,49 @@ class SuiteValidatorsTests(unittest.TestCase):
             1, self._run_cli("validate_spec.py", invalid, schema_path).returncode
         )
 
-    def test_malformed_json_and_missing_jsonschema_exit_with_code_2(self) -> None:
+        for vacuous in (
+            {**valid, "convergence_checks": []},
+            {k: v for k, v in valid.items() if k != "convergence_checks"},
+        ):
+            vac_errs = validate_spec.validate(vacuous, schema)
+            self.assertTrue(
+                any("Status 'converged' requires" in e for e in vac_errs), vac_errs
+            )
+            self.assertEqual(
+                1, self._run_cli("validate_spec.py", vacuous, schema_path).returncode
+            )
+
+        for new_scopes, out_scopes in (
+            (["src/exporter/legacy_csv.py"], ["src/exporter/"]),
+            (["src/exporter"], ["src/exporter/legacy_csv.py"]),
+            (["src/exporter/ndjson.py"], ["src/exporter/ndjson.py"]),
+        ):
+            overlap_spec = {
+                **valid,
+                "new_file_scopes": new_scopes,
+                "out_of_scope": out_scopes,
+            }
+            ov_errs = validate_spec.validate(overlap_spec, schema)
+            self.assertTrue(
+                any("overlaps with out_of_scope" in e for e in ov_errs), ov_errs
+            )
+            self.assertEqual(
+                1,
+                self._run_cli("validate_spec.py", overlap_spec, schema_path).returncode,
+            )
+
+        prose_out_of_scope = {
+            **valid,
+            "new_file_scopes": ["src/exporter/ndjson.py"],
+            "out_of_scope": ["CSV export format in v1", "src/exporter_v2/ndjson.py"],
+        }
+        self.assertEqual([], validate_spec.validate(prose_out_of_scope, schema))
+
+    def test_malformed_json_and_unsupported_schema_keywords_exit_with_code_2(
+        self,
+    ) -> None:
         schema_path = ROOT / "shared/code-review/resources/assets/review.schema.json"
+        review_schema = json.loads(schema_path.read_text(encoding="utf-8"))
         for script_name in (
             "validate_audit.py",
             "validate_workflow.py",
@@ -493,11 +563,304 @@ class SuiteValidatorsTests(unittest.TestCase):
             validate_testing,
             validate_spec,
         ):
-            with (
-                patch.object(builtins, "__import__", side_effect=block_jsonschema),
-                self.assertRaises(RuntimeError),
-            ):
-                mod.validate({}, {})
+            with patch.object(builtins, "__import__", side_effect=block_jsonschema):
+                schema_errs = mod.validate({}, review_schema)
+                self.assertTrue(schema_errs)
+
+        unsupported_schemas = [
+            {"type": "object", "allOf": [{"type": "object"}]},
+            {"type": "object", "$defs": {"item": {"type": "string", "format": "uri"}}},
+            {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0}},
+        ]
+        bad_schema_file = self.tmp_dir / "unsupported.schema.json"
+        bad_schema_file.write_text(json.dumps(unsupported_schemas[0]), encoding="utf-8")
+        for mod, script_name in (
+            (validate_audit, "validate_audit.py"),
+            (validate_workflow, "validate_workflow.py"),
+            (validate_architecture, "validate_architecture.py"),
+            (validate_review, "validate_review.py"),
+            (validate_testing, "validate_testing.py"),
+            (validate_spec, "validate_spec.py"),
+        ):
+            for bad_schema in unsupported_schemas:
+                with self.assertRaises(ValueError):
+                    mod.validate({}, bad_schema)
+            proc = self._run_cli(script_name, {}, bad_schema_file)
+            self.assertEqual(2, proc.returncode, proc.stderr)
+            self.assertIn("Unsupported JSON Schema keyword", proc.stderr)
+
+    def test_stdlib_evaluator_parity_with_jsonschema_across_all_package_schemas(
+        self,
+    ) -> None:
+        import copy
+
+        import jsonschema
+
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        schema_paths = sorted((ROOT / "skills").glob("*/assets/*.schema.json"))
+        self.assertEqual(expected_skills + 1, len(schema_paths))
+        obs_schema_path = ROOT / "schemas/observations.schema.json"
+        self.assertTrue(obs_schema_path.is_file())
+
+        expected_keys = {
+            "$defs",
+            "$ref",
+            "$schema",
+            "additionalProperties",
+            "anyOf",
+            "const",
+            "enum",
+            "items",
+            "maxLength",
+            "minItems",
+            "minLength",
+            "minimum",
+            "oneOf",
+            "pattern",
+            "properties",
+            "required",
+            "title",
+            "type",
+        }
+        observed_keys: set[str] = set()
+
+        def collect_keys(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            for k, v in node.items():
+                observed_keys.add(k)
+                if k in ("properties", "$defs") and isinstance(v, dict):
+                    for sub in v.values():
+                        collect_keys(sub)
+                elif k in ("items", "additionalProperties") and isinstance(v, dict):
+                    collect_keys(v)
+                elif k in ("anyOf", "oneOf") and isinstance(v, list):
+                    for sub in v:
+                        collect_keys(sub)
+
+        for sp in [*schema_paths, obs_schema_path]:
+            schema = json.loads(sp.read_text(encoding="utf-8"))
+            collect_keys(schema)
+        self.assertEqual(expected_keys, observed_keys)
+
+        def assert_parity(instance: Any, schema: dict[str, Any], label: str) -> None:
+            stdlib_bad = bool(validate_review._schema_errors(instance, schema))
+            js_bad = bool(
+                list(jsonschema.Draft202012Validator(schema).iter_errors(instance))
+            )
+            self.assertEqual(js_bad, stdlib_bad, label)
+
+        def package_json_blocks(pkg: Path) -> list[Any]:
+            parsed: list[Any] = []
+            for ref_name in ("method.md", "examples.md"):
+                ref_path = pkg / "references" / ref_name
+                if not ref_path.is_file():
+                    continue
+                fenced, _ = validate_skills._extract_fenced_blocks(
+                    ref_path.read_text(encoding="utf-8")
+                )
+                for lang, body in fenced:
+                    if lang == "json":
+                        parsed.append(json.loads(body))
+            return parsed
+
+        # Positive + negative parity across all 57 packages and 58 schemas
+        for sp in schema_paths:
+            schema = json.loads(sp.read_text(encoding="utf-8"))
+            pkg = sp.parents[1]
+            blocks = package_json_blocks(pkg)
+            matching = [
+                b
+                for b in blocks
+                if not list(jsonschema.Draft202012Validator(schema).iter_errors(b))
+            ]
+            self.assertTrue(matching, f"No matching valid example for {sp}")
+            sample = matching[0]
+            assert_parity(sample, schema, f"{sp}:valid")
+            assert_parity({}, schema, f"{sp}:empty-object")
+            assert_parity("not-an-object", schema, f"{sp}:primitive")
+            assert_parity({**sample, "__extra__": 1}, schema, f"{sp}:extra-prop")
+            for req_key in schema.get("required", []):
+                missing = {k: v for k, v in sample.items() if k != req_key}
+                assert_parity(missing, schema, f"{sp}:missing:{req_key}")
+            for prop_key, prop_schema in schema.get("properties", {}).items():
+                if prop_key not in sample:
+                    continue
+                mutated = copy.deepcopy(sample)
+                mutated[prop_key] = True
+                assert_parity(mutated, schema, f"{sp}:bool-type:{prop_key}")
+                if prop_schema.get("type") == "integer":
+                    mut_float = copy.deepcopy(sample)
+                    mut_float[prop_key] = 1.0
+                    assert_parity(mut_float, schema, f"{sp}:int-float-1.0:{prop_key}")
+                    mut_frac = copy.deepcopy(sample)
+                    mut_frac[prop_key] = 1.5
+                    assert_parity(mut_frac, schema, f"{sp}:int-float-1.5:{prop_key}")
+
+        # Targeted keyword edge cases ($defs/$ref, additionalProperties dict, pattern, maxLength, minimum, minItems, oneOf, anyOf)
+        rec_schema = json.loads(
+            (
+                ROOT
+                / "skills/repo-reconcile-findings/assets/reconciliation.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        bad_ref = {
+            "schema_version": "1.0",
+            "finding_fingerprint_matches": [],
+            "remediation_state_transitions": [
+                {
+                    "finding_id": "F-1",
+                    "fingerprint": "fp",
+                    "previous_state": "invalid-state",
+                    "new_state": "open",
+                    "reason": "bad enum via $ref",
+                }
+            ],
+            "unmapped_records": [],
+        }
+        assert_parity(bad_ref, rec_schema, "reconciliation:$ref-enum")
+
+        bundle_schema = json.loads(
+            (
+                ROOT / "skills/repo-audit-diagnostics/assets/bundle.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        bad_bundle_entry = {
+            "schema_version": "1.0",
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "failure_classification": {
+                "failure_type": "schema_validation_error",
+                "summary": "err",
+                "line_number": 1,
+            },
+            "environment": {"platform": "linux", "python_version": "3.12"},
+            "recovery": {"instructions": ["retry"]},
+            "scrubbed_transcript": "[line 1] redacted",
+            "redaction": {
+                "tier": "evidence",
+                "credentials_redacted": 1,
+                "tool_outputs_omitted": 0,
+                "total_redactions": 1,
+                "by_category": {"bearer_token": -1},
+            },
+        }
+        assert_parity(
+            bad_bundle_entry, bundle_schema, "bundle:additionalProperties-subschema"
+        )
+
+        obs_schema = json.loads(obs_schema_path.read_text(encoding="utf-8"))
+        obs_entry: dict[str, Any] = {
+            "id": "OBS-1",
+            "tool": "semgrep",
+            "tool_version": "1.90.0",
+            "rule": "rule/check",
+            "kind": "review",
+            "reported_level": "warning",
+            "message": "Needs review",
+            "locations": [{"path": "src/app.py", "line": None}],
+            "evidence_state": "scanner-reported; agent verification not performed",
+            "fingerprints": {"fred-skills/v1": "abc123"},
+            "suppressions": [{"kind": "external", "status": "underReview"}],
+            "properties": {"findingId": "F-1", "severity": "medium"},
+        }
+        valid_obs: dict[str, Any] = {
+            "schema_version": "1.0",
+            "observations": [obs_entry],
+            "limitations": ["Scanner claims require verification."],
+        }
+        assert_parity(valid_obs, obs_schema, "observations:valid-nullable-line")
+        assert_parity(
+            {
+                **valid_obs,
+                "observations": [{**obs_entry, "fingerprints": {"k": ""}}],
+            },
+            obs_schema,
+            "observations:additionalProperties-empty-string",
+        )
+        self.assertEqual([], validate_workflow.validate(valid_obs, obs_schema))
+        for bad_obs_path in ("../escape.py", ".git/config"):
+            bad_obs_doc = {
+                **valid_obs,
+                "observations": [
+                    {
+                        **obs_entry,
+                        "locations": [{"path": bad_obs_path, "line": 1}],
+                    }
+                ],
+            }
+            self.assertTrue(
+                validate_workflow.validate(bad_obs_doc, obs_schema), bad_obs_path
+            )
+        for bad_obs_loc in (
+            {"path": "src/app.py", "line": 12, "end_line": 4},
+            {"path": "src/app.py", "line": None, "end_line": 4},
+        ):
+            bad_range_doc = {
+                **valid_obs,
+                "observations": [{**obs_entry, "locations": [bad_obs_loc]}],
+            }
+            range_errs = validate_workflow.validate(bad_range_doc, obs_schema)
+            self.assertTrue(
+                any("end_line" in err for err in range_errs),
+                f"Expected end_line range error for {bad_obs_loc}, got {range_errs}",
+            )
+
+    def test_all_synced_validators_run_under_python_S_and_omit_dev_deps(
+        self,
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
+        synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
+        self.assertEqual(expected_skills, len(synced_validators))
+        for script_path in synced_validators:
+            src = script_path.read_text(encoding="utf-8")
+            self.assertNotIn("jsonschema", src, str(script_path))
+            self.assertNotIn("requirements-dev.txt", src, str(script_path))
+
+        def check_package(script_path: Path) -> None:
+            pkg = script_path.parents[1]
+            blocks: list[str] = []
+            for ref_name in ("method.md", "examples.md"):
+                ref_path = pkg / "references" / ref_name
+                if not ref_path.is_file():
+                    continue
+                fenced, _ = validate_skills._extract_fenced_blocks(
+                    ref_path.read_text(encoding="utf-8")
+                )
+                blocks.extend(body for lang, body in fenced if lang == "json")
+            self.assertTrue(blocks, f"No JSON blocks in {pkg.name}")
+            pkg_tmp = self.tmp_dir / pkg.name
+            pkg_tmp.mkdir(parents=True, exist_ok=True)
+            for idx, raw_json in enumerate(blocks):
+                good_file = pkg_tmp / f"valid-{idx}.json"
+                good_file.write_text(raw_json, encoding="utf-8")
+                good_proc = subprocess.run(
+                    [sys.executable, "-B", "-S", str(script_path), str(good_file)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    0,
+                    good_proc.returncode,
+                    f"{pkg.name} block #{idx + 1} failed: {good_proc.stderr}",
+                )
+            bad_file = pkg_tmp / "invalid.json"
+            bad_file.write_text('{"schema_version": "1.0"}', encoding="utf-8")
+            bad_proc = subprocess.run(
+                [sys.executable, "-B", "-S", str(script_path), str(bad_file)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, bad_proc.returncode, f"{pkg.name}: {bad_proc.stderr}")
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(check_package, synced_validators))
 
     def test_refactored_validators_and_sync_stay_flat_and_portable(self) -> None:
         import ast
@@ -512,8 +875,10 @@ class SuiteValidatorsTests(unittest.TestCase):
             ROOT / "scripts/validate_testing.py",
             ROOT / "scripts/validate_spec.py",
         ]
+        expected_skills = expected_total_skills(ROOT)
+        self.assertGreaterEqual(expected_skills, 1)
         synced_validators = sorted((ROOT / "skills").glob("*/scripts/validate_*.py"))
-        self.assertEqual(57, len(synced_validators))
+        self.assertEqual(expected_skills, len(synced_validators))
 
         for path in canonical_targets:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

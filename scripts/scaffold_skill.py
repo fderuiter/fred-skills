@@ -528,7 +528,16 @@ def _render_examples_markdown(name: str, title: str, schema_filename: str) -> st
     )
 
 
+def _extract_stdlib_schema_evaluator() -> str:
+    source = (_SCRIPTS_DIR / "validate_review.py").read_text(encoding="utf-8")
+    marker = "def _is_repo_relative("
+    idx = source.index(marker)
+    header_end = source.index("\n\n", source.index("from typing import Any")) + 2
+    return source[header_end:idx]
+
+
 def _render_validator_script(schema_filename: str) -> str:
+    evaluator_body = _extract_stdlib_schema_evaluator()
     return (
         "#!/usr/bin/env python3\n"
         '"""Validate skill deliverable JSON against the bundled output schema."""\n\n'
@@ -536,20 +545,13 @@ def _render_validator_script(schema_filename: str) -> str:
         "import argparse\n"
         "import json\n"
         "import pathlib\n"
+        "import re\n"
         "import sys\n"
         "from collections.abc import Mapping\n"
-        "from typing import Any\n\n\n"
+        "from typing import Any\n\n"
+        f"{evaluator_body}"
         "def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:\n"
-        "    try:\n"
-        "        import jsonschema\n"
-        "    except ImportError as exc:\n"
-        "        raise RuntimeError(\n"
-        '            "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."\n'
-        "        ) from exc\n"
-        "    errors = [\n"
-        '        (("/".join(map(str, err.absolute_path)) or "root") + ": " + err.message)\n'
-        "        for err in jsonschema.Draft202012Validator(schema).iter_errors(data)\n"
-        "    ]\n"
+        "    errors = _schema_errors(data, schema)\n"
         "    if errors or not isinstance(data, Mapping):\n"
         "        return errors\n"
         "    seen_ids: set[str] = set()\n"
@@ -575,11 +577,8 @@ def _render_validator_script(schema_filename: str) -> str:
         '            json.loads(args.artifact.read_text(encoding="utf-8")),\n'
         '            json.loads(args.schema.read_text(encoding="utf-8")),\n'
         "        )\n"
-        "    except (OSError, ValueError) as exc:\n"
+        "    except (OSError, TypeError, ValueError) as exc:\n"
         '        print(f"Invalid input: {exc}", file=sys.stderr)\n'
-        "        return 2\n"
-        "    except (ImportError, RuntimeError) as exc:\n"
-        '        print(f"{exc}", file=sys.stderr)\n'
         "        return 2\n"
         "    if errors:\n"
         "        for err in errors:\n"
