@@ -791,6 +791,159 @@ with tempfile.TemporaryDirectory() as temporary:
             assert "---" not in body_text
             web_page.screenshot(path="/tmp/site_skill_page.png")
 
+            # Verify multi-block list DOM order and zero leaked tokens on docs/runbooks.html
+            runbooks_resp = web_page.goto(
+                f"{server_origin}/fred-skills/docs/runbooks.html"
+            )
+            assert runbooks_resp is not None and runbooks_resp.status == 200
+            assert web_page.locator("script").count() == 0
+            runbooks_dom = web_page.evaluate(
+                """() => {
+                    const lis = Array.from(document.querySelectorAll('main li'));
+                    const activeProc = lis.find(li => li.textContent.includes('Check for active processes:'));
+                    const scenarioLi = lis.find(li => li.textContent.includes('Interpret failure signatures and determine remediation:'));
+                    const trailingCount = lis.filter(li => {
+                        const tags = Array.from(li.children).map(c => c.tagName.toLowerCase());
+                        let seen = false;
+                        for (const tag of tags) {
+                            if (tag === 'h4') return true;
+                            if (tag === 'pre' || tag === 'ul' || tag === 'ol') seen = true;
+                            else if (seen && (tag === 'p' || tag === 'blockquote')) return true;
+                        }
+                        return false;
+                    }).length;
+                    const activeRects = activeProc
+                        ? Array.from(activeProc.children).map(c => ({
+                              tag: c.tagName.toLowerCase(),
+                              top: c.getBoundingClientRect().top,
+                              text: c.textContent.trim(),
+                          }))
+                        : [];
+                    const scenarioTags = scenarioLi
+                        ? Array.from(scenarioLi.children).map(c => c.tagName.toLowerCase())
+                        : [];
+                    const scenarioH4Ids = scenarioLi
+                        ? Array.from(scenarioLi.querySelectorAll(':scope > h4')).map(h => h.id)
+                        : [];
+                    return { trailingCount, activeRects, scenarioTags, scenarioH4Ids };
+                }"""
+            )
+            assert runbooks_dom["trailingCount"] == 16, runbooks_dom
+            assert [r["tag"] for r in runbooks_dom["activeRects"]] == [
+                "p",
+                "pre",
+                "p",
+            ], runbooks_dom["activeRects"]
+            assert (
+                runbooks_dom["activeRects"][0]["top"]
+                < runbooks_dom["activeRects"][1]["top"]
+                < runbooks_dom["activeRects"][2]["top"]
+            ), runbooks_dom["activeRects"]
+            assert runbooks_dom["scenarioTags"] == [
+                "p",
+                "h4",
+                "p",
+                "ul",
+                "h4",
+                "p",
+                "ul",
+                "h4",
+                "p",
+                "ul",
+                "h4",
+                "p",
+                "ul",
+            ], runbooks_dom["scenarioTags"]
+            assert len(set(runbooks_dom["scenarioH4Ids"])) == 4 and all(
+                runbooks_dom["scenarioH4Ids"]
+            ), runbooks_dom["scenarioH4Ids"]
+            web_page.locator(
+                "#scenario-a-tool-execution-timeout-tool_timeout"
+            ).scroll_into_view_if_needed()
+            web_page.screenshot(path="/tmp/site_runbooks_scenarios.png")
+
+            # Verify <pre> followed by <blockquote> inside <li> on docs/integration.html
+            integration_resp = web_page.goto(
+                f"{server_origin}/fred-skills/docs/integration.html"
+            )
+            assert integration_resp is not None and integration_resp.status == 200
+            assert web_page.locator("script").count() == 0
+            integration_dom = web_page.evaluate(
+                """() => {
+                    const li = Array.from(document.querySelectorAll('main li')).find(
+                        el => el.textContent.includes('Marketplace install (') &&
+                              el.textContent.includes('Stage-1 context budget warning:')
+                    );
+                    if (!li) return null;
+                    return Array.from(li.children).map(c => ({
+                        tag: c.tagName.toLowerCase(),
+                        top: c.getBoundingClientRect().top,
+                        text: c.textContent.trim(),
+                    }));
+                }"""
+            )
+            assert integration_dom is not None
+            assert [c["tag"] for c in integration_dom] == [
+                "p",
+                "pre",
+                "blockquote",
+            ], integration_dom
+            assert (
+                integration_dom[0]["top"]
+                < integration_dom[1]["top"]
+                < integration_dom[2]["top"]
+            ), integration_dom
+            web_page.locator("main blockquote").nth(1).scroll_into_view_if_needed()
+            web_page.screenshot(path="/tmp/site_integration_callout.png")
+
+            # Verify trailing <p> after nested <ul> on skills/repo-audit-diagnostics/SKILL.html
+            diag_resp = web_page.goto(
+                f"{server_origin}/fred-skills/skills/repo-audit-diagnostics/SKILL.html"
+            )
+            assert diag_resp is not None and diag_resp.status == 200
+            diag_dom = web_page.evaluate(
+                """() => {
+                    const li = Array.from(document.querySelectorAll('main li')).find(
+                        el => el.textContent.includes('Detect failure signatures:')
+                    );
+                    if (!li) return null;
+                    return Array.from(li.children).map(c => ({
+                        tag: c.tagName.toLowerCase(),
+                        top: c.getBoundingClientRect().top,
+                        text: c.textContent.trim(),
+                    }));
+                }"""
+            )
+            assert diag_dom is not None
+            assert [c["tag"] for c in diag_dom] == ["p", "ul", "p"], diag_dom
+            assert diag_dom[0]["top"] < diag_dom[1]["top"] < diag_dom[2]["top"], (
+                diag_dom
+            )
+            assert "Pinpoint the precise transcript line" in diag_dom[2]["text"]
+            web_page.screenshot(path="/tmp/site_diagnostics_skill.png")
+
+            # Verify CLAUDE.html and GEMINI.html host shims link to AGENTS.html and render canonical instructions
+            for shim_page in ("GEMINI.html", "CLAUDE.html"):
+                shim_resp = web_page.goto(f"{server_origin}/fred-skills/{shim_page}")
+                assert shim_resp is not None and shim_resp.status == 200, shim_page
+                assert "@AGENTS.md" not in web_page.locator("main").inner_text(), (
+                    shim_page
+                )
+                assert (
+                    web_page.locator("main h1").first.inner_text()
+                    == "Working in fred-skills"
+                ), shim_page
+                assert web_page.locator('main a[href="AGENTS.html"]').count() >= 1, (
+                    shim_page
+                )
+            web_page.screenshot(path="/tmp/site_claude_shim.png")
+            web_page.locator('main a[href="AGENTS.html"]').first.click()
+            web_page.wait_for_url(f"{server_origin}/fred-skills/AGENTS.html")
+            assert (
+                web_page.locator("main h1").first.inner_text()
+                == "Working in fred-skills"
+            )
+
             assert not web_errors
             assert not external_requests
         finally:
