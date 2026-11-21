@@ -934,6 +934,8 @@ class VettingModuleTests(unittest.TestCase):
             "gemini-extension.json",
         ):
             self.assertIn(expected_cfg, root_payload["configs_scanned"])
+        self.assertFalse((ROOT / ".cursor-plugin/plugin.json").exists())
+        self.assertNotIn(".cursor-plugin/plugin.json", root_payload["configs_scanned"])
         expected_skills = expected_total_skills(ROOT)
         self.assertGreaterEqual(expected_skills, 1)
         self.assertEqual(expected_skills, len(root_payload["skills_scanned"]))

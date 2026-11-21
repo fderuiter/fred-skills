@@ -64,7 +64,7 @@ repos:
         always_run: true
       - id: unit-tests
         name: Test validation and synthetic contracts
-        entry: python -m unittest discover -s tests -v
+        entry: python scripts/run_checks.py --phase tests
         language: system
         pass_filenames: false
         always_run: true
