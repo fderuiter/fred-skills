@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 FRED_PY = ROOT / "scripts/fred.py"
 
 from tests.catalog_oracles import (
+    assert_module_ast_bounds,
     expected_fred_subcommand_count,
     expected_pack_skill_count,
     expected_recipe_count,
@@ -2432,6 +2433,15 @@ class FredDispatchRegistryTests(unittest.TestCase):
         ]
         for handler in handlers:
             self.assertTrue(callable(handler))
+
+    def test_fred_module_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        """Every function in scripts/fred.py must stay within C901 <= 10 and nesting <= 4."""
+        assert_module_ast_bounds(
+            self,
+            ROOT / "scripts/fred.py",
+            max_complexity=10,
+            max_nesting=4,
+        )
 
 
 class FredStructuredCliErrorsTests(unittest.TestCase):

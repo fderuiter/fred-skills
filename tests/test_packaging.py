@@ -40,6 +40,7 @@ from validate_skills import (
 )
 
 from tests.catalog_oracles import (
+    assert_module_ast_bounds,
     expected_audit_domain_count,
     expected_host_count,
     expected_non_audit_skill_count,
@@ -3615,6 +3616,14 @@ class PackageTests(unittest.TestCase):
                 3,
                 f"Function {name} exceeds control-flow nesting limit of 3 (depth: {nesting})",
             )
+
+    def test_skill_tools_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        assert_module_ast_bounds(
+            self,
+            ROOT / "scripts/skill_tools.py",
+            max_complexity=10,
+            max_nesting=4,
+        )
 
     def test_frontmatter_failure_short_circuits_and_symlink_ui_is_guarded(self) -> None:
         schemas_dir = self.root / "schemas"

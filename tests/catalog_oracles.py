@@ -234,3 +234,151 @@ def registered_fred_commands(root: Path = ROOT) -> set[str]:
 def expected_fred_subcommand_count(root: Path = ROOT) -> int:
     """Return total number of subcommands in scripts/fred.py COMMAND_REGISTRY."""
     return len(registered_fred_commands(root))
+
+
+_MCCABE_BRANCH_NODES = (
+    ast.If,
+    ast.While,
+    ast.For,
+    ast.AsyncFor,
+    ast.ExceptHandler,
+    ast.IfExp,
+)
+
+_STRICT_BRANCH_NODES = (
+    *_MCCABE_BRANCH_NODES,
+    ast.With,
+    ast.AsyncWith,
+)
+
+_NESTING_STMT_NODES = (
+    ast.If,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.TryStar,
+)
+
+
+def mccabe_complexity(node: ast.AST) -> int:
+    """Compute Ruff C901-equivalent McCabe cyclomatic complexity via stdlib ast."""
+    complexity = 1
+    for child in ast.walk(node):
+        if child is node:
+            continue
+        if isinstance(child, _MCCABE_BRANCH_NODES):
+            complexity += 1
+        elif isinstance(child, ast.comprehension):
+            complexity += len(child.ifs)
+        elif isinstance(child, ast.match_case) and (
+            child.guard is not None
+            or not isinstance(child.pattern, ast.MatchAs)
+            or child.pattern.name is not None
+        ):
+            complexity += 1
+    return complexity
+
+
+def strict_ast_complexity(node: ast.AST) -> int:
+    """Compute strict AST complexity (including With and BoolOp branches)."""
+    complexity = 1
+    for child in ast.walk(node):
+        if child is node:
+            continue
+        if isinstance(child, _STRICT_BRANCH_NODES):
+            complexity += 1
+        elif isinstance(child, ast.BoolOp):
+            complexity += len(child.values) - 1
+        elif isinstance(child, ast.comprehension):
+            complexity += len(child.ifs)
+    return complexity
+
+
+def _stmt_child_branches(
+    stmt: ast.stmt, depth: int
+) -> list[tuple[list[ast.stmt], int]]:
+    if isinstance(stmt, ast.Match):
+        return [(case.body, depth + 1) for case in stmt.cases if case.body]
+    if not isinstance(stmt, _NESTING_STMT_NODES):
+        return []
+    branches: list[tuple[list[ast.stmt], int]] = [
+        (stmt.body, depth + 1),
+        (getattr(stmt, "finalbody", []), depth + 1),
+    ]
+    for handler in getattr(stmt, "handlers", []):
+        branches.append((handler.body, depth + 1))
+    orelse = getattr(stmt, "orelse", [])
+    if orelse:
+        is_elif = len(orelse) == 1 and isinstance(orelse[0], ast.If)
+        branches.append((orelse, depth if is_elif else depth + 1))
+    return [pair for pair in branches if pair[0]]
+
+
+def max_control_flow_nesting(stmts: list[ast.stmt], depth: int = 0) -> int:
+    """Return maximum control-flow statement nesting depth (treating elif as flat)."""
+    deepest = depth
+    for stmt in stmts:
+        for branch_body, next_depth in _stmt_child_branches(stmt, depth):
+            deepest = max(deepest, max_control_flow_nesting(branch_body, next_depth))
+    return deepest
+
+
+def collect_module_functions(
+    module_path: Path,
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Parse module_path and return every top-level, nested, and method function node."""
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for item in tree.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions[item.name] = item
+            for sub in ast.walk(item):
+                if sub is not item and isinstance(
+                    sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ):
+                    functions[f"{item.name}.{sub.name}"] = sub
+        elif isinstance(item, ast.ClassDef):
+            for method in item.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    functions[f"{item.name}.{method.name}"] = method
+                    for sub in ast.walk(method):
+                        if sub is not method and isinstance(
+                            sub, (ast.FunctionDef, ast.AsyncFunctionDef)
+                        ):
+                            functions[f"{item.name}.{method.name}.{sub.name}"] = sub
+    return functions
+
+
+def assert_module_ast_bounds(
+    test_case: Any,
+    module_path: Path,
+    *,
+    max_complexity: int = 10,
+    max_nesting: int = 4,
+) -> None:
+    """Assert C901/AST complexity <= max_complexity and nesting <= max_nesting across module_path."""
+    functions = collect_module_functions(module_path)
+    test_case.assertGreater(len(functions), 0, f"No functions found in {module_path}")
+    label = module_path.name
+    for name, func_node in functions.items():
+        c901 = mccabe_complexity(func_node)
+        test_case.assertLessEqual(
+            c901,
+            max_complexity,
+            f"{label}:{name} exceeds C901 complexity limit of {max_complexity} (score: {c901})",
+        )
+        strict_score = strict_ast_complexity(func_node)
+        test_case.assertLessEqual(
+            strict_score,
+            max_complexity,
+            f"{label}:{name} exceeds AST complexity limit of {max_complexity} (score: {strict_score})",
+        )
+        nesting = max_control_flow_nesting(func_node.body)
+        test_case.assertLessEqual(
+            nesting,
+            max_nesting,
+            f"{label}:{name} exceeds control-flow nesting limit of {max_nesting} (depth: {nesting})",
+        )
