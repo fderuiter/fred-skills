@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.dont_write_bytecode = True
 from fredlib import reports, repository, runs
@@ -25,6 +27,8 @@ from fredlib.common import (
     resolve_manifest_path,
     resolve_run_directory,
 )
+
+from tests.catalog_oracles import assert_module_ast_bounds
 
 
 class RunTests(unittest.TestCase):
@@ -2763,6 +2767,14 @@ class ReportTests(unittest.TestCase):
                     edge_dir, "py/mixed-locations", "open", "reversed end_line"
                 )
             self.assertEqual("invalid_observations", rev_obs_ctx.exception.code)
+
+    def test_reports_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        assert_module_ast_bounds(
+            self,
+            ROOT / "scripts/fredlib/reports.py",
+            max_complexity=10,
+            max_nesting=4,
+        )
 
 
 class BoundaryGuardAndContractTests(unittest.TestCase):

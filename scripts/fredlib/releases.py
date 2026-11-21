@@ -8,7 +8,7 @@ import os
 import re
 import tarfile
 import zipfile
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -60,36 +60,33 @@ def _is_executable_file(path: Path, data: bytes) -> bool:
     )
 
 
-def _scan_skill_files(
-    package_dir: Path, root: Path = ROOT
-) -> tuple[list[tuple[str, bytes]], set[str]]:
+def _validate_skill_package_dir(package_dir: Path, root: Path) -> None:
     if not package_dir.is_dir() or package_dir.is_symlink():
         raise ValueError(f"Expected a real package directory: {package_dir}")
     if not package_dir.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"Package directory escapes repository root: {package_dir}")
-    files: list[tuple[str, bytes]] = []
-    executable_paths: set[str] = set()
-    for path in sorted(
-        package_dir.rglob("*"),
-        key=lambda p: p.relative_to(package_dir).as_posix(),
-    ):
-        if path.is_symlink():
-            raise ValueError(f"Symlinks not supported in skill packages: {path}")
-        if not path.resolve().is_relative_to(root.resolve()):
-            raise ValueError(f"File escapes repository root: {path}")
-        if not path.is_file():
-            continue
-        rel_path = path.relative_to(package_dir)
-        if _is_ignored_skill_entry(rel_path.parts, path.name, path.suffix):
-            continue
-        rel = rel_path.as_posix()
-        data = path.read_bytes()
-        _validate_allowed_skill_file(rel, data)
-        files.append((rel, data))
-        if _is_skill_script_rel(rel) and _is_executable_file(path, data):
-            executable_paths.add(rel)
-    if not files:
-        raise ValueError(f"No files found in skill package: {package_dir}")
+
+
+def _inspect_skill_package_entry(
+    path: Path, package_dir: Path, root: Path
+) -> tuple[str, bytes, bool] | None:
+    if path.is_symlink():
+        raise ValueError(f"Symlinks not supported in skill packages: {path}")
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"File escapes repository root: {path}")
+    if not path.is_file():
+        return None
+    rel_path = path.relative_to(package_dir)
+    if _is_ignored_skill_entry(rel_path.parts, path.name, path.suffix):
+        return None
+    rel = rel_path.as_posix()
+    data = path.read_bytes()
+    _validate_allowed_skill_file(rel, data)
+    is_exec = _is_skill_script_rel(rel) and _is_executable_file(path, data)
+    return rel, data, is_exec
+
+
+def _vet_scanned_skill(package_dir: Path, root: Path) -> None:
     vet_res = vetting.vet_skill(package_dir, trust_builtin_allowlists=True, root=root)
     if not vet_res["passed"]:
         first = vet_res["findings"][0]
@@ -97,6 +94,28 @@ def _scan_skill_files(
             f"Security vetting failed for skill '{package_dir.name}' "
             f"({first['file']}:{first['line']} [{first['rule']}]): {first['message']}"
         )
+
+
+def _scan_skill_files(
+    package_dir: Path, root: Path = ROOT
+) -> tuple[list[tuple[str, bytes]], set[str]]:
+    _validate_skill_package_dir(package_dir, root)
+    files: list[tuple[str, bytes]] = []
+    executable_paths: set[str] = set()
+    for path in sorted(
+        package_dir.rglob("*"),
+        key=lambda p: p.relative_to(package_dir).as_posix(),
+    ):
+        inspected = _inspect_skill_package_entry(path, package_dir, root)
+        if inspected is None:
+            continue
+        rel, data, is_exec = inspected
+        files.append((rel, data))
+        if is_exec:
+            executable_paths.add(rel)
+    if not files:
+        raise ValueError(f"No files found in skill package: {package_dir}")
+    _vet_scanned_skill(package_dir, root)
     return files, executable_paths
 
 
@@ -107,72 +126,99 @@ def _collect_skill_files(
     return files
 
 
-def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[str]:
+def _suite_skills_from_suites_catalog(
+    root: Path, suite_name: str | None
+) -> list[str] | None:
     by_suite = _suite_skills_by_suite(root)
-    if by_suite is not None:
-        if suite_name is None:
-            skills = [s for members in by_suite.values() for s in members]
-        else:
-            skills = list(by_suite.get(suite_name, ()))
-        return sorted(dict.fromkeys(skills))
+    if by_suite is None:
+        return None
+    if suite_name is None:
+        skills = [s for members in by_suite.values() for s in members]
+    else:
+        skills = list(by_suite.get(suite_name, ()))
+    return sorted(dict.fromkeys(skills))
 
+
+def _select_pack_for_suite(packs: dict[str, Any], suite_name: str | None) -> Any:
+    if suite_name == "repository-audits":
+        return packs.get("full-audit")
+    if suite_name == "repository-workflows":
+        return packs.get("verified-fixes")
+    if suite_name is not None:
+        return packs.get(suite_name)
+    return packs.get("complete")
+
+
+def _extract_pack_skill_names(pack: Any, packs_path: Path) -> list[str]:
+    if not isinstance(pack, dict) or not isinstance(pack.get("skills"), list):
+        raise FredCliError(
+            f"Malformed pack entry in '{packs_path}': expected object with 'skills' array",
+            code="invalid_catalog",
+            hint=f"Ensure pack entries in '{packs_path}' define a 'skills' array.",
+        )
+    skills_list: list[str] = []
+    for item in pack["skills"]:
+        if not isinstance(item, str) or not item:
+            raise FredCliError(
+                f"Malformed pack entry in '{packs_path}': skill identifiers must be nonempty strings",
+                code="invalid_catalog",
+                hint=f"Ensure all entries in 'skills' inside '{packs_path}' are strings.",
+            )
+        skills_list.append(item)
+    return sorted(dict.fromkeys(skills_list))
+
+
+def _suite_skills_from_packs_catalog(
+    root: Path, suite_name: str | None
+) -> list[str] | None:
     packs_path = root / "catalog" / "packs.json"
     try:
         packs_doc = read_json_object(
             packs_path, label="Packs catalog 'catalog/packs.json'"
         )
     except FredCliError as exc:
-        if exc.code != "missing_file":
-            raise
-    else:
-        packs = packs_doc.get("packs")
-        if not isinstance(packs, dict):
-            raise FredCliError(
-                f"Malformed packs catalog '{packs_path}': expected 'packs' object",
-                code="invalid_catalog",
-                hint=f"Ensure '{packs_path}' contains a JSON object under 'packs'.",
-            )
-        if suite_name == "repository-audits":
-            pack = packs.get("full-audit")
-        elif suite_name == "repository-workflows":
-            pack = packs.get("verified-fixes")
-        elif suite_name is not None:
-            pack = packs.get(suite_name)
-        else:
-            pack = packs.get("complete")
-        if pack is not None:
-            if not isinstance(pack, dict) or not isinstance(pack.get("skills"), list):
-                raise FredCliError(
-                    f"Malformed pack entry in '{packs_path}': expected object with 'skills' array",
-                    code="invalid_catalog",
-                    hint=f"Ensure pack entries in '{packs_path}' define a 'skills' array.",
-                )
-            skills_list: list[str] = []
-            for item in pack["skills"]:
-                if not isinstance(item, str) or not item:
-                    raise FredCliError(
-                        f"Malformed pack entry in '{packs_path}': skill identifiers must be nonempty strings",
-                        code="invalid_catalog",
-                        hint=f"Ensure all entries in 'skills' inside '{packs_path}' are strings.",
-                    )
-                skills_list.append(item)
-            return sorted(dict.fromkeys(skills_list))
-
-    skills_dir = root / "skills"
-    if skills_dir.is_dir():
-        dirs = sorted(
-            [
-                d.name
-                for d in skills_dir.iterdir()
-                if d.is_dir() and not d.is_symlink() and (d / "SKILL.md").is_file()
-            ]
+        if exc.code == "missing_file":
+            return None
+        raise
+    packs = packs_doc.get("packs")
+    if not isinstance(packs, dict):
+        raise FredCliError(
+            f"Malformed packs catalog '{packs_path}': expected 'packs' object",
+            code="invalid_catalog",
+            hint=f"Ensure '{packs_path}' contains a JSON object under 'packs'.",
         )
-        if suite_name is not None:
-            known_suites = tuple(s for _, s in _SKILL_SUITE_PREFIXES)
-            dirs = [d for d in dirs if _infer_suite_name(d, known_suites) == suite_name]
-        if dirs:
-            return dirs
+    pack = _select_pack_for_suite(packs, suite_name)
+    if pack is None:
+        return None
+    return _extract_pack_skill_names(pack, packs_path)
 
+
+def _is_valid_skill_directory(entry: Path) -> bool:
+    return entry.is_dir() and not entry.is_symlink() and (entry / "SKILL.md").is_file()
+
+
+def _suite_skills_from_filesystem(
+    root: Path, suite_name: str | None
+) -> list[str] | None:
+    skills_dir = root / "skills"
+    if not skills_dir.is_dir():
+        return None
+    dirs = sorted(d.name for d in skills_dir.iterdir() if _is_valid_skill_directory(d))
+    if suite_name is not None:
+        known_suites = tuple(s for _, s in _SKILL_SUITE_PREFIXES)
+        dirs = [d for d in dirs if _infer_suite_name(d, known_suites) == suite_name]
+    return dirs or None
+
+
+def _get_suite_skills(root: Path = ROOT, suite_name: str | None = None) -> list[str]:
+    for resolver in (
+        _suite_skills_from_suites_catalog,
+        _suite_skills_from_packs_catalog,
+        _suite_skills_from_filesystem,
+    ):
+        resolved = resolver(root, suite_name)
+        if resolved is not None:
+            return resolved
     raise ValueError("Unable to determine suite skills from catalog")
 
 
@@ -327,55 +373,35 @@ def _build_gemini_bundles(
     }
 
 
-def _build_cli_bundles(
-    output: Path,
-    license_entries: list[tuple[str, bytes]],
-    root: Path = ROOT,
-) -> dict[str, list[str]]:
-    ver = version(root)
-    entries: list[tuple[str, bytes]] = list(license_entries)
-    version_path = root / "VERSION"
-    if version_path.is_symlink():
-        raise ValueError(f"Symlinks not supported in release packages: {version_path}")
-    version_bytes = (
-        _read_checked_repo_file(version_path, root)
-        if version_path.exists()
-        else f"{ver}\n".encode()
-    )
-    entries.append(("VERSION", version_bytes))
-
+def _collect_cli_catalog_entries(root: Path) -> list[tuple[str, bytes]]:
     catalog_root = root if (root / "catalog").is_dir() else ROOT
     catalog_dir = catalog_root / "catalog"
     if catalog_dir.is_symlink():
         raise ValueError(f"Symlinks not supported in release packages: {catalog_dir}")
-    if catalog_dir.is_dir():
-        for cat_path in sorted(catalog_dir.glob("*.json"), key=lambda p: p.name):
-            entries.append(
-                (
-                    f"catalog/{cat_path.name}",
-                    _read_checked_repo_file(cat_path, catalog_root),
-                )
-            )
+    if not catalog_dir.is_dir():
+        return []
+    return [
+        (f"catalog/{cat_path.name}", _read_checked_repo_file(cat_path, catalog_root))
+        for cat_path in sorted(catalog_dir.glob("*.json"), key=lambda p: p.name)
+    ]
 
+
+def _collect_cli_script_entries(root: Path) -> list[tuple[str, bytes]]:
     scripts_root = (
         root
         if (root / "scripts/fred.py").exists()
         or (root / "scripts/fred.py").is_symlink()
         else ROOT
     )
-    for rel_script in (
-        "scripts/fred.py",
-        "scripts/skill_tools.py",
-        "scripts/_markdown_utils.py",
-        "scripts/audit_to_sarif.py",
-    ):
-        entries.append(
-            (
-                rel_script,
-                _read_checked_repo_file(scripts_root / rel_script, scripts_root),
-            )
+    entries = [
+        (rel_script, _read_checked_repo_file(scripts_root / rel_script, scripts_root))
+        for rel_script in (
+            "scripts/fred.py",
+            "scripts/skill_tools.py",
+            "scripts/_markdown_utils.py",
+            "scripts/audit_to_sarif.py",
         )
-
+    ]
     fredlib_dir = scripts_root / "scripts/fredlib"
     if fredlib_dir.is_symlink() or not fredlib_dir.is_dir():
         raise ValueError(f"Expected scripts/fredlib directory: {fredlib_dir}")
@@ -386,7 +412,29 @@ def _build_cli_bundles(
                 _read_checked_repo_file(py_path, scripts_root),
             )
         )
+    return entries
 
+
+def _build_cli_bundles(
+    output: Path,
+    license_entries: list[tuple[str, bytes]],
+    root: Path = ROOT,
+) -> dict[str, list[str]]:
+    ver = version(root)
+    version_path = root / "VERSION"
+    if version_path.is_symlink():
+        raise ValueError(f"Symlinks not supported in release packages: {version_path}")
+    version_bytes = (
+        _read_checked_repo_file(version_path, root)
+        if version_path.exists()
+        else f"{ver}\n".encode()
+    )
+    entries: list[tuple[str, bytes]] = [
+        *license_entries,
+        ("VERSION", version_bytes),
+        *_collect_cli_catalog_entries(root),
+        *_collect_cli_script_entries(root),
+    ]
     cli_execs = {"scripts/fred.py", "scripts/audit_to_sarif.py"}
     stem = f"fred-skills-{ver}-cli"
     tar_gz_name = f"{stem}.tar.gz"
@@ -428,6 +476,100 @@ def _package_skills(output: Path, root: Path = ROOT) -> dict[str, list[str]]:
     return archive_skills
 
 
+_RELEASE_META_FILES: frozenset[str] = frozenset(
+    {"manifest.json", "SHA256SUMS", "checksums.sha256"}
+)
+
+
+def _is_release_archive_file(path: Path) -> bool:
+    return path.is_file() and path.name not in _RELEASE_META_FILES
+
+
+def _collect_output_archives(
+    output: Path, skills_for_file: Callable[[str], list[str]]
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "file": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": path.stat().st_size,
+            "skills": skills_for_file(path.name),
+        }
+        for path in sorted(output.iterdir())
+        if _is_release_archive_file(path)
+    ]
+
+
+def _write_manifest_and_checksums(
+    output: Path, manifest: dict[str, Any], archives: list[dict[str, Any]]
+) -> dict[str, Any]:
+    atomic_json(output / "manifest.json", manifest)
+    checksum_lines = "".join(f"{item['sha256']}  {item['file']}\n" for item in archives)
+    (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8", newline="\n")
+    (output / "checksums.sha256").write_text(
+        checksum_lines, encoding="utf-8", newline="\n"
+    )
+    return manifest
+
+
+def _licensing_statement(root: Path) -> str:
+    if not (root / "LICENSE").exists():
+        return "Owner license selection not yet declared"
+    return "See repository LICENSE"
+
+
+def _build_all_packs_release(
+    output: Path,
+    license_entries: list[tuple[str, bytes]],
+    root: Path,
+) -> dict[str, Any]:
+    available_packs = list(_load_documented_packs(root))
+    if not available_packs:
+        raise ValueError("No documented packs found in catalog/packs.json")
+
+    archive_skills: dict[str, list[str]] = {}
+    packs_map: dict[str, list[str]] = {}
+    for p in available_packs:
+        p_skills = choose_skills(root, pack=p)
+        packs_map[p] = p_skills
+        p_stem = f"fred-skills-{version(root)}-{p}"
+        p_entries, p_execs = _scan_skills_entries(p_skills, root=root)
+        bundled_pack_entries = [*license_entries, *p_entries]
+        zip_name = f"{p_stem}.zip"
+        tar_name = f"{p_stem}.tar"
+        _write_zip_archive(
+            output / zip_name, bundled_pack_entries, executable_paths=p_execs
+        )
+        _write_tar_archive(
+            output / tar_name, bundled_pack_entries, executable_paths=p_execs
+        )
+        archive_skills[zip_name] = p_skills
+        archive_skills[tar_name] = p_skills
+
+    packaged = _package_skills(output, root=root)
+    archive_skills.update(packaged)
+    suite_skills = packaged.get("fred-skills-suite.tar.gz") or _get_suite_skills(root)
+    archive_skills.update(
+        _build_gemini_bundles(output, suite_skills, license_entries, root=root)
+    )
+    archive_skills.update(_build_cli_bundles(output, license_entries, root=root))
+
+    all_skills = sorted(set().union(*archive_skills.values()))
+    all_archives = _collect_output_archives(
+        output, lambda fname: archive_skills.get(fname, [])
+    )
+    manifest: dict[str, Any] = {
+        "schema_version": "1.0",
+        "version": version(root),
+        "pack": "all",
+        "packs": packs_map,
+        "skills": all_skills,
+        "licensing": _licensing_statement(root),
+        "archives": all_archives,
+    }
+    return _write_manifest_and_checksums(output, manifest, all_archives)
+
+
 def build(
     output: Path,
     pack: str | None = None,
@@ -441,74 +583,7 @@ def build(
     license_entries = _root_license_entries(root)
 
     if all_packs or pack == "all":
-        available_packs = list(_load_documented_packs(root))
-        if not available_packs:
-            raise ValueError("No documented packs found in catalog/packs.json")
-
-        archive_skills: dict[str, list[str]] = {}
-        packs_map: dict[str, list[str]] = {}
-
-        for p in available_packs:
-            p_skills = choose_skills(root, pack=p)
-            packs_map[p] = p_skills
-            p_stem = f"fred-skills-{version(root)}-{p}"
-            p_entries, p_execs = _scan_skills_entries(p_skills, root=root)
-            bundled_pack_entries = [*license_entries, *p_entries]
-            zip_name = f"{p_stem}.zip"
-            tar_name = f"{p_stem}.tar"
-            _write_zip_archive(
-                output / zip_name, bundled_pack_entries, executable_paths=p_execs
-            )
-            _write_tar_archive(
-                output / tar_name, bundled_pack_entries, executable_paths=p_execs
-            )
-            archive_skills[zip_name] = p_skills
-            archive_skills[tar_name] = p_skills
-
-        packaged = _package_skills(output, root=root)
-        archive_skills.update(packaged)
-        suite_skills = packaged.get("fred-skills-suite.tar.gz") or _get_suite_skills(
-            root
-        )
-        archive_skills.update(
-            _build_gemini_bundles(output, suite_skills, license_entries, root=root)
-        )
-        archive_skills.update(_build_cli_bundles(output, license_entries, root=root))
-
-        all_skills = sorted(set().union(*archive_skills.values()))
-        all_archives: list[dict[str, Any]] = [
-            {
-                "file": path.name,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "bytes": path.stat().st_size,
-                "skills": archive_skills.get(path.name, []),
-            }
-            for path in sorted(output.iterdir())
-            if path.is_file()
-            and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
-        ]
-        manifest: dict[str, Any] = {
-            "schema_version": "1.0",
-            "version": version(root),
-            "pack": "all",
-            "packs": packs_map,
-            "skills": all_skills,
-            "licensing": "Owner license selection not yet declared"
-            if not (root / "LICENSE").exists()
-            else "See repository LICENSE",
-            "archives": all_archives,
-        }
-        atomic_json(output / "manifest.json", manifest)
-        checksum_lines = "".join(
-            f"{item['sha256']}  {item['file']}\n" for item in all_archives
-        )
-        (output / "SHA256SUMS").write_text(
-            checksum_lines, encoding="utf-8", newline="\n"
-        )
-        (output / "checksums.sha256").write_text(
-            checksum_lines, encoding="utf-8", newline="\n"
-        )
-        return manifest
+        return _build_all_packs_release(output, license_entries, root)
 
     selected = choose_skills(root, pack, skills)
     label = pack or "selected"
@@ -523,41 +598,21 @@ def build(
     _write_tar_archive(
         output / (stem + ".tar"), bundled_entries, executable_paths=execs
     )
-    pack_archives: list[dict[str, Any]] = [
-        {
-            "file": path.name,
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "bytes": path.stat().st_size,
-            "skills": list(selected),
-        }
-        for path in sorted(output.iterdir())
-        if path.is_file()
-        and path.name not in {"manifest.json", "SHA256SUMS", "checksums.sha256"}
-    ]
-    manifest = {
+    pack_archives = _collect_output_archives(output, lambda _fname: list(selected))
+    manifest: dict[str, Any] = {
         "schema_version": "1.0",
         "version": version(root),
         "pack": label,
         "skills": selected,
-        "licensing": "Owner license selection not yet declared"
-        if not (root / "LICENSE").exists()
-        else "See repository LICENSE",
+        "licensing": _licensing_statement(root),
         "archives": pack_archives,
     }
-    atomic_json(output / "manifest.json", manifest)
-    checksum_lines = "".join(
-        f"{item['sha256']}  {item['file']}\n" for item in pack_archives
-    )
-    (output / "SHA256SUMS").write_text(checksum_lines, encoding="utf-8", newline="\n")
-    (output / "checksums.sha256").write_text(
-        checksum_lines, encoding="utf-8", newline="\n"
-    )
-    return manifest
+    return _write_manifest_and_checksums(output, manifest, pack_archives)
 
 
-def _verify_checksum_file(
+def _read_safe_checksum_lines(
     checksum_path: Path, manifest_dir: Path, expected_digests: dict[str, str]
-) -> None:
+) -> list[str] | None:
     if checksum_path.is_symlink():
         raise FredCliError(
             f"Symlink checksum file not supported: {checksum_path.name}",
@@ -565,7 +620,7 @@ def _verify_checksum_file(
             hint="Keep checksum files as regular files inside the release directory.",
         )
     if not checksum_path.exists():
-        return
+        return None
     if not checksum_path.is_file() or not checksum_path.resolve().is_relative_to(
         manifest_dir
     ):
@@ -581,41 +636,62 @@ def _verify_checksum_file(
             code="invalid_checksum_file",
             hint=f"Rebuild or re-download '{checksum_path.name}'.",
         )
+    return lines
+
+
+def _verify_checksum_line(
+    line: str,
+    checksum_name: str,
+    expected_digests: dict[str, str],
+    seen: dict[str, str],
+) -> tuple[str, str]:
+    match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+    if not match:
+        raise FredCliError(
+            f"Malformed checksum line in {checksum_name}: {line!r}",
+            code="invalid_checksum_file",
+            hint=f"Ensure '{checksum_name}' uses '<sha256>  <filename>' lines.",
+        )
+    digest, raw_name = match.groups()
+    norm_name = relative_path(raw_name).as_posix()
+    if norm_name != raw_name:
+        raise FredCliError(
+            f"Non-normalized archive path in {checksum_name}: {raw_name!r}",
+            code="invalid_checksum_file",
+            hint=f"Ensure archive filenames in '{checksum_name}' are normalized relative paths.",
+        )
+    if norm_name in seen:
+        raise FredCliError(
+            f"Duplicate archive entry in {checksum_name}: {norm_name}",
+            code="invalid_checksum_file",
+            hint=f"Remove duplicate entries from '{checksum_name}'.",
+        )
+    if norm_name not in expected_digests:
+        raise FredCliError(
+            f"Unexpected archive entry in {checksum_name}: {norm_name}",
+            code="invalid_checksum_file",
+            hint=f"Ensure '{checksum_name}' matches 'manifest.json'.",
+        )
+    if digest != expected_digests[norm_name]:
+        raise FredCliError(
+            f"Checksum mismatch in {checksum_name}: {norm_name}",
+            code="checksum_mismatch",
+            hint=f"Re-download '{checksum_name}' and 'manifest.json' from the same release.",
+        )
+    return norm_name, digest
+
+
+def _verify_checksum_file(
+    checksum_path: Path, manifest_dir: Path, expected_digests: dict[str, str]
+) -> None:
+    lines = _read_safe_checksum_lines(checksum_path, manifest_dir, expected_digests)
+    if lines is None:
+        return
     seen: dict[str, str] = {}
     for line in lines:
-        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
-        if not match:
-            raise FredCliError(
-                f"Malformed checksum line in {checksum_path.name}: {line!r}",
-                code="invalid_checksum_file",
-                hint=f"Ensure '{checksum_path.name}' uses '<sha256>  <filename>' lines.",
-            )
-        digest, raw_name = match.groups()
-        norm_name = relative_path(raw_name).as_posix()
-        if norm_name != raw_name:
-            raise FredCliError(
-                f"Non-normalized archive path in {checksum_path.name}: {raw_name!r}",
-                code="invalid_checksum_file",
-                hint=f"Ensure archive filenames in '{checksum_path.name}' are normalized relative paths.",
-            )
-        if norm_name in seen:
-            raise FredCliError(
-                f"Duplicate archive entry in {checksum_path.name}: {norm_name}",
-                code="invalid_checksum_file",
-                hint=f"Remove duplicate entries from '{checksum_path.name}'.",
-            )
-        if norm_name not in expected_digests:
-            raise FredCliError(
-                f"Unexpected archive entry in {checksum_path.name}: {norm_name}",
-                code="invalid_checksum_file",
-                hint=f"Ensure '{checksum_path.name}' matches 'manifest.json'.",
-            )
-        if digest != expected_digests[norm_name]:
-            raise FredCliError(
-                f"Checksum mismatch in {checksum_path.name}: {norm_name}",
-                code="checksum_mismatch",
-                hint=f"Re-download '{checksum_path.name}' and 'manifest.json' from the same release.",
-            )
+        norm_name, digest = _verify_checksum_line(
+            line, checksum_path.name, expected_digests, seen
+        )
         seen[norm_name] = digest
     if set(seen) != set(expected_digests):
         raise FredCliError(
@@ -641,30 +717,13 @@ def _normalize_archive_selector(item: str | Path, manifest_dir: Path) -> str:
     return relative_path(raw_text).as_posix()
 
 
-def verify(
-    manifest: Path,
-    *,
-    archive: str | Path | Sequence[str | Path] | None = None,
-    ignore_missing: bool = False,
-    expected_version: str | None = None,
-    require_licensing: bool = False,
-) -> dict:
-    manifest_path = resolve_manifest_path(manifest)
-    data = read_json_object(
-        manifest_path,
-        label="Release manifest",
-        hint="Pass a valid 'manifest.json' or release directory generated by 'python scripts/fred.py release'.",
-    )
-    if ("schema_version" in data or require_licensing) and (
-        data.get("schema_version") != "1.0"
-    ):
-        raise FredCliError(
-            f"Unsupported manifest schema_version in '{manifest_path}': {data.get('schema_version')!r}",
-            code="invalid_manifest",
-            hint="Ensure 'manifest.json' declares '\"schema_version\": \"1.0\"'.",
-        )
+def _validate_manifest_version_and_license(
+    data: dict[str, Any],
+    manifest_path: Path,
+    expected_version: str | None,
+    require_licensing: bool,
+) -> str:
     version_val = data.get("version")
-    archives = data.get("archives")
     if not isinstance(version_val, str) or not version_val.strip():
         raise FredCliError(
             f"Malformed release manifest '{manifest_path}': missing nonempty string 'version'",
@@ -685,113 +744,198 @@ def verify(
             code="invalid_licensing",
             hint="Rebuild the release bundle from a repository checkout containing a root LICENSE file.",
         )
+    return version_val
+
+
+def _validate_manifest_header(
+    data: dict[str, Any],
+    manifest_path: Path,
+    expected_version: str | None,
+    require_licensing: bool,
+) -> tuple[str, list[Any]]:
+    if ("schema_version" in data or require_licensing) and (
+        data.get("schema_version") != "1.0"
+    ):
+        raise FredCliError(
+            f"Unsupported manifest schema_version in '{manifest_path}': {data.get('schema_version')!r}",
+            code="invalid_manifest",
+            hint="Ensure 'manifest.json' declares '\"schema_version\": \"1.0\"'.",
+        )
+    version_val = _validate_manifest_version_and_license(
+        data, manifest_path, expected_version, require_licensing
+    )
+    archives = data.get("archives")
     if not isinstance(archives, list):
         raise FredCliError(
             f"Malformed release manifest '{manifest_path}': 'archives' must be a JSON array",
             code="invalid_manifest",
             hint="Ensure 'manifest.json' contains an 'archives' array of {file, sha256, bytes} entries.",
         )
+    return version_val, archives
 
-    manifest_dir = manifest_path.parent.resolve()
-    requested_names: set[str] | None = None
-    if archive is not None:
-        raw_selectors = [archive] if isinstance(archive, str | Path) else list(archive)
-        if not raw_selectors:
-            raise FredCliError(
-                "No archives matched '--archive' selector",
-                code="no_matching_archives",
-                hint="Pass at least one archive filename listed in 'manifest.json'.",
-            )
-        requested_names = {
-            _normalize_archive_selector(item, manifest_dir) for item in raw_selectors
-        }
 
+def _resolve_requested_archive_names(
+    archive: str | Path | Sequence[str | Path] | None, manifest_dir: Path
+) -> set[str] | None:
+    if archive is None:
+        return None
+    raw_selectors = [archive] if isinstance(archive, str | Path) else list(archive)
+    if not raw_selectors:
+        raise FredCliError(
+            "No archives matched '--archive' selector",
+            code="no_matching_archives",
+            hint="Pass at least one archive filename listed in 'manifest.json'.",
+        )
+    return {_normalize_archive_selector(item, manifest_dir) for item in raw_selectors}
+
+
+def _is_valid_archive_byte_count(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+
+def _is_manifest_archive_dict(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return isinstance(entry.get("file"), str) and isinstance(entry.get("sha256"), str)
+
+
+def _parse_manifest_archive_entry(
+    entry: Any,
+    manifest_path: Path,
+    manifest_dir: Path,
+    seen_digests: dict[str, str],
+) -> tuple[str, str, dict[str, Any], Path]:
+    if not _is_manifest_archive_dict(entry):
+        raise FredCliError(
+            f"Malformed archive entry in release manifest '{manifest_path}'",
+            code="invalid_manifest",
+            hint="Each entry in 'archives' must be an object with string 'file' and 'sha256' fields.",
+        )
+    rel = relative_path(entry["file"])
+    rel_posix = rel.as_posix()
+    if rel_posix in seen_digests:
+        raise FredCliError(
+            f"Duplicate archive entry in manifest: {entry['file']}",
+            code="invalid_manifest",
+            hint="Remove duplicate archive entries or rebuild 'manifest.json' with 'python scripts/fred.py release'.",
+        )
+    path = manifest_path.parent / rel
+    if path.is_symlink() or not path.resolve().is_relative_to(manifest_dir):
+        raise FredCliError(
+            "Release archive escapes manifest directory",
+            code="unsafe_archive_path",
+            hint="Keep all release archives inside the manifest directory without symlinks.",
+        )
+    if not _is_valid_archive_byte_count(entry.get("bytes")):
+        raise FredCliError(
+            f"Invalid byte count in manifest: {entry['file']}",
+            code="invalid_manifest",
+            hint="Rebuild the release bundle with 'python scripts/fred.py release --output <dir>'.",
+        )
+    return rel_posix, entry["sha256"], entry, path
+
+
+def _collect_manifest_entries(
+    archives: Sequence[Any], manifest_path: Path, manifest_dir: Path
+) -> tuple[dict[str, str], dict[str, tuple[dict[str, Any], Path]]]:
     expected_digests: dict[str, str] = {}
     manifest_entries: dict[str, tuple[dict[str, Any], Path]] = {}
     for entry in archives:
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(entry.get("file"), str)
-            or not isinstance(entry.get("sha256"), str)
-        ):
-            raise FredCliError(
-                f"Malformed archive entry in release manifest '{manifest_path}'",
-                code="invalid_manifest",
-                hint="Each entry in 'archives' must be an object with string 'file' and 'sha256' fields.",
-            )
-        rel = relative_path(entry["file"])
-        rel_posix = rel.as_posix()
-        if rel_posix in expected_digests:
-            raise FredCliError(
-                f"Duplicate archive entry in manifest: {entry['file']}",
-                code="invalid_manifest",
-                hint="Remove duplicate archive entries or rebuild 'manifest.json' with 'python scripts/fred.py release'.",
-            )
-        path = manifest_path.parent / rel
-        if path.is_symlink() or not path.resolve().is_relative_to(manifest_dir):
-            raise FredCliError(
-                "Release archive escapes manifest directory",
-                code="unsafe_archive_path",
-                hint="Keep all release archives inside the manifest directory without symlinks.",
-            )
-        expected_bytes = entry.get("bytes")
-        if (
-            isinstance(expected_bytes, bool)
-            or not isinstance(expected_bytes, int)
-            or expected_bytes < 0
-        ):
-            raise FredCliError(
-                f"Invalid byte count in manifest: {entry['file']}",
-                code="invalid_manifest",
-                hint="Rebuild the release bundle with 'python scripts/fred.py release --output <dir>'.",
-            )
-        expected_digests[rel_posix] = entry["sha256"]
-        manifest_entries[rel_posix] = (entry, path)
+        rel_posix, digest, parsed_entry, path = _parse_manifest_archive_entry(
+            entry, manifest_path, manifest_dir, expected_digests
+        )
+        expected_digests[rel_posix] = digest
+        manifest_entries[rel_posix] = (parsed_entry, path)
+    return expected_digests, manifest_entries
 
-    if requested_names is not None:
-        unknown = sorted(requested_names - set(manifest_entries))
-        if unknown:
-            raise FredCliError(
-                f"Archive not listed in release manifest: {', '.join(unknown)}",
-                code="no_matching_archives",
-                hint="Specify an archive filename listed in 'manifest.json'.",
-            )
-        candidate_names = [name for name in manifest_entries if name in requested_names]
-    else:
-        candidate_names = list(manifest_entries.keys())
 
-    verified_count = 0
-    for name in candidate_names:
-        entry, path = manifest_entries[name]
-        if not path.is_file():
-            if ignore_missing:
-                continue
-            raise FredCliError(
-                f"Missing release archive: {entry['file']}",
-                code="missing_archive",
-                hint=f"Ensure '{entry['file']}' exists alongside '{manifest_path}', or pass '--archive' / '--ignore-missing' for partial downloads.",
-            )
-        expected_bytes = entry["bytes"]
-        if path.stat().st_size != expected_bytes:
-            raise FredCliError(
-                f"Byte size mismatch: {entry['file']}",
-                code="checksum_mismatch",
-                hint="Re-download or rebuild the release bundle; archive size does not match 'manifest.json'.",
-            )
-        raw = path.read_bytes()
-        if len(raw) != expected_bytes:
-            raise FredCliError(
-                f"Byte size mismatch: {entry['file']}",
-                code="checksum_mismatch",
-                hint="Re-download or rebuild the release bundle; archive size does not match 'manifest.json'.",
-            )
-        if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
-            raise FredCliError(
-                f"Checksum mismatch: {entry['file']}",
-                code="checksum_mismatch",
-                hint="Re-download or rebuild the release bundle; archive bytes do not match 'manifest.json'.",
-            )
-        verified_count += 1
+def _select_candidate_archives(
+    manifest_entries: dict[str, tuple[dict[str, Any], Path]],
+    requested_names: set[str] | None,
+) -> list[str]:
+    if requested_names is None:
+        return list(manifest_entries.keys())
+    unknown = sorted(requested_names - set(manifest_entries))
+    if unknown:
+        raise FredCliError(
+            f"Archive not listed in release manifest: {', '.join(unknown)}",
+            code="no_matching_archives",
+            hint="Specify an archive filename listed in 'manifest.json'.",
+        )
+    return [name for name in manifest_entries if name in requested_names]
+
+
+def _verify_single_archive_file(
+    entry: dict[str, Any],
+    path: Path,
+    manifest_path: Path,
+    ignore_missing: bool,
+) -> bool:
+    if not path.is_file():
+        if ignore_missing:
+            return False
+        raise FredCliError(
+            f"Missing release archive: {entry['file']}",
+            code="missing_archive",
+            hint=f"Ensure '{entry['file']}' exists alongside '{manifest_path}', or pass '--archive' / '--ignore-missing' for partial downloads.",
+        )
+    expected_bytes = entry["bytes"]
+    if path.stat().st_size != expected_bytes:
+        raise FredCliError(
+            f"Byte size mismatch: {entry['file']}",
+            code="checksum_mismatch",
+            hint="Re-download or rebuild the release bundle; archive size does not match 'manifest.json'.",
+        )
+    raw = path.read_bytes()
+    if len(raw) != expected_bytes:
+        raise FredCliError(
+            f"Byte size mismatch: {entry['file']}",
+            code="checksum_mismatch",
+            hint="Re-download or rebuild the release bundle; archive size does not match 'manifest.json'.",
+        )
+    if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
+        raise FredCliError(
+            f"Checksum mismatch: {entry['file']}",
+            code="checksum_mismatch",
+            hint="Re-download or rebuild the release bundle; archive bytes do not match 'manifest.json'.",
+        )
+    return True
+
+
+def verify(
+    manifest: Path,
+    *,
+    archive: str | Path | Sequence[str | Path] | None = None,
+    ignore_missing: bool = False,
+    expected_version: str | None = None,
+    require_licensing: bool = False,
+) -> dict:
+    manifest_path = resolve_manifest_path(manifest)
+    data = read_json_object(
+        manifest_path,
+        label="Release manifest",
+        hint="Pass a valid 'manifest.json' or release directory generated by 'python scripts/fred.py release'.",
+    )
+    version_val, archives = _validate_manifest_header(
+        data, manifest_path, expected_version, require_licensing
+    )
+    manifest_dir = manifest_path.parent.resolve()
+    requested_names = _resolve_requested_archive_names(archive, manifest_dir)
+    expected_digests, manifest_entries = _collect_manifest_entries(
+        archives, manifest_path, manifest_dir
+    )
+    candidate_names = _select_candidate_archives(manifest_entries, requested_names)
+
+    verified_count = sum(
+        1
+        for name in candidate_names
+        if _verify_single_archive_file(
+            manifest_entries[name][0],
+            manifest_entries[name][1],
+            manifest_path,
+            ignore_missing,
+        )
+    )
 
     for checksum_name in ("SHA256SUMS", "checksums.sha256"):
         _verify_checksum_file(

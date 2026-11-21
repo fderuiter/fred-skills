@@ -30,7 +30,7 @@ import validate_skills
 import verify_doc_snippets
 import verify_workflow_actions
 
-from tests.catalog_oracles import expected_total_skills
+from tests.catalog_oracles import assert_module_ast_bounds, expected_total_skills
 
 _PASSTHROUGH_ENV_KEYS = (
     "PATH",
@@ -606,6 +606,14 @@ class ScaffolderTests(unittest.TestCase):
         errors, telemetry = validate_skills.validate_with_telemetry(self.root)
         self.assertEqual([], errors)
         self.assertEqual(1, telemetry["total_packages"])
+
+    def test_scaffold_skill_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        assert_module_ast_bounds(
+            self,
+            ROOT / "scripts/scaffold_skill.py",
+            max_complexity=10,
+            max_nesting=4,
+        )
 
 
 class DiffTelemetryAndLedgerTests(unittest.TestCase):

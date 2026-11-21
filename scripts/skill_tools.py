@@ -264,6 +264,37 @@ def git_tag_exists(
     return proc.returncode == 0
 
 
+def _resolve_hint(hint: str | None, default: str) -> str:
+    return hint if hint is not None else default
+
+
+def _handle_missing_utf8_file(
+    p: Path,
+    label: str,
+    hint: str | None,
+    *,
+    optional: bool,
+    exc: FileNotFoundError,
+) -> None:
+    if optional:
+        if not p.is_symlink():
+            return
+        raise FredCliError(
+            f"Unable to read {label.lower()} '{p}': dangling symlink",
+            code="io_error",
+            hint=_resolve_hint(
+                hint, f"Check symlink target and readability for '{p}'."
+            ),
+        ) from exc
+    raise FredCliError(
+        f"{label} not found: {p}",
+        code="missing_file",
+        hint=_resolve_hint(
+            hint, f"Verify that '{p}' exists and check the path spelling."
+        ),
+    ) from exc
+
+
 @overload
 def read_utf8_text(
     path: Path | str,
@@ -307,36 +338,33 @@ def read_utf8_text(
         raise FredCliError(
             f"Expected {label.lower()} at '{p}', got a directory",
             code="invalid_path_type",
-            hint=hint or f"Pass a file path instead of directory '{p}'.",
+            hint=_resolve_hint(hint, f"Pass a file path instead of directory '{p}'."),
         )
     try:
         return p.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        if optional and not p.is_symlink():
-            return None
-        if optional and p.is_symlink():
-            raise FredCliError(
-                f"Unable to read {label.lower()} '{p}': dangling symlink",
-                code="io_error",
-                hint=hint or f"Check symlink target and readability for '{p}'.",
-            ) from exc
-        raise FredCliError(
-            f"{label} not found: {p}",
-            code="missing_file",
-            hint=hint or f"Verify that '{p}' exists and check the path spelling.",
-        ) from exc
+        _handle_missing_utf8_file(p, label, hint, optional=optional, exc=exc)
+        return None
     except OSError as exc:
         raise FredCliError(
             f"Unable to read {label.lower()} '{p}': {exc}",
             code="io_error",
-            hint=hint or f"Check file permissions and readability for '{p}'.",
+            hint=_resolve_hint(
+                hint, f"Check file permissions and readability for '{p}'."
+            ),
         ) from exc
     except UnicodeDecodeError as exc:
         raise FredCliError(
             f"Invalid UTF-8 encoding in {label.lower()} '{p}': {exc}",
             code="invalid_encoding",
-            hint=hint or f"Re-encode '{p}' as valid UTF-8.",
+            hint=_resolve_hint(hint, f"Re-encode '{p}' as valid UTF-8."),
         ) from exc
+
+
+def _json_dir_hint(p: Path, hint: str | None) -> str | None:
+    if hint is not None:
+        return hint
+    return f"Pass a JSON file path instead of directory '{p}'." if p.is_dir() else None
 
 
 @overload
@@ -381,10 +409,7 @@ def read_json_object(
     raw_text = read_utf8_text(
         p,
         label=label,
-        hint=hint
-        or (
-            f"Pass a JSON file path instead of directory '{p}'." if p.is_dir() else None
-        ),
+        hint=_json_dir_hint(p, hint),
         optional=optional,
     )
     if raw_text is None:
@@ -395,14 +420,18 @@ def read_json_object(
         raise FredCliError(
             f"Malformed JSON in {label.lower()} '{p}' (line {exc.lineno}, column {exc.colno}): {exc.msg}",
             code="invalid_json",
-            hint=hint or f"Fix the JSON syntax in '{p}' near line {exc.lineno}.",
+            hint=_resolve_hint(
+                hint, f"Fix the JSON syntax in '{p}' near line {exc.lineno}."
+            ),
         ) from exc
     if not isinstance(data, dict):
         actual = type(data).__name__
         raise FredCliError(
             f"Expected JSON object in {label.lower()} '{p}', got {actual}",
             code="invalid_json_root",
-            hint=hint or f"Ensure the root value in '{p}' is a JSON object ({{...}}).",
+            hint=_resolve_hint(
+                hint, f"Ensure the root value in '{p}' is a JSON object ({{...}})."
+            ),
         )
     return data
 
@@ -516,6 +545,16 @@ def _format_package_rel(path: Path, package_root: Path, fallback: str) -> str:
     return fallback
 
 
+def _record_chain_violation(
+    chain_str: str,
+    violations: list[str],
+    seen_violations: set[str],
+) -> None:
+    if chain_str not in seen_violations:
+        seen_violations.add(chain_str)
+        violations.append(chain_str)
+
+
 def _read_chain_markdown(
     path: Path,
     rel_label: str,
@@ -536,6 +575,119 @@ def _read_chain_markdown(
         return None
 
 
+def _is_traversable_package_markdown(
+    resolved: Path,
+    package_root: Path,
+    path_chain: tuple[Path, ...],
+) -> bool:
+    if resolved.suffix.lower() != ".md" or resolved in path_chain:
+        return False
+    if not resolved.is_relative_to(package_root):
+        return False
+    return resolved.is_file() and not resolved.is_symlink()
+
+
+def _expand_entry_markdown_links(
+    current: Path,
+    path_chain: tuple[Path, ...],
+    label_chain: tuple[str, ...],
+    *,
+    package_root: Path,
+    max_hops: int,
+    queue: deque[tuple[Path, tuple[Path, ...], tuple[str, ...]]],
+    violations: list[str],
+    seen_violations: set[str],
+    read_errors: list[str] | None,
+) -> None:
+    content = _read_chain_markdown(current, label_chain[-1], read_errors)
+    if content is None:
+        return
+    next_depth = len(path_chain)
+    for raw_target in extract_relative_links(content):
+        resolved = resolve_relative_link_target(raw_target, current.parent)
+        if resolved is None:
+            continue
+        next_label = _format_package_rel(resolved, package_root, raw_target)
+        if next_depth > max_hops:
+            chain_str = " -> ".join((*label_chain, next_label))
+            _record_chain_violation(chain_str, violations, seen_violations)
+        elif _is_traversable_package_markdown(resolved, package_root, path_chain):
+            queue.append(
+                (resolved, (*path_chain, resolved), (*label_chain, next_label))
+            )
+
+
+def _walk_entry_reference_chains(
+    entry_path: Path,
+    package_root: Path,
+    max_hops: int,
+    visited_markdown: set[Path],
+    violations: list[str],
+    seen_violations: set[str],
+    read_errors: list[str] | None,
+) -> None:
+    if not entry_path.is_file() or entry_path.is_symlink():
+        return
+    entry_resolved = entry_path.resolve()
+    queue: deque[tuple[Path, tuple[Path, ...], tuple[str, ...]]] = deque(
+        [(entry_resolved, (entry_resolved,), ("SKILL.md",))]
+    )
+    while queue:
+        current, path_chain, label_chain = queue.popleft()
+        visited_markdown.add(current)
+        _expand_entry_markdown_links(
+            current,
+            path_chain,
+            label_chain,
+            package_root=package_root,
+            max_hops=max_hops,
+            queue=queue,
+            violations=violations,
+            seen_violations=seen_violations,
+            read_errors=read_errors,
+        )
+
+
+def _collect_orphan_reference_violations(
+    ref_md: Path,
+    package_root: Path,
+    violations: list[str],
+    seen_violations: set[str],
+    read_errors: list[str] | None,
+) -> None:
+    ref_label = _format_package_rel(ref_md.resolve(), package_root, ref_md.as_posix())
+    ref_content = _read_chain_markdown(ref_md, ref_label, read_errors)
+    if ref_content is None:
+        return
+    for raw_target in extract_relative_links(ref_content):
+        resolved = resolve_relative_link_target(raw_target, ref_md.parent)
+        if resolved is None:
+            continue
+        target_label = _format_package_rel(resolved, package_root, raw_target)
+        chain_str = f"SKILL.md -> {ref_label} -> {target_label}"
+        _record_chain_violation(chain_str, violations, seen_violations)
+
+
+def _scan_unvisited_reference_files(
+    references_dir: Path,
+    package_root: Path,
+    visited_markdown: set[Path],
+    violations: list[str],
+    seen_violations: set[str],
+    read_errors: list[str] | None,
+) -> None:
+    if not references_dir.is_dir() or references_dir.is_symlink():
+        return
+    for ref_md in sorted(references_dir.rglob("*.md")):
+        if ref_md.is_symlink() or not ref_md.is_file():
+            continue
+        if ref_md.resolve() in visited_markdown:
+            continue
+        _collect_orphan_reference_violations(
+            ref_md, package_root, violations, seen_violations, read_errors
+        )
+
+
 def find_deep_reference_chains(
     package: Path,
     max_hops: int = 1,
@@ -546,79 +698,64 @@ def find_deep_reference_chains(
     if max_hops < 1:
         raise ValueError("max_hops must be at least 1")
     package_root = package.resolve()
-    entry_path = package / "SKILL.md"
     violations: list[str] = []
     seen_violations: set[str] = set()
     visited_markdown: set[Path] = set()
-
-    if entry_path.is_file() and not entry_path.is_symlink():
-        entry_resolved = entry_path.resolve()
-        queue: deque[tuple[Path, tuple[Path, ...], tuple[str, ...]]] = deque(
-            [(entry_resolved, (entry_resolved,), ("SKILL.md",))]
-        )
-        while queue:
-            current, path_chain, label_chain = queue.popleft()
-            visited_markdown.add(current)
-            depth = len(path_chain) - 1
-            current_label = label_chain[-1]
-            content = _read_chain_markdown(current, current_label, read_errors)
-            if content is None:
-                continue
-            for raw_target in extract_relative_links(content):
-                resolved = resolve_relative_link_target(raw_target, current.parent)
-                if resolved is None:
-                    continue
-                next_depth = depth + 1
-                next_label = _format_package_rel(resolved, package_root, raw_target)
-                if next_depth > max_hops:
-                    chain_str = " -> ".join((*label_chain, next_label))
-                    if chain_str not in seen_violations:
-                        seen_violations.add(chain_str)
-                        violations.append(chain_str)
-                    continue
-                if (
-                    resolved.suffix.lower() == ".md"
-                    and resolved.is_relative_to(package_root)
-                    and resolved.is_file()
-                    and not resolved.is_symlink()
-                    and resolved not in path_chain
-                ):
-                    queue.append(
-                        (
-                            resolved,
-                            (*path_chain, resolved),
-                            (*label_chain, next_label),
-                        )
-                    )
-
-    references_dir = package / "references"
-    if references_dir.is_dir() and not references_dir.is_symlink():
-        for ref_md in sorted(references_dir.rglob("*.md")):
-            if ref_md.is_symlink() or not ref_md.is_file():
-                continue
-            ref_resolved = ref_md.resolve()
-            if ref_resolved in visited_markdown:
-                continue
-            ref_label = _format_package_rel(
-                ref_resolved, package_root, ref_md.as_posix()
-            )
-            ref_content = _read_chain_markdown(ref_md, ref_label, read_errors)
-            if ref_content is None:
-                continue
-            for raw_target in extract_relative_links(ref_content):
-                resolved = resolve_relative_link_target(raw_target, ref_md.parent)
-                if resolved is None:
-                    continue
-                target_label = _format_package_rel(resolved, package_root, raw_target)
-                chain_str = f"SKILL.md -> {ref_label} -> {target_label}"
-                if chain_str not in seen_violations:
-                    seen_violations.add(chain_str)
-                    violations.append(chain_str)
-
+    _walk_entry_reference_chains(
+        package / "SKILL.md",
+        package_root,
+        max_hops,
+        visited_markdown,
+        violations,
+        seen_violations,
+        read_errors,
+    )
+    _scan_unvisited_reference_files(
+        package / "references",
+        package_root,
+        visited_markdown,
+        violations,
+        seen_violations,
+        read_errors,
+    )
     return violations
 
 
 _YAML_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+|\"[^\"]+\"|'[^']+')\s*:(.*)$")
+_YAML_INT_RE = re.compile(r"-?(?:0|[1-9][0-9]*)")
+_YAML_FLOAT_RE = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]+")
+_YAML_LITERAL_SCALARS: dict[str, Any] = {
+    "true": True,
+    "True": True,
+    "TRUE": True,
+    "false": False,
+    "False": False,
+    "FALSE": False,
+    "null": None,
+    "Null": None,
+    "NULL": None,
+    "~": None,
+}
+
+
+def _is_yaml_comment_start(
+    raw: str, idx: int, in_single: bool, in_double: bool
+) -> bool:
+    if in_single or in_double:
+        return False
+    return idx == 0 or raw[idx - 1].isspace()
+
+
+def _advance_yaml_quote_state(
+    ch: str, in_single: bool, in_double: bool
+) -> tuple[bool, bool, bool]:
+    if ch == "\\" and in_double:
+        return in_single, in_double, True
+    if ch == "'" and not in_double:
+        return not in_single, in_double, False
+    if ch == '"' and not in_single:
+        return in_single, not in_double, False
+    return in_single, in_double, False
 
 
 def _strip_yaml_inline_comment(raw: str) -> str:
@@ -629,27 +766,15 @@ def _strip_yaml_inline_comment(raw: str) -> str:
         if escaped:
             escaped = False
             continue
-        if ch == "\\" and in_double:
-            escaped = True
-            continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        elif (
-            ch == "#"
-            and not in_single
-            and not in_double
-            and (idx == 0 or raw[idx - 1].isspace())
-        ):
+        if ch == "#" and _is_yaml_comment_start(raw, idx, in_single, in_double):
             return raw[:idx].rstrip()
+        in_single, in_double, escaped = _advance_yaml_quote_state(
+            ch, in_single, in_double
+        )
     return raw.strip()
 
 
-def _parse_yaml_scalar_stdlib(raw: str, path: Path) -> Any:
-    cleaned = _strip_yaml_inline_comment(raw.strip())
-    if not cleaned:
-        return None
+def _parse_quoted_yaml_scalar(cleaned: str, path: Path) -> Any:
     if cleaned.startswith('"'):
         if len(cleaned) < 2 or not cleaned.endswith('"'):
             raise ValueError(f"{path}: unterminated double-quoted YAML scalar")
@@ -657,19 +782,17 @@ def _parse_yaml_scalar_stdlib(raw: str, path: Path) -> Any:
             return json.loads(cleaned)
         except json.JSONDecodeError as exc:
             raise ValueError(f"{path}: invalid double-quoted YAML scalar") from exc
-    if cleaned.startswith("'"):
-        if len(cleaned) < 2 or not cleaned.endswith("'"):
-            raise ValueError(f"{path}: unterminated single-quoted YAML scalar")
-        return cleaned[1:-1].replace("''", "'")
-    if cleaned in {"true", "True", "TRUE"}:
-        return True
-    if cleaned in {"false", "False", "FALSE"}:
-        return False
-    if cleaned in {"null", "Null", "NULL", "~"}:
-        return None
-    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", cleaned):
+    if len(cleaned) < 2 or not cleaned.endswith("'"):
+        raise ValueError(f"{path}: unterminated single-quoted YAML scalar")
+    return cleaned[1:-1].replace("''", "'")
+
+
+def _parse_unquoted_yaml_scalar(cleaned: str, path: Path) -> Any:
+    if cleaned in _YAML_LITERAL_SCALARS:
+        return _YAML_LITERAL_SCALARS[cleaned]
+    if _YAML_INT_RE.fullmatch(cleaned):
         return int(cleaned)
-    if re.fullmatch(r"-?(?:0|[1-9][0-9]*)\.[0-9]+", cleaned):
+    if _YAML_FLOAT_RE.fullmatch(cleaned):
         return float(cleaned)
     if cleaned.startswith("[") and cleaned.endswith("]"):
         inner = cleaned[1:-1].strip()
@@ -677,6 +800,171 @@ def _parse_yaml_scalar_stdlib(raw: str, path: Path) -> Any:
             return []
         return [_parse_yaml_scalar_stdlib(item, path) for item in inner.split(",")]
     return cleaned
+
+
+def _parse_yaml_scalar_stdlib(raw: str, path: Path) -> Any:
+    cleaned = _strip_yaml_inline_comment(raw.strip())
+    if not cleaned:
+        return None
+    if cleaned[0] in {'"', "'"}:
+        return _parse_quoted_yaml_scalar(cleaned, path)
+    return _parse_unquoted_yaml_scalar(cleaned, path)
+
+
+def _collect_yaml_block_lines(
+    raw_lines: list[str], idx: int
+) -> tuple[list[tuple[int, str]], int]:
+    block_lines: list[tuple[int, str]] = []
+    block_indent: int | None = None
+    total = len(raw_lines)
+    while idx < total:
+        sub = raw_lines[idx]
+        if not sub.strip():
+            block_lines.append((0, ""))
+            idx += 1
+            continue
+        indent = len(sub) - len(sub.lstrip(" "))
+        if indent == 0:
+            break
+        if block_indent is None:
+            block_indent = indent
+        content = sub[block_indent:] if indent >= block_indent else sub.lstrip(" ")
+        block_lines.append((indent, content))
+        idx += 1
+    return block_lines, idx
+
+
+def _fold_yaml_block_lines(block_lines: list[tuple[int, str]]) -> str:
+    folded_parts: list[str] = []
+    for _, part in block_lines:
+        if not part:
+            folded_parts.append("\n")
+        elif folded_parts and not folded_parts[-1].endswith("\n"):
+            folded_parts.append(" " + part)
+        else:
+            folded_parts.append(part)
+    return "".join(folded_parts)
+
+
+def _parse_yaml_block_scalar(
+    raw_lines: list[str], idx: int, style: str
+) -> tuple[str, int]:
+    block_lines, next_idx = _collect_yaml_block_lines(raw_lines, idx)
+    if style.endswith("-"):
+        while block_lines and block_lines[-1][1] == "":
+            block_lines.pop()
+    joined = (
+        "\n".join(part for _, part in block_lines)
+        if style.startswith("|")
+        else _fold_yaml_block_lines(block_lines)
+    )
+    if not style.endswith("-") and block_lines:
+        joined = joined.rstrip("\n") + "\n"
+    return joined, next_idx
+
+
+def _collect_indented_yaml_lines(
+    raw_lines: list[str], idx: int
+) -> tuple[list[str], int]:
+    sub_lines: list[str] = []
+    total = len(raw_lines)
+    while idx < total:
+        sub = raw_lines[idx]
+        sub_stripped = sub.strip()
+        if not sub_stripped or sub_stripped.startswith("#"):
+            idx += 1
+            continue
+        if not sub[0].isspace():
+            break
+        sub_lines.append(sub)
+        idx += 1
+    return sub_lines, idx
+
+
+def _parse_yaml_sequence_lines(sub_lines: list[str], path: Path) -> list[Any]:
+    seq: list[Any] = []
+    for item_line in sub_lines:
+        item_str = item_line.lstrip()
+        if not item_str.startswith("- "):
+            raise ValueError(f"{path}: invalid YAML sequence item: {item_line!r}")
+        seq.append(_parse_yaml_scalar_stdlib(item_str[2:], path))
+    return seq
+
+
+def _parse_yaml_mapping_lines(sub_lines: list[str], path: Path) -> dict[str, Any]:
+    nested: dict[str, Any] = {}
+    for map_line in sub_lines:
+        sub_match = _YAML_KEY_RE.match(map_line.lstrip(" "))
+        if sub_match is None:
+            raise ValueError(f"{path}: invalid nested YAML mapping: {map_line!r}")
+        nk = str(_parse_yaml_scalar_stdlib(sub_match.group(1), path))
+        nested[nk] = _parse_yaml_scalar_stdlib(sub_match.group(2), path)
+    return nested
+
+
+def _parse_yaml_nested_block(
+    raw_lines: list[str], idx: int, path: Path
+) -> tuple[Any, int]:
+    sub_lines, next_idx = _collect_indented_yaml_lines(raw_lines, idx)
+    if not sub_lines:
+        return None, next_idx
+    if sub_lines[0].lstrip().startswith("- "):
+        return _parse_yaml_sequence_lines(sub_lines, path), next_idx
+    return _parse_yaml_mapping_lines(sub_lines, path), next_idx
+
+
+def _parse_yaml_plain_continuation(
+    scalar_val: str, raw_lines: list[str], idx: int
+) -> tuple[str, int]:
+    cont_parts = [scalar_val]
+    total = len(raw_lines)
+    while idx < total:
+        sub = raw_lines[idx]
+        sub_stripped = sub.strip()
+        if not sub_stripped:
+            break
+        if sub_stripped.startswith("#"):
+            idx += 1
+            continue
+        if not sub[0].isspace():
+            break
+        cont_parts.append(_strip_yaml_inline_comment(sub_stripped))
+        idx += 1
+    return " ".join(p for p in cont_parts if p), idx
+
+
+def _parse_yaml_entry_value(
+    raw_rest: str, raw_lines: list[str], idx: int, path: Path
+) -> tuple[Any, int]:
+    rest = _strip_yaml_inline_comment(raw_rest.strip())
+    if rest in {"|", "|-", "|+", ">", ">-", ">+"}:
+        return _parse_yaml_block_scalar(raw_lines, idx, rest)
+    if rest == "":
+        return _parse_yaml_nested_block(raw_lines, idx, path)
+    scalar_val = _parse_yaml_scalar_stdlib(raw_rest, path)
+    is_unquoted_str = isinstance(scalar_val, str) and not raw_rest.lstrip().startswith(
+        ('"', "'")
+    )
+    if is_unquoted_str and idx < len(raw_lines):
+        assert isinstance(scalar_val, str)
+        return _parse_yaml_plain_continuation(scalar_val, raw_lines, idx)
+    return scalar_val, idx
+
+
+def _parse_top_level_frontmatter_line(
+    line: str, stripped: str, path: Path
+) -> tuple[bool, Any, str]:
+    if "\t" in line[: len(line) - len(line.lstrip())]:
+        raise ValueError(f"{path}: tab indentation is not allowed in YAML frontmatter")
+    if line[0].isspace() or stripped.startswith("- "):
+        return False, stripped, ""
+    match = _YAML_KEY_RE.match(line)
+    if match is None:
+        if ":" not in stripped:
+            return False, _parse_yaml_scalar_stdlib(stripped, path), ""
+        raise ValueError(f"{path}: invalid YAML frontmatter line: {line!r}")
+    key = str(_parse_yaml_scalar_stdlib(match.group(1), path))
+    return True, key, match.group(2)
 
 
 def _parse_frontmatter_stdlib(frontmatter_text: str, path: Path) -> Any:
@@ -692,124 +980,15 @@ def _parse_frontmatter_stdlib(frontmatter_text: str, path: Path) -> Any:
             idx += 1
             continue
         saw_content = True
-        if "\t" in line[: len(line) - len(line.lstrip())]:
-            raise ValueError(
-                f"{path}: tab indentation is not allowed in YAML frontmatter"
-            )
-        if line[0].isspace() or stripped.startswith("- "):
-            return stripped
-        match = _YAML_KEY_RE.match(line)
-        if match is None:
-            if ":" not in stripped:
-                return _parse_yaml_scalar_stdlib(stripped, path)
-            raise ValueError(f"{path}: invalid YAML frontmatter line: {line!r}")
-        raw_key, raw_rest = match.group(1), match.group(2)
-        key = str(_parse_yaml_scalar_stdlib(raw_key, path))
-        rest = _strip_yaml_inline_comment(raw_rest.strip())
-        idx += 1
-
-        if rest in {"|", "|-", "|+", ">", ">-", ">+"}:
-            block_lines: list[tuple[int, str]] = []
-            block_indent: int | None = None
-            while idx < total:
-                sub = raw_lines[idx]
-                sub_stripped = sub.strip()
-                if not sub_stripped:
-                    block_lines.append((0, ""))
-                    idx += 1
-                    continue
-                indent = len(sub) - len(sub.lstrip(" "))
-                if indent == 0:
-                    break
-                if block_indent is None:
-                    block_indent = indent
-                content = (
-                    sub[block_indent:] if indent >= block_indent else sub.lstrip(" ")
-                )
-                block_lines.append((indent, content))
-                idx += 1
-            while block_lines and block_lines[-1][1] == "" and rest.endswith("-"):
-                block_lines.pop()
-            if rest.startswith("|"):
-                joined = "\n".join(part for _, part in block_lines)
-            else:
-                folded_parts: list[str] = []
-                for _, part in block_lines:
-                    if not part:
-                        folded_parts.append("\n")
-                    elif folded_parts and not folded_parts[-1].endswith("\n"):
-                        folded_parts.append(" " + part)
-                    else:
-                        folded_parts.append(part)
-                joined = "".join(folded_parts)
-            if not rest.endswith("-") and block_lines:
-                joined = joined.rstrip("\n") + "\n"
-            result[key] = joined
-            continue
-
-        if rest == "":
-            sub_lines: list[str] = []
-            while idx < total:
-                sub = raw_lines[idx]
-                sub_stripped = sub.strip()
-                if not sub_stripped or sub_stripped.startswith("#"):
-                    idx += 1
-                    continue
-                if not sub[0].isspace():
-                    break
-                sub_lines.append(sub)
-                idx += 1
-            if not sub_lines:
-                result[key] = None
-            elif sub_lines[0].lstrip().startswith("- "):
-                seq: list[Any] = []
-                for item_line in sub_lines:
-                    item_str = item_line.lstrip()
-                    if not item_str.startswith("- "):
-                        raise ValueError(
-                            f"{path}: invalid YAML sequence item: {item_line!r}"
-                        )
-                    seq.append(_parse_yaml_scalar_stdlib(item_str[2:], path))
-                result[key] = seq
-            else:
-                nested: dict[str, Any] = {}
-                for map_line in sub_lines:
-                    sub_match = _YAML_KEY_RE.match(map_line.lstrip(" "))
-                    if sub_match is None:
-                        raise ValueError(
-                            f"{path}: invalid nested YAML mapping: {map_line!r}"
-                        )
-                    nk = str(_parse_yaml_scalar_stdlib(sub_match.group(1), path))
-                    nv = _parse_yaml_scalar_stdlib(sub_match.group(2), path)
-                    nested[nk] = nv
-                result[key] = nested
-            continue
-
-        scalar_val = _parse_yaml_scalar_stdlib(raw_rest, path)
-        if (
-            isinstance(scalar_val, str)
-            and not raw_rest.lstrip().startswith(('"', "'"))
-            and idx < total
-        ):
-            cont_parts = [scalar_val]
-            while idx < total:
-                sub = raw_lines[idx]
-                sub_stripped = sub.strip()
-                if not sub_stripped:
-                    break
-                if sub_stripped.startswith("#"):
-                    idx += 1
-                    continue
-                if not sub[0].isspace():
-                    break
-                cont_parts.append(_strip_yaml_inline_comment(sub_stripped))
-                idx += 1
-            scalar_val = " ".join(p for p in cont_parts if p)
-        result[key] = scalar_val
-
-    if not saw_content:
-        return None
-    return result
+        is_kv, key_or_val, raw_rest = _parse_top_level_frontmatter_line(
+            line, stripped, path
+        )
+        if not is_kv:
+            return key_or_val
+        result[key_or_val], idx = _parse_yaml_entry_value(
+            raw_rest, raw_lines, idx + 1, path
+        )
+    return result if saw_content else None
 
 
 def read_frontmatter(path: Path) -> tuple[dict, str]:
@@ -830,37 +1009,41 @@ def read_frontmatter(path: Path) -> tuple[dict, str]:
     return metadata, body
 
 
-def _validate_suite_artifact(suite: dict, root: Path) -> None:
-    artifact = suite.get("artifact")
-    if artifact is None:
-        return
-    if not isinstance(artifact, dict):
-        raise TypeError(f"Suite '{suite.get('name')}' artifact must be an object")
-    filename = artifact.get("filename")
-    schema = artifact.get("schema")
-    starter = artifact.get("starter")
-    if (
-        not isinstance(filename, str)
-        or not filename.endswith(".json")
-        or Path(filename).name != filename
-        or "\\" in filename
-    ):
-        raise ValueError(
-            f"Suite '{suite.get('name')}' artifact filename must be a JSON basename"
-        )
+def _is_valid_json_basename(filename: object) -> bool:
+    if not isinstance(filename, str) or not filename.endswith(".json"):
+        return False
+    return Path(filename).name == filename and "\\" not in filename
+
+
+def _validate_suite_artifact_schema(
+    suite_name: object, schema: object, root: Path
+) -> None:
     if not isinstance(schema, str) or not schema.endswith(".schema.json"):
         raise ValueError(
-            f"Suite '{suite.get('name')}' artifact schema must name a .schema.json path"
+            f"Suite '{suite_name}' artifact schema must name a .schema.json path"
         )
     if (root / "skills").is_dir() and (root / "shared").is_dir():
         schema_file = root / schema
         if schema_file.is_symlink() or not schema_file.is_file():
-            raise ValueError(
-                f"Suite '{suite.get('name')}' missing artifact schema: {schema}"
-            )
+            raise ValueError(f"Suite '{suite_name}' missing artifact schema: {schema}")
+
+
+def _validate_suite_artifact(suite: dict, root: Path) -> None:
+    artifact = suite.get("artifact")
+    if artifact is None:
+        return
+    suite_name = suite.get("name")
+    if not isinstance(artifact, dict):
+        raise TypeError(f"Suite '{suite_name}' artifact must be an object")
+    if not _is_valid_json_basename(artifact.get("filename")):
+        raise ValueError(
+            f"Suite '{suite_name}' artifact filename must be a JSON basename"
+        )
+    _validate_suite_artifact_schema(suite_name, artifact.get("schema"), root)
+    starter = artifact.get("starter")
     if not isinstance(starter, dict) or not starter:
         raise ValueError(
-            f"Suite '{suite.get('name')}' artifact starter must be a nonempty mapping"
+            f"Suite '{suite_name}' artifact starter must be a nonempty mapping"
         )
 
 
@@ -993,56 +1176,77 @@ def infer_suite_name(
     return "repository-audits"
 
 
+def _phase_sort_key(item: tuple[int, Any]) -> tuple[int, int]:
+    idx, phase = item
+    if isinstance(phase, dict) and isinstance(phase.get("id"), int):
+        return (0, phase["id"])
+    return (1, idx)
+
+
+def _order_suite_phases(
+    suite: dict[str, Any], suite_name: str, *, strict: bool
+) -> list[Any] | None:
+    phases = suite["phases"] if strict else suite.get("phases", [])
+    if not isinstance(phases, list):
+        if strict:
+            raise TypeError(f"Suite '{suite_name}' phases must be a list")
+        return None
+    if strict:
+        return phases
+    return [phase for _, phase in sorted(enumerate(phases), key=_phase_sort_key)]
+
+
+def _iter_phase_skills(
+    suite_name: str, phase: Any, *, strict: bool
+) -> Iterator[tuple[str, dict[str, Any], Any]]:
+    if not isinstance(phase, dict):
+        if strict:
+            raise TypeError(f"Suite '{suite_name}' phase must be an object")
+        return
+    skills = phase["skills"] if strict else phase.get("skills", [])
+    if not isinstance(skills, list):
+        if strict:
+            raise TypeError(f"Suite '{suite_name}' phase skills must be a list")
+        return
+    for skill in skills:
+        if strict or (isinstance(skill, str) and skill):
+            yield suite_name, phase, skill
+
+
+def _resolve_suite_entry_name(
+    suite: Any, *, strict: bool, root: Path
+) -> tuple[dict[str, Any], str] | None:
+    if not isinstance(suite, dict):
+        if strict:
+            raise TypeError("Suite entry must be an object")
+        return None
+    if strict:
+        _validate_suite_artifact(suite, root)
+    suite_name = suite["name"] if strict else suite.get("name")
+    if not isinstance(suite_name, str) or not suite_name:
+        if strict:
+            raise ValueError(f"Invalid suite name: {suite_name!r}")
+        return None
+    return suite, suite_name
+
+
 def _iter_suite_phase_skills(
     suites: Iterable[Any],
     *,
     strict: bool = False,
     root: Path = ROOT,
 ) -> Iterator[tuple[str, dict[str, Any] | None, Any]]:
-    for suite in suites:
-        if not isinstance(suite, dict):
-            if strict:
-                raise TypeError("Suite entry must be an object")
+    for raw_suite in suites:
+        resolved = _resolve_suite_entry_name(raw_suite, strict=strict, root=root)
+        if resolved is None:
             continue
-        if strict:
-            _validate_suite_artifact(suite, root)
-        suite_name = suite["name"] if strict else suite.get("name")
-        if not isinstance(suite_name, str) or not suite_name:
-            if strict:
-                raise ValueError(f"Invalid suite name: {suite_name!r}")
-            continue
+        suite, suite_name = resolved
         yield suite_name, None, None
-        phases = suite["phases"] if strict else suite.get("phases", [])
-        if not isinstance(phases, list):
-            if strict:
-                raise TypeError(f"Suite '{suite_name}' phases must be a list")
+        ordered_phases = _order_suite_phases(suite, suite_name, strict=strict)
+        if ordered_phases is None:
             continue
-        ordered_phases = (
-            phases
-            if strict
-            else sorted(
-                enumerate(phases),
-                key=lambda item: (
-                    (0, item[1]["id"])
-                    if isinstance(item[1], dict) and isinstance(item[1].get("id"), int)
-                    else (1, item[0])
-                ),
-            )
-        )
-        for item in ordered_phases:
-            phase = item if strict else item[1]
-            if not isinstance(phase, dict):
-                if strict:
-                    raise TypeError(f"Suite '{suite_name}' phase must be an object")
-                continue
-            skills = phase["skills"] if strict else phase.get("skills", [])
-            if not isinstance(skills, list):
-                if strict:
-                    raise TypeError(f"Suite '{suite_name}' phase skills must be a list")
-                continue
-            for skill in skills:
-                if strict or (isinstance(skill, str) and skill):
-                    yield suite_name, phase, skill
+        for phase in ordered_phases:
+            yield from _iter_phase_skills(suite_name, phase, strict=strict)
 
 
 def read_suites_catalog(root: Path = ROOT) -> list[dict[str, Any]] | None:
@@ -1136,8 +1340,7 @@ def workflow_phase_order_map(root: Path = ROOT) -> dict[str, int]:
     return order_map
 
 
-def suite_members(root: Path = ROOT) -> dict[str, dict]:
-    suites_path = root / "catalog/suites.json"
+def _load_strict_suites_list(suites_path: Path) -> list[Any]:
     document = read_json_object(
         suites_path,
         label="Suites catalog 'catalog/suites.json'",
@@ -1149,6 +1352,11 @@ def suite_members(root: Path = ROOT) -> dict[str, dict]:
             code="invalid_catalog",
             hint=f"Ensure '{suites_path}' contains a JSON array under 'suites'.",
         )
+    return raw_suites
+
+
+def suite_members(root: Path = ROOT) -> dict[str, dict]:
+    raw_suites = _load_strict_suites_list(root / "catalog/suites.json")
     members: dict[str, dict] = {}
     for suite_name, phase, name in _iter_suite_phase_skills(
         raw_suites, strict=True, root=root
@@ -1174,6 +1382,19 @@ def suite_members(root: Path = ROOT) -> dict[str, dict]:
     return members
 
 
+def _load_suite_members_strict(root: Path, suites_path: Path) -> dict[str, dict]:
+    try:
+        return suite_members(root)
+    except FredCliError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise FredCliError(
+            f"Malformed suites catalog '{suites_path}': {exc}",
+            code="invalid_catalog",
+            hint=f"Fix suite definitions in '{suites_path}'.",
+        ) from exc
+
+
 def infer_suite_and_siblings(
     skill_name: str,
     root: Path | None = None,
@@ -1182,16 +1403,7 @@ def infer_suite_and_siblings(
     if root is not None:
         suites_path = root / "catalog/suites.json"
         if suites_path.exists() or suites_path.is_symlink():
-            try:
-                members = suite_members(root)
-            except FredCliError:
-                raise
-            except (OSError, ValueError, TypeError, KeyError) as exc:
-                raise FredCliError(
-                    f"Malformed suites catalog '{suites_path}': {exc}",
-                    code="invalid_catalog",
-                    hint=f"Fix suite definitions in '{suites_path}'.",
-                ) from exc
+            members = _load_suite_members_strict(root, suites_path)
             if skill_name in members:
                 suite_name = str(members[skill_name]["suite"])
                 siblings = {
@@ -1201,6 +1413,35 @@ def infer_suite_and_siblings(
                 }
                 return suite_name, siblings
     return infer_suite_name(skill_name), set()
+
+
+def _is_valid_skill_suite_row(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return isinstance(row.get("name"), str) and isinstance(row.get("suite"), str)
+
+
+def _fallback_skill_suites_from_catalog(root: Path) -> dict[str, str]:
+    skills_path = root / "catalog/skills.json"
+    doc = read_json_object(
+        skills_path,
+        label="Skills catalog 'catalog/skills.json'",
+        optional=True,
+    )
+    if doc is None:
+        return {}
+    raw_skills = doc.get("skills")
+    if not isinstance(raw_skills, list):
+        raise FredCliError(
+            f"Malformed skills catalog '{skills_path}': expected 'skills' array",
+            code="invalid_catalog",
+            hint=f"Ensure '{skills_path}' contains a JSON array under 'skills'.",
+        )
+    return {
+        row["name"]: row["suite"]
+        for row in raw_skills
+        if _is_valid_skill_suite_row(row)
+    }
 
 
 def suite_for_skills(
@@ -1214,31 +1455,48 @@ def suite_for_skills(
         dict(skill_suites) if skill_suites is not None else skill_to_suite_map(root)
     )
     if not resolved_map:
-        skills_path = root / "catalog/skills.json"
-        doc = read_json_object(
-            skills_path,
-            label="Skills catalog 'catalog/skills.json'",
-            optional=True,
-        )
-        if doc is not None:
-            raw_skills = doc.get("skills")
-            if not isinstance(raw_skills, list):
-                raise FredCliError(
-                    f"Malformed skills catalog '{skills_path}': expected 'skills' array",
-                    code="invalid_catalog",
-                    hint=f"Ensure '{skills_path}' contains a JSON array under 'skills'.",
-                )
-            resolved_map = {
-                row["name"]: row["suite"]
-                for row in raw_skills
-                if isinstance(row, dict)
-                and isinstance(row.get("name"), str)
-                and isinstance(row.get("suite"), str)
-            }
+        resolved_map = _fallback_skill_suites_from_catalog(root)
     suites = list(dict.fromkeys(resolved_map[s] for s in skills if s in resolved_map))
     if "repository-audits" in suites:
         return "repository-audits"
     return suites[0] if suites else "repository-audits"
+
+
+def _resolve_recipe_suite(
+    recipe_obj: dict[str, Any], root: Path, s_map: dict[str, str]
+) -> str:
+    explicit_suite = recipe_obj.get("suite")
+    if isinstance(explicit_suite, str) and explicit_suite:
+        return explicit_suite
+    raw_skills = recipe_obj.get("skills", [])
+    str_skills = (
+        [s for s in raw_skills if isinstance(s, str)]
+        if isinstance(raw_skills, list)
+        else []
+    )
+    return suite_for_skills(str_skills, root=root, skill_suites=s_map or None)
+
+
+def _register_recipe_aliases(
+    mapping: dict[str, str], raw_aliases: Any, resolved_suite: str
+) -> None:
+    if not isinstance(raw_aliases, list):
+        return
+    for alias in raw_aliases:
+        if isinstance(alias, str) and alias and alias not in mapping:
+            mapping[alias] = resolved_suite
+
+
+def _register_top_level_recipe_aliases(
+    mapping: dict[str, str], top_aliases: Any
+) -> None:
+    if not isinstance(top_aliases, dict):
+        return
+    for alias, target in top_aliases.items():
+        if not isinstance(alias, str) or not alias or alias in mapping:
+            continue
+        if isinstance(target, str) and target in mapping:
+            mapping[alias] = mapping[target]
 
 
 def recipe_to_suite_map(root: Path = ROOT) -> dict[str, str]:
@@ -1263,36 +1521,10 @@ def recipe_to_suite_map(root: Path = ROOT) -> dict[str, str]:
     for recipe_name, recipe_obj in recipes_obj.items():
         if not isinstance(recipe_name, str) or not isinstance(recipe_obj, dict):
             continue
-        explicit_suite = recipe_obj.get("suite")
-        if isinstance(explicit_suite, str) and explicit_suite:
-            resolved_suite = explicit_suite
-        else:
-            raw_skills = recipe_obj.get("skills", [])
-            str_skills = (
-                [s for s in raw_skills if isinstance(s, str)]
-                if isinstance(raw_skills, list)
-                else []
-            )
-            resolved_suite = suite_for_skills(
-                str_skills, root=root, skill_suites=s_map or None
-            )
+        resolved_suite = _resolve_recipe_suite(recipe_obj, root, s_map)
         mapping[recipe_name] = resolved_suite
-        raw_aliases = recipe_obj.get("aliases", [])
-        if isinstance(raw_aliases, list):
-            for alias in raw_aliases:
-                if isinstance(alias, str) and alias and alias not in mapping:
-                    mapping[alias] = resolved_suite
-    top_aliases = doc.get("aliases")
-    if isinstance(top_aliases, dict):
-        for alias, target in top_aliases.items():
-            if (
-                isinstance(alias, str)
-                and alias
-                and isinstance(target, str)
-                and target in mapping
-                and alias not in mapping
-            ):
-                mapping[alias] = mapping[target]
+        _register_recipe_aliases(mapping, recipe_obj.get("aliases", []), resolved_suite)
+    _register_top_level_recipe_aliases(mapping, doc.get("aliases"))
     return mapping
 
 
@@ -1321,6 +1553,16 @@ def is_audit_ledger_shape(data: Mapping[str, Any]) -> bool:
     )
 
 
+def _classify_fallback_domain_payload(data: dict[str, Any]) -> str | None:
+    if "summary" in data and "findings" in data:
+        return "review"
+    if "component" in data and "framework" in data:
+        return "testing"
+    if "title" in data and "status" in data and "findings" not in data:
+        return "architecture"
+    return "run" if "run_id" in data else None
+
+
 def classify_domain_payload(data: object) -> str | None:
     """Classify a non-audit domain, workflow, or run JSON payload by kind."""
     if not isinstance(data, dict) or is_audit_ledger_shape(data):
@@ -1329,15 +1571,7 @@ def classify_domain_payload(data: object) -> str | None:
     for kind, markers in DOMAIN_KIND_KEY_SETS:
         if keys & markers:
             return kind
-    if "summary" in data and "findings" in data:
-        return "review"
-    if "component" in data and "framework" in data:
-        return "testing"
-    if "title" in data and "status" in data and "findings" not in data:
-        return "architecture"
-    if "run_id" in data:
-        return "run"
-    return None
+    return _classify_fallback_domain_payload(data)
 
 
 def detect_domain_artifact(data: object) -> str | None:

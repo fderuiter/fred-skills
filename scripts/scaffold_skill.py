@@ -207,6 +207,55 @@ def _resolve_suite_and_sibling(
     return target_suite, (secondary if name == primary else primary)
 
 
+def _safe_excluded_for_skill(manifest: dict[str, object], skill_name: str) -> set[str]:
+    try:
+        return sync_audit_resources._excluded_for_skill(manifest, skill_name)
+    except (TypeError, ValueError):
+        return set()
+
+
+def _is_extra_suite_schema(rel: str, own_schema_filename: str) -> bool:
+    return (
+        rel.startswith("assets/")
+        and rel.endswith(".schema.json")
+        and Path(rel).name != own_schema_filename
+    )
+
+
+def _collect_manifest_companions(
+    manifest: dict[str, object],
+    shared: Path,
+    root: Path,
+    skill_name: str,
+    own_schema_filename: str,
+) -> tuple[list[str], list[str]]:
+    excluded = _safe_excluded_for_skill(manifest, skill_name)
+    file_targets = sync_audit_resources._collect_file_targets(
+        manifest, shared, excluded
+    )
+    script_targets = sync_audit_resources._collect_script_targets(
+        manifest.get("scripts", []),
+        shared,
+        root,
+        root / "skills" / skill_name,
+        skill_name,
+        excluded,
+        check=True,
+        problems=[],
+    )
+    schemas: list[str] = []
+    companions: list[str] = []
+    for rel, _ in file_targets:
+        if _is_extra_suite_schema(rel, own_schema_filename):
+            schemas.append(rel)
+        elif rel.endswith(".md") and rel != "assets/prompt.md":
+            companions.append(rel)
+    for rel_s, _ in script_targets:
+        if rel_s.startswith("scripts/") and rel_s.endswith(".py"):
+            companions.append(rel_s)
+    return schemas, companions
+
+
 def _discover_suite_synced_companions(
     root: Path,
     suite_name: str,
@@ -227,64 +276,16 @@ def _discover_suite_synced_companions(
             label=f"Shared resource manifest '{child.name}/manifest.json'",
             optional=True,
         )
-        if manifest is None:
+        if manifest is None or manifest.get("suite", "repository-audits") != suite_name:
             continue
-        if manifest.get("suite", "repository-audits") != suite_name:
+        try:
+            extra_s, extra_c = _collect_manifest_companions(
+                manifest, child, root, skill_name, own_schema_filename
+            )
+        except (TypeError, ValueError):
             continue
-        raw_exclude = manifest.get("exclude", {})
-        excluded = (
-            set(raw_exclude.get(skill_name, []))
-            if isinstance(raw_exclude, dict)
-            and isinstance(raw_exclude.get(skill_name), list)
-            else set()
-        )
-        for rel in manifest.get("files", []):
-            if not isinstance(rel, str) or rel in excluded:
-                continue
-            if (
-                rel.startswith("assets/")
-                and rel.endswith(".schema.json")
-                and Path(rel).name != own_schema_filename
-            ):
-                schemas.append(rel)
-            elif rel.endswith(".md") and rel != "assets/prompt.md":
-                companions.append(rel)
-        scripts = manifest.get("scripts", [])
-        if isinstance(scripts, Mapping):
-            for s_path, s_targets in scripts.items():
-                if (
-                    isinstance(s_path, str)
-                    and isinstance(s_targets, (list, tuple, set))
-                    and skill_name in s_targets
-                    and s_path not in excluded
-                    and s_path.startswith("scripts/")
-                    and s_path.endswith(".py")
-                ):
-                    companions.append(s_path)
-        elif isinstance(scripts, list):
-            for s_item in scripts:
-                if isinstance(s_item, Mapping):
-                    rel_s = s_item.get("path") or s_item.get("file")
-                    targets = s_item.get("targets") or s_item.get("skills", [])
-                    if (
-                        isinstance(rel_s, str)
-                        and isinstance(targets, (list, tuple, set))
-                        and skill_name in targets
-                        and rel_s not in excluded
-                        and rel_s.startswith("scripts/")
-                        and rel_s.endswith(".py")
-                    ):
-                        companions.append(rel_s)
-                    continue
-                if not isinstance(s_item, str) or s_item in excluded:
-                    continue
-                if (
-                    s_item == "scripts/audit_to_sarif.py"
-                    and skill_name != "repo-audit-synthesis"
-                ):
-                    continue
-                if s_item.startswith("scripts/") and s_item.endswith(".py"):
-                    companions.append(s_item)
+        schemas.extend(extra_s)
+        companions.extend(extra_c)
     return sorted(set(schemas)), sorted(set(companions))
 
 
@@ -647,15 +648,7 @@ def _render_validator_script(schema_filename: str) -> str:
     )
 
 
-def _validate_inputs(
-    name: str,
-    description: str,
-    short_description: str,
-    maturity: str,
-    root: Path,
-    package_dir: Path,
-    force: bool,
-) -> None:
+def _validate_skill_identifier(name: str, root: Path) -> None:
     if not NAME.fullmatch(name) or len(name) > 64:
         raise ValueError(
             f"Invalid skill name {name!r}: must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ and be at most 64 characters"
@@ -675,6 +668,48 @@ def _validate_inputs(
                 f"Skill name {name!r} collides with existing pack name in catalog/packs.json"
             )
 
+
+def _read_skill_frontmatter_strict(path: Path) -> tuple[dict[str, Any], str]:
+    """Read SKILL.md frontmatter strictly, raising FredCliError on read or parse errors."""
+    read_utf8_text(path, label=f"Skill manifest '{path}'")
+    try:
+        meta, body = read_frontmatter(path)
+    except FredCliError:
+        raise
+    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
+        raise FredCliError(
+            f"Invalid SKILL.md frontmatter in '{path}': {exc}",
+            code="invalid_frontmatter",
+            hint=f"Ensure '{path}' begins with a valid YAML mapping delimited by '---'.",
+        ) from exc
+    return meta, body
+
+
+def _ensure_unique_description(description: str, root: Path, package_dir: Path) -> None:
+    skills_root = root / "skills"
+    if not skills_root.is_dir():
+        return
+    resolved_package = package_dir.resolve()
+    for existing_entry in sorted(skills_root.glob("*/SKILL.md")):
+        if existing_entry.parent.resolve() == resolved_package:
+            continue
+        meta, _ = _read_skill_frontmatter_strict(existing_entry)
+        if meta.get("description") == description:
+            raise ValueError(
+                f"Activation description duplicates existing skill '{existing_entry.parent.name}'"
+            )
+
+
+def _validate_inputs(
+    name: str,
+    description: str,
+    short_description: str,
+    maturity: str,
+    root: Path,
+    package_dir: Path,
+    force: bool,
+) -> None:
+    _validate_skill_identifier(name, root)
     desc_errors = _validate_description_contract(description)
     if desc_errors:
         raise ValueError("; ".join(desc_errors))
@@ -694,32 +729,7 @@ def _validate_inputs(
             f"Skill directory already exists: {package_dir} (pass --force to overwrite)"
         )
 
-    skills_root = root / "skills"
-    if skills_root.is_dir():
-        for existing_entry in sorted(skills_root.glob("*/SKILL.md")):
-            if existing_entry.parent.resolve() == package_dir.resolve():
-                continue
-            meta, _ = _read_skill_frontmatter_strict(existing_entry)
-            if meta.get("description") == description:
-                raise ValueError(
-                    f"Activation description duplicates existing skill '{existing_entry.parent.name}'"
-                )
-
-
-def _read_skill_frontmatter_strict(path: Path) -> tuple[dict[str, Any], str]:
-    """Read SKILL.md frontmatter strictly, raising FredCliError on read or parse errors."""
-    read_utf8_text(path, label=f"Skill manifest '{path}'")
-    try:
-        meta, body = read_frontmatter(path)
-    except FredCliError:
-        raise
-    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
-        raise FredCliError(
-            f"Invalid SKILL.md frontmatter in '{path}': {exc}",
-            code="invalid_frontmatter",
-            hint=f"Ensure '{path}' begins with a valid YAML mapping delimited by '---'.",
-        ) from exc
-    return meta, body
+    _ensure_unique_description(description, root, package_dir)
 
 
 def _pack_raw_chars(root: Path, skill_names: Sequence[str]) -> int:
@@ -749,36 +759,43 @@ _SUITE_PREFERRED_PACKS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _is_curated_pack_entry(name: str, pack_obj: object) -> bool:
+    return (
+        name not in UMBRELLA_PACK_NAMES
+        and isinstance(pack_obj, dict)
+        and isinstance(pack_obj.get("skills"), list)
+    )
+
+
+def _pick_lowest_cost_pack(
+    group: Sequence[str],
+    curated: Mapping[str, dict[str, Any]],
+    root: Path,
+    skill_cost: int,
+) -> str | None:
+    candidates = [
+        (_pack_raw_chars(root, curated[p]["skills"]), idx, p)
+        for idx, p in enumerate(group)
+        if _pack_raw_chars(root, curated[p]["skills"]) + skill_cost
+        < MAX_CURATED_PACK_CHARS
+    ]
+    return min(candidates)[2] if candidates else None
+
+
 def _select_curated_pack_for_skill(
     packs: dict[str, Any], root: Path, name: str, suite_name: str
 ) -> str | None:
-    curated = {
-        k: v
-        for k, v in packs.items()
-        if k not in UMBRELLA_PACK_NAMES
-        and isinstance(v, dict)
-        and isinstance(v.get("skills"), list)
-    }
+    curated = {k: v for k, v in packs.items() if _is_curated_pack_entry(k, v)}
     if not curated or any(name in v["skills"] for v in curated.values()):
         return None
     skill_cost = _pack_raw_chars(root, [name])
     preferred = [p for p in _SUITE_PREFERRED_PACKS.get(suite_name, ()) if p in curated]
     non_starter = [p for p in curated if p != "starter" and p not in preferred]
     ordered = [*preferred, *non_starter]
-    for group in (ordered, ["starter"] if "starter" in curated else []):
-        candidates = [
-            (
-                _pack_raw_chars(root, curated[p]["skills"]),
-                idx,
-                p,
-            )
-            for idx, p in enumerate(group)
-            if _pack_raw_chars(root, curated[p]["skills"]) + skill_cost
-            < MAX_CURATED_PACK_CHARS
-        ]
-        if candidates:
-            return min(candidates)[2]
-    return None
+    starter_group = ["starter"] if "starter" in curated else []
+    return _pick_lowest_cost_pack(
+        ordered, curated, root, skill_cost
+    ) or _pick_lowest_cost_pack(starter_group, curated, root, skill_cost)
 
 
 def _append_pack_skill(pack_obj: dict[str, Any], name: str) -> bool:
@@ -796,6 +813,19 @@ _FULL_AUDIT_DESC_COUNT_RE = re.compile(r"\b(All\s+)\d+(\s+specialist\s+audits)\b
 _COMPLETE_DESC_COUNT_RE = re.compile(r"(\()\d+(\s+skills;)")
 
 
+def _rewrite_pack_description_count(
+    pack_obj: dict[str, Any], pattern: re.Pattern[str], count: int
+) -> bool:
+    old_desc = pack_obj.get("description")
+    if not isinstance(old_desc, str):
+        return False
+    new_desc = pattern.sub(rf"\g<1>{count}\g<2>", old_desc)
+    if new_desc == old_desc:
+        return False
+    pack_obj["description"] = new_desc
+    return True
+
+
 def _sync_umbrella_pack_descriptions(packs: dict[str, Any]) -> bool:
     changed = False
     full_audit = packs.get("full-audit")
@@ -805,25 +835,55 @@ def _sync_umbrella_pack_descriptions(packs: dict[str, Any]) -> bool:
             for sk in full_audit["skills"]
             if isinstance(sk, str) and sk not in _AUDIT_CORE_SKILLS
         )
-        old_desc = full_audit.get("description")
-        if isinstance(old_desc, str):
-            new_desc = _FULL_AUDIT_DESC_COUNT_RE.sub(
-                rf"\g<1>{specialists}\g<2>", old_desc
+        changed = (
+            _rewrite_pack_description_count(
+                full_audit, _FULL_AUDIT_DESC_COUNT_RE, specialists
             )
-            if new_desc != old_desc:
-                full_audit["description"] = new_desc
-                changed = True
+            or changed
+        )
 
     complete = packs.get("complete")
     if isinstance(complete, dict) and isinstance(complete.get("skills"), list):
         total = sum(1 for sk in complete["skills"] if isinstance(sk, str))
-        old_desc = complete.get("description")
-        if isinstance(old_desc, str):
-            new_desc = _COMPLETE_DESC_COUNT_RE.sub(rf"\g<1>{total}\g<2>", old_desc)
-            if new_desc != old_desc:
-                complete["description"] = new_desc
-                changed = True
+        changed = (
+            _rewrite_pack_description_count(complete, _COMPLETE_DESC_COUNT_RE, total)
+            or changed
+        )
     return changed
+
+
+def _sync_full_audit_pack_membership(
+    full_audit: dict[str, Any], name: str, suite_name: str
+) -> bool:
+    fa_skills = full_audit.get("skills")
+    if suite_name == "repository-audits":
+        was_sorted = isinstance(fa_skills, list) and fa_skills == sorted(fa_skills)
+        if not _append_pack_skill(full_audit, name):
+            return False
+        if was_sorted and isinstance(fa_skills, list):
+            fa_skills.sort()
+        return True
+    if isinstance(fa_skills, list) and name in fa_skills:
+        full_audit["skills"] = [sk for sk in fa_skills if sk != name]
+        return True
+    return False
+
+
+def _apply_pack_registrations(
+    packs: dict[str, Any], root: Path, name: str, suite_name: str
+) -> bool:
+    changes: list[bool] = []
+    chosen = _select_curated_pack_for_skill(packs, root, name, suite_name)
+    if chosen is not None:
+        changes.append(_append_pack_skill(packs[chosen], name))
+    if isinstance(packs.get("complete"), dict):
+        changes.append(_append_pack_skill(packs["complete"], name))
+    if isinstance(packs.get("full-audit"), dict):
+        changes.append(
+            _sync_full_audit_pack_membership(packs["full-audit"], name, suite_name)
+        )
+    changes.append(_sync_umbrella_pack_descriptions(packs))
+    return any(changes)
 
 
 def _register_skill_in_packs(
@@ -839,24 +899,7 @@ def _register_skill_in_packs(
     packs = packs_doc.get("packs")
     if not isinstance(packs, dict) or not packs:
         return False
-    changed = False
-    chosen = _select_curated_pack_for_skill(packs, root, name, suite_name)
-    if chosen is not None:
-        changed = _append_pack_skill(packs[chosen], name) or changed
-    if "complete" in packs and isinstance(packs["complete"], dict):
-        changed = _append_pack_skill(packs["complete"], name) or changed
-    if "full-audit" in packs and isinstance(packs["full-audit"], dict):
-        fa_skills = packs["full-audit"].get("skills")
-        if suite_name == "repository-audits":
-            was_sorted = isinstance(fa_skills, list) and fa_skills == sorted(fa_skills)
-            if _append_pack_skill(packs["full-audit"], name):
-                if was_sorted and isinstance(fa_skills, list):
-                    fa_skills.sort()
-                changed = True
-        elif isinstance(fa_skills, list) and name in fa_skills:
-            packs["full-audit"]["skills"] = [sk for sk in fa_skills if sk != name]
-            changed = True
-    changed = _sync_umbrella_pack_descriptions(packs) or changed
+    changed = _apply_pack_registrations(packs, root, name, suite_name)
     if changed:
         packs_path.write_text(
             json.dumps(packs_doc, indent=2, ensure_ascii=False) + "\n",
@@ -886,13 +929,15 @@ def _format_prose_count_token(raw_token: str, expected: int) -> str:
     return str(expected)
 
 
-def _rewrite_prose_counts_in_text(
+def _spans_overlap(start: int, end: int, occupied: Sequence[tuple[int, int]]) -> bool:
+    return any(not (end <= s or start >= e) for s, e in occupied)
+
+
+def _collect_prose_count_edits(
     text: str,
     rules: Sequence[tuple[re.Pattern[str], int | None]],
-    *,
-    max_end: int | None = None,
-) -> str:
-    limit = len(text) if max_end is None else min(len(text), max_end)
+    limit: int,
+) -> list[tuple[int, int, str]]:
     edits: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
     for pattern, expected in rules:
@@ -901,13 +946,26 @@ def _rewrite_prose_counts_in_text(
         for match in pattern.finditer(text, 0, limit):
             raw_tok = match.group(1)
             found = parse_prose_int(raw_tok)
-            if found is None or found == expected:
-                continue
             start, end = match.span(1)
-            if any(not (end <= s or start >= e) for s, e in occupied):
+            if (
+                found is None
+                or found == expected
+                or _spans_overlap(start, end, occupied)
+            ):
                 continue
             occupied.append((start, end))
             edits.append((start, end, _format_prose_count_token(raw_tok, expected)))
+    return edits
+
+
+def _rewrite_prose_counts_in_text(
+    text: str,
+    rules: Sequence[tuple[re.Pattern[str], int | None]],
+    *,
+    max_end: int | None = None,
+) -> str:
+    limit = len(text) if max_end is None else min(len(text), max_end)
+    edits = _collect_prose_count_edits(text, rules, limit)
     if not edits:
         return text
     updated = text
@@ -969,41 +1027,79 @@ def _sync_prose_count_docs(root: Path) -> list[Path]:
     return updated_paths
 
 
-def _sync_catalog_files(
-    root: Path,
-    name: str,
-    title: str,
-    suite_name: str | None,
-    phase_id: int | None,
-    maturity: str,
-    symptoms: Sequence[str],
-) -> list[Path]:
-    """Update suites.json, experience.json, shared resources, and generated catalog indexes."""
-    touched: list[Path] = []
-    catalog_dir = root / "catalog"
-    catalog_dir.mkdir(parents=True, exist_ok=True)
-
-    suites_path = catalog_dir / "suites.json"
-    loaded_suites = read_json_object(
+def _load_or_default_suites_doc(
+    suites_path: Path, suite_name: str | None
+) -> dict[str, Any]:
+    loaded = read_json_object(
         suites_path,
         label="Suite catalog 'catalog/suites.json'",
         optional=True,
     )
-    if loaded_suites is not None:
-        suites_doc = loaded_suites
-    else:
-        default_suite = suite_name or "repository-workflows"
-        suites_doc = {
-            "schema_version": "1.0",
-            "suites": [
-                {
-                    "name": default_suite,
-                    "protocol_version": "1.0",
-                    "phases": [{"id": 0, "title": "Workflow", "skills": []}],
-                }
-            ],
-        }
+    if loaded is not None:
+        return loaded
+    default_suite = suite_name or "repository-workflows"
+    return {
+        "schema_version": "1.0",
+        "suites": [
+            {
+                "name": default_suite,
+                "protocol_version": "1.0",
+                "phases": [{"id": 0, "title": "Workflow", "skills": []}],
+            }
+        ],
+    }
 
+
+def _should_prune_skill_from_phase(
+    suite_obj_name: object,
+    phase_obj_id: object,
+    target_suite_name: str,
+    phase_id: int | None,
+) -> bool:
+    if suite_obj_name != target_suite_name:
+        return True
+    return phase_id is not None and phase_obj_id != phase_id
+
+
+def _prune_prior_skill_phases(
+    suites_list: Sequence[dict[str, Any]],
+    name: str,
+    target_suite_name: str,
+    phase_id: int | None,
+) -> None:
+    for s_obj in suites_list:
+        for p_obj in s_obj.get("phases", []):
+            if name in p_obj.get("skills", []) and _should_prune_skill_from_phase(
+                s_obj.get("name"), p_obj.get("id"), target_suite_name, phase_id
+            ):
+                p_obj["skills"] = [sk for sk in p_obj["skills"] if sk != name]
+
+
+def _resolve_target_suite_phase(
+    target_suite: dict[str, Any], target_suite_name: str, phase_id: int | None
+) -> dict[str, Any]:
+    phases = target_suite.get("phases", [])
+    if not phases:
+        raise ValueError(f"Suite {target_suite_name!r} has no phases configured")
+    if phase_id is None:
+        return phases[-1]
+    target_phase = next((p for p in phases if p.get("id") == phase_id), None)
+    if target_phase is None:
+        valid_ids = [str(p.get("id")) for p in phases]
+        raise ValueError(
+            f"Unknown phase id {phase_id} in suite {target_suite_name!r} "
+            f"(available: {', '.join(valid_ids)})"
+        )
+    return target_phase
+
+
+def _register_skill_in_suites_doc(
+    suites_path: Path,
+    name: str,
+    suite_name: str | None,
+    phase_id: int | None,
+) -> str:
+    suites_doc = _load_or_default_suites_doc(suites_path, suite_name)
     suites_list = suites_doc.get("suites", [])
     available_names = [s["name"] for s in suites_list if isinstance(s.get("name"), str)]
     target_suite_name = suite_name or infer_suite_name(name, available_names)
@@ -1018,30 +1114,10 @@ def _sync_catalog_files(
             f"(available: {', '.join(available_names)})"
         )
 
-    # Remove from any prior phase if re-running with --force, then add to target phase
-    for s_obj in suites_list:
-        for p_obj in s_obj.get("phases", []):
-            if name in p_obj.get("skills", []) and (
-                s_obj.get("name") != target_suite_name
-                or (phase_id is not None and p_obj.get("id") != phase_id)
-            ):
-                p_obj["skills"] = [sk for sk in p_obj["skills"] if sk != name]
-
-    phases = target_suite.get("phases", [])
-    if not phases:
-        raise ValueError(f"Suite {target_suite_name!r} has no phases configured")
-
-    if phase_id is not None:
-        target_phase = next((p for p in phases if p.get("id") == phase_id), None)
-        if target_phase is None:
-            valid_ids = [str(p.get("id")) for p in phases]
-            raise ValueError(
-                f"Unknown phase id {phase_id} in suite {target_suite_name!r} "
-                f"(available: {', '.join(valid_ids)})"
-            )
-    else:
-        target_phase = phases[-1]
-
+    _prune_prior_skill_phases(suites_list, name, target_suite_name, phase_id)
+    target_phase = _resolve_target_suite_phase(
+        target_suite, target_suite_name, phase_id
+    )
     if name not in target_phase["skills"]:
         target_phase["skills"].append(name)
 
@@ -1050,18 +1126,26 @@ def _sync_catalog_files(
         encoding="utf-8",
         newline="\n",
     )
-    touched.append(suites_path)
+    return target_suite_name
 
-    experience_path = catalog_dir / "experience.json"
+
+def _update_experience_catalog(
+    experience_path: Path,
+    name: str,
+    title: str,
+    maturity: str,
+    symptoms: Sequence[str],
+) -> None:
     loaded_exp = read_json_object(
         experience_path,
         label="Experience catalog 'catalog/experience.json'",
         optional=True,
     )
-    if loaded_exp is not None:
-        exp_doc = loaded_exp
-    else:
-        exp_doc = {"schema_version": "1.0", "skills": {}}
+    exp_doc: dict[str, Any] = (
+        loaded_exp
+        if loaded_exp is not None
+        else {"schema_version": "1.0", "skills": {}}
+    )
 
     skills_map = dict(exp_doc.get("skills", {}))
     skills_map[name] = {
@@ -1082,8 +1166,10 @@ def _sync_catalog_files(
         encoding="utf-8",
         newline="\n",
     )
-    touched.append(experience_path)
 
+
+def _ensure_auxiliary_catalogs(catalog_dir: Path) -> list[Path]:
+    created: list[Path] = []
     for aux_name, top_key in (
         ("recipes.json", "recipes"),
         ("packs.json", "packs"),
@@ -1096,8 +1182,35 @@ def _sync_catalog_files(
                 encoding="utf-8",
                 newline="\n",
             )
-            touched.append(aux_path)
+            created.append(aux_path)
+    return created
 
+
+def _sync_catalog_files(
+    root: Path,
+    name: str,
+    title: str,
+    suite_name: str | None,
+    phase_id: int | None,
+    maturity: str,
+    symptoms: Sequence[str],
+) -> list[Path]:
+    """Update suites.json, experience.json, shared resources, and generated catalog indexes."""
+    catalog_dir = root / "catalog"
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+
+    suites_path = catalog_dir / "suites.json"
+    target_suite_name = _register_skill_in_suites_doc(
+        suites_path, name, suite_name, phase_id
+    )
+    experience_path = catalog_dir / "experience.json"
+    _update_experience_catalog(experience_path, name, title, maturity, symptoms)
+
+    touched: list[Path] = [
+        suites_path,
+        experience_path,
+        *_ensure_auxiliary_catalogs(catalog_dir),
+    ]
     packs_path = catalog_dir / "packs.json"
     if _register_skill_in_packs(packs_path, root, name, target_suite_name):
         touched.append(packs_path)
@@ -1106,16 +1219,91 @@ def _sync_catalog_files(
         sync_audit_resources.sync(root=root, check=False)
 
     build_catalog.build(root=root, check=False)
-    for rel_out in build_catalog.rendered_catalog(root=root):
-        touched.append(root / rel_out)
+    touched.extend(
+        root / rel_out for rel_out in build_catalog.rendered_catalog(root=root)
+    )
 
     build_experience.build(root=root, check=False)
-    for rel_out in build_experience.outputs(root=root):
-        touched.append(root / rel_out)
+    touched.extend(root / rel_out for rel_out in build_experience.outputs(root=root))
 
     touched.extend(_sync_prose_count_docs(root))
-
     return touched
+
+
+def _resolve_skills_parent(resolved_root: Path, output_dir: Path | None) -> Path:
+    if output_dir is None:
+        return resolved_root / "skills"
+    if output_dir.is_absolute():
+        return output_dir.resolve()
+    return (resolved_root / output_dir).resolve()
+
+
+def _resolve_text_or_default(value: str | None, fallback: str) -> str:
+    return value.strip() if value and value.strip() else fallback
+
+
+def _build_scaffold_package_files(
+    *,
+    resolved_root: Path,
+    name: str,
+    effective_title: str,
+    effective_description: str,
+    effective_short: str,
+    effective_suite: str,
+    sibling_skill: str,
+) -> dict[str, str]:
+    schema_filename = f"{name}.schema.json"
+    extra_schema_links, extra_companion_links = _discover_suite_synced_companions(
+        resolved_root, effective_suite, name, schema_filename
+    )
+    explicit_only = name in EXPLICIT_INVOCATION_ONLY_SKILLS
+    return {
+        "SKILL.md": _render_skill_markdown(
+            name=name,
+            title=effective_title,
+            description=effective_description,
+            schema_filename=schema_filename,
+            extra_schema_links=extra_schema_links,
+            extra_companion_links=extra_companion_links,
+            disable_model_invocation=explicit_only,
+        ),
+        "assets/icon.svg": _render_icon_svg(name=name, suite_name=effective_suite),
+        "assets/prompt.md": _render_prompt_markdown(
+            name=name, schema_filename=schema_filename
+        ),
+        f"assets/{schema_filename}": _render_output_schema(
+            name=name, title=effective_title
+        ),
+        "agents/openai.yaml": _render_openai_yaml(
+            name=name,
+            title=effective_title,
+            short_description=effective_short,
+            allow_implicit_invocation=not explicit_only,
+        ),
+        "references/evaluation-scenarios.json": _render_evaluation_scenarios(
+            name=name,
+            title=effective_title,
+            suite_name=effective_suite,
+            sibling_skill=sibling_skill,
+        ),
+        "references/examples.md": _render_examples_markdown(
+            name=name, title=effective_title, schema_filename=schema_filename
+        ),
+        "scripts/validate_output.py": _render_validator_script(
+            schema_filename=schema_filename
+        ),
+    }
+
+
+def _write_scaffolded_package_files(
+    package_dir: Path, package_files: Mapping[str, str]
+) -> None:
+    for rel_path, content in package_files.items():
+        target = package_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8", newline="\n")
+        if rel_path.startswith("scripts/"):
+            target.chmod(0o755)
 
 
 def scaffold_skill(
@@ -1136,30 +1324,18 @@ def scaffold_skill(
 ) -> dict[str, Any]:
     """Create a compliant skill package and optionally synchronize catalog indexes."""
     resolved_root = root.resolve()
-    skills_parent = (
-        output_dir.resolve()
-        if output_dir is not None and output_dir.is_absolute()
-        else (resolved_root / output_dir).resolve()
-        if output_dir is not None
-        else resolved_root / "skills"
-    )
+    skills_parent = _resolve_skills_parent(resolved_root, output_dir)
     package_dir = skills_parent / name
 
     effective_suite, sibling_skill = _resolve_suite_and_sibling(
-        root=resolved_root,
-        name=name,
-        explicit_suite=suite,
+        root=resolved_root, name=name, explicit_suite=suite
     )
-    effective_title = title.strip() if title and title.strip() else _default_title(name)
-    effective_description = (
-        description.strip()
-        if description and description.strip()
-        else _default_description(name, effective_title, effective_suite)
+    effective_title = _resolve_text_or_default(title, _default_title(name))
+    effective_description = _resolve_text_or_default(
+        description, _default_description(name, effective_title, effective_suite)
     )
-    effective_short = (
-        short_description.strip()
-        if short_description and short_description.strip()
-        else _default_short_description(effective_title, name)
+    effective_short = _resolve_text_or_default(
+        short_description, _default_short_description(effective_title, name)
     )
     effective_symptoms = (
         [s.strip() for s in symptoms if s.strip()]
@@ -1182,66 +1358,20 @@ def scaffold_skill(
             "--catalog requires scaffolding inside <root>/skills so discovery paths resolve"
         )
 
-    schema_filename = f"{name}.schema.json"
-    extra_schema_links, extra_companion_links = _discover_suite_synced_companions(
-        resolved_root, effective_suite, name, schema_filename
+    package_files = _build_scaffold_package_files(
+        resolved_root=resolved_root,
+        name=name,
+        effective_title=effective_title,
+        effective_description=effective_description,
+        effective_short=effective_short,
+        effective_suite=effective_suite,
+        sibling_skill=sibling_skill,
     )
-    explicit_only = name in EXPLICIT_INVOCATION_ONLY_SKILLS
-    package_files: dict[str, str] = {
-        "SKILL.md": _render_skill_markdown(
-            name=name,
-            title=effective_title,
-            description=effective_description,
-            schema_filename=schema_filename,
-            extra_schema_links=extra_schema_links,
-            extra_companion_links=extra_companion_links,
-            disable_model_invocation=explicit_only,
-        ),
-        "assets/icon.svg": _render_icon_svg(
-            name=name,
-            suite_name=effective_suite,
-        ),
-        "assets/prompt.md": _render_prompt_markdown(
-            name=name,
-            schema_filename=schema_filename,
-        ),
-        f"assets/{schema_filename}": _render_output_schema(
-            name=name,
-            title=effective_title,
-        ),
-        "agents/openai.yaml": _render_openai_yaml(
-            name=name,
-            title=effective_title,
-            short_description=effective_short,
-            allow_implicit_invocation=not explicit_only,
-        ),
-        "references/evaluation-scenarios.json": _render_evaluation_scenarios(
-            name=name,
-            title=effective_title,
-            suite_name=effective_suite,
-            sibling_skill=sibling_skill,
-        ),
-        "references/examples.md": _render_examples_markdown(
-            name=name,
-            title=effective_title,
-            schema_filename=schema_filename,
-        ),
-        "scripts/validate_output.py": _render_validator_script(
-            schema_filename=schema_filename,
-        ),
-    }
-
     planned_paths = [package_dir / rel for rel in sorted(package_files)]
     catalog_paths: list[Path] = []
 
     if not dry_run:
-        for rel_path, content in package_files.items():
-            target = package_dir / rel_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8", newline="\n")
-            if rel_path.startswith("scripts/"):
-                target.chmod(0o755)
-
+        _write_scaffolded_package_files(package_dir, package_files)
         if sync_catalog:
             catalog_paths = _sync_catalog_files(
                 root=resolved_root,
@@ -1254,11 +1384,7 @@ def scaffold_skill(
             )
         elif (resolved_root / "shared").is_dir():
             sync_audit_resources.sync_skill_package(
-                resolved_root,
-                package_dir,
-                effective_suite,
-                name,
-                check=False,
+                resolved_root, package_dir, effective_suite, name, check=False
             )
 
     return {
