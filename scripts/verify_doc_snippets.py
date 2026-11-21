@@ -1286,6 +1286,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         help="Non-mutating verification mode (standard repository flag)",
     )
     parser.add_argument(
+        "--root",
+        type=Path,
+        default=ROOT,
+        help="Repository root directory.",
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help="Optional specific files to check",
@@ -3062,7 +3068,11 @@ def verify_all_snippets(
         else None
     )
 
-    if target_rel_paths is None or "docs/toolkit.md" in target_rel_paths:
+    check_toolkit = (
+        target_rel_paths is None
+        and (root.resolve() == ROOT.resolve() or (root / "docs/toolkit.md").is_file())
+    ) or (target_rel_paths is not None and "docs/toolkit.md" in target_rel_paths)
+    if check_toolkit:
         subcmd_errors = verify_toolkit_subcommands(root=root)
         errors.extend(subcmd_errors)
 
@@ -3102,7 +3112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
     try:
-        errors = verify_all_snippets(root=ROOT, files=args.files or None)
+        errors = verify_all_snippets(root=args.root.resolve(), files=args.files or None)
     except (FredCliError, subprocess.TimeoutExpired) as exc:
         _print_cli_exception(exc)
         return 1

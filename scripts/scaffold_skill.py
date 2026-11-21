@@ -6,8 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,18 +21,32 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import build_catalog
 import build_experience
 import sync_audit_resources
+from _doc_invariants import (
+    CORE_INVARIANT_DOCS,
+    PROSE_NUMBER_WORDS,
+    DocCountExpectations,
+    build_prose_count_rules,
+    discover_untagged_release_notes,
+    parse_prose_int,
+)
 from skill_tools import (
     ROOT,
+    extract_markdown_preamble,
     infer_suite_name,
     read_frontmatter,
     suite_skills_by_suite,
 )
 from validate_skills import (
+    _AUDIT_CORE_SKILLS,
+    _README_AUDIT_DOMAINS_RE,
+    _README_ENGINEERING_RE,
+    _README_WORKFLOWS_RE,
     EXPLICIT_INVOCATION_ONLY_SKILLS,
     MAX_CURATED_PACK_CHARS,
     MAX_DESCRIPTION_CHARS,
     NAME,
     UMBRELLA_PACK_NAMES,
+    _load_doc_expectations,
     _validate_description_contract,
 )
 
@@ -225,8 +240,32 @@ def _discover_suite_synced_companions(
             elif rel.endswith(".md") and rel != "assets/prompt.md":
                 companions.append(rel)
         scripts = manifest.get("scripts", [])
-        if isinstance(scripts, list):
+        if isinstance(scripts, Mapping):
+            for s_path, s_targets in scripts.items():
+                if (
+                    isinstance(s_path, str)
+                    and isinstance(s_targets, (list, tuple, set))
+                    and skill_name in s_targets
+                    and s_path not in excluded
+                    and s_path.startswith("scripts/")
+                    and s_path.endswith(".py")
+                ):
+                    companions.append(s_path)
+        elif isinstance(scripts, list):
             for s_item in scripts:
+                if isinstance(s_item, Mapping):
+                    rel_s = s_item.get("path") or s_item.get("file")
+                    targets = s_item.get("targets") or s_item.get("skills", [])
+                    if (
+                        isinstance(rel_s, str)
+                        and isinstance(targets, (list, tuple, set))
+                        and skill_name in targets
+                        and rel_s not in excluded
+                        and rel_s.startswith("scripts/")
+                        and rel_s.endswith(".py")
+                    ):
+                        companions.append(rel_s)
+                    continue
                 if not isinstance(s_item, str) or s_item in excluded:
                     continue
                 if (
@@ -519,7 +558,7 @@ def _render_examples_markdown(name: str, title: str, schema_filename: str) -> st
         "```python\n"
         "# src/service/handler.py\n"
         "def apply_transition(record: dict[str, object], payload: dict[str, object]) -> None:\n"
-        "    record['state'] = payload['target_state']  # mutates state without boundary guard\n"
+        '    record["state"] = payload["target_state"]  # mutates state without boundary guard\n'
         "```\n\n"
         f"## 2. Valid Deliverable Output (`assets/{schema_filename}`)\n\n"
         "```json\n"
@@ -538,6 +577,11 @@ def _extract_stdlib_schema_evaluator() -> str:
 
 def _render_validator_script(schema_filename: str) -> str:
     evaluator_body = _extract_stdlib_schema_evaluator()
+    schema_default_tail = (
+        f'        / "assets"\n        / "{schema_filename}",\n'
+        if len(schema_filename) > 67
+        else f'        / "assets/{schema_filename}",\n'
+    )
     return (
         "#!/usr/bin/env python3\n"
         '"""Validate skill deliverable JSON against the bundled output schema."""\n\n'
@@ -547,7 +591,7 @@ def _render_validator_script(schema_filename: str) -> str:
         "import pathlib\n"
         "import re\n"
         "import sys\n"
-        "from collections.abc import Mapping\n"
+        "from collections.abc import Callable, Mapping\n"
         "from typing import Any\n\n"
         f"{evaluator_body}"
         "def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:\n"
@@ -555,9 +599,9 @@ def _render_validator_script(schema_filename: str) -> str:
         "    if errors or not isinstance(data, Mapping):\n"
         "        return errors\n"
         "    seen_ids: set[str] = set()\n"
-        "    for item in data.get('findings', []):\n"
-        "        if isinstance(item, Mapping) and isinstance(item.get('id'), str):\n"
-        "            fid = item['id']\n"
+        '    for item in data.get("findings", []):\n'
+        '        if isinstance(item, Mapping) and isinstance(item.get("id"), str):\n'
+        '            fid = item["id"]\n'
         "            if fid in seen_ids:\n"
         '                errors.append(f"Duplicate IDs in findings: {fid}")\n'
         "            seen_ids.add(fid)\n"
@@ -569,7 +613,7 @@ def _render_validator_script(schema_filename: str) -> str:
         '        "--schema",\n'
         "        type=pathlib.Path,\n"
         "        default=pathlib.Path(__file__).resolve().parents[1]\n"
-        f'        / "assets/{schema_filename}",\n'
+        f"{schema_default_tail}"
         "    )\n"
         "    args = parser.parse_args()\n"
         "    try:\n"
@@ -584,7 +628,9 @@ def _render_validator_script(schema_filename: str) -> str:
         "        for err in errors:\n"
         "            print(err, file=sys.stderr)\n"
         "        return 1\n"
-        '    print("PASS: deliverable structure and finding IDs; semantic claims require review.")\n'
+        "    print(\n"
+        '        "PASS: deliverable structure and finding IDs; semantic claims require review."\n'
+        "    )\n"
         "    return 0\n\n\n"
         'if __name__ == "__main__":\n'
         "    sys.exit(main())\n"
@@ -719,6 +765,40 @@ def _append_pack_skill(pack_obj: dict[str, Any], name: str) -> bool:
     return True
 
 
+_FULL_AUDIT_DESC_COUNT_RE = re.compile(r"\b(All\s+)\d+(\s+specialist\s+audits)\b")
+_COMPLETE_DESC_COUNT_RE = re.compile(r"(\()\d+(\s+skills;)")
+
+
+def _sync_umbrella_pack_descriptions(packs: dict[str, Any]) -> bool:
+    changed = False
+    full_audit = packs.get("full-audit")
+    if isinstance(full_audit, dict) and isinstance(full_audit.get("skills"), list):
+        specialists = sum(
+            1
+            for sk in full_audit["skills"]
+            if isinstance(sk, str) and sk not in _AUDIT_CORE_SKILLS
+        )
+        old_desc = full_audit.get("description")
+        if isinstance(old_desc, str):
+            new_desc = _FULL_AUDIT_DESC_COUNT_RE.sub(
+                rf"\g<1>{specialists}\g<2>", old_desc
+            )
+            if new_desc != old_desc:
+                full_audit["description"] = new_desc
+                changed = True
+
+    complete = packs.get("complete")
+    if isinstance(complete, dict) and isinstance(complete.get("skills"), list):
+        total = sum(1 for sk in complete["skills"] if isinstance(sk, str))
+        old_desc = complete.get("description")
+        if isinstance(old_desc, str):
+            new_desc = _COMPLETE_DESC_COUNT_RE.sub(rf"\g<1>{total}\g<2>", old_desc)
+            if new_desc != old_desc:
+                complete["description"] = new_desc
+                changed = True
+    return changed
+
+
 def _register_skill_in_packs(
     packs_path: Path, root: Path, name: str, suite_name: str
 ) -> bool:
@@ -734,12 +814,18 @@ def _register_skill_in_packs(
         changed = _append_pack_skill(packs[chosen], name) or changed
     if "complete" in packs and isinstance(packs["complete"], dict):
         changed = _append_pack_skill(packs["complete"], name) or changed
-    if (
-        suite_name == "repository-audits"
-        and "full-audit" in packs
-        and isinstance(packs["full-audit"], dict)
-    ):
-        changed = _append_pack_skill(packs["full-audit"], name) or changed
+    if "full-audit" in packs and isinstance(packs["full-audit"], dict):
+        fa_skills = packs["full-audit"].get("skills")
+        if suite_name == "repository-audits":
+            was_sorted = isinstance(fa_skills, list) and fa_skills == sorted(fa_skills)
+            if _append_pack_skill(packs["full-audit"], name):
+                if was_sorted and isinstance(fa_skills, list):
+                    fa_skills.sort()
+                changed = True
+        elif isinstance(fa_skills, list) and name in fa_skills:
+            packs["full-audit"]["skills"] = [sk for sk in fa_skills if sk != name]
+            changed = True
+    changed = _sync_umbrella_pack_descriptions(packs) or changed
     if changed:
         packs_path.write_text(
             json.dumps(packs_doc, indent=2, ensure_ascii=False) + "\n",
@@ -747,6 +833,109 @@ def _register_skill_in_packs(
             newline="\n",
         )
     return changed
+
+
+_INT_TO_PROSE_WORD: dict[int, str] = {v: k for k, v in PROSE_NUMBER_WORDS.items()}
+_EXTRA_TOTAL_SKILL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:loads|exposes|installs)\s+all\s+([A-Za-z0-9]+)\s+skills\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfull\s+([A-Za-z0-9]+)-skill\s+(?:repository|bundles?)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _format_prose_count_token(raw_token: str, expected: int) -> str:
+    if raw_token.isalpha() and expected in _INT_TO_PROSE_WORD:
+        word = _INT_TO_PROSE_WORD[expected]
+        return word.capitalize() if raw_token[0].isupper() else word
+    return str(expected)
+
+
+def _rewrite_prose_counts_in_text(
+    text: str,
+    rules: Sequence[tuple[re.Pattern[str], int | None]],
+    *,
+    max_end: int | None = None,
+) -> str:
+    limit = len(text) if max_end is None else min(len(text), max_end)
+    edits: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for pattern, expected in rules:
+        if expected is None:
+            continue
+        for match in pattern.finditer(text, 0, limit):
+            raw_tok = match.group(1)
+            found = parse_prose_int(raw_tok)
+            if found is None or found == expected:
+                continue
+            start, end = match.span(1)
+            if any(not (end <= s or start >= e) for s, e in occupied):
+                continue
+            occupied.append((start, end))
+            edits.append((start, end, _format_prose_count_token(raw_tok, expected)))
+    if not edits:
+        return text
+    updated = text
+    for start, end, replacement in sorted(edits, reverse=True):
+        updated = f"{updated[:start]}{replacement}{updated[end:]}"
+    return updated
+
+
+def _sync_prose_count_docs(root: Path) -> list[Path]:
+    exp, load_errors = _load_doc_expectations(root)
+    if load_errors or exp.total_skills is None:
+        return []
+    deliverables_total = len(exp.deliverables) if exp.deliverables else None
+    shared_rules = build_prose_count_rules(
+        DocCountExpectations(
+            total_skills=exp.total_skills,
+            starter_skills=exp.starter_skills,
+            suites_count=exp.suites_count,
+            packs_count=exp.packs_count,
+            hosts_count=exp.hosts_count,
+            deliverables_count=deliverables_total,
+            audit_skills=exp.audit_skills,
+            audit_domains=exp.audit_domains,
+            workflow_skills=exp.workflow_skills,
+            engineering_skills=exp.engineering_skills,
+        )
+    )
+    doc_rules: list[tuple[re.Pattern[str], int | None]] = [
+        *((pat, expected) for pat, _label, expected in shared_rules),
+        *((pat, exp.total_skills) for pat in _EXTRA_TOTAL_SKILL_PATTERNS),
+    ]
+    readme_intro_rules: tuple[tuple[re.Pattern[str], int | None], ...] = (
+        (_README_AUDIT_DOMAINS_RE, exp.audit_domains),
+        (_README_WORKFLOWS_RE, exp.workflow_skills),
+        (_README_ENGINEERING_RE, exp.engineering_skills),
+    )
+    candidates = dict.fromkeys(
+        [
+            *CORE_INVARIANT_DOCS,
+            "docs/integration.md",
+            *discover_untagged_release_notes(root),
+        ]
+    )
+    updated_paths: list[Path] = []
+    for rel_path in candidates:
+        doc_path = root / rel_path
+        if doc_path.is_symlink() or not doc_path.is_file():
+            continue
+        original = doc_path.read_text(encoding="utf-8")
+        rewritten = _rewrite_prose_counts_in_text(original, doc_rules)
+        if rel_path == "README.md":
+            intro = extract_markdown_preamble(rewritten)
+            rewritten = _rewrite_prose_counts_in_text(
+                rewritten, readme_intro_rules, max_end=len(intro)
+            )
+        if rewritten != original:
+            doc_path.write_text(rewritten, encoding="utf-8", newline="\n")
+            updated_paths.append(doc_path)
+    return updated_paths
 
 
 def _sync_catalog_files(
@@ -883,6 +1072,8 @@ def _sync_catalog_files(
     for rel_out in build_experience.outputs(root=root):
         touched.append(root / rel_out)
 
+    touched.extend(_sync_prose_count_docs(root))
+
     return touched
 
 
@@ -951,12 +1142,8 @@ def scaffold_skill(
         )
 
     schema_filename = f"{name}.schema.json"
-    extra_schema_links, extra_companion_links = (
-        _discover_suite_synced_companions(
-            resolved_root, effective_suite, name, schema_filename
-        )
-        if sync_catalog
-        else ([], [])
+    extra_schema_links, extra_companion_links = _discover_suite_synced_companions(
+        resolved_root, effective_suite, name, schema_filename
     )
     explicit_only = name in EXPLICIT_INVOCATION_ONLY_SKILLS
     package_files: dict[str, str] = {
@@ -1023,6 +1210,14 @@ def scaffold_skill(
                 phase_id=phase,
                 maturity=maturity,
                 symptoms=effective_symptoms,
+            )
+        elif (resolved_root / "shared").is_dir():
+            sync_audit_resources.sync_skill_package(
+                resolved_root,
+                package_dir,
+                effective_suite,
+                name,
+                check=False,
             )
 
     return {
