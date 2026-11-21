@@ -102,51 +102,70 @@ def _parse_adapter_argv(value: str) -> list[str]:
 _IDENTIFIER_HEADERS = frozenset({"Skill", "Host", "Pack", "Task"})
 
 
+def _resolve_flex_floors(
+    headers: list[str], natural: list[int], flex: list[int], budget: int
+) -> tuple[list[int], bool]:
+    floors = [min(natural[i], max(len(headers[i]), 6)) for i in flex]
+    if budget > sum(floors):
+        return floors, False
+    min_floors = [max(4, min(natural[i], 6)) for i in flex]
+    return min_floors, budget <= sum(min_floors)
+
+
+def _assign_equal_flex_shares(
+    widths: list[int], remaining: set[int], avail: int
+) -> None:
+    share = avail // len(remaining)
+    sorted_rem = sorted(remaining)
+    extra = avail - share * len(sorted_rem)
+    for idx, col in enumerate(sorted_rem):
+        widths[col] = share + (1 if idx < extra else 0)
+
+
+def _distribute_flex_budget(
+    widths: list[int],
+    natural: list[int],
+    flex: list[int],
+    floor_map: dict[int, int],
+    avail: int,
+) -> None:
+    remaining = set(flex)
+    while remaining:
+        share = avail // len(remaining)
+        pinned = [i for i in remaining if natural[i] <= share]
+        pinned_vals = natural
+        if not pinned:
+            pinned = [i for i in remaining if share <= floor_map[i]]
+            pinned_vals = floor_map  # type: ignore[assignment]
+        if pinned:
+            for col in pinned:
+                widths[col] = pinned_vals[col]
+                avail -= widths[col]
+                remaining.remove(col)
+            continue
+        _assign_equal_flex_shares(widths, remaining, avail)
+        break
+
+
 def _fit_column_widths(
     headers: list[str], natural: list[int], term_width: int
 ) -> list[int]:
     sep_width = 2 * max(0, len(headers) - 1)
     if sum(natural) + sep_width <= term_width:
         return list(natural)
-    clamped_term = max(term_width, 40)
     widths = list(natural)
     flex = [i for i, h in enumerate(headers) if h not in _IDENTIFIER_HEADERS]
     if not flex:
         return widths
     fixed_total = sum(widths[i] for i in range(len(headers)) if i not in flex)
-    budget = clamped_term - sep_width - fixed_total
-    floors = [min(natural[i], max(len(headers[i]), 6)) for i in flex]
-    if budget <= sum(floors):
-        min_floors = [max(4, min(natural[i], 6)) for i in flex]
-        if budget <= sum(min_floors):
-            for idx, col in enumerate(flex):
-                widths[col] = min_floors[idx]
-            return widths
-        floors = min_floors
-    remaining = set(flex)
+    budget = max(term_width, 40) - sep_width - fixed_total
+    floors, saturated = _resolve_flex_floors(headers, natural, flex, budget)
+    if saturated:
+        for idx, col in enumerate(flex):
+            widths[col] = floors[idx]
+        return widths
     floor_map = dict(zip(flex, floors, strict=True))
-    avail = budget
-    while remaining:
-        share = avail // len(remaining)
-        small = [i for i in remaining if natural[i] <= share]
-        if small:
-            for col in small:
-                widths[col] = natural[col]
-                avail -= widths[col]
-                remaining.remove(col)
-            continue
-        clamped = [i for i in remaining if share <= floor_map[i]]
-        if clamped:
-            for col in clamped:
-                widths[col] = floor_map[col]
-                avail -= widths[col]
-                remaining.remove(col)
-            continue
-        sorted_rem = sorted(remaining)
-        extra = avail - share * len(sorted_rem)
-        for idx, col in enumerate(sorted_rem):
-            widths[col] = share + (1 if idx < extra else 0)
-        break
+    _distribute_flex_budget(widths, natural, flex, floor_map, budget)
     return widths
 
 
@@ -291,31 +310,31 @@ def _installed_rows_for_host(host_label: str, entry: dict[str, Any]) -> list[lis
     return rows
 
 
+def _collect_installed_rows(data: dict[str, Any]) -> list[list[str]]:
+    hosts_val = data.get("hosts")
+    if isinstance(hosts_val, list):
+        rows: list[list[str]] = []
+        for host_entry in hosts_val:
+            if isinstance(host_entry, dict):
+                label = str(host_entry.get("host") or "-")
+                rows.extend(_installed_rows_for_host(label, host_entry))
+        return rows
+    if isinstance(hosts_val, dict):
+        rows = []
+        for host_name, host_entry in hosts_val.items():
+            if isinstance(host_entry, dict):
+                rows.extend(_installed_rows_for_host(host_name, host_entry))
+        return rows
+    return _installed_rows_for_host(str(data.get("host") or "-"), data)
+
+
 def _render_installed_table(data: Any) -> str:
     headers = ["Host", "Skill", "Version", "Status", "Harness Path"]
     if not isinstance(data, dict):
         return "No entries found."
-    hosts_val = data.get("hosts")
-    rows: list[list[str]] = []
-    if isinstance(hosts_val, list):
-        for host_entry in hosts_val:
-            if isinstance(host_entry, dict):
-                rows.extend(
-                    _installed_rows_for_host(
-                        str(host_entry.get("host") or "-"), host_entry
-                    )
-                )
-    elif isinstance(hosts_val, dict):
-        for host_name, host_entry in hosts_val.items():
-            if isinstance(host_entry, dict):
-                rows.extend(_installed_rows_for_host(host_name, host_entry))
-    else:
-        host_label = str(data.get("host") or "-")
-        rows.extend(_installed_rows_for_host(host_label, data))
+    rows = _collect_installed_rows(data)
     if not rows:
-        if data.get("message"):
-            return str(data["message"])
-        return "No entries found."
+        return str(data["message"]) if data.get("message") else "No entries found."
     return format_table(headers, rows)
 
 
@@ -369,43 +388,48 @@ def render_discovery_table(command: str, data: Any) -> str:
     return ""
 
 
-def _render_planning_tty(command: str, data: dict[str, Any]) -> str:
-    if command == "preflight":
-        repo = data.get("repository", {})
-        snap = data.get("snapshot", {})
-        file_count = snap.get("file_count", len(snap.get("files", {})))
-        dirty_suffix = " (dirty)" if repo.get("dirty") else ""
-        langs = ", ".join(data.get("languages", [])) or "none detected"
-        deps = data.get("dependencies", {})
-        dep_pkgs = deps.get("packages", {}) if isinstance(deps, dict) else {}
-        dep_manifests = deps.get("manifests", []) if isinstance(deps, dict) else []
-        lines = [
+def _render_preflight_tty(data: dict[str, Any]) -> str:
+    repo = data.get("repository", {})
+    snap = data.get("snapshot", {})
+    file_count = snap.get("file_count", len(snap.get("files", {})))
+    dirty_suffix = " (dirty)" if repo.get("dirty") else ""
+    langs = ", ".join(data.get("languages", [])) or "none detected"
+    deps = data.get("dependencies", {})
+    dep_pkgs = deps.get("packages", {}) if isinstance(deps, dict) else {}
+    dep_manifests = deps.get("manifests", []) if isinstance(deps, dict) else []
+    return "\n".join(
+        [
             f"Repository: {repo.get('path', '')}",
             f"Revision: {repo.get('revision', 'unversioned')}{dirty_suffix}",
             f"Files indexed: {file_count} (complete: {snap.get('complete', True)})",
             f"Languages: {langs}",
             f"Dependencies: {len(dep_pkgs)} packages across {len(dep_manifests)} manifests",
         ]
-        return "\n".join(lines)
-    if command == "plan":
-        plan_info = data.get("plan", {})
-        repo = data.get("preflight", {}).get("repository", {})
-        skills = plan_info.get("skills", [])
-        deferred = plan_info.get("deferred_skills", [])
-        outputs = plan_info.get("expected_outputs", [])
-        lines = [
-            f"Plan: {plan_info.get('task', '')} (mode: {plan_info.get('mode', '')}, budget: {plan_info.get('budget', '')})",
-            f"Repository: {repo.get('path', '')} ({repo.get('revision', 'unversioned')})",
-            f"Selected skills ({len(skills)}): {', '.join(skills) or 'none'}",
-            f"Deferred skills ({len(deferred)}): {', '.join(deferred) or 'none'}",
-            f"Expected outputs: {', '.join(outputs) or 'none'}",
-        ]
-        if plan_info.get("base_revision"):
-            changed = plan_info.get("changed_files", [])
-            lines.append(
-                f"Changed files ({len(changed)} vs {plan_info['base_revision'][:12]}): {', '.join(changed[:10]) or 'none'}"
-            )
-        return "\n".join(lines)
+    )
+
+
+def _render_plan_tty(data: dict[str, Any]) -> str:
+    plan_info = data.get("plan", {})
+    repo = data.get("preflight", {}).get("repository", {})
+    skills = plan_info.get("skills", [])
+    deferred = plan_info.get("deferred_skills", [])
+    outputs = plan_info.get("expected_outputs", [])
+    lines = [
+        f"Plan: {plan_info.get('task', '')} (mode: {plan_info.get('mode', '')}, budget: {plan_info.get('budget', '')})",
+        f"Repository: {repo.get('path', '')} ({repo.get('revision', 'unversioned')})",
+        f"Selected skills ({len(skills)}): {', '.join(skills) or 'none'}",
+        f"Deferred skills ({len(deferred)}): {', '.join(deferred) or 'none'}",
+        f"Expected outputs: {', '.join(outputs) or 'none'}",
+    ]
+    if plan_info.get("base_revision"):
+        changed = plan_info.get("changed_files", [])
+        lines.append(
+            f"Changed files ({len(changed)} vs {plan_info['base_revision'][:12]}): {', '.join(changed[:10]) or 'none'}"
+        )
+    return "\n".join(lines)
+
+
+def _render_init_tty(data: dict[str, Any]) -> str:
     run = data.get("run", {})
     plan_info = run.get("plan", {})
     output = data.get("output", "")
@@ -421,104 +445,152 @@ def _render_planning_tty(command: str, data: dict[str, Any]) -> str:
     )
 
 
-def _render_run_management_tty(command: str, data: dict[str, Any]) -> str:
-    if command == "validate-run":
-        status = "valid" if data.get("valid") else "invalid"
-        return f"Run validation: {status} (semantic claims verified: {str(bool(data.get('semantic_claims_verified'))).lower()})"
-    if command == "resume":
-        changed = data.get("changed_files", [])
-        stale = data.get("stale_finding_ids", [])
-        old_snap = str(data.get("old_snapshot", ""))[:12]
-        new_snap = str(data.get("new_snapshot", ""))[:12]
-        return "\n".join(
-            [
-                f"Resume check: {len(changed)} changed files, {len(stale)} stale findings",
-                f"Snapshot: {old_snap} -> {new_snap}",
-                f"Next action: {data.get('next_action', '')}",
-            ]
-        )
-    if command == "advance":
-        changed = data.get("changed_files", [])
-        old_snap = str(data.get("old_snapshot", ""))[:12]
-        new_snap = str(data.get("new_snapshot", ""))[:12]
-        active_skill = data.get("active_skill")
-        next_step = (
-            f"Next pass ({data.get('pass_index', 0) + 1}/{data.get('total_passes', 0)}): {active_skill}"
-            if active_skill
-            else f"Completed all {data.get('total_passes', 0)} passes"
-        )
-        return "\n".join(
-            [
-                f"Advanced run {data.get('run_id', '')}: completed {data.get('completed_skill', '')} ({len(changed)} changed files)",
-                f"Snapshot: {old_snap} -> {new_snap}",
-                next_step,
-            ]
-        )
-    if command == "memory":
-        if "contracts" in data:
-            return f"Exported memory: {data.get('output', '')} ({data.get('contracts', 0)} contracts)"
-        return f"Exported memory: {data.get('output', '')} ({data.get('records', 0)} records from {data.get('deliverable', 'domain')})"
-    if command == "checkpoint":
-        checkpoints = data.get("checkpoints", [])
-        latest_note = checkpoints[-1].get("note", "") if checkpoints else ""
-        return "\n".join(
-            [
-                f"Recorded checkpoint: {data.get('run_id', '')} -> {data.get('state', '')}",
-                f"Note: {latest_note}",
-            ]
-        )
-    if command == "report":
-        return f"Rendered report: {data.get('output', '')}"
-    if command == "issues":
-        drafts = data.get("drafts", [])
-        lines = [
-            f"Generated issue drafts: {len(drafts)} (remote writes: {data.get('remote_writes', 0)})"
+def _render_planning_tty(command: str, data: dict[str, Any]) -> str:
+    if command == "preflight":
+        return _render_preflight_tty(data)
+    if command == "plan":
+        return _render_plan_tty(data)
+    return _render_init_tty(data)
+
+
+def _render_validate_run_tty(data: dict[str, Any]) -> str:
+    status = "valid" if data.get("valid") else "invalid"
+    verified = str(bool(data.get("semantic_claims_verified"))).lower()
+    return f"Run validation: {status} (semantic claims verified: {verified})"
+
+
+def _render_resume_tty(data: dict[str, Any]) -> str:
+    changed = data.get("changed_files", [])
+    stale = data.get("stale_finding_ids", [])
+    old_snap = str(data.get("old_snapshot", ""))[:12]
+    new_snap = str(data.get("new_snapshot", ""))[:12]
+    return "\n".join(
+        [
+            f"Resume check: {len(changed)} changed files, {len(stale)} stale findings",
+            f"Snapshot: {old_snap} -> {new_snap}",
+            f"Next action: {data.get('next_action', '')}",
         ]
-        lines.extend(f"  {path}" for path in drafts)
-        return "\n".join(lines)
-    if command == "compare":
-        return (
-            "Comparison summary: "
-            f"{len(data.get('introduced', []))} introduced, "
-            f"{len(data.get('persisting', []))} persisting, "
-            f"{len(data.get('status_changed', []))} status changed, "
-            f"{len(data.get('not_observed', []))} not observed, "
-            f"{len(data.get('ambiguous', []))} ambiguous"
-        )
-    if command == "reconcile":
-        return "\n".join(
-            [
-                f"Reconciled finding {data.get('finding_id', '')}: {data.get('state', '')}",
-                f"Note: {data.get('note', '')}",
-            ]
-        )
-    if command == "import-sarif":
-        return f"Imported SARIF observations: {data.get('observations', 0)} -> {data.get('output', '')}"
+    )
+
+
+def _render_advance_tty(data: dict[str, Any]) -> str:
+    changed = data.get("changed_files", [])
+    old_snap = str(data.get("old_snapshot", ""))[:12]
+    new_snap = str(data.get("new_snapshot", ""))[:12]
+    active_skill = data.get("active_skill")
+    next_step = (
+        f"Next pass ({data.get('pass_index', 0) + 1}/{data.get('total_passes', 0)}): {active_skill}"
+        if active_skill
+        else f"Completed all {data.get('total_passes', 0)} passes"
+    )
+    return "\n".join(
+        [
+            f"Advanced run {data.get('run_id', '')}: completed {data.get('completed_skill', '')} ({len(changed)} changed files)",
+            f"Snapshot: {old_snap} -> {new_snap}",
+            next_step,
+        ]
+    )
+
+
+def _render_memory_tty(data: dict[str, Any]) -> str:
+    if "contracts" in data:
+        return f"Exported memory: {data.get('output', '')} ({data.get('contracts', 0)} contracts)"
+    return f"Exported memory: {data.get('output', '')} ({data.get('records', 0)} records from {data.get('deliverable', 'domain')})"
+
+
+def _render_checkpoint_tty(data: dict[str, Any]) -> str:
+    checkpoints = data.get("checkpoints", [])
+    latest_note = checkpoints[-1].get("note", "") if checkpoints else ""
+    return "\n".join(
+        [
+            f"Recorded checkpoint: {data.get('run_id', '')} -> {data.get('state', '')}",
+            f"Note: {latest_note}",
+        ]
+    )
+
+
+def _render_issues_tty(data: dict[str, Any]) -> str:
+    drafts = data.get("drafts", [])
+    lines = [
+        f"Generated issue drafts: {len(drafts)} (remote writes: {data.get('remote_writes', 0)})"
+    ]
+    lines.extend(f"  {path}" for path in drafts)
+    return "\n".join(lines)
+
+
+def _render_compare_tty(data: dict[str, Any]) -> str:
+    return (
+        "Comparison summary: "
+        f"{len(data.get('introduced', []))} introduced, "
+        f"{len(data.get('persisting', []))} persisting, "
+        f"{len(data.get('status_changed', []))} status changed, "
+        f"{len(data.get('not_observed', []))} not observed, "
+        f"{len(data.get('ambiguous', []))} ambiguous"
+    )
+
+
+def _render_reconcile_tty(data: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            f"Reconciled finding {data.get('finding_id', '')}: {data.get('state', '')}",
+            f"Note: {data.get('note', '')}",
+        ]
+    )
+
+
+_RUN_MANAGEMENT_TTY_RENDERERS: dict[str, Callable[[dict[str, Any]], str]] = {
+    "validate-run": _render_validate_run_tty,
+    "resume": _render_resume_tty,
+    "advance": _render_advance_tty,
+    "memory": _render_memory_tty,
+    "checkpoint": _render_checkpoint_tty,
+    "report": lambda d: f"Rendered report: {d.get('output', '')}",
+    "issues": _render_issues_tty,
+    "compare": _render_compare_tty,
+    "reconcile": _render_reconcile_tty,
+    "import-sarif": lambda d: (
+        f"Imported SARIF observations: {d.get('observations', 0)} -> {d.get('output', '')}"
+    ),
+}
+
+
+def _render_run_management_tty(command: str, data: dict[str, Any]) -> str:
+    renderer = _RUN_MANAGEMENT_TTY_RENDERERS.get(command)
+    if renderer is not None:
+        return renderer(data)
     return (
         f"Exported SARIF results: {data.get('results', 0)} -> {data.get('output', '')}"
     )
+
+
+def _install_verb(command: str, *, dry_run: bool) -> str:
+    if dry_run:
+        return "install" if command == "install" else "update"
+    return "Installed" if command == "install" else "Updated"
+
+
+def _render_install_or_update_tty(
+    command: str, data: dict[str, Any], skills: list[Any], prefix: str
+) -> str:
+    verb = _install_verb(command, dry_run=bool(prefix))
+    hosts_list = data.get("hosts")
+    if isinstance(hosts_list, list) and hosts_list:
+        host_names = ", ".join(str(h.get("host", "")) for h in hosts_list)
+        lines = [
+            f"{prefix}{verb} {len(skills)} skills across {len(hosts_list)} hosts ({host_names}, {data.get('scope', '')}):"
+        ]
+        lines.extend(
+            f"  {h.get('host', '')} -> {h.get('target', '')}" for h in hosts_list
+        )
+        return "\n".join(lines)
+    return f"{prefix}{verb} {len(skills)} skills for {data.get('host', '')} ({data.get('scope', '')}) -> {data.get('target', '')}"
 
 
 def _render_installation_tty(command: str, data: dict[str, Any]) -> str:
     skills = data.get("skills", [])
     prefix = "Dry run: " if data.get("dry_run") else ""
     if command in {"install", "update"}:
-        verb = (
-            ("install" if command == "install" else "update")
-            if prefix
-            else ("Installed" if command == "install" else "Updated")
-        )
-        hosts_list = data.get("hosts")
-        if isinstance(hosts_list, list) and hosts_list:
-            host_names = ", ".join(str(h.get("host", "")) for h in hosts_list)
-            lines = [
-                f"{prefix}{verb} {len(skills)} skills across {len(hosts_list)} hosts ({host_names}, {data.get('scope', '')}):"
-            ]
-            lines.extend(
-                f"  {h.get('host', '')} -> {h.get('target', '')}" for h in hosts_list
-            )
-            return "\n".join(lines)
-        return f"{prefix}{verb} {len(skills)} skills for {data.get('host', '')} ({data.get('scope', '')}) -> {data.get('target', '')}"
+        return _render_install_or_update_tty(command, data, skills, prefix)
     if command == "remove":
         verb = "remove" if prefix else "Removed"
         return f"{prefix}{verb} {len(skills)} skills: {', '.join(skills) or 'none'}"
@@ -648,52 +720,25 @@ def render_tty_output(
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def parser() -> argparse.ArgumentParser:
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--json",
-        dest="as_json",
-        action="store_true",
-        default=False,
-        help="Output raw machine-readable JSON",
-    )
-
-    root = argparse.ArgumentParser(
-        prog="fred.py",
-        description=__doc__,
-        parents=[common],
-    )
-
-    commands = root.add_subparsers(dest="command", required=True)
-
-    sub_common = argparse.ArgumentParser(add_help=False)
-    sub_common.add_argument(
-        "--json",
-        dest="as_json",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Output raw machine-readable JSON",
-    )
-
-    # 1. Discovery commands
+def _add_discovery_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     commands.add_parser(
         "tasks",
         parents=[sub_common],
         help="List available audit recipe tasks and their target outcomes",
     )
-
     commands.add_parser(
         "packs",
         parents=[sub_common],
         help="List curated audit skill packs and included skills",
     )
-
     commands.add_parser(
         "hosts",
         parents=[sub_common],
         help="List supported agent hosts, configuration paths, and invocation formats",
     )
-
     sub_search = commands.add_parser(
         "search",
         parents=[sub_common],
@@ -706,7 +751,126 @@ def parser() -> argparse.ArgumentParser:
         help="Search query to match against skill metadata",
     )
 
-    # 2. Planning commands
+
+def _add_shared_plan_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument(
+        "repo",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="Path to target repository (default: current working directory)",
+    )
+    sub.add_argument(
+        "--task",
+        required=True,
+        choices=TASK_CHOICES,
+        help=f"Audit recipe/task to execute ({', '.join(TASK_CHOICES)})",
+    )
+    sub.add_argument(
+        "--mode",
+        choices=["explore", "changes", "investigate", "comprehensive"],
+        default="investigate",
+        help="Audit mode: explore, changes, investigate, or comprehensive",
+    )
+    sub.add_argument(
+        "--budget",
+        choices=["brief", "balanced", "deep"],
+        default="balanced",
+        help="Execution budget level: brief, balanced, or deep",
+    )
+    sub.add_argument(
+        "--base",
+        help="Base git commit, tag, or branch for differential analysis",
+    )
+    sub.add_argument(
+        "--profile",
+        choices=PROFILE_CHOICES,
+        help=f"Project archetype or technology profile name ({', '.join(PROFILE_CHOICES)})",
+    )
+    sub.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Path pattern to exclude from analysis (can be repeated)",
+    )
+    sub.add_argument(
+        "--config",
+        type=Path,
+        help="Optional project YAML with profile, excludes, and critical workflows; never executable commands",
+    )
+    sub.add_argument(
+        "--directory",
+        default=None,
+        help="Optional target subdirectory within the repository to focus tactical scope",
+    )
+    sub.add_argument(
+        "--symbol",
+        default=None,
+        help="Optional symbol, function, or type name to trace blast radius and caller migration order",
+    )
+    sub.add_argument(
+        "--allowed-paths",
+        "--allowed-path",
+        dest="allowed_paths",
+        action="append",
+        default=[],
+        help="Relative path or glob allowed for edits when fixes are authorized (can be repeated)",
+    )
+    sub.add_argument(
+        "--do-not-modify-paths",
+        "--do-not-modify-path",
+        dest="do_not_modify_paths",
+        action="append",
+        default=[],
+        help="Relative path or glob that must never be modified (can be repeated)",
+    )
+    sub.add_argument(
+        "--issue-number",
+        type=int,
+        default=None,
+        help="Optional GitHub issue number for live read-only gh context queries",
+    )
+    sub.add_argument(
+        "--full",
+        action="store_true",
+        help="Include the full source-file inventory in terminal output",
+    )
+
+
+def _add_init_only_arguments(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Output directory path for the initialized run",
+    )
+    sub.add_argument(
+        "--allow-fixes",
+        action="store_true",
+        help="Authorize proposing application fixes (default: false)",
+    )
+    sub.add_argument(
+        "--allow-issue-publication",
+        action="store_true",
+        help="Authorize publishing findings to external issue trackers (default: false)",
+    )
+    sub.add_argument(
+        "--single-task",
+        action="store_true",
+        help="Initialize a stateless single-task loop that emits one active skill per pass",
+    )
+    sub.add_argument(
+        "--source-audit",
+        type=Path,
+        default=None,
+        help="Optional existing audit.json file or run directory to seed findings/evidence into a new workflow run without mutating the source ledger",
+    )
+
+
+def _add_planning_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     pre = commands.add_parser(
         "preflight",
         parents=[sub_common],
@@ -724,127 +888,26 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include every recorded source-file hash",
     )
-
-    for command in ["plan", "init"]:
-        is_plan = command == "plan"
-        cmd_help = (
-            "Construct an audit plan without modifying repository files or executing fixes"
-            if is_plan
-            else "Initialize an audit run directory with an immutable baseline and task prompt"
-        )
+    for command, cmd_help in (
+        (
+            "plan",
+            "Construct an audit plan without modifying repository files or executing fixes",
+        ),
+        (
+            "init",
+            "Initialize an audit run directory with an immutable baseline and task prompt",
+        ),
+    ):
         sub = commands.add_parser(command, parents=[sub_common], help=cmd_help)
-        sub.add_argument(
-            "repo",
-            type=Path,
-            nargs="?",
-            default=Path("."),
-            help="Path to target repository (default: current working directory)",
-        )
-        sub.add_argument(
-            "--task",
-            required=True,
-            choices=TASK_CHOICES,
-            help=f"Audit recipe/task to execute ({', '.join(TASK_CHOICES)})",
-        )
-        sub.add_argument(
-            "--mode",
-            choices=["explore", "changes", "investigate", "comprehensive"],
-            default="investigate",
-            help="Audit mode: explore, changes, investigate, or comprehensive",
-        )
-        sub.add_argument(
-            "--budget",
-            choices=["brief", "balanced", "deep"],
-            default="balanced",
-            help="Execution budget level: brief, balanced, or deep",
-        )
-        sub.add_argument(
-            "--base",
-            help="Base git commit, tag, or branch for differential analysis",
-        )
-        sub.add_argument(
-            "--profile",
-            choices=PROFILE_CHOICES,
-            help=f"Project archetype or technology profile name ({', '.join(PROFILE_CHOICES)})",
-        )
-        sub.add_argument(
-            "--exclude",
-            action="append",
-            default=[],
-            help="Path pattern to exclude from analysis (can be repeated)",
-        )
-        sub.add_argument(
-            "--config",
-            type=Path,
-            help="Optional project YAML with profile, excludes, and critical workflows; never executable commands",
-        )
-        sub.add_argument(
-            "--directory",
-            default=None,
-            help="Optional target subdirectory within the repository to focus tactical scope",
-        )
-        sub.add_argument(
-            "--symbol",
-            default=None,
-            help="Optional symbol, function, or type name to trace blast radius and caller migration order",
-        )
-        sub.add_argument(
-            "--allowed-paths",
-            "--allowed-path",
-            dest="allowed_paths",
-            action="append",
-            default=[],
-            help="Relative path or glob allowed for edits when fixes are authorized (can be repeated)",
-        )
-        sub.add_argument(
-            "--do-not-modify-paths",
-            "--do-not-modify-path",
-            dest="do_not_modify_paths",
-            action="append",
-            default=[],
-            help="Relative path or glob that must never be modified (can be repeated)",
-        )
-        sub.add_argument(
-            "--issue-number",
-            type=int,
-            default=None,
-            help="Optional GitHub issue number for live read-only gh context queries",
-        )
-        sub.add_argument(
-            "--full",
-            action="store_true",
-            help="Include the full source-file inventory in terminal output",
-        )
+        _add_shared_plan_arguments(sub)
         if command == "init":
-            sub.add_argument(
-                "--output",
-                type=Path,
-                required=True,
-                help="Output directory path for the initialized run",
-            )
-            sub.add_argument(
-                "--allow-fixes",
-                action="store_true",
-                help="Authorize proposing application fixes (default: false)",
-            )
-            sub.add_argument(
-                "--allow-issue-publication",
-                action="store_true",
-                help="Authorize publishing findings to external issue trackers (default: false)",
-            )
-            sub.add_argument(
-                "--single-task",
-                action="store_true",
-                help="Initialize a stateless single-task loop that emits one active skill per pass",
-            )
-            sub.add_argument(
-                "--source-audit",
-                type=Path,
-                default=None,
-                help="Optional existing audit.json file or run directory to seed findings/evidence into a new workflow run without mutating the source ledger",
-            )
+            _add_init_only_arguments(sub)
 
-    # 3. Run Management commands
+
+def _add_run_lifecycle_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     sub_val = commands.add_parser(
         "validate-run",
         parents=[sub_common],
@@ -910,6 +973,11 @@ def parser() -> argparse.ArgumentParser:
         help="Planned skill completed in this session slice (can be repeated or comma-separated)",
     )
 
+
+def _add_audit_report_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     sub_rep = commands.add_parser(
         "report",
         parents=[sub_common],
@@ -981,6 +1049,11 @@ def parser() -> argparse.ArgumentParser:
         help="Path to later audit.json file or audit run directory",
     )
 
+
+def _add_sarif_and_reconcile_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     sub_rec = commands.add_parser(
         "reconcile",
         parents=[sub_common],
@@ -1067,6 +1140,11 @@ def parser() -> argparse.ArgumentParser:
         help="Exclude both refuted and informational findings from export",
     )
 
+
+def _add_triage_subparser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     sub_tri = commands.add_parser(
         "triage",
         parents=[sub_common],
@@ -1125,7 +1203,84 @@ def parser() -> argparse.ArgumentParser:
         help="Validate generated bundle against bundle.schema.json",
     )
 
-    # 4. Installation commands
+
+def _add_install_mutation_arguments(sub: argparse.ArgumentParser, command: str) -> None:
+    skill_help = (
+        "Specific skill name to install (can be repeated)"
+        if command in {"install", "update"}
+        else "Specific skill name to remove (can be repeated)"
+    )
+    sub.add_argument(
+        "--skill",
+        action="append",
+        default=[],
+        help=skill_help,
+    )
+    sub.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate installation actions without modifying the filesystem",
+    )
+    sub.add_argument(
+        "--force",
+        action="store_true",
+        help="Archive modified managed skills to backups and repair or remove drifted entries",
+    )
+    if command in {"install", "update"}:
+        pack_help = (
+            f"Skill pack to install ({', '.join(PACK_CHOICES)}; defaults to starter when --skill is omitted)"
+            if command == "install"
+            else f"Skill pack to install ({', '.join(PACK_CHOICES)})"
+        )
+        sub.add_argument(
+            "--pack",
+            default=None,
+            choices=PACK_CHOICES,
+            help=pack_help,
+        )
+
+
+def _configure_install_subparser(sub: argparse.ArgumentParser, command: str) -> None:
+    sub.add_argument(
+        "--destination",
+        type=Path,
+        required=False,
+        default=None,
+        help="Explicit project root, or home directory with --scope user (defaults to current working directory for project scope, user home directory for user scope)",
+    )
+    sub.add_argument(
+        "--host",
+        required=False,
+        default=None,
+        choices=HOST_CHOICES,
+        help=f"Target agent host ({', '.join(HOST_CHOICES)})",
+    )
+    sub.add_argument(
+        "--scope",
+        choices=["project", "user"],
+        default="project",
+        help="Installation scope: project or user",
+    )
+    if command == "installed":
+        sub.add_argument(
+            "--check",
+            action="store_true",
+            help="Exit with code 1 when skill drift or an active operation lock exists",
+        )
+    elif command in {"install", "update", "remove"}:
+        _add_install_mutation_arguments(sub, command)
+    elif command == "recover-install":
+        sub.add_argument(
+            "--confirm-interrupted",
+            action="store_true",
+            help="Confirm recovery from an interrupted installation",
+        )
+
+
+def _add_installation_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     sub_vet = commands.add_parser(
         "vet",
         parents=[sub_common],
@@ -1146,93 +1301,32 @@ def parser() -> argparse.ArgumentParser:
         help="Explicit capability allowlist entry such as read:~/.claude/projects (can be repeated)",
     )
 
-    install_helps = {
-        "installed": "List installed skills, source versions, and harness paths for a target destination",
-        "install": "Install audit skills or packs into an agent host environment",
-        "update": "Update previously installed skills to the current version",
-        "remove": "Uninstall specific skills from an agent host environment",
-        "rollback": "Revert the most recent skill installation or removal operation",
-        "recover-install": "Recover from an interrupted skill installation state",
-    }
-    for command in [
-        "installed",
-        "install",
-        "update",
-        "remove",
-        "rollback",
-        "recover-install",
-    ]:
-        sub = commands.add_parser(
-            command, parents=[sub_common], help=install_helps[command]
-        )
-        sub.add_argument(
-            "--destination",
-            type=Path,
-            required=False,
-            default=None,
-            help="Explicit project root, or home directory with --scope user (defaults to current working directory for project scope, user home directory for user scope)",
-        )
-        sub.add_argument(
-            "--host",
-            required=False,
-            default=None,
-            choices=HOST_CHOICES,
-            help=f"Target agent host ({', '.join(HOST_CHOICES)})",
-        )
-        sub.add_argument(
-            "--scope",
-            choices=["project", "user"],
-            default="project",
-            help="Installation scope: project or user",
-        )
-        if command == "installed":
-            sub.add_argument(
-                "--check",
-                action="store_true",
-                help="Exit with code 1 when skill drift or an active operation lock exists",
-            )
-        if command not in {"installed", "rollback", "recover-install"}:
-            skill_help = (
-                "Specific skill name to install (can be repeated)"
-                if command in {"install", "update"}
-                else "Specific skill name to remove (can be repeated)"
-            )
-            sub.add_argument(
-                "--skill",
-                action="append",
-                default=[],
-                help=skill_help,
-            )
-            sub.add_argument(
-                "--dry-run",
-                action="store_true",
-                help="Simulate installation actions without modifying the filesystem",
-            )
-            sub.add_argument(
-                "--force",
-                action="store_true",
-                help="Archive modified managed skills to backups and repair or remove drifted entries",
-            )
-        if command in {"install", "update"}:
-            pack_help = (
-                f"Skill pack to install ({', '.join(PACK_CHOICES)}; defaults to starter when --skill is omitted)"
-                if command == "install"
-                else f"Skill pack to install ({', '.join(PACK_CHOICES)})"
-            )
-            sub.add_argument(
-                "--pack",
-                default=None,
-                choices=PACK_CHOICES,
-                help=pack_help,
-            )
-        if command == "recover-install":
-            sub.add_argument(
-                "--confirm-interrupted",
-                action="store_true",
-                help="Confirm recovery from an interrupted installation",
-            )
+    install_helps = (
+        (
+            "installed",
+            "List installed skills, source versions, and harness paths for a target destination",
+        ),
+        ("install", "Install audit skills or packs into an agent host environment"),
+        ("update", "Update previously installed skills to the current version"),
+        ("remove", "Uninstall specific skills from an agent host environment"),
+        (
+            "rollback",
+            "Revert the most recent skill installation or removal operation",
+        ),
+        (
+            "recover-install",
+            "Recover from an interrupted skill installation state",
+        ),
+    )
+    for command, help_text in install_helps:
+        sub = commands.add_parser(command, parents=[sub_common], help=help_text)
+        _configure_install_subparser(sub, command)
 
-    # 5. Release commands
+
+def _add_release_subparsers(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    sub_common: argparse.ArgumentParser,
+) -> None:
     sub_eval = commands.add_parser(
         "evaluate",
         parents=[sub_common],
@@ -1329,22 +1423,60 @@ def parser() -> argparse.ArgumentParser:
         help="Require manifest.json licensing field to declare 'See repository LICENSE'",
     )
 
-    # Custom argument groups for root help output
+
+def _attach_lifecycle_argument_groups(
+    root: argparse.ArgumentParser,
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     lifecycle_arg_groups = {
         name: root.add_argument_group(name) for name in LIFECYCLE_GROUPS
     }
-
     subcmd_to_group = {
         cmd: group_name for group_name, cmds in LIFECYCLE_GROUPS.items() for cmd in cmds
     }
-
     if commands in root._positionals._group_actions:
         root._positionals._group_actions.remove(commands)
-
     for action in commands._choices_actions:
         grp = subcmd_to_group.get(action.dest)
         if grp and grp in lifecycle_arg_groups:
             lifecycle_arg_groups[grp]._group_actions.append(action)
+
+
+def parser() -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        default=False,
+        help="Output raw machine-readable JSON",
+    )
+
+    root = argparse.ArgumentParser(
+        prog="fred.py",
+        description=__doc__,
+        parents=[common],
+    )
+    commands = root.add_subparsers(dest="command", required=True)
+
+    sub_common = argparse.ArgumentParser(add_help=False)
+    sub_common.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Output raw machine-readable JSON",
+    )
+
+    _add_discovery_subparsers(commands, sub_common)
+    _add_planning_subparsers(commands, sub_common)
+    _add_run_lifecycle_subparsers(commands, sub_common)
+    _add_audit_report_subparsers(commands, sub_common)
+    _add_sarif_and_reconcile_subparsers(commands, sub_common)
+    _add_triage_subparser(commands, sub_common)
+    _add_installation_subparsers(commands, sub_common)
+    _add_release_subparsers(commands, sub_common)
+    _attach_lifecycle_argument_groups(root, commands)
     return root
 
 
@@ -1439,94 +1571,159 @@ def _extract_run_options(a: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _handle_run_plan(a: argparse.Namespace) -> dict[str, Any]:
+    plan, preflight = runs.plan(a.repo.resolve(), **_extract_run_options(a))
+    return {
+        "plan": plan,
+        "preflight": preflight if a.full else concise_environment(preflight),
+    }
+
+
+def _handle_run_init(a: argparse.Namespace) -> dict[str, Any]:
+    data = runs.initialize(
+        a.repo.resolve(),
+        a.output,
+        allow_fixes=a.allow_fixes,
+        allow_publication=a.allow_issue_publication,
+        single_task=getattr(a, "single_task", False),
+        source_audit=getattr(a, "source_audit", None),
+        **_extract_run_options(a),
+    )
+    return {
+        "output": str(a.output),
+        "run": data if a.full else concise_environment(data),
+    }
+
+
+def _handle_validate_run(a: argparse.Namespace) -> dict[str, Any]:
+    errors = runs.validate_run(a.directory)
+    if errors:
+        raise FredCliError(
+            "; ".join(errors),
+            code="schema_validation_failed",
+            hint="Fix the schema or identity errors in 'run.json' and the deliverable artifact, then rerun 'validate-run'.",
+        )
+    return {"valid": True, "semantic_claims_verified": False}
+
+
+def _handle_run_memory(a: argparse.Namespace) -> dict[str, Any]:
+    data = runs.memory(a.directory)
+    atomic_json(a.output, data)
+    if "contracts" in data:
+        return {"output": str(a.output), "contracts": len(data["contracts"])}
+    record_count = sum(
+        len(data.get(key, []))
+        for key in (
+            "decisions",
+            "boundaries",
+            "components",
+            "findings",
+            "test_cases",
+            "interview_decisions",
+            "requirements",
+        )
+        if isinstance(data.get(key), list)
+    )
+    return {
+        "output": str(a.output),
+        "deliverable": data.get("deliverable", ""),
+        "records": record_count,
+    }
+
+
+def _handle_run_compare(a: argparse.Namespace) -> dict[str, Any]:
+    before_path = _resolve_audit_only_input(a.before, "compare")
+    after_path = _resolve_audit_only_input(a.after, "compare")
+    hint = "Pass a valid 'audit.json' file or audit run directory."
+    return runs.compare(
+        read_json_object(before_path, label="Audit ledger", hint=hint),
+        read_json_object(after_path, label="Audit ledger", hint=hint),
+    )
+
+
+def _handle_import_sarif(a: argparse.Namespace) -> dict[str, Any]:
+    data = runs.import_sarif(a.source, root=getattr(a, "root", None))
+    atomic_json(a.output, data)
+    return {"observations": len(data["observations"]), "output": str(a.output)}
+
+
+_RUNS_DISPATCH: dict[str, Callable[[argparse.Namespace], Any]] = {
+    "plan": _handle_run_plan,
+    "init": _handle_run_init,
+    "validate-run": _handle_validate_run,
+    "resume": lambda a: runs.revalidate(a.directory),
+    "advance": lambda a: runs.advance(a.directory, note=getattr(a, "note", None)),
+    "checkpoint": lambda a: runs.checkpoint(
+        a.directory,
+        a.state,
+        a.note,
+        completed_skills=getattr(a, "completed_skills", None),
+    ),
+    "memory": _handle_run_memory,
+    "compare": _handle_run_compare,
+    "reconcile": lambda a: runs.reconcile(
+        a.directory, a.finding, a.state, a.note, a.verification
+    ),
+    "import-sarif": _handle_import_sarif,
+}
+
+
 def handle_runs(a: argparse.Namespace) -> Any:
-    if a.command in {"plan", "init"}:
-        repo = a.repo.resolve()
-        options = _extract_run_options(a)
-        if a.command == "plan":
-            plan, preflight = runs.plan(repo, **options)
-            return {
-                "plan": plan,
-                "preflight": preflight if a.full else concise_environment(preflight),
-            }
-        data = runs.initialize(
-            repo,
-            a.output,
-            allow_fixes=a.allow_fixes,
-            allow_publication=a.allow_issue_publication,
-            single_task=getattr(a, "single_task", False),
-            source_audit=getattr(a, "source_audit", None),
-            **options,
+    handler = _RUNS_DISPATCH.get(a.command)
+    if handler is None:
+        raise ValueError(f"Unknown runs command: {a.command}")
+    return handler(a)
+
+
+def _select_install_pack(a: argparse.Namespace) -> str | None:
+    if a.pack or a.skill:
+        return a.pack
+    return "starter" if a.command == "install" else None
+
+
+def _handle_install_or_update(
+    target: installation.TargetEnvironment, a: argparse.Namespace
+) -> Any:
+    install_options = installation.InstallOptions(
+        pack=_select_install_pack(a),
+        skills=a.skill,
+        update=a.command == "update",
+        dry_run=a.dry_run,
+        force=a.force,
+    )
+    return installation.install(target, install_options)
+
+
+def _handle_remove_skills(
+    target: installation.TargetEnvironment, a: argparse.Namespace
+) -> Any:
+    if not a.skill:
+        raise ValueError(
+            "Remove requires at least one --skill; there is no implicit remove-all"
         )
-        return {
-            "output": str(a.output),
-            "run": data if a.full else concise_environment(data),
-        }
-    if a.command == "validate-run":
-        errors = runs.validate_run(a.directory)
-        if errors:
-            raise FredCliError(
-                "; ".join(errors),
-                code="schema_validation_failed",
-                hint="Fix the schema or identity errors in 'run.json' and the deliverable artifact, then rerun 'validate-run'.",
-            )
-        return {"valid": True, "semantic_claims_verified": False}
-    if a.command == "resume":
-        return runs.revalidate(a.directory)
-    if a.command == "advance":
-        return runs.advance(a.directory, note=getattr(a, "note", None))
-    if a.command == "checkpoint":
-        return runs.checkpoint(
-            a.directory,
-            a.state,
-            a.note,
-            completed_skills=getattr(a, "completed_skills", None),
-        )
-    if a.command == "memory":
-        data = runs.memory(a.directory)
-        atomic_json(a.output, data)
-        if "contracts" in data:
-            return {"output": str(a.output), "contracts": len(data["contracts"])}
-        record_count = sum(
-            len(data.get(key, []))
-            for key in (
-                "decisions",
-                "boundaries",
-                "components",
-                "findings",
-                "test_cases",
-                "interview_decisions",
-                "requirements",
-            )
-            if isinstance(data.get(key), list)
-        )
-        return {
-            "output": str(a.output),
-            "deliverable": data.get("deliverable", ""),
-            "records": record_count,
-        }
-    if a.command == "compare":
-        before_path = _resolve_audit_only_input(a.before, "compare")
-        after_path = _resolve_audit_only_input(a.after, "compare")
-        return runs.compare(
-            read_json_object(
-                before_path,
-                label="Audit ledger",
-                hint="Pass a valid 'audit.json' file or audit run directory.",
-            ),
-            read_json_object(
-                after_path,
-                label="Audit ledger",
-                hint="Pass a valid 'audit.json' file or audit run directory.",
-            ),
-        )
-    if a.command == "reconcile":
-        return runs.reconcile(a.directory, a.finding, a.state, a.note, a.verification)
-    if a.command == "import-sarif":
-        data = runs.import_sarif(a.source, root=getattr(a, "root", None))
-        atomic_json(a.output, data)
-        return {"observations": len(data["observations"]), "output": str(a.output)}
-    raise ValueError(f"Unknown runs command: {a.command}")
+    remove_options = installation.RemoveOptions(
+        skills=a.skill, dry_run=a.dry_run, force=a.force
+    )
+    return installation.remove(target, remove_options)
+
+
+_INSTALLATION_TARGET_DISPATCH: dict[
+    str, Callable[[installation.TargetEnvironment, argparse.Namespace], Any]
+] = {
+    "installed": lambda target, _a: installation.query_installed(target),
+    "install": _handle_install_or_update,
+    "update": _handle_install_or_update,
+    "remove": _handle_remove_skills,
+    "rollback": lambda target, _a: installation.rollback(
+        target, installation.RollbackOptions(target=target)
+    ),
+    "recover-install": lambda target, a: installation.recover(
+        target,
+        installation.RecoverOptions(
+            confirm_interrupted=a.confirm_interrupted, target=target
+        ),
+    ),
+}
 
 
 def handle_installation(a: argparse.Namespace) -> Any:
@@ -1535,42 +1732,11 @@ def handle_installation(a: argparse.Namespace) -> Any:
             a.target,
             allowed_capabilities=getattr(a, "allow_capability", None),
         )
+    handler = _INSTALLATION_TARGET_DISPATCH.get(a.command)
+    if handler is None:
+        raise ValueError(f"Unknown installation command: {a.command}")
     target = installation.TargetEnvironment(a.destination, a.host, a.scope)
-    if a.command == "installed":
-        return installation.query_installed(target)
-    if a.command in {"install", "update"}:
-        selected_pack = (
-            a.pack
-            if (a.pack or a.skill)
-            else ("starter" if a.command == "install" else None)
-        )
-        install_options = installation.InstallOptions(
-            pack=selected_pack,
-            skills=a.skill,
-            update=a.command == "update",
-            dry_run=a.dry_run,
-            force=a.force,
-        )
-        return installation.install(target, install_options)
-    if a.command == "remove":
-        if not a.skill:
-            raise ValueError(
-                "Remove requires at least one --skill; there is no implicit remove-all"
-            )
-        remove_options = installation.RemoveOptions(
-            skills=a.skill, dry_run=a.dry_run, force=a.force
-        )
-        return installation.remove(target, remove_options)
-    if a.command == "rollback":
-        rollback_options = installation.RollbackOptions(target=target)
-        return installation.rollback(target, rollback_options)
-    if a.command == "recover-install":
-        recover_options = installation.RecoverOptions(
-            confirm_interrupted=a.confirm_interrupted,
-            target=target,
-        )
-        return installation.recover(target, recover_options)
-    raise ValueError(f"Unknown installation command: {a.command}")
+    return handler(target, a)
 
 
 def _resolve_audit_only_input(target: Path, command_name: str) -> Path:
@@ -1637,79 +1803,113 @@ def _resolve_sarif_export_input(target: Path) -> Path:
     return resolved
 
 
-def handle_reporting(a: argparse.Namespace) -> Any:
-    if a.command == "report":
-        prior_data = None
-        explicit_remediation = getattr(a, "remediation", None)
-        if a.prior:
-            audit_path = _resolve_audit_only_input(a.audit, "report --prior")
-            prior_path = _resolve_audit_only_input(a.prior, "report --prior")
-            prior_data = runs._require_audit_ledger(
-                read_json_object(prior_path, label="Prior audit ledger"),
-                "report --prior",
-            )
-        elif explicit_remediation is not None:
-            audit_path = _resolve_audit_only_input(a.audit, "report --remediation")
-        else:
-            audit_path = resolve_audit_path(a.audit)
-            if (
-                audit_path.name == "run.json"
-                or audit_path.name in WORKFLOW_DELIVERABLE_SCHEMAS
-            ):
-                raise FredCliError(
-                    f"Report rendering ('report') requires an 'audit.json' ledger; artifact '{audit_path.name}' is not supported",
-                    code="unsupported_domain_artifact",
-                    hint="Pass an 'audit.json' ledger or primary suite deliverable.",
-                )
-        audit_data = read_json_object(audit_path, label="Audit ledger")
-        remediation_data = None
-        if explicit_remediation is not None:
-            remediation_data = read_json_object(
-                explicit_remediation,
-                label="Remediation ledger",
-                hint="Pass a valid 'remediation.json' file containing a 'records' array.",
-            )
-        elif _detect_domain_kind(audit_data) is None and (
-            a.audit.is_dir() or audit_path.name == "audit.json"
-        ):
-            for candidate_name in ("remediation.json", "reconciliation.json"):
-                sibling_remediation = audit_path.parent / candidate_name
-                if sibling_remediation.is_file():
-                    remediation_data = read_json_object(
-                        sibling_remediation,
-                        label="Remediation ledger",
-                        hint=f"Ensure '{candidate_name}' conforms to reconciliation.schema.json.",
-                    )
-                    break
-        target = reports.render(
-            audit_data,
-            a.output,
-            prior_data,
-            remediation=remediation_data,
+def _resolve_report_inputs(
+    a: argparse.Namespace, explicit_remediation: Path | None
+) -> tuple[Path, dict[str, Any] | None]:
+    if a.prior:
+        audit_path = _resolve_audit_only_input(a.audit, "report --prior")
+        prior_path = _resolve_audit_only_input(a.prior, "report --prior")
+        prior_data = runs._require_audit_ledger(
+            read_json_object(prior_path, label="Prior audit ledger"),
+            "report --prior",
         )
-        return {"output": str(target)}
-    if a.command == "issues":
-        audit_path = _resolve_audit_only_input(a.audit, "issues")
-        return {
-            "drafts": reports.issue_drafts(
-                read_json_object(audit_path, label="Audit ledger"),
-                a.output,
-                format=a.format,
-            ),
-            "remote_writes": 0,
-        }
-    if a.command == "export-sarif":
-        from audit_to_sarif import convert_file
+        return audit_path, prior_data
+    if explicit_remediation is not None:
+        return _resolve_audit_only_input(a.audit, "report --remediation"), None
+    audit_path = resolve_audit_path(a.audit)
+    if audit_path.name == "run.json" or audit_path.name in WORKFLOW_DELIVERABLE_SCHEMAS:
+        raise FredCliError(
+            f"Report rendering ('report') requires an 'audit.json' ledger; artifact '{audit_path.name}' is not supported",
+            code="unsupported_domain_artifact",
+            hint="Pass an 'audit.json' ledger or primary suite deliverable.",
+        )
+    return audit_path, None
 
-        audit_path = _resolve_sarif_export_input(a.audit)
-        data = convert_file(
-            audit_path,
-            a.output,
-            filter_refuted=a.filter_refuted or a.filter_refuted_or_info,
-            filter_info=a.filter_info or a.filter_refuted_or_info,
+
+def _load_sibling_remediation(audit_dir: Path) -> dict[str, Any] | None:
+    for candidate_name in ("remediation.json", "reconciliation.json"):
+        sibling = audit_dir / candidate_name
+        if sibling.is_file():
+            return read_json_object(
+                sibling,
+                label="Remediation ledger",
+                hint=f"Ensure '{candidate_name}' conforms to reconciliation.schema.json.",
+            )
+    return None
+
+
+def _resolve_report_remediation(
+    a: argparse.Namespace,
+    explicit_remediation: Path | None,
+    audit_path: Path,
+    audit_data: dict[str, Any],
+) -> dict[str, Any] | None:
+    if explicit_remediation is not None:
+        return read_json_object(
+            explicit_remediation,
+            label="Remediation ledger",
+            hint="Pass a valid 'remediation.json' file containing a 'records' array.",
         )
-        return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
-    raise ValueError(f"Unknown reporting command: {a.command}")
+    if _detect_domain_kind(audit_data) is not None:
+        return None
+    if a.audit.is_dir() or audit_path.name == "audit.json":
+        return _load_sibling_remediation(audit_path.parent)
+    return None
+
+
+def _handle_report_command(a: argparse.Namespace) -> dict[str, Any]:
+    explicit_remediation = getattr(a, "remediation", None)
+    audit_path, prior_data = _resolve_report_inputs(a, explicit_remediation)
+    audit_data = read_json_object(audit_path, label="Audit ledger")
+    remediation_data = _resolve_report_remediation(
+        a, explicit_remediation, audit_path, audit_data
+    )
+    target = reports.render(
+        audit_data,
+        a.output,
+        prior_data,
+        remediation=remediation_data,
+    )
+    return {"output": str(target)}
+
+
+def _handle_issues_command(a: argparse.Namespace) -> dict[str, Any]:
+    audit_path = _resolve_audit_only_input(a.audit, "issues")
+    return {
+        "drafts": reports.issue_drafts(
+            read_json_object(audit_path, label="Audit ledger"),
+            a.output,
+            format=a.format,
+        ),
+        "remote_writes": 0,
+    }
+
+
+def _handle_export_sarif_command(a: argparse.Namespace) -> dict[str, Any]:
+    from audit_to_sarif import convert_file
+
+    audit_path = _resolve_sarif_export_input(a.audit)
+    data = convert_file(
+        audit_path,
+        a.output,
+        filter_refuted=a.filter_refuted or a.filter_refuted_or_info,
+        filter_info=a.filter_info or a.filter_refuted_or_info,
+    )
+    return {"results": len(data["runs"][0]["results"]), "output": str(a.output)}
+
+
+_REPORTING_DISPATCH: dict[str, Callable[[argparse.Namespace], Any]] = {
+    "report": _handle_report_command,
+    "issues": _handle_issues_command,
+    "export-sarif": _handle_export_sarif_command,
+}
+
+
+def handle_reporting(a: argparse.Namespace) -> Any:
+    handler = _REPORTING_DISPATCH.get(a.command)
+    if handler is None:
+        raise ValueError(f"Unknown reporting command: {a.command}")
+    return handler(a)
 
 
 def _validate_adapter_argv(adapter_argv: Any) -> list[str]:
@@ -1761,34 +1961,38 @@ def _load_triage_module() -> Any:
     return triage
 
 
+def _discover_triage_transcript(
+    triage: Any, workspace: Path | None, session_id: str | None
+) -> tuple[Path, Any]:
+    if workspace is not None:
+        if not workspace.is_dir():
+            raise ValueError(f"Workspace directory not found: {workspace}")
+        discovery_meta = triage.discover_transcript_details(
+            workspace, session_id=session_id
+        )
+    elif session_id:
+        discovery_meta = triage.discover_transcript_details(None, session_id=session_id)
+    else:
+        raise ValueError("Transcript file path is required")
+    transcript = Path(discovery_meta["selected_transcript"])
+    print(f"Discovered transcript: {transcript}", file=sys.stderr)
+    return transcript, discovery_meta
+
+
 def handle_diagnostics(a: argparse.Namespace) -> Any:
     if a.command != "triage":
         raise ValueError(f"Unknown diagnostics command: {a.command}")
 
     workspace = a.workspace or a.workspace_dir
     output_dir = a.output or a.output_dir
-
     triage = _load_triage_module()
 
     transcript = a.transcript or a.transcript_opt
     discovery_meta = None
     if not transcript:
-        if workspace and workspace.is_dir():
-            discovery_meta = triage.discover_transcript_details(
-                workspace, session_id=a.session_id
-            )
-            transcript = Path(discovery_meta["selected_transcript"])
-            print(f"Discovered transcript: {transcript}", file=sys.stderr)
-        elif workspace:
-            raise ValueError(f"Workspace directory not found: {workspace}")
-        elif a.session_id:
-            discovery_meta = triage.discover_transcript_details(
-                None, session_id=a.session_id
-            )
-            transcript = Path(discovery_meta["selected_transcript"])
-            print(f"Discovered transcript: {transcript}", file=sys.stderr)
-        else:
-            raise ValueError("Transcript file path is required")
+        transcript, discovery_meta = _discover_triage_transcript(
+            triage, workspace, a.session_id
+        )
     if not transcript.is_file():
         raise ValueError(f"Transcript file not found: {transcript}")
 
@@ -1904,6 +2108,28 @@ def _to_cli_error(exc: BaseException) -> FredCliError:
     )
 
 
+def _print_cli_error(cli_err: FredCliError, *, as_json: bool) -> None:
+    if as_json:
+        print(
+            json.dumps(cli_err.to_dict(), indent=2, ensure_ascii=False),
+            file=sys.stderr,
+        )
+        return
+    print(f"fred-skills: {cli_err.message}", file=sys.stderr)
+    if cli_err.hint:
+        print(f"Hint: {cli_err.hint}", file=sys.stderr)
+
+
+def _exit_code_for_result(args: argparse.Namespace, result: Any) -> int:
+    if not isinstance(result, dict):
+        return 0
+    if args.command == "installed" and getattr(args, "check", False):
+        return 0 if result.get("healthy", True) else 1
+    if args.command == "vet":
+        return 0 if result.get("passed", True) else 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -1919,35 +2145,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         AttributeError,
         json.JSONDecodeError,
     ) as exc:
-        cli_err = _to_cli_error(exc)
-        if getattr(args, "as_json", False):
-            print(
-                json.dumps(cli_err.to_dict(), indent=2, ensure_ascii=False),
-                file=sys.stderr,
-            )
-        else:
-            print(f"fred-skills: {cli_err.message}", file=sys.stderr)
-            if cli_err.hint:
-                print(f"Hint: {cli_err.hint}", file=sys.stderr)
+        _print_cli_error(
+            _to_cli_error(exc), as_json=bool(getattr(args, "as_json", False))
+        )
         return 1
     if sys.stdout.isatty() and not getattr(args, "as_json", False):
         print(render_tty_output(args.command, result, args))
     else:
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    if (
-        args.command == "installed"
-        and getattr(args, "check", False)
-        and isinstance(result, dict)
-        and not result.get("healthy", True)
-    ):
-        return 1
-    if (
-        args.command == "vet"
-        and isinstance(result, dict)
-        and not result.get("passed", True)
-    ):
-        return 1
-    return 0
+    return _exit_code_for_result(args, result)
 
 
 if __name__ == "__main__":

@@ -365,82 +365,122 @@ def _render_testing_html(doc: dict) -> str:
     return _page_shell(f"Automated testing — {text(doc['component'])}", body)
 
 
+def _validate_reconciliation_schema(remediation: dict[str, Any]) -> None:
+    if (
+        "finding_fingerprint_matches" not in remediation
+        and "unmapped_records" not in remediation
+    ):
+        return
+    rem_errors = _validate_canonical_artifact(
+        remediation, artifact_name="reconciliation.json"
+    )
+    if rem_errors:
+        raise ValueError("Invalid remediation ledger: " + "; ".join(rem_errors[:5]))
+
+
+def _validate_remediation_structure(remediation: Any) -> None:
+    mapping = remediation if isinstance(remediation, dict) else {}
+    has_records = "records" in mapping
+    has_transitions = "remediation_state_transitions" in mapping
+    if not has_records and not has_transitions:
+        raise ValueError(
+            "Invalid remediation ledger: expected 'records' or 'remediation_state_transitions'"
+        )
+    if has_records and not isinstance(mapping["records"], list):
+        raise ValueError("Invalid remediation ledger: expected a 'records' list")
+    if has_transitions and not isinstance(
+        mapping["remediation_state_transitions"], list
+    ):
+        raise ValueError(
+            "Invalid remediation ledger: expected a 'remediation_state_transitions' list"
+        )
+    _validate_reconciliation_schema(mapping)
+
+
+def _is_unambiguous_fingerprint_match(match: object) -> bool:
+    if not isinstance(match, dict) or match.get("match_status") == "ambiguous":
+        return False
+    return isinstance(match.get("finding_id"), str) and isinstance(
+        match.get("fingerprint"), str
+    )
+
+
+def _build_explicit_fingerprint_map(remediation: dict[str, Any]) -> dict[str, str]:
+    return {
+        match["finding_id"]: match["fingerprint"]
+        for match in (remediation.get("finding_fingerprint_matches") or [])
+        if _is_unambiguous_fingerprint_match(match)
+    }
+
+
+def _match_remediation_finding_id(
+    fid: object,
+    fp: object,
+    finding_ids: set[str],
+    fp_to_ids: dict[str, list[str]],
+) -> str | None:
+    if isinstance(fid, str) and fid in finding_ids:
+        return fid
+    if isinstance(fp, str) and len(fp_to_ids.get(fp, [])) == 1:
+        return fp_to_ids[fp][0]
+    return None
+
+
+def _apply_remediation_transition(
+    tr: object,
+    finding_ids: set[str],
+    fp_to_ids: dict[str, list[str]],
+    explicit_fp_map: dict[str, str],
+    latest: dict[str, dict[str, str]],
+) -> None:
+    state = tr.get("new_state") if isinstance(tr, dict) else None
+    if not isinstance(tr, dict) or state not in _REMEDIATION_LABELS:
+        raise ValueError(f"Unknown remediation state: {state!r}")
+    fid = tr.get("finding_id")
+    fp = tr.get("fingerprint") or (
+        explicit_fp_map.get(fid) if isinstance(fid, str) else None
+    )
+    matched_id = _match_remediation_finding_id(fid, fp, finding_ids, fp_to_ids)
+    if matched_id is not None:
+        latest[matched_id] = {"state": state, "note": str(tr.get("reason", ""))}
+
+
+def _apply_remediation_record(
+    rec: object,
+    finding_ids: set[str],
+    fp_to_ids: dict[str, list[str]],
+    latest: dict[str, dict[str, str]],
+) -> None:
+    state = rec.get("state") if isinstance(rec, dict) else None
+    if not isinstance(rec, dict) or state not in _REMEDIATION_LABELS:
+        raise ValueError(f"Unknown remediation state: {state!r}")
+    matched_id = _match_remediation_finding_id(
+        rec.get("finding_id"), rec.get("fingerprint"), finding_ids, fp_to_ids
+    )
+    if matched_id is not None:
+        latest[matched_id] = {"state": state, "note": str(rec.get("note", ""))}
+
+
 def _index_remediation(
     remediation: dict[str, Any] | None, audit: dict[str, Any]
 ) -> tuple[dict[str, dict[str, str]], bool]:
     if remediation is None:
         return {}, False
-    has_records = isinstance(remediation, dict) and "records" in remediation
-    has_transitions = (
-        isinstance(remediation, dict) and "remediation_state_transitions" in remediation
-    )
-    if not has_records and not has_transitions:
-        raise ValueError(
-            "Invalid remediation ledger: expected 'records' or 'remediation_state_transitions'"
-        )
-    if has_records and not isinstance(remediation["records"], list):
-        raise ValueError("Invalid remediation ledger: expected a 'records' list")
-    if has_transitions and not isinstance(
-        remediation["remediation_state_transitions"], list
-    ):
-        raise ValueError(
-            "Invalid remediation ledger: expected a 'remediation_state_transitions' list"
-        )
-    if isinstance(remediation, dict) and (
-        "finding_fingerprint_matches" in remediation
-        or "unmapped_records" in remediation
-    ):
-        rem_errors = _validate_canonical_artifact(
-            remediation, artifact_name="reconciliation.json"
-        )
-        if rem_errors:
-            raise ValueError("Invalid remediation ledger: " + "; ".join(rem_errors[:5]))
+    _validate_remediation_structure(remediation)
     raw_records = remediation.get("records") or []
     raw_transitions = remediation.get("remediation_state_transitions") or []
     finding_ids = {f["id"] for f in audit["findings"]}
     fp_to_ids: dict[str, list[str]] = {}
     for finding in audit["findings"]:
         fp_to_ids.setdefault(fingerprint(finding, audit), []).append(finding["id"])
-    explicit_fp_map: dict[str, str] = {}
-    for match in remediation.get("finding_fingerprint_matches") or []:
-        if (
-            isinstance(match, dict)
-            and isinstance(match.get("finding_id"), str)
-            and isinstance(match.get("fingerprint"), str)
-            and match.get("match_status") != "ambiguous"
-        ):
-            explicit_fp_map[match["finding_id"]] = match["fingerprint"]
+    explicit_fp_map = _build_explicit_fingerprint_map(remediation)
     latest: dict[str, dict[str, str]] = {}
     for tr in raw_transitions:
-        state = tr.get("new_state") if isinstance(tr, dict) else None
-        if not isinstance(tr, dict) or state not in _REMEDIATION_LABELS:
-            raise ValueError(f"Unknown remediation state: {state!r}")
-        note = str(tr.get("reason", ""))
-        fid = tr.get("finding_id")
-        fp = tr.get("fingerprint") or (
-            explicit_fp_map.get(fid) if isinstance(fid, str) else None
+        _apply_remediation_transition(
+            tr, finding_ids, fp_to_ids, explicit_fp_map, latest
         )
-        matched_id: str | None = None
-        if isinstance(fid, str) and fid in finding_ids:
-            matched_id = fid
-        elif isinstance(fp, str) and len(fp_to_ids.get(fp, [])) == 1:
-            matched_id = fp_to_ids[fp][0]
-        if matched_id is not None:
-            latest[matched_id] = {"state": state, "note": note}
     for rec in raw_records:
-        state = rec.get("state") if isinstance(rec, dict) else None
-        if not isinstance(rec, dict) or state not in _REMEDIATION_LABELS:
-            raise ValueError(f"Unknown remediation state: {state!r}")
-        note = str(rec.get("note", ""))
-        fid = rec.get("finding_id")
-        fp = rec.get("fingerprint")
-        matched_id = None
-        if isinstance(fid, str) and fid in finding_ids:
-            matched_id = fid
-        elif isinstance(fp, str) and len(fp_to_ids.get(fp, [])) == 1:
-            matched_id = fp_to_ids[fp][0]
-        if matched_id is not None:
-            latest[matched_id] = {"state": state, "note": note}
+        _apply_remediation_record(rec, finding_ids, fp_to_ids, latest)
     return latest, (len(raw_records) + len(raw_transitions)) > 0
 
 
@@ -493,76 +533,103 @@ def _collision_summary_html(
     return topic_html, loc_html
 
 
-def _render_comparison_html(prior: dict[str, Any] | None, audit: dict[str, Any]) -> str:
-    if prior is None:
-        return "<p>No prior ledger supplied. Missing findings on another run do not prove resolution.</p>"
-    diff = compare(prior, audit)
-    prior_findings = {f["id"]: f for f in prior.get("findings", [])}
-    curr_findings = {f["id"]: f for f in audit.get("findings", [])}
-    prior_evidence = {e["id"]: e for e in prior.get("evidence", [])}
-    curr_evidence = {e["id"]: e for e in audit.get("evidence", [])}
+def _finding_summary_cells(
+    fid: str, findings_map: dict[str, dict[str, Any]]
+) -> tuple[str, str, str]:
+    finding = findings_map.get(fid)
+    if finding is None:
+        return "—", "—", "—"
+    sev_html = _severity_badge_html(finding["severity"])
+    status_str = text(_STATUS_LABELS.get(finding["status"], finding["status"]))
+    return sev_html, status_str, text(finding["title"])
 
-    introduced_rows = (
-        "".join(
-            f'<tr><td><a href="#{text(fid)}">{text(fid)}</a></td>'
-            f"<td>{_severity_badge_html(curr_findings[fid]['severity']) if fid in curr_findings else '—'}</td>"
-            f"<td>{text(_STATUS_LABELS.get(curr_findings[fid]['status'], curr_findings[fid]['status'])) if fid in curr_findings else '—'}</td>"
-            f"<td>{text(curr_findings[fid]['title']) if fid in curr_findings else '—'}</td></tr>"
-            for fid in diff["introduced"]
+
+def _render_single_finding_diff_rows(
+    fids: list[str],
+    findings_map: dict[str, dict[str, Any]],
+    *,
+    link: bool,
+    empty_label: str,
+) -> str:
+    if not fids:
+        return f'<tr><td colspan="4" class="empty-state">{empty_label}</td></tr>'
+    rows: list[str] = []
+    for fid in fids:
+        id_cell = (
+            f'<a href="#{text(fid)}">{text(fid)}</a>'
+            if link
+            else f"<code>{text(fid)}</code>"
         )
-        or '<tr><td colspan="4" class="empty-state">No introduced findings.</td></tr>'
-    )
-    changed_rows = (
-        "".join(
-            f'<tr><td><a href="#{text(item["after"])}">{text(item["after"])}</a></td>'
+        sev_html, status_html, title_html = _finding_summary_cells(fid, findings_map)
+        rows.append(
+            f"<tr><td>{id_cell}</td><td>{sev_html}</td><td>{status_html}</td><td>{title_html}</td></tr>"
+        )
+    return "".join(rows)
+
+
+def _render_paired_finding_diff_rows(
+    items: list[dict[str, Any]],
+    curr_findings: dict[str, dict[str, Any]],
+    *,
+    show_transition: bool,
+    empty_label: str,
+) -> str:
+    if not items:
+        return f'<tr><td colspan="5" class="empty-state">{empty_label}</td></tr>'
+    rows: list[str] = []
+    for item in items:
+        after_id = item["after"]
+        sev_html, status_html, title_html = _finding_summary_cells(
+            after_id, curr_findings
+        )
+        if show_transition:
+            status_cell = f"{text(_STATUS_LABELS.get(item['from'], item['from']))} → {text(_STATUS_LABELS.get(item['to'], item['to']))}"
+        else:
+            status_cell = status_html
+        rows.append(
+            f'<tr><td><a href="#{text(after_id)}">{text(after_id)}</a></td>'
             f"<td><code>{text(item['before'])}</code></td>"
-            f"<td>{_severity_badge_html(curr_findings[item['after']]['severity']) if item['after'] in curr_findings else '—'}</td>"
-            f"<td>{text(_STATUS_LABELS.get(item['from'], item['from']))} → {text(_STATUS_LABELS.get(item['to'], item['to']))}</td>"
-            f"<td>{text(curr_findings[item['after']]['title']) if item['after'] in curr_findings else '—'}</td></tr>"
-            for item in diff["status_changed"]
+            f"<td>{sev_html}</td><td>{status_cell}</td><td>{title_html}</td></tr>"
         )
-        or '<tr><td colspan="5" class="empty-state">No status changes.</td></tr>'
-    )
-    persisting_rows = (
-        "".join(
-            f'<tr><td><a href="#{text(item["after"])}">{text(item["after"])}</a></td>'
-            f"<td><code>{text(item['before'])}</code></td>"
-            f"<td>{_severity_badge_html(curr_findings[item['after']]['severity']) if item['after'] in curr_findings else '—'}</td>"
-            f"<td>{text(_STATUS_LABELS.get(curr_findings[item['after']]['status'], curr_findings[item['after']]['status'])) if item['after'] in curr_findings else '—'}</td>"
-            f"<td>{text(curr_findings[item['after']]['title']) if item['after'] in curr_findings else '—'}</td></tr>"
-            for item in diff["persisting"]
+    return "".join(rows)
+
+
+def _format_collision_refs(
+    fids: list[str],
+    findings_map: dict[str, dict[str, Any]],
+    *,
+    link: bool,
+) -> str:
+    if not fids:
+        return '<span class="muted">None</span>'
+    parts: list[str] = []
+    for fid in fids:
+        base = (
+            f'<a href="#{text(fid)}">{text(fid)}</a>'
+            if link
+            else f"<code>{text(fid)}</code>"
         )
-        or '<tr><td colspan="5" class="empty-state">No persisting findings.</td></tr>'
-    )
-    absent_rows = (
-        "".join(
-            f"<tr><td><code>{text(fid)}</code></td>"
-            f"<td>{_severity_badge_html(prior_findings[fid]['severity']) if fid in prior_findings else '—'}</td>"
-            f"<td>{text(_STATUS_LABELS.get(prior_findings[fid]['status'], prior_findings[fid]['status'])) if fid in prior_findings else '—'}</td>"
-            f"<td>{text(prior_findings[fid]['title']) if fid in prior_findings else '—'}</td></tr>"
-            for fid in diff["not_observed"]
-        )
-        or '<tr><td colspan="4" class="empty-state">No absent prior findings.</td></tr>'
-    )
-    ambiguous_rows_list: list[str] = []
-    for item in diff["ambiguous"]:
-        after_links = (
-            ", ".join(
-                f'<a href="#{text(fid)}">{text(fid)}</a> ({text(curr_findings[fid]["title"])})'
-                if fid in curr_findings
-                else f'<a href="#{text(fid)}">{text(fid)}</a>'
-                for fid in item["after"]
-            )
-            or '<span class="muted">None</span>'
-        )
-        before_codes = (
-            ", ".join(
-                f"<code>{text(fid)}</code> ({text(prior_findings[fid]['title'])})"
-                if fid in prior_findings
-                else f"<code>{text(fid)}</code>"
-                for fid in item["before"]
-            )
-            or '<span class="muted">None</span>'
+        if fid in findings_map:
+            parts.append(f"{base} ({text(findings_map[fid]['title'])})")
+        else:
+            parts.append(base)
+    return ", ".join(parts)
+
+
+def _render_ambiguous_diff_rows(
+    ambiguous: list[dict[str, Any]],
+    prior_findings: dict[str, dict[str, Any]],
+    curr_findings: dict[str, dict[str, Any]],
+    prior_evidence: dict[str, dict[str, Any]],
+    curr_evidence: dict[str, dict[str, Any]],
+) -> str:
+    if not ambiguous:
+        return '<tr><td colspan="4" class="empty-state">No ambiguous fingerprint collisions.</td></tr>'
+    rows: list[str] = []
+    for item in ambiguous:
+        after_links = _format_collision_refs(item["after"], curr_findings, link=True)
+        before_codes = _format_collision_refs(
+            item["before"], prior_findings, link=False
         )
         topic_html, loc_html = _collision_summary_html(
             item["before"],
@@ -572,12 +639,51 @@ def _render_comparison_html(prior: dict[str, Any] | None, audit: dict[str, Any])
             prior_evidence,
             curr_evidence,
         )
-        ambiguous_rows_list.append(
+        rows.append(
             f"<tr><td>{after_links}</td><td>{before_codes}</td><td>{topic_html}</td><td>{loc_html}</td></tr>"
         )
-    ambiguous_rows = (
-        "".join(ambiguous_rows_list)
-        or '<tr><td colspan="4" class="empty-state">No ambiguous fingerprint collisions.</td></tr>'
+    return "".join(rows)
+
+
+def _render_comparison_html(prior: dict[str, Any] | None, audit: dict[str, Any]) -> str:
+    if prior is None:
+        return "<p>No prior ledger supplied. Missing findings on another run do not prove resolution.</p>"
+    diff = compare(prior, audit)
+    prior_findings = {f["id"]: f for f in prior.get("findings", [])}
+    curr_findings = {f["id"]: f for f in audit.get("findings", [])}
+    prior_evidence = {e["id"]: e for e in prior.get("evidence", [])}
+    curr_evidence = {e["id"]: e for e in audit.get("evidence", [])}
+
+    introduced_rows = _render_single_finding_diff_rows(
+        diff["introduced"],
+        curr_findings,
+        link=True,
+        empty_label="No introduced findings.",
+    )
+    changed_rows = _render_paired_finding_diff_rows(
+        diff["status_changed"],
+        curr_findings,
+        show_transition=True,
+        empty_label="No status changes.",
+    )
+    persisting_rows = _render_paired_finding_diff_rows(
+        diff["persisting"],
+        curr_findings,
+        show_transition=False,
+        empty_label="No persisting findings.",
+    )
+    absent_rows = _render_single_finding_diff_rows(
+        diff["not_observed"],
+        prior_findings,
+        link=False,
+        empty_label="No absent prior findings.",
+    )
+    ambiguous_rows = _render_ambiguous_diff_rows(
+        diff["ambiguous"],
+        prior_findings,
+        curr_findings,
+        prior_evidence,
+        curr_evidence,
     )
     caveats = diff.get("limitations", [])
     callout_html = (
@@ -608,73 +714,156 @@ def _render_comparison_html(prior: dict[str, Any] | None, audit: dict[str, Any])
     )
 
 
-def _render_audit_html(
-    audit: dict,
-    prior: dict | None = None,
-    remediation: dict | None = None,
-) -> str:
-    errors = audit_errors(audit)
-    if errors:
-        raise ValueError("Invalid audit ledger: " + "; ".join(errors[:5]))
-    latest_remediation, has_remediation = _index_remediation(remediation, audit)
-    evidence = {e["id"]: e for e in audit["evidence"]}
-    findings = sorted(
-        audit["findings"],
-        key=lambda f: (
-            _SEVERITY_ORDER.index(f["severity"]),
-            f["id"],
-        ),
+def _render_remediation_badge_and_note(
+    rem_entry: dict[str, str] | None,
+) -> tuple[str, str, str]:
+    if not rem_entry:
+        return "unreconciled", "", ""
+    rem_state = rem_entry["state"]
+    rem_label = _REMEDIATION_LABELS[rem_state]
+    rem_tone = _REMEDIATION_TONES[rem_state]
+    rem_badge_html = (
+        f' <span class="badge badge-{rem_tone} {rem_tone}">{text(rem_label)}</span>'
     )
-    findings_by_id = {f["id"]: f for f in findings}
-    cards = []
-    for f in findings:
-        locations = "".join(
-            f"<li><code>{text(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']}</code> — {text(evidence[eid]['symbol'])} — {text(evidence[eid]['context'])}</li>"
-            for eid in f["evidence_ids"]
-        )
-        locations_html = f"<ul>{locations}</ul>" if locations else ""
-        sequence = "".join(f"<li>{text(step)}</li>" for step in f["sequence"])
-        criteria = "".join(f"<li>{text(step)}</li>" for step in f["acceptance"])
-        contracts_html = (
-            f"<p>Contracts: {text(', '.join(f['contract_ids']))}</p>"
-            if f["contract_ids"]
-            else ""
-        )
-        commands_html = (
-            f"<pre>{text(chr(10).join(f['validation']['commands']))}</pre>"
-            if f["validation"]["commands"]
-            else ""
-        )
-        if f["related_findings"]:
-            related_links = ", ".join(
-                f'<a href="#{text(rf)}">{text(rf)}</a>'
-                if rf in findings_by_id
-                else text(rf)
-                for rf in f["related_findings"]
-            )
-            related_html = f"<p>Related findings: {related_links}</p>"
-        else:
-            related_html = ""
-        rem_entry = latest_remediation.get(f["id"])
-        rem_attr = rem_entry["state"] if rem_entry else "unreconciled"
-        if rem_entry:
-            rem_state = rem_entry["state"]
-            rem_label = _REMEDIATION_LABELS[rem_state]
-            rem_tone = _REMEDIATION_TONES[rem_state]
-            rem_badge_html = f' <span class="badge badge-{rem_tone} {rem_tone}">{text(rem_label)}</span>'
-            rem_note_html = (
-                f'<p class="remediation-note"><b>Remediation ({text(rem_label)}):</b> {text(rem_entry["note"])}</p>'
-                if rem_entry["note"]
-                else ""
-            )
-        else:
-            rem_badge_html = ""
-            rem_note_html = ""
-        cards.append(f'''<article class="finding" data-severity="{text(f["severity"])}" data-status="{text(f["status"])}" data-remediation="{text(rem_attr)}" id="{text(f["id"])}"><h3>{text(f["id"])}: {text(f["title"])}</h3>
+    rem_note_html = (
+        f'<p class="remediation-note"><b>Remediation ({text(rem_label)}):</b> {text(rem_entry["note"])}</p>'
+        if rem_entry["note"]
+        else ""
+    )
+    return rem_state, rem_badge_html, rem_note_html
+
+
+def _render_related_findings_html(
+    related_ids: list[str], findings_by_id: dict[str, dict[str, Any]]
+) -> str:
+    if not related_ids:
+        return ""
+    links = ", ".join(
+        f'<a href="#{text(rf)}">{text(rf)}</a>' if rf in findings_by_id else text(rf)
+        for rf in related_ids
+    )
+    return f"<p>Related findings: {links}</p>"
+
+
+def _render_audit_finding_card(
+    f: dict[str, Any],
+    evidence: dict[str, dict[str, Any]],
+    findings_by_id: dict[str, dict[str, Any]],
+    rem_entry: dict[str, str] | None,
+) -> str:
+    locations = "".join(
+        f"<li><code>{text(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']}</code> — {text(evidence[eid]['symbol'])} — {text(evidence[eid]['context'])}</li>"
+        for eid in f["evidence_ids"]
+    )
+    locations_html = f"<ul>{locations}</ul>" if locations else ""
+    sequence = "".join(f"<li>{text(step)}</li>" for step in f["sequence"])
+    criteria = "".join(f"<li>{text(step)}</li>" for step in f["acceptance"])
+    contracts_html = (
+        f"<p>Contracts: {text(', '.join(f['contract_ids']))}</p>"
+        if f["contract_ids"]
+        else ""
+    )
+    commands_html = (
+        f"<pre>{text(chr(10).join(f['validation']['commands']))}</pre>"
+        if f["validation"]["commands"]
+        else ""
+    )
+    related_html = _render_related_findings_html(f["related_findings"], findings_by_id)
+    rem_attr, rem_badge_html, rem_note_html = _render_remediation_badge_and_note(
+        rem_entry
+    )
+    return f'''<article class="finding" data-severity="{text(f["severity"])}" data-status="{text(f["status"])}" data-remediation="{text(rem_attr)}" id="{text(f["id"])}"><h3>{text(f["id"])}: {text(f["title"])}</h3>
 <p class="badges"><span class="badge badge-{text(f["severity"])} {text(f["severity"])}">{text(f["severity"])} · {text(f["status"])} · confidence {text(f["confidence"])}</span>{rem_badge_html}</p>
 {rem_note_html}<p>{text(f["impact"])}</p><details><summary>Developer: failure, source, and correction</summary><p>{text(f["preconditions"])}</p><ol class="trace">{sequence}</ol><p><b>Expected:</b> {text(f["expected"])}</p><p><b>Actual:</b> {text(f["actual"])}</p>{locations_html}<p><b>Cause:</b> {text(f["root_cause"])}</p><p><b>Proposed remedy:</b> {text(f["remedy"])}</p></details>
 <details><summary>Reviewer: contracts, safeguards, and verification</summary>{contracts_html}<p>{text(f["counterevidence"])}</p><p>Validation: {text(f["validation"]["state"])}</p>{commands_html}<p>{text(f["validation"]["result"])}</p></details>
-<details><summary>Implementation: acceptance and relationships</summary><ul>{criteria}</ul>{related_html}<p class="muted">Evidence certainty is separate from remediation state.</p></details></article>''')
+<details><summary>Implementation: acceptance and relationships</summary><ul>{criteria}</ul>{related_html}<p class="muted">Evidence certainty is separate from remediation state.</p></details></article>'''
+
+
+def _render_remediation_filter_html(
+    findings: list[dict[str, Any]],
+    latest_remediation: dict[str, dict[str, str]],
+    has_remediation: bool,
+) -> str:
+    if not has_remediation:
+        return ""
+    rem_opts = [
+        f'<option value="{st}">{text(_REMEDIATION_LABELS[st])} ({sum(latest_remediation.get(f["id"], {}).get("state") == st for f in findings)})</option>'
+        for st in _REMEDIATION_ORDER
+    ]
+    unreconciled_count = sum(f["id"] not in latest_remediation for f in findings)
+    if unreconciled_count > 0:
+        rem_opts.append(
+            f'<option value="unreconciled">Unreconciled ({unreconciled_count})</option>'
+        )
+    return (
+        f'<label for="remediation">Remediation state <select id="remediation">'
+        f'<option value="">All remediation states ({len(findings)})</option>'
+        f"{''.join(rem_opts)}</select></label>"
+    )
+
+
+def _render_audit_findings_section(
+    findings: list[dict[str, Any]],
+    cards: list[str],
+    latest_remediation: dict[str, dict[str, str]],
+    has_remediation: bool,
+) -> str:
+    if not findings:
+        return (
+            "<p>No findings recorded. Review coverage before drawing conclusions.</p>"
+        )
+    severity_options = "".join(
+        f'<option value="{s}">{text(_SEVERITY_LABELS[s])} ({sum(f["severity"] == s for f in findings)})</option>'
+        for s in _SEVERITY_ORDER
+    )
+    status_options = "".join(
+        f'<option value="{s}">{text(_STATUS_LABELS[s])} ({sum(f["status"] == s for f in findings)})</option>'
+        for s in _STATUS_ORDER
+    )
+    remediation_filter_html = _render_remediation_filter_html(
+        findings, latest_remediation, has_remediation
+    )
+    return (
+        f'<label for="query">Search findings <input id="query" type="search"></label>'
+        f'<label for="severity">Severity <select id="severity"><option value="">All severities ({len(findings)})</option>{severity_options}</select></label>'
+        f'<label for="status">Evidence status <select id="status"><option value="">All statuses ({len(findings)})</option>{status_options}</select></label>'
+        f"{remediation_filter_html}"
+        f'<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>'
+        f'<p id="count" role="status" aria-live="polite"></p>'
+        f'<div id="empty-state" class="empty-state" hidden><p>No findings match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
+        f"{''.join(cards)}"
+    )
+
+
+def _format_remediation_executive_summary(
+    findings: list[dict[str, Any]],
+    latest_remediation: dict[str, dict[str, str]],
+    has_remediation: bool,
+) -> str:
+    if not has_remediation:
+        return "0 verified fixed (no remediation records supplied)."
+    vf_count = sum(
+        latest_remediation.get(f["id"], {}).get("state") == "verified-fixed"
+        for f in findings
+    )
+    rem_parts = [f"{vf_count} verified fixed"]
+    for st in _REMEDIATION_ORDER:
+        if st == "verified-fixed":
+            continue
+        st_count = sum(
+            latest_remediation.get(f["id"], {}).get("state") == st for f in findings
+        )
+        if st_count > 0:
+            rem_parts.append(f"{st_count} {_REMEDIATION_LABELS[st].lower()}")
+    unrec_exec = sum(f["id"] not in latest_remediation for f in findings)
+    if unrec_exec > 0:
+        rem_parts.append(f"{unrec_exec} unreconciled")
+    return ", ".join(rem_parts) + "."
+
+
+def _render_audit_tables_and_limitations(
+    audit: dict[str, Any],
+) -> tuple[str, str, str]:
     coverage = (
         "".join(
             f"<tr><td>{text(c['topic'])}</td><td>{text(c['scope'])}</td><td>{text(c['status'])}</td><td>{text(c['notes'])}</td><td>{text(c['next_action'])}</td></tr>"
@@ -696,75 +885,44 @@ def _render_audit_html(
         )
         or '<tr><td colspan="4" class="empty-state">No checks recorded.</td></tr>'
     )
+    return coverage, limitations_html, checks
+
+
+def _render_audit_html(
+    audit: dict,
+    prior: dict | None = None,
+    remediation: dict | None = None,
+) -> str:
+    errors = audit_errors(audit)
+    if errors:
+        raise ValueError("Invalid audit ledger: " + "; ".join(errors[:5]))
+    latest_remediation, has_remediation = _index_remediation(remediation, audit)
+    evidence = {e["id"]: e for e in audit["evidence"]}
+    findings = sorted(
+        audit["findings"],
+        key=lambda f: (_SEVERITY_ORDER.index(f["severity"]), f["id"]),
+    )
+    findings_by_id = {f["id"]: f for f in findings}
+    cards = [
+        _render_audit_finding_card(
+            f, evidence, findings_by_id, latest_remediation.get(f["id"])
+        )
+        for f in findings
+    ]
+    coverage, limitations_html, checks = _render_audit_tables_and_limitations(audit)
     comparison_html = _render_comparison_html(prior, audit)
-    if len(findings) > 0:
-        severity_options = "".join(
-            f'<option value="{s}">{text(_SEVERITY_LABELS[s])} ({sum(f["severity"] == s for f in findings)})</option>'
-            for s in _SEVERITY_ORDER
-        )
-        status_options = "".join(
-            f'<option value="{s}">{text(_STATUS_LABELS[s])} ({sum(f["status"] == s for f in findings)})</option>'
-            for s in _STATUS_ORDER
-        )
-        if has_remediation:
-            rem_opts = [
-                f'<option value="{st}">{text(_REMEDIATION_LABELS[st])} ({sum(latest_remediation.get(f["id"], {}).get("state") == st for f in findings)})</option>'
-                for st in _REMEDIATION_ORDER
-            ]
-            unreconciled_count = sum(
-                f["id"] not in latest_remediation for f in findings
-            )
-            if unreconciled_count > 0:
-                rem_opts.append(
-                    f'<option value="unreconciled">Unreconciled ({unreconciled_count})</option>'
-                )
-            remediation_filter_html = (
-                f'<label for="remediation">Remediation state <select id="remediation">'
-                f'<option value="">All remediation states ({len(findings)})</option>'
-                f"{''.join(rem_opts)}</select></label>"
-            )
-        else:
-            remediation_filter_html = ""
-        findings_body = (
-            f'<label for="query">Search findings <input id="query" type="search"></label>'
-            f'<label for="severity">Severity <select id="severity"><option value="">All severities ({len(findings)})</option>{severity_options}</select></label>'
-            f'<label for="status">Evidence status <select id="status"><option value="">All statuses ({len(findings)})</option>{status_options}</select></label>'
-            f"{remediation_filter_html}"
-            f'<button id="toggle-details" type="button" aria-expanded="false">Expand all</button>'
-            f'<p id="count" role="status" aria-live="polite"></p>'
-            f'<div id="empty-state" class="empty-state" hidden><p>No findings match the current filter.</p><button id="reset-filters" type="button">Reset filters</button></div>'
-            f"{''.join(cards)}"
-        )
-    else:
-        findings_body = (
-            "<p>No findings recorded. Review coverage before drawing conclusions.</p>"
-        )
+    findings_body = _render_audit_findings_section(
+        findings, cards, latest_remediation, has_remediation
+    )
     record_label = (
         "1 finding record" if len(findings) == 1 else f"{len(findings)} finding records"
     )
     sev_summary = ", ".join(
         f"{sum(f['severity'] == s for f in findings)} {s}" for s in _SEVERITY_ORDER
     )
-    if has_remediation:
-        vf_count = sum(
-            latest_remediation.get(f["id"], {}).get("state") == "verified-fixed"
-            for f in findings
-        )
-        rem_parts = [f"{vf_count} verified fixed"]
-        for st in _REMEDIATION_ORDER:
-            if st == "verified-fixed":
-                continue
-            st_count = sum(
-                latest_remediation.get(f["id"], {}).get("state") == st for f in findings
-            )
-            if st_count > 0:
-                rem_parts.append(f"{st_count} {_REMEDIATION_LABELS[st].lower()}")
-        unrec_exec = sum(f["id"] not in latest_remediation for f in findings)
-        if unrec_exec > 0:
-            rem_parts.append(f"{unrec_exec} unreconciled")
-        rem_exec_text = ", ".join(rem_parts) + "."
-    else:
-        rem_exec_text = "0 verified fixed (no remediation records supplied)."
+    rem_exec_text = _format_remediation_executive_summary(
+        findings, latest_remediation, has_remediation
+    )
     body = f"""<header><p class="muted">fred-skills · local evidence report</p><h1>Repository audit</h1><p>{text(audit["run_id"])} · {text(audit["repository"]["identity"])}</p><p>Revision: <code>{text(audit["repository"]["revision"])}</code> · dirty: {text(audit["repository"]["dirty"])}</p><nav aria-label="Report views"><a href="#executive">Executive</a><a href="#findings">Findings</a><a href="#coverage">Coverage</a><a href="#checks">Checks</a><a href="#comparison">Comparison</a></nav></header>
 <section id="executive"><h2>Executive view</h2><p>{record_label}; {sum(f["status"] == "confirmed" for f in findings)} reproduced; {sum(f["status"] == "refuted" for f in findings)} refuted. These counts are not a repository safety score.</p><p><b>Severity counts:</b> {sev_summary}.</p><p><b>Remediation totals:</b> {rem_exec_text}</p>{limitations_html}</section>
 <section id="findings"><h2>Review findings</h2>{findings_body}</section>
@@ -899,10 +1057,10 @@ def _fence_issue_commands(commands: list[str]) -> str:
     return f"{fence}\n{joined}\n{fence}"
 
 
-def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
-    if format not in ("markdown", "json"):
+def _validate_issue_drafts_inputs(audit: Any, output: Path, fmt: str) -> None:
+    if fmt not in ("markdown", "json"):
         raise FredCliError(
-            f"Unsupported issue format: {format}",
+            f"Unsupported issue format: {fmt}",
             code="invalid_issue_format",
             hint="Choose --format markdown or --format json.",
         )
@@ -920,8 +1078,7 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
             code="unsupported_domain_artifact",
             hint="Pass an 'audit.json' ledger from a repository-audits run.",
         )
-    errors = audit_errors(audit)
-    if errors:
+    if audit_errors(audit):
         raise FredCliError(
             "Invalid ledger; cannot draft issues",
             code="invalid_audit_ledger",
@@ -934,9 +1091,95 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
             code="non_empty_output_directory",
             hint="Choose a new or empty --output directory for generated issue drafts.",
         )
+
+
+def _render_issue_finding_sections(
+    fid: str,
+    f: dict[str, Any],
+    evidence: dict[str, dict[str, Any]],
+) -> list[str]:
+    safe_fid = _sanitize_issue_inline(fid)
+    safe_ftitle = _sanitize_issue_inline(f["title"])
+    safe_status = _sanitize_issue_inline(f["status"])
+    safe_severity = _sanitize_issue_inline(f["severity"])
+    safe_confidence = _sanitize_issue_inline(f["confidence"])
+    evidence_lines = "\n".join(
+        f"- {_sanitize_issue_inline(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({_sanitize_issue_inline(evidence[eid]['symbol'])}): {_sanitize_issue_inline(evidence[eid]['context'])}"
+        for eid in f["evidence_ids"]
+    )
+    contract_ids_str = ", ".join(
+        _sanitize_issue_inline(cid) for cid in f["contract_ids"]
+    )
+    sequence_lines = "\n".join(
+        f"{i}. {_sanitize_issue_inline(step)}"
+        for i, step in enumerate(f["sequence"], 1)
+    )
+    acceptance_lines = "\n".join(
+        "- " + _sanitize_issue_inline(a) for a in f["acceptance"]
+    )
+    val_summary = (
+        _sanitize_issue_inline(f["validation"]["state"])
+        + ": "
+        + _sanitize_issue_inline(f["validation"]["result"])
+    )
+    commands_block = _fence_issue_commands(f["validation"]["commands"])
+    finding_sections = [
+        f"## {safe_fid}: {safe_ftitle}",
+        f"Evidence: {safe_status}; severity: {safe_severity}; confidence: {safe_confidence}",
+        _sanitize_issue_block(f["impact"]),
+        "### Preconditions",
+        _sanitize_issue_block(f["preconditions"]),
+        "### Expected and actual behavior",
+        "Expected: " + _sanitize_issue_inline(f["expected"]),
+        "Actual: " + _sanitize_issue_inline(f["actual"]),
+        "### Source evidence",
+        evidence_lines,
+        "### Contract and cause",
+        "Contract IDs: " + contract_ids_str,
+        _sanitize_issue_block(f["root_cause"]),
+        "### Failure sequence",
+        sequence_lines,
+        "### Counterevidence",
+        _sanitize_issue_block(f["counterevidence"]),
+        "### Proposed correction",
+        _sanitize_issue_block(f["remedy"]),
+        "### Acceptance",
+        acceptance_lines,
+        "### Validation",
+        val_summary,
+    ]
+    if commands_block:
+        finding_sections.append(commands_block)
+    return finding_sections
+
+
+def _write_issue_draft_file(
+    issue: dict[str, Any],
+    safe_issue_title: str,
+    body_text: str,
+    output: Path,
+    fmt: str,
+) -> str:
+    if fmt == "json":
+        payload = {
+            "title": safe_issue_title,
+            "body": body_text,
+            "labels": list(issue.get("labels", [])),
+            "assignees": list(issue.get("assignees", [])),
+        }
+        path = output / (issue["id"] + ".json")
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    else:
+        path = output / (issue["id"] + ".md")
+        path.write_text(body_text + "\n", encoding="utf-8")
+    return str(path)
+
+
+def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[str]:
+    _validate_issue_drafts_inputs(audit, output, format)
     findings = {f["id"]: f for f in audit["findings"]}
     evidence = {e["id"]: e for e in audit["evidence"]}
-    paths = []
+    paths: list[str] = []
     for issue in audit["issues"]:
         if issue["publication"] != "draft":
             continue
@@ -948,74 +1191,13 @@ def issue_drafts(audit: dict, output: Path, format: str = "markdown") -> list[st
             "Publication state: local draft; no external write performed.",
         ]
         for fid in issue["finding_ids"]:
-            f = findings[fid]
-            safe_fid = _sanitize_issue_inline(fid)
-            safe_ftitle = _sanitize_issue_inline(f["title"])
-            safe_status = _sanitize_issue_inline(f["status"])
-            safe_severity = _sanitize_issue_inline(f["severity"])
-            safe_confidence = _sanitize_issue_inline(f["confidence"])
-            evidence_lines = "\n".join(
-                f"- {_sanitize_issue_inline(evidence[eid]['path'])}:{evidence[eid]['line_start']}–{evidence[eid]['line_end']} ({_sanitize_issue_inline(evidence[eid]['symbol'])}): {_sanitize_issue_inline(evidence[eid]['context'])}"
-                for eid in f["evidence_ids"]
+            sections.extend(
+                _render_issue_finding_sections(fid, findings[fid], evidence)
             )
-            contract_ids_str = ", ".join(
-                _sanitize_issue_inline(cid) for cid in f["contract_ids"]
-            )
-            sequence_lines = "\n".join(
-                f"{i}. {_sanitize_issue_inline(step)}"
-                for i, step in enumerate(f["sequence"], 1)
-            )
-            acceptance_lines = "\n".join(
-                "- " + _sanitize_issue_inline(a) for a in f["acceptance"]
-            )
-            val_summary = (
-                _sanitize_issue_inline(f["validation"]["state"])
-                + ": "
-                + _sanitize_issue_inline(f["validation"]["result"])
-            )
-            commands_block = _fence_issue_commands(f["validation"]["commands"])
-            finding_sections = [
-                f"## {safe_fid}: {safe_ftitle}",
-                f"Evidence: {safe_status}; severity: {safe_severity}; confidence: {safe_confidence}",
-                _sanitize_issue_block(f["impact"]),
-                "### Preconditions",
-                _sanitize_issue_block(f["preconditions"]),
-                "### Expected and actual behavior",
-                "Expected: " + _sanitize_issue_inline(f["expected"]),
-                "Actual: " + _sanitize_issue_inline(f["actual"]),
-                "### Source evidence",
-                evidence_lines,
-                "### Contract and cause",
-                "Contract IDs: " + contract_ids_str,
-                _sanitize_issue_block(f["root_cause"]),
-                "### Failure sequence",
-                sequence_lines,
-                "### Counterevidence",
-                _sanitize_issue_block(f["counterevidence"]),
-                "### Proposed correction",
-                _sanitize_issue_block(f["remedy"]),
-                "### Acceptance",
-                acceptance_lines,
-                "### Validation",
-                val_summary,
-            ]
-            if commands_block:
-                finding_sections.append(commands_block)
-            sections.extend(finding_sections)
         deps_str = ", ".join(_sanitize_issue_inline(d) for d in issue["depends_on"])
         sections.append("Dependencies: " + deps_str)
         body_text = "\n\n".join(sections)
-        if format == "json":
-            payload = {
-                "title": safe_issue_title,
-                "body": body_text,
-                "labels": list(issue.get("labels", [])),
-                "assignees": list(issue.get("assignees", [])),
-            }
-            path = output / (issue["id"] + ".json")
-            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        else:
-            path = output / (issue["id"] + ".md")
-            path.write_text(body_text + "\n", encoding="utf-8")
-        paths.append(str(path))
+        paths.append(
+            _write_issue_draft_file(issue, safe_issue_title, body_text, output, format)
+        )
     return paths

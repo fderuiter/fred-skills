@@ -24,6 +24,7 @@ from fredlib.common import (
 )
 
 from tests.catalog_oracles import (
+    assert_module_ast_bounds,
     expected_pack_count,
     expected_suite_skill_count,
     expected_total_skills,
@@ -1451,6 +1452,14 @@ class InstallationTests(unittest.TestCase):
                 10,
                 f"Function {name} exceeds cyclomatic complexity limit of 10 (score: {score})",
             )
+
+    def test_releases_cyclomatic_complexity_and_nesting_bounds(self) -> None:
+        assert_module_ast_bounds(
+            self,
+            ROOT / "scripts/fredlib/releases.py",
+            max_complexity=10,
+            max_nesting=4,
+        )
 
     def test_installation_functions_have_at_most_four_positional_parameters(self):
         import ast
