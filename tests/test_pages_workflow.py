@@ -268,7 +268,9 @@ class PagesWorkflowTests(unittest.TestCase):
         triggers = self._triggers()
         self.assertEqual(set(triggers.keys()), {"workflow_run", "workflow_dispatch"})
         wf_run = triggers["workflow_run"]
-        self.assertEqual(wf_run.get("workflows"), ["Validate skill packages"])
+        self.assertEqual(
+            wf_run.get("workflows"), ["Validate skill packages", "Release"]
+        )
         self.assertEqual(wf_run.get("types"), ["completed"])
         self.assertEqual(wf_run.get("branches"), ["main"])
 
@@ -717,6 +719,39 @@ class PagesWorkflowTests(unittest.TestCase):
             self.assertEqual(unvalidated_dispatch.returncode, 1)
             self.assertIn("unvalidated commit", unvalidated_dispatch.stderr)
 
+            ok_release_wf_c1, out_release_wf_c1 = self._run_preflight_gate(
+                repo,
+                {
+                    **common_env,
+                    "EVENT_NAME": "workflow_run",
+                    "TARGET_SHA": c1_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "workflow_run",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+            )
+            self.assertEqual(
+                ok_release_wf_c1.returncode, 0, msg=ok_release_wf_c1.stderr
+            )
+            self.assertEqual(
+                out_release_wf_c1,
+                {"should_deploy": "true", "target_sha": c1_sha},
+            )
+
+            unvalidated_release_wf_c2, _ = self._run_preflight_gate(
+                repo,
+                {
+                    **common_env,
+                    "EVENT_NAME": "workflow_run",
+                    "TARGET_SHA": c2_broken_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "workflow_run",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+            )
+            self.assertEqual(unvalidated_release_wf_c2.returncode, 1)
+            self.assertIn("unvalidated commit", unvalidated_release_wf_c2.stderr)
+
             # Push valid Commit 3 on origin/main: Commit 1 is now superseded (should_deploy=false).
             _write_lf(pusher / "README.md", "# Commit 3 (valid)\n")
             _git(pusher, "add", "README.md")
@@ -783,6 +818,25 @@ class PagesWorkflowTests(unittest.TestCase):
             self.assertEqual(stale_dispatch.returncode, 0, msg=stale_dispatch.stderr)
             self.assertEqual(
                 out_stale_dispatch,
+                {"should_deploy": "false", "target_sha": c1_sha},
+            )
+
+            stale_release_wf, out_stale_release_wf = self._run_preflight_gate(
+                repo,
+                {
+                    **common_env,
+                    "EVENT_NAME": "workflow_run",
+                    "TARGET_SHA": c1_sha,
+                    "WORKFLOW_CONCLUSION": "success",
+                    "WORKFLOW_EVENT": "workflow_run",
+                    "WORKFLOW_HEAD_BRANCH": "main",
+                },
+            )
+            self.assertEqual(
+                stale_release_wf.returncode, 0, msg=stale_release_wf.stderr
+            )
+            self.assertEqual(
+                out_stale_release_wf,
                 {"should_deploy": "false", "target_sha": c1_sha},
             )
 

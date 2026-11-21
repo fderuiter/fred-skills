@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from skill_tools import git_tag_exists
+from skill_tools import git_blob_bytes, git_tag_exists, run_local_git
 
 __all__ = [
     "CORE_INVARIANT_DOCS",
@@ -25,10 +26,13 @@ __all__ = [
     "DocCountExpectations",
     "ProseCountMismatch",
     "build_prose_count_rules",
+    "check_single_tagged_release_note",
     "discover_untagged_release_notes",
     "find_prose_count_mismatches",
     "git_tag_exists",
+    "list_local_v_tag_versions",
     "parse_prose_int",
+    "validate_historical_release_notes_immutability",
 ]
 
 PROSE_NUMBER_WORDS: dict[str, int] = {
@@ -133,6 +137,111 @@ def discover_untagged_release_notes(
         return []
     candidate = f"docs/release-notes-{ver}.md"
     return [candidate] if (root / candidate).is_file() else []
+
+
+def _read_active_version(root: Path) -> str:
+    version_path = root / "VERSION"
+    if not version_path.is_file():
+        return ""
+    return version_path.read_text(encoding="utf-8").strip()
+
+
+def list_local_v_tag_versions(root: Path) -> set[str]:
+    """Return local SemVer tag versions (stripped of leading 'v') under refs/tags/v*."""
+    if not (root / ".git").exists() or not shutil.which("git"):
+        return set()
+    proc = run_local_git(
+        root,
+        "for-each-ref",
+        "--format=%(refname:strip=2)",
+        "refs/tags/v*",
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return set()
+    return {
+        raw[1:]
+        for line in proc.stdout.splitlines()
+        if (raw := line.strip()).startswith("v") and len(raw) > 1
+    }
+
+
+def check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
+    """Verify docs/release-notes-<tag_ver>.md matches refs/tags/v<tag_ver> byte-for-byte."""
+    rel_path = f"docs/release-notes-{tag_ver}.md"
+    doc_path = root / rel_path
+    blob_bytes = git_blob_bytes(root, f"refs/tags/v{tag_ver}:{rel_path}")
+    if blob_bytes is None:
+        if doc_path.exists() or doc_path.is_symlink():
+            return [
+                (
+                    f"{rel_path}: tagged release notes immutability violation; "
+                    f"file did not exist at refs/tags/v{tag_ver}"
+                )
+            ]
+        return []
+    if doc_path.is_symlink() or not doc_path.is_file():
+        return [
+            (
+                f"{rel_path}: tagged release notes immutability violation; "
+                f"file missing or symlink after refs/tags/v{tag_ver}"
+            )
+        ]
+    if doc_path.read_bytes() != blob_bytes:
+        return [
+            (
+                f"{rel_path}: tagged release notes immutability violation; "
+                f"content must remain byte-identical to refs/tags/v{tag_ver}:{rel_path}"
+            )
+        ]
+    return []
+
+
+def _discover_release_note_files(
+    root: Path,
+    target_rel_paths: set[str] | None,
+) -> list[tuple[str, str]]:
+    docs_dir = root / "docs"
+    if not docs_dir.is_dir():
+        return []
+    discovered: list[tuple[str, str]] = []
+    for note_path in sorted(docs_dir.glob("release-notes-*.md")):
+        ver = note_path.name.removeprefix("release-notes-").removesuffix(".md")
+        rel_path = f"docs/{note_path.name}"
+        if not ver:
+            continue
+        if target_rel_paths is not None and rel_path not in target_rel_paths:
+            continue
+        discovered.append((ver, rel_path))
+    return discovered
+
+
+def validate_historical_release_notes_immutability(
+    root: Path,
+    *,
+    target_rel_paths: set[str] | None = None,
+) -> list[str]:
+    """Fail closed when .git exists and historical release notes lack local tags or drift."""
+    if not (root / ".git").exists():
+        return []
+    active_ver = _read_active_version(root)
+    errors: list[str] = []
+    tagged = list_local_v_tag_versions(root)
+    for ver, rel_path in _discover_release_note_files(root, target_rel_paths):
+        if git_tag_exists(root, f"v{ver}"):
+            tagged.add(ver)
+        elif ver != active_ver:
+            errors.append(
+                f"{rel_path}: tagged release notes immutability violation; "
+                f"missing local tag refs/tags/v{ver} for historical release notes"
+            )
+    for tag_ver in sorted(tagged):
+        rel_path = f"docs/release-notes-{tag_ver}.md"
+        if target_rel_paths is not None and rel_path not in target_rel_paths:
+            continue
+        errors.extend(check_single_tagged_release_note(root, tag_ver))
+    return errors
 
 
 def build_prose_count_rules(

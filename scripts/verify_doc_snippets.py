@@ -35,6 +35,7 @@ from _doc_invariants import (
     build_prose_count_rules,
     discover_untagged_release_notes,
     find_prose_count_mismatches,
+    validate_historical_release_notes_immutability,
 )
 from _markdown_utils import match_atx_heading, scan_markdown_fences
 from skill_tools import FredCliError
@@ -1286,6 +1287,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         help="Non-mutating verification mode (standard repository flag)",
     )
     parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Optional repository root directory (defaults to parent of scripts/)",
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help="Optional specific files to check",
@@ -1899,9 +1906,19 @@ def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
         return _validate_run_checks_script(parts, script_path, root)
 
     if script_arg.endswith("bump_version.py"):
-        extra_args = [
-            normalize_cli_token(arg) for arg in parts[2:] if arg != "--dry-run"
-        ]
+        norm_args = [normalize_cli_token(arg) for arg in parts[2:]]
+        if "--check" in norm_args:
+            root_args = (
+                ["--root", str(root)]
+                if "--root" not in norm_args and (root / "VERSION").is_file()
+                else []
+            )
+            return _run_readonly_check(
+                [sys.executable, str(script_path), *root_args, *norm_args],
+                root,
+                "bump_version.py --check",
+            )
+        extra_args = [arg for arg in norm_args if arg != "--dry-run"]
         return _run_readonly_check(
             [sys.executable, str(script_path), "--dry-run", *extra_args],
             root,
@@ -3062,6 +3079,16 @@ def verify_all_snippets(
         else None
     )
 
+    if target_rel_paths is None or any(
+        rel.startswith("docs/release-notes-") for rel in target_rel_paths
+    ):
+        errors.extend(
+            validate_historical_release_notes_immutability(
+                root,
+                target_rel_paths=target_rel_paths,
+            )
+        )
+
     if target_rel_paths is None or "docs/toolkit.md" in target_rel_paths:
         subcmd_errors = verify_toolkit_subcommands(root=root)
         errors.extend(subcmd_errors)
@@ -3101,8 +3128,9 @@ def _print_cli_exception(exc: FredCliError | subprocess.TimeoutExpired) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
+    target_root = args.root.resolve() if args.root is not None else ROOT
     try:
-        errors = verify_all_snippets(root=ROOT, files=args.files or None)
+        errors = verify_all_snippets(root=target_root, files=args.files or None)
     except (FredCliError, subprocess.TimeoutExpired) as exc:
         _print_cli_exception(exc)
         return 1

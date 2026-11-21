@@ -79,6 +79,7 @@ python -m mypy
 python scripts/sync_audit_resources.py --check
 python scripts/build_catalog.py --check
 python scripts/build_experience.py --check
+python scripts/bump_version.py --check
 python scripts/validate_skills.py
 python scripts/check_doc_links.py
 python scripts/verify_doc_snippets.py
@@ -87,9 +88,10 @@ python scripts/verify_workflow_actions.py --check
 python scripts/package_skills.py --output /tmp/release-verify
 python -m unittest discover -s tests -v
 
-# Regenerate shared copies and indexes
+# Regenerate shared copies, version manifests, and indexes
 python scripts/sync_audit_resources.py
 python scripts/build_catalog.py
+python scripts/bump_version.py
 python scripts/build_experience.py
 
 # Scaffold a new skill package and export diff-scoped validation telemetry
