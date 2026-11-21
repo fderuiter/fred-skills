@@ -154,11 +154,85 @@ def _default_short_description(title: str, name: str) -> str:
     return candidate
 
 
-def _default_symptoms(name: str) -> list[str]:
-    """Derive discovery symptom tags from a skill identifier."""
-    ignored = {"repo", "audit", "skill", "workflow"}
-    tokens = [tok for tok in name.split("-") if tok and tok not in ignored]
-    return tokens[:4] if tokens else [name]
+_SYMPTOM_IGNORED_TOKENS: frozenset[str] = frozenset(
+    {"repo", "audit", "arch", "review", "test", "spec", "skill", "workflow"}
+)
+
+_SUITE_SYMPTOM_TEMPLATES: dict[str, tuple[str, str, str]] = {
+    "repository-audits": (
+        "unchecked {focus} invariant",
+        "{focus} contract regression",
+        "missing {focus} boundary guard",
+    ),
+    "repository-workflows": (
+        "unverified {focus} remediation step",
+        "{focus} handoff state drift",
+        "incomplete {focus} workflow trace",
+    ),
+    "software-architecture": (
+        "leaky {focus} boundary coupling",
+        "undocumented {focus} architecture decision",
+        "{focus} component ownership drift",
+    ),
+    "code-review": (
+        "unreviewed {focus} diff regression",
+        "{focus} invariant broken in PR",
+        "missing {focus} review safeguard",
+    ),
+    "automated-testing": (
+        "missing {focus} boundary test",
+        "unverified {focus} failure oracle",
+        "{focus} regression coverage gap",
+    ),
+    "spec-driven-development": (
+        "ambiguous {focus} acceptance scope",
+        "underspecified {focus} edge case",
+        "{focus} specification drift",
+    ),
+}
+
+
+def _symptom_focus(name: str) -> str:
+    tokens = [
+        tok for tok in name.split("-") if tok and tok not in _SYMPTOM_IGNORED_TOKENS
+    ]
+    raw = " ".join(tokens[:3]) if tokens else name.replace("-", " ")
+    return raw[:32].strip() or "module"
+
+
+def _default_symptoms(name: str, suite_name: str = "repository-audits") -> list[str]:
+    """Derive multi-word discovery symptom phrases from a skill identifier."""
+    focus = _symptom_focus(name)
+    templates = _SUITE_SYMPTOM_TEMPLATES.get(
+        suite_name, _SUITE_SYMPTOM_TEMPLATES["repository-audits"]
+    )
+    return [tpl.format(focus=focus) for tpl in templates]
+
+
+def _normalize_catalog_symptoms(
+    symptoms: Sequence[str] | None,
+    name: str,
+    suite_name: str = "repository-audits",
+) -> list[str]:
+    defaults = _default_symptoms(name, suite_name)
+    cleaned = [item.strip() for item in (symptoms or ()) if item and item.strip()]
+    if not cleaned:
+        return defaults
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in [*cleaned, *defaults]:
+        key = candidate.lower()
+        if key in seen:
+            continue
+        if (
+            len(result) >= len(cleaned)
+            and len(result) >= 3
+            and any(" " in s for s in result)
+        ):
+            break
+        seen.add(key)
+        result.append(candidate)
+    return result
 
 
 def _resolve_suite_and_sibling(
@@ -304,7 +378,8 @@ def _render_skill_markdown(
     name: str,
     title: str,
     description: str,
-    schema_filename: str,
+    primary_schema_rel: str,
+    primary_validator_rel: str,
     extra_schema_links: Sequence[str] = (),
     extra_companion_links: Sequence[str] = (),
     disable_model_invocation: bool = False,
@@ -341,20 +416,86 @@ def _render_skill_markdown(
         "- Keep unrelated modules, public interfaces, and unverified claims unchanged.\n"
         "- Distinguish observed execution evidence from static inference.\n\n"
         "## Deliver\n\n"
-        f"Format structured results conforming to the [output schema](assets/{schema_filename}){extra_clause}, "
-        "and verify deliverables with [output validator](scripts/validate_output.py).\n"
+        f"Format structured results conforming to the [output schema]({primary_schema_rel}){extra_clause}, "
+        f"and verify deliverables with [output validator]({primary_validator_rel}).\n"
         "Cite exact relative file paths, concrete evidence, and remaining verification limits.\n"
     )
 
 
-def _render_prompt_markdown(name: str, schema_filename: str) -> str:
+def _render_prompt_markdown(name: str, primary_schema_rel: str) -> str:
     return (
         f"Use {name} to inspect <repository> at <revision> within the requested scope.\n"
-        "Ground claims in concrete file evidence and separate confirmed behavior from inference.\n"
+        f"Ground {name} claims in concrete file evidence and separate confirmed behavior from inference.\n"
         "Do not modify application code or publish external issues without explicit permission.\n"
         "Keep unrelated boundaries and existing invariants unchanged.\n"
-        f"Emit structured output conforming to assets/{schema_filename}.\n"
+        f"Emit structured output conforming to {primary_schema_rel}.\n"
     )
+
+
+def _render_workflow_output_schema(name: str, title: str) -> str:
+    schema: dict[str, Any] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": f"{title} Workflow Schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "schema_version",
+            "skill",
+            "summary",
+            "task_breakdowns",
+            "dependency_order",
+            "file_scopes",
+            "acceptance_criteria",
+        ],
+        "properties": {
+            "schema_version": {"type": "string", "const": "1.0"},
+            "skill": {"type": "string", "const": name},
+            "summary": {"type": "string", "minLength": 1},
+            "task_breakdowns": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "task_id",
+                        "title",
+                        "file_scopes",
+                        "acceptance_criteria",
+                    ],
+                    "properties": {
+                        "task_id": {"type": "string", "minLength": 1},
+                        "title": {"type": "string", "minLength": 1},
+                        "file_scopes": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "blocked_by": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "acceptance_criteria": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                    },
+                },
+            },
+            "dependency_order": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "file_scopes": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+            "acceptance_criteria": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
+        },
+    }
+    return json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
 
 
 def _render_output_schema(name: str, title: str) -> str:
@@ -541,8 +682,8 @@ def _render_evaluation_scenarios(
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
-def _render_examples_markdown(name: str, title: str, schema_filename: str) -> str:
-    sample_output = {
+def _standalone_example_payload(name: str, title: str) -> dict[str, Any]:
+    return {
         "schema_version": "1.0",
         "skill": name,
         "summary": f"Inspected {title.lower()} boundaries across src/service/handler.py.",
@@ -552,7 +693,7 @@ def _render_examples_markdown(name: str, title: str, schema_filename: str) -> st
                 "title": f"Unchecked boundary precondition in {name} handler",
                 "severity": "medium",
                 "evidence": [
-                    "src/service/handler.py:18-24 omits boundary precondition guard before state mutation."
+                    "src/service/handler.py:2-3 omits boundary precondition guard before state mutation."
                 ],
             }
         ],
@@ -560,18 +701,249 @@ def _render_examples_markdown(name: str, title: str, schema_filename: str) -> st
             "Static source inspection only; live integration harness was not executed."
         ],
     }
+
+
+def _audit_example_payload(name: str, title: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "run_id": f"example-{name[:32]}",
+        "repository": {
+            "identity": "example-service",
+            "revision": "a1b2c3d",
+            "dirty": False,
+            "snapshot": "src/service/handler.py",
+        },
+        "scope": ["src/service/handler.py"],
+        "coverage": [
+            {
+                "topic": name,
+                "scope": "src/service/handler.py",
+                "status": "inspected",
+                "evidence_ids": ["EV-001"],
+                "notes": f"Inspected {title.lower()} invariants in apply_transition.",
+                "next_action": "none",
+            }
+        ],
+        "contracts": [
+            {
+                "id": "C-001",
+                "dimension": name,
+                "scope": "src/service/handler.py",
+                "intended": "apply_transition validates target_state before mutating record.",
+                "observed": "apply_transition assigns target_state directly without guard.",
+                "enforcement": "missing-precondition-check",
+                "evidence_ids": ["EV-001"],
+            }
+        ],
+        "evidence": [
+            {
+                "id": "EV-001",
+                "path": "src/service/handler.py",
+                "line_start": 2,
+                "line_end": 3,
+                "symbol": "apply_transition",
+                "context": "apply_transition mutates record['state'] without checking target_state.",
+            }
+        ],
+        "findings": [
+            {
+                "id": "F-001",
+                "topic": name,
+                "tags": [name, "boundary-guard"],
+                "title": f"Unchecked target_state transition in {name} handler",
+                "status": "supported",
+                "severity": "medium",
+                "confidence": "high",
+                "contract_ids": ["C-001"],
+                "evidence_ids": ["EV-001"],
+                "preconditions": "Caller passes a payload dictionary missing target_state.",
+                "sequence": [
+                    "Caller invokes apply_transition(record, payload).",
+                    "Handler indexes payload['target_state'] without precondition check.",
+                ],
+                "expected": "Validate target_state presence before mutating record state.",
+                "actual": "Unchecked dictionary lookup raises KeyError or mutates state unsafely.",
+                "impact": "Breaks deterministic transition error handling.",
+                "root_cause": "unchecked-state-transition",
+                "counterevidence": "Inspected src/service/handler.py; no upstream schema guard exists.",
+                "remedy": "Check 'target_state' in payload and raise ValueError before mutation.",
+                "acceptance": [
+                    "Unit test verifies missing target_state raises ValueError cleanly."
+                ],
+                "validation": {
+                    "state": "not-run",
+                    "commands": [],
+                    "result": "Static source inspection only; runtime harness not executed.",
+                },
+                "related_findings": [],
+            }
+        ],
+        "issues": [],
+        "limitations": [
+            "Static source inspection only; live integration harness was not executed."
+        ],
+        "checks": [],
+    }
+
+
+def _workflow_example_payload(name: str, title: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "skill": name,
+        "summary": f"Planned bounded remediation step for {title.lower()} in src/service/handler.py.",
+        "task_breakdowns": [
+            {
+                "task_id": "TASK-001",
+                "title": f"Enforce boundary guard in {name} handler",
+                "file_scopes": ["src/service/handler.py"],
+                "blocked_by": [],
+                "acceptance_criteria": [
+                    "Reject payloads missing target_state with ValueError before state mutation."
+                ],
+            }
+        ],
+        "dependency_order": ["TASK-001"],
+        "file_scopes": ["src/service/handler.py"],
+        "acceptance_criteria": [
+            "Reject payloads missing target_state with ValueError before state mutation."
+        ],
+    }
+
+
+def _architecture_example_payload(name: str, title: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "title": f"{title} Specification",
+        "status": "accepted",
+        "boundaries": [
+            {
+                "name": "service-handler-boundary",
+                "type": "module",
+                "description": "src/service/handler.py: validate transition payloads before mutating state.",
+                "paths": ["src/service/handler.py"],
+                "invariants": [
+                    "State transitions require a validated target_state key."
+                ],
+            }
+        ],
+        "decisions": [
+            {
+                "id": "ADR-001",
+                "title": f"Enforce explicit boundary validation for {name}",
+                "context": "src/service/handler.py mutates state from untrusted payload dictionaries.",
+                "decision": "Validate required transition keys at module entry before mutating state.",
+                "paths": ["src/service/handler.py"],
+                "consequences": [
+                    "Invalid transition payloads fail fast without partial state mutation."
+                ],
+            }
+        ],
+    }
+
+
+def _review_example_payload(_name: str, title: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "verdict": "request_changes",
+        "summary": f"Identified unguarded state transition in src/service/handler.py during {title.lower()}.",
+        "findings": [
+            {
+                "id": "REV-001",
+                "title": "Unchecked target_state lookup mutates handler state",
+                "severity": "high",
+                "file": "src/service/handler.py",
+                "line": 3,
+                "description": "apply_transition indexes payload['target_state'] without validating preconditions.",
+                "recommendation": "Validate 'target_state' presence and raise ValueError before mutating record.",
+            }
+        ],
+    }
+
+
+def _testing_example_payload(_name: str, _title: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "component": "service.handler",
+        "framework": "unittest",
+        "test_cases": [
+            {
+                "id": "TC-001",
+                "name": "test_apply_transition_rejects_missing_target_state",
+                "file": "tests/test_handler.py",
+                "description": "src/service/handler.py: assert apply_transition({}, {}) raises ValueError without mutating state.",
+                "oracle_type": "exception",
+                "verified": False,
+            }
+        ],
+    }
+
+
+def _spec_example_payload(_name: str, title: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "title": f"{title} Feature Specification",
+        "status": "approved",
+        "summary": f"Specification for {title.lower()} safeguards in src/service/handler.py.",
+        "interview_decisions": [
+            {
+                "id": "DEC-001",
+                "category": "edge-case",
+                "question": "How should apply_transition handle payloads missing target_state?",
+                "decision": "Raise ValueError before mutating record['state'].",
+                "rationale": "Preserves atomic state invariants on malformed inputs.",
+            }
+        ],
+        "requirements": [
+            {
+                "id": "REQ-001",
+                "description": "Validate target_state presence before mutating record state.",
+                "priority": "must",
+            }
+        ],
+        "new_file_scopes": ["src/service/handler.py"],
+        "out_of_scope": ["External database schema migrations"],
+        "verification_commands": ["python -m unittest discover -s tests"],
+    }
+
+
+_SUITE_EXAMPLE_BUILDERS = {
+    "repository-audits": _audit_example_payload,
+    "repository-workflows": _workflow_example_payload,
+    "software-architecture": _architecture_example_payload,
+    "code-review": _review_example_payload,
+    "automated-testing": _testing_example_payload,
+    "spec-driven-development": _spec_example_payload,
+}
+
+
+def _render_examples_markdown(
+    name: str,
+    title: str,
+    primary_schema_rel: str,
+    primary_validator_rel: str,
+    *,
+    suite_name: str | None = None,
+) -> str:
+    builder = (
+        _SUITE_EXAMPLE_BUILDERS.get(suite_name) if suite_name is not None else None
+    )
+    sample_output = (
+        builder(name, title)
+        if builder is not None
+        else _standalone_example_payload(name, title)
+    )
     rendered_json = json.dumps(sample_output, indent=2, ensure_ascii=False)
     return (
         f"# Worked Examples: {title}\n\n"
-        f"Load these examples on demand when formatting deliverables for `assets/{schema_filename}` "
-        "and running `scripts/validate_output.py`.\n\n"
+        f"Load these examples on demand when formatting deliverables for `{primary_schema_rel}` "
+        f"and running `{primary_validator_rel}`.\n\n"
         "## 1. Representative Input Context\n\n"
         "```python\n"
         "# src/service/handler.py\n"
         "def apply_transition(record: dict[str, object], payload: dict[str, object]) -> None:\n"
         '    record["state"] = payload["target_state"]  # mutates state without boundary guard\n'
         "```\n\n"
-        f"## 2. Valid Deliverable Output (`assets/{schema_filename}`)\n\n"
+        f"## 2. Valid Deliverable Output (`{primary_schema_rel}`)\n\n"
         "```json\n"
         f"{rendered_json}\n"
         "```\n"
@@ -744,12 +1116,14 @@ def _pack_raw_chars(root: Path, skill_names: Sequence[str]) -> int:
     return total
 
 
+_LOCKED_CURATED_PACKS: frozenset[str] = frozenset({"starter", "session-hygiene"})
+
 _SUITE_PREFERRED_PACKS: dict[str, tuple[str, ...]] = {
     "software-architecture": ("software-architecture",),
     "code-review": ("code-review",),
     "automated-testing": ("automated-testing",),
     "spec-driven-development": ("spec-driven-development",),
-    "repository-workflows": ("verified-fixes", "session-hygiene"),
+    "repository-workflows": ("verified-fixes",),
     "repository-audits": (
         "release-readiness",
         "web-review",
@@ -788,14 +1162,15 @@ def _select_curated_pack_for_skill(
     curated = {k: v for k, v in packs.items() if _is_curated_pack_entry(k, v)}
     if not curated or any(name in v["skills"] for v in curated.values()):
         return None
+    unlocked = {k: v for k, v in curated.items() if k not in _LOCKED_CURATED_PACKS}
+    if not unlocked:
+        return None
     skill_cost = _pack_raw_chars(root, [name])
-    preferred = [p for p in _SUITE_PREFERRED_PACKS.get(suite_name, ()) if p in curated]
-    non_starter = [p for p in curated if p != "starter" and p not in preferred]
-    ordered = [*preferred, *non_starter]
-    starter_group = ["starter"] if "starter" in curated else []
+    preferred = [p for p in _SUITE_PREFERRED_PACKS.get(suite_name, ()) if p in unlocked]
+    fallback = [p for p in unlocked if p not in preferred]
     return _pick_lowest_cost_pack(
-        ordered, curated, root, skill_cost
-    ) or _pick_lowest_cost_pack(starter_group, curated, root, skill_cost)
+        preferred, unlocked, root, skill_cost
+    ) or _pick_lowest_cost_pack(fallback, unlocked, root, skill_cost)
 
 
 def _append_pack_skill(pack_obj: dict[str, Any], name: str) -> bool:
@@ -1186,6 +1561,217 @@ def _ensure_auxiliary_catalogs(catalog_dir: Path) -> list[Path]:
     return created
 
 
+_SUITE_EVAL_TARGETS: dict[str, tuple[str, str]] = {
+    "repository-audits": ("audit", "audit_target.py"),
+    "software-architecture": ("architecture", "architecture_target.py"),
+    "code-review": ("review", "review_target.py"),
+    "automated-testing": ("testing", "testing_target.py"),
+    "spec-driven-development": ("spec", "spec_target.py"),
+    "repository-workflows": ("workflow", "workflow_target.py"),
+}
+
+
+def _scaffold_fixture_slug(name: str) -> str:
+    slug = name.replace("-", "_")
+    return (
+        f"pkg_{slug}" if slug in {"class", "def", "import", "return", "from"} else slug
+    )
+
+
+def _write_scaffold_eval_fixtures(
+    root: Path, name: str, title: str, target_filename: str
+) -> list[Path]:
+    lower_title = title.lower()
+    base = root / "evals/fixtures/scaffolded" / _scaffold_fixture_slug(name)
+    fix_a = base / "a" / target_filename
+    fix_b = base / "b" / target_filename
+    fix_a.parent.mkdir(parents=True, exist_ok=True)
+    fix_b.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        f'"""Synthetic {name} target ({lower_title})."""\n\n\n'
+        "def apply_transition(record: dict[str, object], payload: dict[str, object]) -> None:\n"
+    )
+    fix_a.write_text(
+        f'{header}    record["state"] = payload["target_state"]\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    fix_b.write_text(
+        f"{header}"
+        '    if "target_state" not in payload:\n'
+        '        raise ValueError("missing target_state")\n'
+        '    record["state"] = payload["target_state"]\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    return [fix_a, fix_b]
+
+
+def _suite_eval_expectations(
+    contract: str, name: str, target_filename: str
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    if contract == "architecture":
+        return (
+            [
+                {
+                    "kind": "boundary",
+                    "type": "module",
+                    "min_invariants": 1,
+                    "paths": [target_filename],
+                }
+            ],
+            {"status": "accepted", "min_invariants": 1},
+            {"status": "accepted"},
+            {"status": "draft"},
+        )
+    if contract == "review":
+        return (
+            [{"file": target_filename, "severity": "high", "line": 5}],
+            {
+                "verdict": "request_changes",
+                "files": [target_filename],
+                "require_recommendations": True,
+            },
+            {"verdict": "approve"},
+            {"verdict": "comment"},
+        )
+    if contract == "testing":
+        return (
+            [{"oracle_type": "exception", "verified": False, "file": target_filename}],
+            {"component": "testing_target", "framework": "unittest", "verified": False},
+            {"component": "testing_target", "framework": "unittest"},
+            {"component": "repository", "framework": "unittest"},
+        )
+    if contract == "spec":
+        return (
+            [{"kind": "interview_decision", "category": "edge-case"}],
+            {"status": "interviewing", "new_file_scopes": [target_filename]},
+            {"status": "approved", "new_file_scopes": [target_filename]},
+            {"status": "draft"},
+        )
+    if contract == "workflow":
+        return (
+            [{"kind": "task", "file_scopes": [target_filename], "has_blockers": False}],
+            {"acyclic": True},
+            {"acyclic": True},
+            {"acyclic": True},
+        )
+    return (
+        [
+            {
+                "topic": name,
+                "root_cause": "unchecked-state-transition",
+                "locations": [[target_filename, "apply_transition"]],
+            }
+        ],
+        None,
+        None,
+        None,
+    )
+
+
+def _make_eval_case_entry(
+    case_id: str,
+    fixture_rel: str,
+    name: str,
+    contract: str,
+    prompt: str,
+    anchors: list[dict[str, Any]],
+    assertions: dict[str, Any] | None,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "id": case_id,
+        "fixture": fixture_rel,
+        "skill": name,
+    }
+    if contract != "audit":
+        entry["contract"] = contract
+    if contract == "workflow":
+        entry["schema"] = f"skills/{name}/assets/{name}.schema.json"
+    entry["prompt"] = prompt
+    entry["expected_anchors"] = anchors
+    if assertions is not None:
+        entry["expected_assertions"] = assertions
+    return entry
+
+
+def _build_starter_eval_cases(
+    name: str, title: str, contract: str, target_filename: str, sibling_skill: str
+) -> list[dict[str, Any]]:
+    in_scope_prompt = f"Inspect the supplied {title.lower()} module and report concrete boundary issues."
+    sibling_title = _default_title(sibling_skill).lower()
+    routing_prompt = f"Run {sibling_title} checks on the supplied service interfaces."
+    anchors_a, assert_a, assert_b, assert_r = _suite_eval_expectations(
+        contract, name, target_filename
+    )
+    slug = _scaffold_fixture_slug(name)
+    fix_a = f"fixtures/scaffolded/{slug}/a"
+    fix_b = f"fixtures/scaffolded/{slug}/b"
+    return [
+        _make_eval_case_entry(
+            f"{name}-a", fix_a, name, contract, in_scope_prompt, anchors_a, assert_a
+        ),
+        _make_eval_case_entry(
+            f"{name}-b", fix_b, name, contract, in_scope_prompt, [], assert_b
+        ),
+        _make_eval_case_entry(
+            f"{name}-routing", fix_a, name, contract, routing_prompt, [], assert_r
+        ),
+    ]
+
+
+def _has_curated_eval_cases(cases: Sequence[Any], name: str) -> bool:
+    existing = [c for c in cases if isinstance(c, dict) and c.get("skill") == name]
+    if not existing:
+        return False
+    return any(
+        not str(c.get("fixture", "")).startswith("fixtures/scaffolded/")
+        for c in existing
+    )
+
+
+def _sync_eval_cases(
+    root: Path,
+    name: str,
+    title: str,
+    suite_name: str,
+    sibling_skill: str,
+) -> list[Path]:
+    cases_path = root / "evals/cases.json"
+    cases_doc = read_json_object(
+        cases_path,
+        label="Evaluation manifest 'evals/cases.json'",
+        optional=True,
+    )
+    if cases_doc is None or not isinstance(cases_doc.get("cases"), list):
+        return []
+    raw_cases: list[Any] = cases_doc["cases"]
+    if _has_curated_eval_cases(raw_cases, name):
+        return []
+    contract, target_filename = _SUITE_EVAL_TARGETS.get(
+        suite_name, _SUITE_EVAL_TARGETS["repository-audits"]
+    )
+    fixture_paths = _write_scaffold_eval_fixtures(root, name, title, target_filename)
+    starter_cases = _build_starter_eval_cases(
+        name, title, contract, target_filename, sibling_skill
+    )
+    kept = [
+        c for c in raw_cases if not (isinstance(c, dict) and c.get("skill") == name)
+    ]
+    cases_doc["cases"] = [*kept, *starter_cases]
+    cases_path.write_text(
+        json.dumps(cases_doc, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return [*fixture_paths, cases_path]
+
+
 def _sync_catalog_files(
     root: Path,
     name: str,
@@ -1194,8 +1780,9 @@ def _sync_catalog_files(
     phase_id: int | None,
     maturity: str,
     symptoms: Sequence[str],
+    sibling_skill: str,
 ) -> list[Path]:
-    """Update suites.json, experience.json, shared resources, and generated catalog indexes."""
+    """Update suites.json, experience.json, shared resources, evals, and generated catalog indexes."""
     catalog_dir = root / "catalog"
     catalog_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1226,6 +1813,9 @@ def _sync_catalog_files(
     build_experience.build(root=root, check=False)
     touched.extend(root / rel_out for rel_out in build_experience.outputs(root=root))
 
+    touched.extend(
+        _sync_eval_cases(root, name, title, target_suite_name, sibling_skill)
+    )
     touched.extend(_sync_prose_count_docs(root))
     return touched
 
@@ -1242,6 +1832,45 @@ def _resolve_text_or_default(value: str | None, fallback: str) -> str:
     return value.strip() if value and value.strip() else fallback
 
 
+def _resolve_package_contract_links(
+    own_schema_filename: str,
+    synced_schemas: Sequence[str],
+    synced_companions: Sequence[str],
+) -> tuple[str, list[str], str, list[str], bool, bool]:
+    synced_validators = [
+        rel
+        for rel in synced_companions
+        if rel.startswith("scripts/validate_") and rel.endswith(".py")
+    ]
+    non_validators = [rel for rel in synced_companions if rel not in synced_validators]
+    emit_own_schema = not synced_schemas
+    primary_schema = (
+        f"assets/{own_schema_filename}" if emit_own_schema else synced_schemas[0]
+    )
+    extra_schemas = [] if emit_own_schema else list(synced_schemas[1:])
+    emit_own_validator = not synced_validators
+    primary_validator = (
+        "scripts/validate_output.py" if emit_own_validator else synced_validators[0]
+    )
+    extra_companions = [*non_validators, *synced_validators[1:]]
+    return (
+        primary_schema,
+        extra_schemas,
+        primary_validator,
+        extra_companions,
+        emit_own_schema,
+        emit_own_validator,
+    )
+
+
+def _render_own_schema_text(
+    name: str, title: str, suite_name: str, use_suite_companions: bool
+) -> str:
+    if use_suite_companions and suite_name == "repository-workflows":
+        return _render_workflow_output_schema(name=name, title=title)
+    return _render_output_schema(name=name, title=title)
+
+
 def _build_scaffold_package_files(
     *,
     resolved_root: Path,
@@ -1251,28 +1880,44 @@ def _build_scaffold_package_files(
     effective_short: str,
     effective_suite: str,
     sibling_skill: str,
+    use_suite_companions: bool = True,
 ) -> dict[str, str]:
     schema_filename = f"{name}.schema.json"
-    extra_schema_links, extra_companion_links = _discover_suite_synced_companions(
-        resolved_root, effective_suite, name, schema_filename
+    synced_schemas, synced_companions = (
+        _discover_suite_synced_companions(
+            resolved_root, effective_suite, name, schema_filename
+        )
+        if use_suite_companions
+        else ([], [])
+    )
+    (
+        primary_schema,
+        extra_schema_links,
+        primary_validator,
+        extra_companion_links,
+        emit_own_schema,
+        emit_own_validator,
+    ) = _resolve_package_contract_links(
+        schema_filename, synced_schemas, synced_companions
     )
     explicit_only = name in EXPLICIT_INVOCATION_ONLY_SKILLS
-    return {
+    example_suite = (
+        effective_suite if (use_suite_companions and not emit_own_validator) else None
+    )
+    files: dict[str, str] = {
         "SKILL.md": _render_skill_markdown(
             name=name,
             title=effective_title,
             description=effective_description,
-            schema_filename=schema_filename,
+            primary_schema_rel=primary_schema,
+            primary_validator_rel=primary_validator,
             extra_schema_links=extra_schema_links,
             extra_companion_links=extra_companion_links,
             disable_model_invocation=explicit_only,
         ),
         "assets/icon.svg": _render_icon_svg(name=name, suite_name=effective_suite),
         "assets/prompt.md": _render_prompt_markdown(
-            name=name, schema_filename=schema_filename
-        ),
-        f"assets/{schema_filename}": _render_output_schema(
-            name=name, title=effective_title
+            name=name, primary_schema_rel=primary_schema
         ),
         "agents/openai.yaml": _render_openai_yaml(
             name=name,
@@ -1287,12 +1932,22 @@ def _build_scaffold_package_files(
             sibling_skill=sibling_skill,
         ),
         "references/examples.md": _render_examples_markdown(
-            name=name, title=effective_title, schema_filename=schema_filename
-        ),
-        "scripts/validate_output.py": _render_validator_script(
-            schema_filename=schema_filename
+            name=name,
+            title=effective_title,
+            primary_schema_rel=primary_schema,
+            primary_validator_rel=primary_validator,
+            suite_name=example_suite,
         ),
     }
+    if emit_own_schema:
+        files[f"assets/{schema_filename}"] = _render_own_schema_text(
+            name, effective_title, effective_suite, use_suite_companions
+        )
+    if emit_own_validator:
+        files["scripts/validate_output.py"] = _render_validator_script(
+            schema_filename=schema_filename
+        )
+    return files
 
 
 def _write_scaffolded_package_files(
@@ -1306,6 +1961,62 @@ def _write_scaffolded_package_files(
             target.chmod(0o755)
 
 
+def _resolve_sync_modes(
+    resolved_root: Path, skills_parent: Path, sync_catalog: bool | None
+) -> tuple[bool, bool]:
+    in_repo_skills = skills_parent == (resolved_root / "skills").resolve()
+    if sync_catalog is True and not in_repo_skills:
+        raise ValueError(
+            "--catalog requires scaffolding inside <root>/skills so discovery paths resolve"
+        )
+    effective_sync = (
+        sync_catalog
+        if sync_catalog is not None
+        else (in_repo_skills and (resolved_root / "catalog/suites.json").is_file())
+    )
+    use_companions = (
+        sync_catalog is not False
+        and in_repo_skills
+        and (resolved_root / "shared").is_dir()
+    )
+    return effective_sync, use_companions
+
+
+def _materialize_scaffold_outputs(
+    *,
+    resolved_root: Path,
+    package_dir: Path,
+    package_files: Mapping[str, str],
+    effective_sync: bool,
+    use_companions: bool,
+    name: str,
+    effective_title: str,
+    explicit_suite: str | None,
+    effective_suite: str,
+    phase: int | None,
+    maturity: str,
+    effective_symptoms: Sequence[str],
+    sibling_skill: str,
+) -> list[Path]:
+    _write_scaffolded_package_files(package_dir, package_files)
+    if effective_sync:
+        return _sync_catalog_files(
+            root=resolved_root,
+            name=name,
+            title=effective_title,
+            suite_name=explicit_suite,
+            phase_id=phase,
+            maturity=maturity,
+            symptoms=effective_symptoms,
+            sibling_skill=sibling_skill,
+        )
+    if use_companions:
+        sync_audit_resources.sync_skill_package(
+            resolved_root, package_dir, effective_suite, name, check=False
+        )
+    return []
+
+
 def scaffold_skill(
     name: str,
     *,
@@ -1314,7 +2025,7 @@ def scaffold_skill(
     title: str | None = None,
     description: str | None = None,
     short_description: str | None = None,
-    sync_catalog: bool = False,
+    sync_catalog: bool | None = None,
     suite: str | None = None,
     phase: int | None = None,
     maturity: str = "experimental",
@@ -1322,7 +2033,7 @@ def scaffold_skill(
     force: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Create a compliant skill package and optionally synchronize catalog indexes."""
+    """Create a compliant skill package and synchronize catalog indexes when applicable."""
     resolved_root = root.resolve()
     skills_parent = _resolve_skills_parent(resolved_root, output_dir)
     package_dir = skills_parent / name
@@ -1337,11 +2048,7 @@ def scaffold_skill(
     effective_short = _resolve_text_or_default(
         short_description, _default_short_description(effective_title, name)
     )
-    effective_symptoms = (
-        [s.strip() for s in symptoms if s.strip()]
-        if symptoms
-        else _default_symptoms(name)
-    )
+    effective_symptoms = _normalize_catalog_symptoms(symptoms, name, effective_suite)
 
     _validate_inputs(
         name=name,
@@ -1352,11 +2059,9 @@ def scaffold_skill(
         package_dir=package_dir,
         force=force,
     )
-
-    if sync_catalog and skills_parent != (resolved_root / "skills"):
-        raise ValueError(
-            "--catalog requires scaffolding inside <root>/skills so discovery paths resolve"
-        )
+    effective_sync, use_companions = _resolve_sync_modes(
+        resolved_root, skills_parent, sync_catalog
+    )
 
     package_files = _build_scaffold_package_files(
         resolved_root=resolved_root,
@@ -1366,33 +2071,35 @@ def scaffold_skill(
         effective_short=effective_short,
         effective_suite=effective_suite,
         sibling_skill=sibling_skill,
+        use_suite_companions=use_companions,
     )
     planned_paths = [package_dir / rel for rel in sorted(package_files)]
-    catalog_paths: list[Path] = []
-
-    if not dry_run:
-        _write_scaffolded_package_files(package_dir, package_files)
-        if sync_catalog:
-            catalog_paths = _sync_catalog_files(
-                root=resolved_root,
-                name=name,
-                title=effective_title,
-                suite_name=suite,
-                phase_id=phase,
-                maturity=maturity,
-                symptoms=effective_symptoms,
-            )
-        elif (resolved_root / "shared").is_dir():
-            sync_audit_resources.sync_skill_package(
-                resolved_root, package_dir, effective_suite, name, check=False
-            )
+    catalog_paths = (
+        []
+        if dry_run
+        else _materialize_scaffold_outputs(
+            resolved_root=resolved_root,
+            package_dir=package_dir,
+            package_files=package_files,
+            effective_sync=effective_sync,
+            use_companions=use_companions,
+            name=name,
+            effective_title=effective_title,
+            explicit_suite=suite,
+            effective_suite=effective_suite,
+            phase=phase,
+            maturity=maturity,
+            effective_symptoms=effective_symptoms,
+            sibling_skill=sibling_skill,
+        )
+    )
 
     return {
         "name": name,
         "title": effective_title,
         "package_dir": package_dir,
         "files": planned_paths,
-        "catalog_synced": sync_catalog,
+        "catalog_synced": effective_sync,
         "catalog_files": catalog_paths,
         "dry_run": dry_run,
     }
@@ -1425,12 +2132,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Short UI description for agents/openai.yaml (25-64 chars).",
     )
-    parser.add_argument(
+    catalog_group = parser.add_mutually_exclusive_group()
+    catalog_group.add_argument(
         "--catalog",
         "--sync-catalog",
         dest="sync_catalog",
-        action="store_true",
-        help="Also register the skill in catalog/suites.json and catalog/experience.json and rebuild discovery indexes.",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Register the skill in catalog manifests, evaluations, and generated discovery indexes.",
+    )
+    catalog_group.add_argument(
+        "--no-catalog",
+        dest="sync_catalog",
+        action="store_const",
+        const=False,
+        help="Skip catalog synchronization and emit an isolated standalone package.",
     )
     parser.add_argument(
         "--suite",

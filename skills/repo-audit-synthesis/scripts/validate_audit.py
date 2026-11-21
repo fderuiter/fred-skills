@@ -452,13 +452,24 @@ def _is_repo_relative_evidence_path(raw_path: str) -> bool:
     return bool(p.parts) and ".." not in p.parts and ".git" not in p.parts
 
 
+def _check_evidence_item(ev: Mapping[str, Any]) -> list[str]:
+    ev_id = ev.get("id", "unknown")
+    start = ev.get("line_start")
+    end = ev.get("line_end")
+    errors: list[str] = []
+    if isinstance(start, int) and isinstance(end, int) and end < start:
+        errors.append(f"Reversed lines: {ev_id}")
+    path = ev.get("path")
+    if isinstance(path, str) and not _is_repo_relative_evidence_path(path):
+        errors.append(f"Evidence path must be repository-relative: {ev_id}")
+    return errors
+
+
 def _check_evidence(evidence_items: list[Mapping[str, Any]]) -> list[str]:
     errors: list[str] = []
     for ev in evidence_items:
-        if ev["line_end"] < ev["line_start"]:
-            errors.append(f"Reversed lines: {ev['id']}")
-        if not _is_repo_relative_evidence_path(ev["path"]):
-            errors.append(f"Evidence path must be repository-relative: {ev['id']}")
+        if isinstance(ev, Mapping):
+            errors.extend(_check_evidence_item(ev))
     return errors
 
 
@@ -474,25 +485,43 @@ def _check_contract_and_coverage_refs(
     return errors
 
 
+def _finding_validation_ok(finding: Mapping[str, Any]) -> bool:
+    val = finding.get("validation")
+    if not isinstance(val, Mapping):
+        return False
+    return val.get("state") == "executed" and bool(val.get("commands"))
+
+
+def _check_finding_status_rules(
+    finding: Mapping[str, Any], fid: Any, status: str
+) -> list[str]:
+    errors: list[str] = []
+    if status in ("confirmed", "supported") and (
+        not finding.get("evidence_ids") or not finding.get("contract_ids")
+    ):
+        errors.append(f"Actionable defect lacks contract/evidence: {fid}")
+    if status == "confirmed" and not _finding_validation_ok(finding):
+        errors.append(f"Confirmed finding lacks executed command: {fid}")
+    if status == "refuted" and finding.get("severity") != "info":
+        errors.append(f"Refuted candidate must be info: {fid}")
+    return errors
+
+
 def _check_single_finding(
     finding: Mapping[str, Any],
     maps: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> list[str]:
+    if not isinstance(finding, Mapping):
+        return []
     errors = _check_refs(finding, "evidence_ids", "evidence", maps)
     errors.extend(_check_refs(finding, "contract_ids", "contracts", maps))
     errors.extend(_check_refs(finding, "related_findings", "findings", maps))
-    status = finding["status"]
-    if status in ("confirmed", "supported") and (
-        not finding["evidence_ids"] or not finding["contract_ids"]
-    ):
-        errors.append(f"Actionable defect lacks contract/evidence: {finding['id']}")
-    if status == "confirmed" and (
-        finding["validation"]["state"] != "executed"
-        or not finding["validation"]["commands"]
-    ):
-        errors.append(f"Confirmed finding lacks executed command: {finding['id']}")
-    if status == "refuted" and finding["severity"] != "info":
-        errors.append(f"Refuted candidate must be info: {finding['id']}")
+    fid = finding.get("id", "unknown")
+    status = finding.get("status")
+    if not isinstance(status, str) or not status:
+        errors.append(f"Finding missing status: {fid}")
+        return errors
+    errors.extend(_check_finding_status_rules(finding, fid, status))
     return errors
 
 
@@ -510,16 +539,21 @@ def _check_single_issue(
     issue: Mapping[str, Any],
     maps: Mapping[str, Mapping[str, Mapping[str, Any]]],
 ) -> list[str]:
+    if not isinstance(issue, Mapping):
+        return []
+    issue_id = issue.get("id", "unknown")
     errors = _check_refs(issue, "finding_ids", "findings", maps)
     errors.extend(_check_refs(issue, "depends_on", "issues", maps))
-    findings_map = maps["findings"]
+    findings_map = maps.get("findings", {})
     errors.extend(
-        f"Issue includes refuted finding: {issue['id']}"
-        for fid in issue["finding_ids"]
-        if fid in findings_map and findings_map[fid]["status"] == "refuted"
+        f"Issue includes refuted finding: {issue_id}"
+        for fid in issue.get("finding_ids", [])
+        if fid in findings_map and findings_map[fid].get("status") == "refuted"
     )
-    if issue["publication"] in ("created", "linked") and not issue["existing_url"]:
-        errors.append(f"Published issue lacks verified URL: {issue['id']}")
+    if issue.get("publication") in ("created", "linked") and not issue.get(
+        "existing_url"
+    ):
+        errors.append(f"Published issue lacks verified URL: {issue_id}")
     return errors
 
 
@@ -546,7 +580,7 @@ def _visit_issue(
     if issue_id in done or issue_id not in issues_map:
         return
     visiting.add(issue_id)
-    for dep in issues_map[issue_id]["depends_on"]:
+    for dep in issues_map[issue_id].get("depends_on", []):
         _visit_issue(dep, issues_map, visiting, done, errors)
     visiting.remove(issue_id)
     done.add(issue_id)
@@ -561,11 +595,23 @@ def _find_issue_cycles(issues_map: Mapping[str, Mapping[str, Any]]) -> list[str]
     return errors
 
 
+_AUDIT_LEDGER_KEYS = frozenset({"contracts", "evidence", "findings", "issues"})
+
+
+def _is_audit_ledger_schema(schema: Mapping[str, Any]) -> bool:
+    if schema.get("title") == "AuditSessionDiagnosticBundle":
+        return False
+    props = schema.get("properties")
+    if not isinstance(props, Mapping):
+        return True
+    return _AUDIT_LEDGER_KEYS.issubset(props)
+
+
 def validate(data: Any, schema: Mapping[str, Any]) -> list[str]:
     errors = _schema_errors(data, schema)
     if errors or not isinstance(data, Mapping):
         return errors
-    if schema.get("title") == "AuditSessionDiagnosticBundle":
+    if not _is_audit_ledger_schema(schema):
         return errors
     maps = _index_records(data, errors)
     errors.extend(_check_evidence(data.get("evidence", [])))

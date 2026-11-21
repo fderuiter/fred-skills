@@ -74,6 +74,7 @@ CORE_INVARIANT_DOCS: tuple[str, ...] = (
     "docs/validation.md",
     "docs/implementation-status.md",
     "docs/research.md",
+    "evals/README.md",
 )
 
 RELEASE_HOST_COUNT_RE = re.compile(
@@ -267,6 +268,7 @@ def build_prose_count_rules(
 ) -> tuple[tuple[re.Pattern[str], str, int | None], ...]:
     """Build shared prose count patterns and expected counts for documentation checks."""
     scenarios_total = exp.total_skills * 3 if exp.total_skills is not None else None
+    paired_runs_total = exp.total_skills * 6 if exp.total_skills is not None else None
     return (
         (
             re.compile(r"\*\*([A-Za-z0-9]+)\s+standalone\s+skills\*\*", re.IGNORECASE),
@@ -312,7 +314,10 @@ def build_prose_count_rules(
             exp.total_skills,
         ),
         (
-            re.compile(r"\bacross\s+the\s+([A-Za-z0-9]+)\s+skills\b", re.IGNORECASE),
+            re.compile(
+                r"\bacross\s+(?:the|all)\s+([A-Za-z0-9]+)\s+skills\b",
+                re.IGNORECASE,
+            ),
             "skill",
             exp.total_skills,
         ),
@@ -395,11 +400,35 @@ def build_prose_count_rules(
         ),
         (
             re.compile(
-                r"\b(?:These|all)\s+([A-Za-z0-9]+)\s+(?:scenario\s+)?specifications\b",
+                r"\b(?:These|The|all)\s+([A-Za-z0-9]+)\s+(?:skill\s+)?(?:scenario\s+)?specifications\b",
                 re.IGNORECASE,
             ),
             "scenario specification",
             scenarios_total,
+        ),
+        (
+            re.compile(
+                r"\bnot\s+([A-Za-z0-9]+)\s+(?:executed|completed\s+model)\s+evaluations\b",
+                re.IGNORECASE,
+            ),
+            "evaluation scenario",
+            scenarios_total,
+        ),
+        (
+            re.compile(
+                r"\b([A-Za-z0-9]+)\s+raw\s+cases\b",
+                re.IGNORECASE,
+            ),
+            "evaluation case",
+            scenarios_total,
+        ),
+        (
+            re.compile(
+                r"in\s+baseline\s+and\s+with-skill\s+configurations\s+\(([A-Za-z0-9]+)\s+runs\)",
+                re.IGNORECASE,
+            ),
+            "evaluation run",
+            paired_runs_total,
         ),
     )
 

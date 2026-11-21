@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -522,8 +523,43 @@ def _fallback_audit_file(source: Path) -> str:
     return "README.txt"
 
 
+_SCAFFOLD_DOCSTRING_RE = re.compile(r'^"""Synthetic ([a-z0-9-]+) target \((.+)\)\."""$')
+
+
+def _parse_scaffold_target(req_lower: str, target_path: Path) -> tuple[str, bool, bool]:
+    text = target_path.read_text(encoding="utf-8")
+    first_line = text.splitlines()[0].strip() if text else ""
+    match = _SCAFFOLD_DOCSTRING_RE.match(first_line)
+    skill_name = match.group(1) if match else "general"
+    lower_title = match.group(2).lower() if match else skill_name
+    in_scope = f"supplied {lower_title} module" in req_lower
+    has_defect = 'if "target_state" not in payload:' not in text
+    return skill_name, in_scope, has_defect
+
+
+def _audit_scaffold_fallback(req_lower: str, source: Path) -> dict[str, Any]:
+    skill_name, in_scope, has_defect = _parse_scaffold_target(
+        req_lower, source / "audit_target.py"
+    )
+    detected = (
+        [
+            (
+                skill_name,
+                "unchecked-state-transition",
+                "apply_transition",
+                "Unchecked target_state lookup mutates record state without guard",
+            )
+        ]
+        if (in_scope and has_defect)
+        else []
+    )
+    return _build_audit_ledger("audit_target.py", skill_name, detected)
+
+
 def _handle_audit(request: str, source: Path) -> dict[str, Any]:
     req_lower = request.lower()
+    if (source / "audit_target.py").exists():
+        return _audit_scaffold_fallback(req_lower, source)
     missing_guard = _match_audit_rule_table(
         req_lower, source, _MISSING_GUARD_AUDIT_RULES, expect_marker_present=False
     )
@@ -647,10 +683,41 @@ def _arch_pipeline_decomposition(req_lower: str, source: Path) -> dict[str, Any]
     }
 
 
+def _arch_scaffold_fallback(req_lower: str, source: Path) -> dict[str, Any]:
+    skill_name, in_scope, has_defect = _parse_scaffold_target(
+        req_lower, source / "architecture_target.py"
+    )
+    if not in_scope:
+        return _architecture_abstain()
+    boundaries = (
+        [
+            {
+                "name": "module-boundary",
+                "type": "module",
+                "description": "architecture_target.py: validate transition payload before mutating state.",
+                "paths": ["architecture_target.py"],
+                "invariants": [
+                    "Transition payload must validate target_state before state mutation."
+                ],
+            }
+        ]
+        if has_defect
+        else []
+    )
+    return {
+        "schema_version": "1.0",
+        "title": f"{skill_name} boundary specification",
+        "status": "accepted",
+        "boundaries": boundaries,
+        "decisions": [],
+    }
+
+
 _ARCHITECTURE_HANDLERS: dict[str, Callable[[str, Path], dict[str, Any]]] = {
     "dispatch_adr_context.json": _arch_dispatch_adr,
     "http_order_repo.py": _arch_order_repo_boundary,
     "pipeline_modules.py": _arch_pipeline_decomposition,
+    "architecture_target.py": _arch_scaffold_fallback,
 }
 
 
@@ -766,10 +833,42 @@ def _review_raw_comments(req_lower: str, source: Path) -> dict[str, Any]:
     }
 
 
+def _review_scaffold_fallback(req_lower: str, source: Path) -> dict[str, Any]:
+    _skill_name, in_scope, has_defect = _parse_scaffold_target(
+        req_lower, source / "review_target.py"
+    )
+    if not in_scope:
+        return _review_abstain()
+    if has_defect:
+        return {
+            "schema_version": "1.0",
+            "verdict": "request_changes",
+            "summary": "Unchecked target_state lookup in apply_transition.",
+            "findings": [
+                {
+                    "id": "FINDING-1",
+                    "title": "Validate target_state before mutating record state",
+                    "severity": "high",
+                    "file": "review_target.py",
+                    "line": 5,
+                    "description": "review_target.py indexes payload['target_state'] without guard.",
+                    "recommendation": "Raise ValueError when 'target_state' is absent from payload.",
+                }
+            ],
+        }
+    return {
+        "schema_version": "1.0",
+        "verdict": "approve",
+        "summary": "Boundary guard validates target_state before mutation.",
+        "findings": [],
+    }
+
+
 _REVIEW_HANDLERS: dict[str, Callable[[str, Path], dict[str, Any]]] = {
     "invoice_client.py": _review_invoice_diff,
     "escrow_state.py": _review_escrow_invariants,
     "raw_comments.json": _review_raw_comments,
+    "review_target.py": _review_scaffold_fallback,
 }
 
 
@@ -873,10 +972,36 @@ def _testing_cache_store_execution(req_lower: str, source: Path) -> dict[str, An
     }
 
 
+def _testing_scaffold_fallback(req_lower: str, source: Path) -> dict[str, Any]:
+    _skill_name, in_scope, has_defect = _parse_scaffold_target(
+        req_lower, source / "testing_target.py"
+    )
+    if not in_scope:
+        return _testing_abstain()
+    if not has_defect:
+        return _testing_abstain("testing_target")
+    return {
+        "schema_version": "1.0",
+        "component": "testing_target",
+        "framework": "unittest",
+        "test_cases": [
+            {
+                "id": "TC-1",
+                "name": "test_missing_target_state_raises_value_error",
+                "file": "testing_target.py",
+                "description": "testing_target.py: assert apply_transition({}, {}) raises ValueError.",
+                "oracle_type": "exception",
+                "verified": False,
+            }
+        ],
+    }
+
+
 _TESTING_HANDLERS: dict[str, Callable[[str, Path], dict[str, Any]]] = {
     "discount_calc.py": _testing_discount_gaps,
     "rate_limiter.py": _testing_rate_limiter_generation,
     "cache_store.py": _testing_cache_store_execution,
+    "testing_target.py": _testing_scaffold_fallback,
 }
 
 
@@ -1228,6 +1353,46 @@ def _workflow_terse_commit(req_lower: str, source: Path) -> dict[str, Any]:
     }
 
 
+def _workflow_scaffold_fallback(req_lower: str, source: Path) -> dict[str, Any]:
+    skill_name, in_scope, has_defect = _parse_scaffold_target(
+        req_lower, source / "workflow_target.py"
+    )
+    if not in_scope or not has_defect:
+        return {
+            "schema_version": "1.0",
+            "skill": skill_name,
+            "summary": "No workflow remediation tasks required.",
+            "task_breakdowns": [
+                {
+                    "task_id": "noop",
+                    "title": "Preserve current baseline",
+                    "file_scopes": [],
+                    "acceptance_criteria": ["No changes needed"],
+                }
+            ],
+            "dependency_order": [],
+            "file_scopes": [],
+            "acceptance_criteria": [],
+        }
+    return {
+        "schema_version": "1.0",
+        "skill": skill_name,
+        "summary": f"Planned remediation task for {skill_name} in workflow_target.py.",
+        "task_breakdowns": [
+            {
+                "task_id": "TASK-1",
+                "title": "Guard target_state lookup in apply_transition",
+                "file_scopes": ["workflow_target.py"],
+                "blocked_by": [],
+                "acceptance_criteria": ["Reject missing target_state with ValueError"],
+            }
+        ],
+        "dependency_order": ["TASK-1"],
+        "file_scopes": ["workflow_target.py"],
+        "acceptance_criteria": ["Reject missing target_state with ValueError"],
+    }
+
+
 _WORKFLOW_HANDLERS: dict[str, Callable[[str, Path], dict[str, Any]]] = {
     "ledger_writer.py": _workflow_verify_finding,
     "quota_ledger.py": _workflow_specify_regression,
@@ -1237,6 +1402,7 @@ _WORKFLOW_HANDLERS: dict[str, Callable[[str, Path], dict[str, Any]]] = {
     "reconcile_inputs.json": _workflow_reconcile_findings,
     "session_state.json": _workflow_session_handoff,
     "commit_context.json": _workflow_terse_commit,
+    "workflow_target.py": _workflow_scaffold_fallback,
 }
 
 
@@ -1375,10 +1541,41 @@ def _spec_convergence_check(req_lower: str, source: Path) -> dict[str, Any]:
     }
 
 
+def _spec_scaffold_fallback(req_lower: str, source: Path) -> dict[str, Any]:
+    skill_name, in_scope, has_defect = _parse_scaffold_target(
+        req_lower, source / "spec_target.py"
+    )
+    if not in_scope:
+        return _spec_abstain()
+    decisions = (
+        [
+            {
+                "id": "DEC-1",
+                "category": "edge-case",
+                "question": "How should apply_transition handle payloads missing target_state?",
+                "decision": "Reject missing target_state with ValueError before mutating record.",
+                "rationale": "spec_target.py currently indexes target_state without guard.",
+            }
+        ]
+        if has_defect
+        else []
+    )
+    return {
+        "schema_version": "1.0",
+        "title": f"{skill_name} specification",
+        "status": "interviewing" if has_defect else "approved",
+        "interview_decisions": decisions,
+        "new_file_scopes": ["spec_target.py"],
+        "out_of_scope": ["CLI flags"],
+        "verification_commands": ["python -m unittest"],
+    }
+
+
 _SPEC_HANDLERS: dict[str, Callable[[str, Path], dict[str, Any]]] = {
     "webhook_context.json": _spec_webhook_interview,
     "spec_notes.json": _spec_author_notes,
     "convergence_inputs.json": _spec_convergence_check,
+    "spec_target.py": _spec_scaffold_fallback,
 }
 
 
