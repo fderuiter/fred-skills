@@ -12,7 +12,7 @@ Never manually edit generated outputs: `catalog/skills.json`, `docs/catalog.md`,
 
 Trapdoors:
 - `PYTHONDONTWRITEBYTECODE=1`: `scripts/validate_skills.py` rejects `__pycache__` and `.pyc` files under `skills/`.
-- `unittest` only: run `python -m unittest discover -s tests -v`, never `pytest` (`evals/fixtures/oracles/{a,b}/test_fee.py` collides).
+- `unittest` suite: run `python -B scripts/run_checks.py --phase tests` (`pyproject.toml` scopes `pytest` to `tests/` so `evals/fixtures/oracles/{a,b}/test_fee.py` never collides).
 - Cross-platform `mypy`: `tests/test_packaging.py` runs `mypy --platform win32 --no-incremental` (guard POSIX calls with `sys.platform != "win32"`).
 - Action pins: `.github/workflows/*.yml` 40-char SHAs and `# v...` tags must match `.github/action-pins.json`.
 - Pages docs: tests check structural sections/tables in `README.md`, `docs/experience.md`, `docs/implementation-status.md`, `docs/releasing.md`, and `docs/runbooks.md` (and ban hosting provider names in Pages docs).

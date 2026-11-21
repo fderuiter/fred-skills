@@ -1,6 +1,8 @@
 """Negative package fixtures and generated-artifact drift checks."""
 
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -838,39 +840,76 @@ class PackageTests(unittest.TestCase):
         local_repos = [r for r in config["repos"] if r.get("repo") == "local"]
         self.assertTrue(local_repos)
         hooks = {h["id"]: h for h in local_repos[0].get("hooks", [])}
-        for hook_id in [
+        scoped_python_hooks = [
             "mypy",
             "sync-audit-resources",
             "build-catalog",
             "build-experience",
+            "bump-version",
             "validate-skills",
+            "check-doc-links",
+            "verify-doc-snippets",
             "verify-workflow-actions",
-            "unit-tests",
-        ]:
+        ]
+        for hook_id in scoped_python_hooks:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
             self.assertFalse(hooks[hook_id].get("pass_filenames", True))
-            self.assertTrue(hooks[hook_id].get("always_run", False))
+            self.assertFalse(
+                hooks[hook_id].get("always_run", False),
+                f"{hook_id} must use path-scoped files triggers instead of always_run",
+            )
+            self.assertTrue(
+                str(hooks[hook_id].get("entry", "")).startswith("python -B "),
+                f"{hook_id} entry must invoke python -B",
+            )
+            pattern = hooks[hook_id].get("files", "")
+            self.assertTrue(pattern, f"{hook_id} must define a files regex")
+            re.compile(pattern)
+
+        self.assertEqual(
+            hooks["bump-version"].get("entry"),
+            "python -B scripts/bump_version.py --check",
+        )
+        bump_re = re.compile(hooks["bump-version"]["files"])
+        for matched_path in (
+            "VERSION",
+            "LICENSE",
+            "README.md",
+            "skills/repo-audit-concurrency/SKILL.md",
+            "catalog/packs.json",
+            "shared/repo-audit/manifest.json",
+            "scripts/fredlib/runs.py",
+            "scripts/bump_version.py",
+            "docs/usage.md",
+        ):
+            self.assertRegex(matched_path, bump_re)
+        for unrelated_path in (
+            "tests/test_toolkit.py",
+            ".github/workflows/validate.yml",
+            "CONTRIBUTING.md",
+        ):
+            self.assertNotRegex(unrelated_path, bump_re)
+
         self.assertEqual(
             hooks["validate-skills"].get("entry"),
-            "python scripts/validate_skills.py --telemetry validation-telemetry.json",
+            "python -B scripts/validate_skills.py --telemetry validation-telemetry.json",
+        )
+        self.assertEqual(
+            hooks["verify-doc-snippets"].get("entry"),
+            "python -B scripts/verify_doc_snippets.py --commit-safe",
         )
         self.assertEqual(
             hooks["unit-tests"].get("entry"),
-            "python scripts/run_checks.py --phase tests",
+            "python -B scripts/run_checks.py --phase tests",
         )
         self.assertEqual(hooks["unit-tests"].get("stages"), ["pre-push"])
+        self.assertTrue(hooks["unit-tests"].get("always_run", False))
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
             self.assertEqual(hooks[hook_id].get("language"), "system")
         self.assertIn("markdown", hooks["ruff-format"].get("types_or", []))
         self.assertEqual(hooks["ruff-format"].get("types_or"), ["python", "markdown"])
-        for hook_id in ["check-doc-links", "verify-doc-snippets"]:
-            self.assertIn(hook_id, hooks)
-            self.assertEqual(hooks[hook_id].get("language"), "system")
-            self.assertFalse(hooks[hook_id].get("pass_filenames", True))
-            self.assertTrue(hooks[hook_id].get("always_run", False))
-            self.assertNotIn("files", hooks[hook_id])
 
         reqs_path = ROOT / "requirements-dev.txt"
         self.assertTrue(reqs_path.is_file())
@@ -951,6 +990,7 @@ class PackageTests(unittest.TestCase):
             "sync-audit-resources",
             "build-catalog",
             "build-experience",
+            "bump-version",
             "validate-skills",
             "check-doc-links",
             "verify-doc-snippets",
@@ -1228,21 +1268,26 @@ class PackageTests(unittest.TestCase):
                 any(line.startswith(f"{target}:") for line in content.splitlines()),
                 f"Target {target} must be defined",
             )
+        self.assertIn("export PYTHONDONTWRITEBYTECODE := 1", content)
+        self.assertIn(".venv/bin/python", content)
+        self.assertIn(".venv/Scripts/python.exe", content)
         self.assertIn("RUFF ?= ruff", content)
-        self.assertIn("scripts/run_checks.py", content)
+        self.assertIn("$(PYTHON) -B scripts/run_checks.py", content)
         self.assertNotIn("validation-telemetry.json", content)
-        self.assertIn("scripts/sync_audit_resources.py", content)
-        self.assertIn("scripts/build_catalog.py", content)
-        self.assertIn("scripts/build_experience.py", content)
-        self.assertIn("unittest", content)
+        self.assertIn("$(PYTHON) -B scripts/sync_audit_resources.py", content)
+        self.assertIn("$(PYTHON) -B scripts/build_catalog.py", content)
+        self.assertIn("$(PYTHON) -B scripts/build_experience.py", content)
+        self.assertIn("$(PYTHON) -B scripts/run_checks.py --phase tests", content)
 
     def test_makefile_dry_run_execution(self):
         if not shutil.which("make"):
             self.skipTest("make is not available on this host")
+        clean_env = {k: v for k, v in os.environ.items() if k not in {"PYTHON", "RUFF"}}
         for target in ["check", "fix", "test"]:
             result = subprocess.run(
                 ["make", "-n", target],
                 cwd=ROOT,
+                env=clean_env,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -1254,25 +1299,46 @@ class PackageTests(unittest.TestCase):
             )
             output = result.stdout
             if target == "check":
-                self.assertIn("scripts/run_checks.py", output)
+                self.assertIn("-B scripts/run_checks.py", output)
                 self.assertNotIn("validation-telemetry.json", output)
             elif target == "fix":
                 self.assertIn("ruff format .", output)
                 self.assertIn("ruff check --fix .", output)
-                self.assertIn("scripts/sync_audit_resources.py", output)
-                self.assertIn("scripts/build_catalog.py", output)
+                self.assertIn("-B scripts/sync_audit_resources.py", output)
+                self.assertIn("-B scripts/build_catalog.py", output)
             elif target == "test":
-                self.assertIn("unittest", output)
+                self.assertIn("-B scripts/run_checks.py --phase tests", output)
+
+        venv_probe = self.root / "makefile-venv-probe"
+        (venv_probe / ".venv" / "bin").mkdir(parents=True)
+        (venv_probe / ".venv" / "bin" / "python").write_text(
+            "#!/bin/sh\n", encoding="utf-8"
+        )
+        shutil.copy2(ROOT / "Makefile", venv_probe / "Makefile")
+        venv_res = subprocess.run(
+            ["make", "-n", "test"],
+            cwd=venv_probe,
+            env=clean_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, venv_res.returncode, venv_res.stderr)
+        self.assertIn(
+            ".venv/bin/python -B scripts/run_checks.py --phase tests",
+            venv_res.stdout,
+        )
 
         default_result = subprocess.run(
             ["make", "-n"],
             cwd=ROOT,
+            env=clean_env,
             check=False,
             capture_output=True,
             text=True,
         )
         self.assertEqual(default_result.returncode, 0)
-        self.assertIn("scripts/run_checks.py", default_result.stdout)
+        self.assertIn("-B scripts/run_checks.py", default_result.stdout)
 
     def test_run_checks_phase_resolution_and_doc_omission(self) -> None:
         self.assertEqual(
@@ -1511,6 +1577,112 @@ class PackageTests(unittest.TestCase):
         self.assertLess(
             err_text.index("FAIL_FIRST_MOD_A"),
             err_text.index("FAIL_FAST_MOD_B"),
+        )
+
+    def test_run_checks_targeted_filters_fail_fast_and_live_streaming(self) -> None:
+        import contextlib
+        import io
+        import threading
+
+        import run_checks as run_checks_mod
+
+        mod_cmds = build_phase_commands(
+            "tests",
+            root=ROOT,
+            modules=["test_toolkit"],
+            keyword_patterns=["help"],
+        )
+        self.assertEqual(1, len(mod_cmds))
+        self.assertEqual(
+            ["-B", "-m", "unittest", "-v", "-k", "help", "tests.test_toolkit"],
+            mod_cmds[0][1:],
+        )
+
+        fast_cmds = build_phase_commands("tests", root=ROOT, fast=True)
+        fast_mods = {cmd[-1] for cmd in fast_cmds}
+        self.assertIn("tests.test_fred_cli", fast_mods)
+        self.assertNotIn("tests.test_evaluation_cli", fast_mods)
+        self.assertNotIn("tests.test_packaging", fast_mods)
+
+        with self.assertRaises(ValueError):
+            build_phase_commands("tests", root=ROOT, modules=["tests.does_not_exist"])
+
+        # Changed filter with zero affected files exits 0 cleanly
+        empty_out, empty_err = io.StringIO(), io.StringIO()
+        with (
+            patch("run_checks.detect_changed_files", return_value=[]),
+            contextlib.redirect_stdout(empty_out),
+            contextlib.redirect_stderr(empty_err),
+        ):
+            rc_empty = run_checks(["tests"], root=ROOT, changed=True)
+        self.assertEqual(0, rc_empty, empty_err.getvalue())
+        self.assertIn("0 affected test module(s)", empty_out.getvalue())
+
+        # Fail-fast stops queued workers immediately and streams completion lines as futures finish
+        synth_root = self.root / "fail-fast-synth"
+        synth_tests = synth_root / "tests"
+        synth_tests.mkdir(parents=True)
+        for idx, mod_stem in enumerate(("test_m1", "test_m2", "test_m3", "test_m4")):
+            (synth_tests / f"{mod_stem}.py").write_text(
+                "import unittest\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_ok(self) -> None:\n"
+                "        pass\n" + ("# size pad\n" * (20 - idx * 4)),
+                encoding="utf-8",
+            )
+
+        started: list[str] = []
+        gate = threading.Event()
+        stream_observed_mid_flight: list[str] = []
+
+        class LiveStreamBuffer(io.StringIO):
+            def write(self, s: str) -> int:
+                if not gate.is_set() and "(EXIT 1," in s:
+                    stream_observed_mid_flight.append(s)
+                    gate.set()
+                return super().write(s)
+
+        def fail_fast_runner(
+            cmd: list[str], *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            mod = cmd[-1]
+            started.append(mod)
+            if mod == "tests.test_m1":
+                return subprocess.CompletedProcess(
+                    cmd, returncode=1, stdout="", stderr="FIRST_FAILURE\n"
+                )
+            if mod == "tests.test_m2":
+                gate.wait(timeout=2.0)
+                return subprocess.CompletedProcess(cmd, returncode=0)
+            return subprocess.CompletedProcess(cmd, returncode=0)
+
+        ff_out = LiveStreamBuffer()
+        ff_err = io.StringIO()
+        with (
+            patch("run_checks.subprocess.run", side_effect=fail_fast_runner),
+            contextlib.redirect_stdout(ff_out),
+            contextlib.redirect_stderr(ff_err),
+        ):
+            rc_ff = run_checks_mod.main(
+                [
+                    "--root",
+                    str(synth_root),
+                    "--phase",
+                    "tests",
+                    "--workers",
+                    "2",
+                    "--fail-fast",
+                ]
+            )
+        self.assertEqual(1, rc_ff)
+        self.assertTrue(
+            stream_observed_mid_flight,
+            "Expected module status line to stream before slower in-flight worker completed",
+        )
+        self.assertLessEqual(
+            len(started),
+            2,
+            f"Expected --fail-fast to cancel queued modules m3/m4, started={started}",
         )
 
     def test_documentation_files_state_accurate_package_count(self):
@@ -3447,15 +3619,26 @@ class PackageTests(unittest.TestCase):
             (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
         )
         hooks = {h["id"]: h for h in pre_commit_cfg["repos"][0]["hooks"]}
-        self.assertEqual(len(hooks), 11)
+        self.assertEqual(len(hooks), 12)
         self.assertIn("mypy", hooks)
-        self.assertEqual(hooks["mypy"].get("entry"), "python -m mypy")
+        self.assertEqual(hooks["mypy"].get("entry"), "python -B -m mypy")
         self.assertEqual(hooks["mypy"].get("language"), "system")
         self.assertFalse(hooks["mypy"].get("pass_filenames", True))
-        self.assertTrue(hooks["mypy"].get("always_run", False))
+        self.assertFalse(hooks["mypy"].get("always_run", False))
+        mypy_files_re = re.compile(str(hooks["mypy"]["files"]))
+        self.assertRegex("scripts/run_checks.py", mypy_files_re)
+        self.assertRegex("pyproject.toml", mypy_files_re)
+        self.assertNotRegex("README.md", mypy_files_re)
+
+        pytest_cfg = pyproject.get("tool", {}).get("pytest", {}).get("ini_options", {})
+        self.assertEqual(["tests"], pytest_cfg.get("testpaths"))
+        self.assertEqual([".", "scripts"], pytest_cfg.get("pythonpath"))
+        norecursedirs = set(pytest_cfg.get("norecursedirs", []))
+        self.assertIn("evals", norecursedirs)
+        self.assertIn("oracles", norecursedirs)
 
         makefile_text = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("$(PYTHON) scripts/run_checks.py", makefile_text)
+        self.assertIn("$(PYTHON) -B scripts/run_checks.py", makefile_text)
         self.assertIn("typecheck", DEFAULT_PHASES)
         self.assertEqual(
             [[sys.executable, "-m", "mypy"]],

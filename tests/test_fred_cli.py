@@ -1,6 +1,8 @@
 """Tests for scripts/fred.py CLI lifecycle grouping, parameter guidance, and table formatting."""
 
+import contextlib
 import errno
+import io
 import json
 import os
 import struct
@@ -8,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
@@ -31,7 +34,11 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
 FRED_PY = ROOT / "scripts/fred.py"
+
+import fred
 
 from tests.catalog_oracles import (
     assert_module_ast_bounds,
@@ -39,6 +46,53 @@ from tests.catalog_oracles import (
     expected_pack_skill_count,
     expected_recipe_count,
 )
+
+
+def _run_fred_in_process(
+    *args: str,
+    cwd: Path | str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    out_buf = io.StringIO()
+    err_buf = io.StringIO()
+    prev_cwd = Path.cwd()
+    target_cwd = Path(cwd).resolve() if cwd is not None else None
+    merged_env: dict[str, str] | None = None
+    if env is not None:
+        merged_env = dict(env)
+        merged_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    env_ctx: contextlib.AbstractContextManager[object] = (
+        patch.dict(os.environ, merged_env, clear=True)
+        if merged_env is not None
+        else contextlib.nullcontext()
+    )
+    returncode = 0
+    with (
+        env_ctx,
+        contextlib.redirect_stdout(out_buf),
+        contextlib.redirect_stderr(err_buf),
+    ):
+        try:
+            if target_cwd is not None:
+                os.chdir(target_cwd)
+            returncode = int(fred.main(list(args)))
+        except SystemExit as exc:
+            if exc.code is None:
+                returncode = 0
+            elif isinstance(exc.code, int):
+                returncode = exc.code
+            else:
+                print(exc.code, file=err_buf)
+                returncode = 1
+        finally:
+            if target_cwd is not None or Path.cwd() != prev_cwd:
+                os.chdir(prev_cwd)
+    return subprocess.CompletedProcess(
+        args=[sys.executable, str(FRED_PY), *args],
+        returncode=returncode,
+        stdout=out_buf.getvalue(),
+        stderr=err_buf.getvalue(),
+    )
 
 
 def _drain_pty_master(master: int) -> bytes:
@@ -66,26 +120,20 @@ class FredCLITests(unittest.TestCase):
         columns: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if not isatty:
-            return subprocess.run(
-                [sys.executable, str(FRED_PY), *args],
-                check=False,
-                capture_output=True,
-                text=True,
-                cwd=cwd,
-                env=env,
-            )
+            return _run_fred_in_process(*args, cwd=cwd, env=env)
         if pty is None:
             self.skipTest("pty module is not available on this platform")
         master, slave = pty.openpty()
         try:
             run_env = dict(os.environ if env is None else env)
+            run_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
             if columns is not None:
                 run_env["COLUMNS"] = str(columns)
                 if fcntl is not None and termios is not None:
                     winsize = struct.pack("HHHH", 24, max(1, columns), 0, 0)
                     fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
             with subprocess.Popen(
-                [sys.executable, str(FRED_PY), *args],
+                [sys.executable, "-B", str(FRED_PY), *args],
                 stdin=subprocess.DEVNULL,
                 stdout=slave,
                 stderr=slave,
@@ -101,11 +149,50 @@ class FredCLITests(unittest.TestCase):
                 os.close(slave)
             os.close(master)
         return subprocess.CompletedProcess(
-            args=[sys.executable, str(FRED_PY), *args],
+            args=[sys.executable, "-B", str(FRED_PY), *args],
             returncode=returncode,
             stdout=output.decode("utf-8", errors="replace"),
             stderr="",
         )
+
+    def test_cli_subprocess_entrypoint_smoke(self) -> None:
+        before_cwd = Path.cwd()
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch(
+                "subprocess.run",
+                side_effect=AssertionError(
+                    "non-PTY run_cli must execute fred.main in-process"
+                ),
+            ),
+        ):
+            in_proc = self.run_cli("hosts", "--json", cwd=tmp)
+        self.assertEqual(0, in_proc.returncode, in_proc.stderr)
+        self.assertEqual(before_cwd, Path.cwd())
+        self.assertIn("hosts", json.loads(in_proc.stdout))
+
+        sub_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        sub_ok = subprocess.run(
+            [sys.executable, "-B", str(FRED_PY), "hosts", "--json"],
+            cwd=ROOT,
+            env=sub_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, sub_ok.returncode, sub_ok.stderr)
+        self.assertEqual(json.loads(in_proc.stdout), json.loads(sub_ok.stdout))
+
+        sub_err = subprocess.run(
+            [sys.executable, "-B", str(FRED_PY), "verify-release", "/nonexistent.json"],
+            cwd=ROOT,
+            env=sub_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(1, sub_err.returncode)
+        self.assertIn("fred-skills:", sub_err.stderr)
 
     def test_root_help_lifecycle_groups(self):
         proc = self.run_cli("--help")
@@ -2446,12 +2533,7 @@ class FredDispatchRegistryTests(unittest.TestCase):
 
 class FredStructuredCliErrorsTests(unittest.TestCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, str(FRED_PY), *args],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        return _run_fred_in_process(*args)
 
     def assertNoTraceback(self, stderr: str) -> None:
         self.assertNotIn("Traceback (most recent call last)", stderr)

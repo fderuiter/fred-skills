@@ -72,6 +72,9 @@ python scripts/run_checks.py --phase packages
 python scripts/run_checks.py --phase docs
 python scripts/run_checks.py --phase tests
 python scripts/run_checks.py --phase tests --workers 4
+python scripts/run_checks.py --phase tests --module tests.test_toolkit -k help --fail-fast
+python scripts/run_checks.py --phase tests --fast
+python scripts/run_checks.py --phase tests --changed
 
 # Individual linting, formatting, static type, and verification commands
 ruff check .

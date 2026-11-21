@@ -17,6 +17,7 @@ import sys
 import tempfile
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -1299,6 +1300,11 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         help="Non-mutating verification mode (standard repository flag)",
     )
     parser.add_argument(
+        "--commit-safe",
+        action="store_true",
+        help="Validate CLI contracts in-process and skip duplicate repo-wide ruff/--check subprocesses during commits",
+    )
+    parser.add_argument(
         "--root",
         type=Path,
         default=ROOT,
@@ -1310,6 +1316,9 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         help="Optional specific files to check",
     )
     return parser
+
+
+_COMMIT_SAFE_MODE: ContextVar[bool] = ContextVar("_COMMIT_SAFE_MODE", default=False)
 
 
 def _parse_option_line_flags(line: str) -> set[str]:
@@ -1588,7 +1597,7 @@ def _validate_make(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
     )
     if bad:
         return False, f"Invalid make flag: {bad}"
-    if not shutil.which("make"):
+    if _COMMIT_SAFE_MODE.get() or not shutil.which("make"):
         return _validate_make_fallback(parts[1:], root)
     return _run_readonly_check(["make", "-n", *parts[1:]], root, "make dry-run")
 
@@ -1822,6 +1831,26 @@ def _execute_fred_verify_release(
     return True, ""
 
 
+def _run_fred_readonly_subcommand(
+    fred_args: list[str],
+    script_path: Path,
+    root: Path,
+) -> tuple[bool, str]:
+    """Execute read-only fred.py subcommands when not in commit-safe mode."""
+    if not fred_args:
+        return True, ""
+    norm_args = [normalize_cli_token(arg) for arg in fred_args]
+    if fred_args[0] == "search":
+        return _run_readonly_check(
+            [sys.executable, str(script_path), *norm_args],
+            root,
+            "scripts/fred.py search",
+        )
+    if fred_args[0] == "verify-release":
+        return _execute_fred_verify_release(norm_args, script_path, root)
+    return True, ""
+
+
 def _validate_python_fred(
     parts: list[str],
     script_path: Path,
@@ -1834,20 +1863,139 @@ def _validate_python_fred(
             return False, err
 
     cat_ok, cat_err = _validate_fred_catalog_flags(parts[2:], root)
-    if not cat_ok:
-        return False, cat_err
+    if not cat_ok or _COMMIT_SAFE_MODE.get():
+        return cat_ok, cat_err
 
-    if len(parts) >= 3 and parts[2] == "search":
-        search_args = [normalize_cli_token(arg) for arg in parts[2:]]
-        return _run_readonly_check(
-            [sys.executable, str(script_path), *search_args],
-            root,
-            "scripts/fred.py search",
-        )
-    if len(parts) >= 3 and parts[2] == "verify-release":
-        verify_args = [normalize_cli_token(arg) for arg in parts[2:]]
-        return _execute_fred_verify_release(verify_args, script_path, root)
-    return True, ""
+    return _run_fred_readonly_subcommand(parts[2:], script_path, root)
+
+
+def _non_negative_int(raw: str) -> int:
+    val = int(raw)
+    if val < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return val
+
+
+def _parser_check_only() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--check", action="store_true")
+    return parser
+
+
+def _parser_build_experience() -> argparse.ArgumentParser:
+    parser = _parser_check_only()
+    parser.add_argument("--stage-site", type=Path, default=None)
+    return parser
+
+
+def _parser_check_doc_links() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("files", nargs="*")
+    return parser
+
+
+def _parser_verify_workflow_actions() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--online", "--verify-remote", dest="online", action="store_true"
+    )
+    parser.add_argument("--changed-from", default=None)
+    parser.add_argument("--timeout", type=float, default=15.0)
+    parser.add_argument("--retries", type=_non_negative_int, default=2)
+    parser.add_argument("files", nargs="*")
+    return parser
+
+
+def _parser_package_skills() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--output", "-o", "--dist-dir", dest="output", type=Path)
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--verify-only", action="store_true")
+    parser.add_argument("--all", action="store_true")
+    return parser
+
+
+def _parser_run_demo() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--output", type=Path, required=True)
+    return parser
+
+
+def _parser_suite_validator() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("artifact", type=Path)
+    parser.add_argument("--schema", type=Path, default=None)
+    return parser
+
+
+def _parser_run_checks() -> argparse.ArgumentParser:
+    import run_checks as _rc_mod
+
+    return _rc_mod.build_parser()
+
+
+def _parser_bump_version() -> argparse.ArgumentParser:
+    import bump_version as _bv_mod
+
+    return _bv_mod.build_parser()
+
+
+def _parser_scaffold_skill() -> argparse.ArgumentParser:
+    import scaffold_skill as _ss_mod
+
+    return _ss_mod.build_parser()
+
+
+def _parser_check_workflow_pins() -> argparse.ArgumentParser:
+    import check_workflow_pins as _cwp_mod
+
+    return _cwp_mod.build_parser()
+
+
+def _parser_build_site() -> argparse.ArgumentParser:
+    import build_site as _bs_mod
+
+    return _bs_mod.build_parser()
+
+
+def _parser_validate_skills() -> argparse.ArgumentParser:
+    import validate_skills as _vs_mod
+
+    return _vs_mod._build_arg_parser()
+
+
+_INPROCESS_SCRIPT_PARSERS: dict[str, Callable[[], argparse.ArgumentParser]] = {
+    "verify_doc_snippets.py": _build_cli_parser,
+    "run_checks.py": _parser_run_checks,
+    "bump_version.py": _parser_bump_version,
+    "scaffold_skill.py": _parser_scaffold_skill,
+    "check_workflow_pins.py": _parser_check_workflow_pins,
+    "build_site.py": _parser_build_site,
+    "validate_skills.py": _parser_validate_skills,
+    "sync_audit_resources.py": _parser_check_only,
+    "build_catalog.py": _parser_check_only,
+    "build_experience.py": _parser_build_experience,
+    "check_doc_links.py": _parser_check_doc_links,
+    "verify_workflow_actions.py": _parser_verify_workflow_actions,
+    "package_skills.py": _parser_package_skills,
+    "run_demo.py": _parser_run_demo,
+    "validate_audit.py": _parser_suite_validator,
+    "validate_workflow.py": _parser_suite_validator,
+    "validate_architecture.py": _parser_suite_validator,
+    "validate_review.py": _parser_suite_validator,
+    "validate_testing.py": _parser_suite_validator,
+    "validate_spec.py": _parser_suite_validator,
+}
+
+
+def _resolve_inprocess_script_parser(script_arg: str) -> argparse.ArgumentParser | None:
+    """Return an in-process ArgumentParser for known repository Python scripts."""
+    name = Path(script_arg).name
+    if name == "audit_to_sarif.py" and audit_to_sarif_mod is not None:
+        return audit_to_sarif_mod.build_parser()  # type: ignore[no-any-return]
+    builder = _INPROCESS_SCRIPT_PARSERS.get(name)
+    return builder() if builder is not None else None
 
 
 def _validate_script_cli_args(
@@ -1855,13 +2003,10 @@ def _validate_script_cli_args(
     script_arg: str,
     script_args: list[str],
 ) -> tuple[bool, str]:
-    """Validate CLI flags for a repository Python script via parser or --help."""
-    if script_arg.endswith("verify_doc_snippets.py"):
-        return _parse_with_argparse(_build_cli_parser(), script_args, script_arg)
-    if script_arg.endswith("audit_to_sarif.py") and audit_to_sarif_mod is not None:
-        return _parse_with_argparse(
-            audit_to_sarif_mod.build_parser(), script_args, script_arg
-        )
+    """Validate CLI flags for a repository Python script via in-process parser or --help."""
+    inproc_parser = _resolve_inprocess_script_parser(script_arg)
+    if inproc_parser is not None:
+        return _parse_with_argparse(inproc_parser, script_args, script_arg)
     allowed = _get_help_flags([sys.executable, str(script_path), "--help"])
     if allowed is None:
         return False, f"{script_arg} --help failed"
@@ -1871,15 +2016,43 @@ def _validate_script_cli_args(
     return True, ""
 
 
+def _validate_run_checks_inprocess(
+    extra_args: list[str],
+    root: Path,
+) -> tuple[bool, str]:
+    """Validate run_checks.py CLI flags, phases, and module selectors in-process."""
+    import run_checks as _rc_mod
+
+    ok, err = _parse_with_argparse(_rc_mod.build_parser(), extra_args, "run_checks.py")
+    if not ok:
+        return False, err
+    parsed = _rc_mod.build_parser().parse_args(extra_args)
+    bad_phases = [p for p in parsed.positional_phases if p not in _rc_mod.ALL_PHASES]
+    if bad_phases:
+        return False, f"run_checks.py failed: invalid phase {bad_phases[0]!r}"
+    if parsed.modules:
+        try:
+            _rc_mod.filter_test_modules(
+                _rc_mod.discover_test_modules(root),
+                root=root,
+                modules=parsed.modules,
+            )
+        except ValueError as exc:
+            return False, f"run_checks.py failed: {exc}"
+    return True, ""
+
+
 def _validate_run_checks_script(
     parts: list[str],
     script_path: Path,
     root: Path,
 ) -> tuple[bool, str]:
-    """Validate scripts/run_checks.py invocations in dry-run mode."""
+    """Validate scripts/run_checks.py invocations in dry-run or commit-safe in-process mode."""
     extra_args = [
         normalize_cli_token(arg) for arg in parts[2:] if arg not in ("-n", "--dry-run")
     ]
+    if _COMMIT_SAFE_MODE.get():
+        return _validate_run_checks_inprocess(extra_args, root)
     return _run_readonly_check(
         [sys.executable, str(script_path), "--dry-run", *extra_args],
         root,
@@ -1894,7 +2067,7 @@ def _try_direct_readonly_script(
     root: Path,
 ) -> tuple[bool, str] | None:
     """Execute argparse-backed non-mutating scripts directly when safe."""
-    if script_arg.endswith("verify_doc_snippets.py"):
+    if _COMMIT_SAFE_MODE.get() or script_arg.endswith("verify_doc_snippets.py"):
         return None
     norm_args = [normalize_cli_token(arg) for arg in raw_args]
     if "--check" in norm_args:
@@ -1912,6 +2085,34 @@ def _try_direct_readonly_script(
     return None
 
 
+def _validate_bump_version_script(
+    parts: list[str],
+    script_path: Path,
+    root: Path,
+) -> tuple[bool, str]:
+    """Validate bump_version.py in commit-safe parser mode or read-only subprocess mode."""
+    if _COMMIT_SAFE_MODE.get():
+        return _validate_script_cli_args(script_path, parts[1], parts[2:])
+    norm_args = [normalize_cli_token(arg) for arg in parts[2:]]
+    if "--check" in norm_args:
+        root_args = (
+            ["--root", str(root)]
+            if "--root" not in norm_args and (root / "VERSION").is_file()
+            else []
+        )
+        return _run_readonly_check(
+            [sys.executable, str(script_path), *root_args, *norm_args],
+            root,
+            "bump_version.py --check",
+        )
+    extra_args = [arg for arg in norm_args if arg != "--dry-run"]
+    return _run_readonly_check(
+        [sys.executable, str(script_path), "--dry-run", *extra_args],
+        root,
+        "bump_version.py",
+    )
+
+
 def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
     """Validate python script invocations and CLI flags safely in dry-run mode."""
     script_arg = parts[1]
@@ -1926,24 +2127,7 @@ def _validate_python_script(parts: list[str], root: Path) -> tuple[bool, str]:
         return _validate_run_checks_script(parts, script_path, root)
 
     if script_arg.endswith("bump_version.py"):
-        norm_args = [normalize_cli_token(arg) for arg in parts[2:]]
-        if "--check" in norm_args:
-            root_args = (
-                ["--root", str(root)]
-                if "--root" not in norm_args and (root / "VERSION").is_file()
-                else []
-            )
-            return _run_readonly_check(
-                [sys.executable, str(script_path), *root_args, *norm_args],
-                root,
-                "bump_version.py --check",
-            )
-        extra_args = [arg for arg in norm_args if arg != "--dry-run"]
-        return _run_readonly_check(
-            [sys.executable, str(script_path), "--dry-run", *extra_args],
-            root,
-            "bump_version.py",
-        )
+        return _validate_bump_version_script(parts, script_path, root)
 
     direct = _try_direct_readonly_script(script_path, script_arg, parts[2:], root)
     if direct is not None:
@@ -2000,7 +2184,11 @@ def _validate_ruff(parts: list[str], root: Path, _cmd: str) -> tuple[bool, str]:
         return (False, f"Invalid ruff flag: {bad}") if bad else (True, "")
     if subcmd not in RUFF_SUBCOMMANDS:
         return False, f"Invalid ruff subcommand: {subcmd}"
-    if _is_safe_ruff_check(parts) and shutil.which("ruff"):
+    if (
+        not _COMMIT_SAFE_MODE.get()
+        and _is_safe_ruff_check(parts)
+        and shutil.which("ruff")
+    ):
         return _run_readonly_check(parts, root, "ruff check")
     return _validate_ruff_flags(subcmd, parts[2:])
 
@@ -2755,6 +2943,8 @@ def _execute_single_segment(segment: str, root: Path) -> tuple[bool, str]:
 def execute_snippet_command(
     cmd: str,
     root: Path = ROOT,
+    *,
+    commit_safe: bool | None = None,
 ) -> tuple[bool, str]:
     """Execute or dry-run validate a single documented shell command.
 
@@ -2769,10 +2959,15 @@ def execute_snippet_command(
     if not segments:
         return True, ""
 
-    for segment in segments:
-        ok, msg = _execute_single_segment(segment, root)
-        if not ok:
-            return False, msg
+    effective_safe = _COMMIT_SAFE_MODE.get() if commit_safe is None else commit_safe
+    token = _COMMIT_SAFE_MODE.set(effective_safe)
+    try:
+        for segment in segments:
+            ok, msg = _execute_single_segment(segment, root)
+            if not ok:
+                return False, msg
+    finally:
+        _COMMIT_SAFE_MODE.reset(token)
 
     return True, ""
 
@@ -3260,8 +3455,21 @@ def _should_check_toolkit(
 def verify_all_snippets(
     root: Path = ROOT,
     files: list[str] | None = None,
+    *,
+    commit_safe: bool = False,
 ) -> list[str]:
     """Verify and execute snippets across documentation files."""
+    token = _COMMIT_SAFE_MODE.set(commit_safe)
+    try:
+        return _verify_all_snippets_impl(root=root, files=files)
+    finally:
+        _COMMIT_SAFE_MODE.reset(token)
+
+
+def _verify_all_snippets_impl(
+    root: Path = ROOT,
+    files: list[str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     target_rel_paths = (
         {_normalize_target_path(f, root=root) for f in files}
@@ -3332,7 +3540,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     target_root = args.root.resolve() if args.root is not None else ROOT
     try:
-        errors = verify_all_snippets(root=target_root, files=args.files or None)
+        errors = verify_all_snippets(
+            root=target_root,
+            files=args.files or None,
+            commit_safe=args.commit_safe,
+        )
     except (FredCliError, subprocess.TimeoutExpired) as exc:
         _print_cli_exception(exc)
         return 1
