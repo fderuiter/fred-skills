@@ -1856,6 +1856,61 @@ class InstallationTests(unittest.TestCase):
         )
         self.assertEqual(0, proc.returncode, proc.stderr)
 
+    def test_detect_host_fails_closed_on_corrupt_or_unreadable_receipts(self) -> None:
+        dest = self.root / "corrupt_receipt_project"
+        (dest / ".claude").mkdir(parents=True)
+
+        # Absent .fred-skills and empty state dir succeed cleanly
+        self.assertEqual("claude-code", installation.detect_host(dest))
+        state_dir = dest / ".fred-skills/claude-code-project"
+        state_dir.mkdir(parents=True)
+        self.assertEqual("claude-code", installation.detect_host(dest))
+
+        # Corrupt named receipt.json and nested receipt*.json both raise FredCliError (ValueError)
+        orig_read_text = Path.read_text
+        for rel_receipt in (
+            "claude-code-project/receipt.json",
+            "nested/receipt-extra.json",
+        ):
+            receipt_path = dest / ".fred-skills" / rel_receipt
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            for payload, expected_code in (
+                (b"\xff\xfe\x00", "invalid_encoding"),
+                (b"{corrupt", "invalid_json"),
+                (b"[]", "invalid_json_root"),
+            ):
+                receipt_path.write_bytes(payload)
+                with self.assertRaises(FredCliError) as exc_ctx:
+                    installation.detect_host(dest)
+                self.assertIsInstance(exc_ctx.exception, ValueError)
+                self.assertEqual(expected_code, exc_ctx.exception.code)
+
+            receipt_path.write_text('{"host": "claude-code"}\n', encoding="utf-8")
+            receipt_resolved = receipt_path.resolve()
+
+            def deny_receipt(
+                self_path: Path,
+                *args: object,
+                _target: Path = receipt_resolved,
+                **kwargs: object,
+            ) -> str:
+                if self_path.resolve() == _target:
+                    raise PermissionError("receipt permission denied")
+                return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.object(
+                    Path, "read_text", autospec=True, side_effect=deny_receipt
+                ),
+                self.assertRaises(FredCliError) as io_ctx,
+            ):
+                installation.detect_host(dest)
+            self.assertIsInstance(io_ctx.exception, ValueError)
+            self.assertEqual("io_error", io_ctx.exception.code)
+            receipt_path.unlink()
+
+        self.assertEqual("claude-code", installation.detect_host(dest))
+
 
 if __name__ == "__main__":
     unittest.main()

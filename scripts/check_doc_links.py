@@ -14,9 +14,11 @@ sys.dont_write_bytecode = True
 from _markdown_utils import strip_fenced_code_blocks
 from skill_tools import (
     ROOT,
+    FredCliError,
     extract_document_anchors,
     extract_link_fragment,
     extract_relative_links,
+    read_utf8_text,
     resolve_relative_link_target,
 )
 
@@ -46,21 +48,46 @@ def _strip_non_link_blocks(content: str, is_html: bool) -> str:
     return strip_fenced_code_blocks(content)
 
 
+def _format_display_rel(path: Path, display_root: Path) -> str:
+    try:
+        resolved_path = path.resolve()
+        return resolved_path.relative_to(display_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.as_posix()
+
+
+def _format_doc_read_error(
+    path: Path,
+    display_root: Path,
+    exc: FredCliError,
+) -> str:
+    rel = _format_display_rel(path, display_root)
+    return f"{rel}: {exc.message}"
+
+
 def _get_cached_anchors(
     target_path: Path,
     cache: dict[Path, set[str]],
-) -> set[str] | None:
+    *,
+    display_root: Path = ROOT,
+    read_errors: dict[Path, str] | None = None,
+) -> tuple[set[str] | None, str | None]:
     """Load and cache valid #fragment anchors for a Markdown or HTML file."""
     resolved = target_path.resolve()
     if resolved in cache:
-        return cache[resolved]
+        return cache[resolved], None
+    if read_errors is not None and resolved in read_errors:
+        return None, read_errors[resolved]
     try:
-        text = resolved.read_text(encoding="utf-8")
-    except OSError:
-        return None
+        text = read_utf8_text(resolved, label="Documentation file")
+    except FredCliError as exc:
+        err = _format_doc_read_error(resolved, display_root, exc)
+        if read_errors is not None:
+            read_errors[resolved] = err
+        return None, err
     anchors = extract_document_anchors(text, suffix=resolved.suffix)
     cache[resolved] = anchors
-    return anchors
+    return anchors, None
 
 
 def _infer_link_policy(
@@ -102,16 +129,17 @@ def check_file_links(
     *,
     boundary_dir: Path | None = None,
     reject_md_links: bool | None = None,
+    anchor_read_errors: dict[Path, str] | None = None,
 ) -> list[str]:
     """Check that all relative links and #fragment anchors in a markdown or HTML file resolve cleanly."""
     errors: list[str] = []
+    resolved_root = root.resolve()
     try:
-        content = file_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return [f"{file_path}: Cannot read file: {exc}"]
+        content = read_utf8_text(file_path, label="Documentation file")
+    except FredCliError as exc:
+        return [_format_doc_read_error(file_path, resolved_root, exc)]
 
     resolved_file = file_path.resolve()
-    resolved_root = root.resolve()
     file_dir = resolved_file.parent
     is_html = resolved_file.suffix.lower() == ".html"
     effective_boundary, effective_reject_md = _infer_link_policy(
@@ -121,6 +149,7 @@ def check_file_links(
         reject_md_links=reject_md_links,
     )
     active_cache = anchor_cache if anchor_cache is not None else {}
+    active_read_errors = anchor_read_errors if anchor_read_errors is not None else {}
     active_cache.setdefault(
         resolved_file, extract_document_anchors(content, suffix=resolved_file.suffix)
     )
@@ -145,8 +174,15 @@ def check_file_links(
         resolved = resolve_relative_link_target(target, file_dir)
         if resolved is None:
             if fragment is not None:
-                self_anchors = _get_cached_anchors(resolved_file, active_cache)
-                if self_anchors is not None and fragment not in self_anchors:
+                self_anchors, self_err = _get_cached_anchors(
+                    resolved_file,
+                    active_cache,
+                    display_root=resolved_root,
+                    read_errors=active_read_errors,
+                )
+                if self_err is not None:
+                    errors.append(self_err)
+                elif self_anchors is not None and fragment not in self_anchors:
                     errors.append(
                         f"{rel_file.as_posix()}: Broken anchor link '{target}' -> anchor '#{fragment}' does not exist"
                     )
@@ -186,12 +222,19 @@ def check_file_links(
                 anchor_target.is_file()
                 and anchor_target.suffix.lower() in DOC_EXTENSIONS
             ):
-                target_anchors = _get_cached_anchors(anchor_target, active_cache)
-                if target_anchors is not None and fragment not in target_anchors:
+                target_anchors, target_err = _get_cached_anchors(
+                    anchor_target,
+                    active_cache,
+                    display_root=resolved_root,
+                    read_errors=active_read_errors,
+                )
+                if target_err is not None:
+                    errors.append(target_err)
+                elif target_anchors is not None and fragment not in target_anchors:
                     errors.append(
                         f"{rel_file.as_posix()}: Broken anchor link '{target}' -> anchor '#{fragment}' does not exist"
                     )
-    return errors
+    return list(dict.fromkeys(errors))
 
 
 def _collect_dir_doc_files(directory: Path) -> list[Path]:
@@ -208,15 +251,20 @@ def _collect_dir_doc_files(directory: Path) -> list[Path]:
     return collected
 
 
-def _collect_inbound_link_targets(scan_files: list[Path]) -> set[Path]:
+def _collect_inbound_link_targets(
+    scan_files: list[Path],
+    display_root: Path = ROOT,
+) -> tuple[set[Path], list[str]]:
     """Return resolved filesystem paths targeted by relative links across scan_files."""
     inbound_targets: set[Path] = set()
+    read_errors: list[str] = []
     for src_file in scan_files:
         if not src_file.is_file():
             continue
         try:
-            content = src_file.read_text(encoding="utf-8")
-        except OSError:
+            content = read_utf8_text(src_file, label="Documentation file")
+        except FredCliError as exc:
+            read_errors.append(_format_doc_read_error(src_file, display_root, exc))
             continue
         resolved_src = src_file.resolve()
         is_html = resolved_src.suffix.lower() == ".html"
@@ -228,15 +276,7 @@ def _collect_inbound_link_targets(scan_files: list[Path]) -> set[Path]:
             inbound_targets.add(resolved_target)
             if resolved_target.is_dir() and (resolved_target / "index.html").is_file():
                 inbound_targets.add((resolved_target / "index.html").resolve())
-    return inbound_targets
-
-
-def _format_display_rel(path: Path, display_root: Path) -> str:
-    resolved_path = path.resolve()
-    try:
-        return resolved_path.relative_to(display_root.resolve()).as_posix()
-    except ValueError:
-        return path.as_posix()
+    return inbound_targets, read_errors
 
 
 def _check_orphan_docs_guides(
@@ -247,8 +287,10 @@ def _check_orphan_docs_guides(
     site_root: Path | None = None,
 ) -> list[str]:
     """Verify documentation files in docs_dir (and optional staged site_root) have inbound links."""
-    inbound_targets = _collect_inbound_link_targets(scan_files)
-    orphan_errors: list[str] = []
+    inbound_targets, orphan_errors = _collect_inbound_link_targets(
+        scan_files,
+        display_root=display_root,
+    )
 
     if docs_dir.is_dir():
         for guide_path in sorted(docs_dir.rglob("*")):
@@ -343,6 +385,7 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
             )
 
     anchor_cache: dict[Path, set[str]] = {}
+    anchor_read_errors: dict[Path, str] = {}
     for doc_file in sorted(file_policies):
         if not doc_file.is_file():
             continue
@@ -354,6 +397,7 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
                 anchor_cache=anchor_cache,
                 boundary_dir=b_dir,
                 reject_md_links=reject_md,
+                anchor_read_errors=anchor_read_errors,
             )
         )
 
@@ -367,7 +411,7 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
             )
         )
 
-    return errors
+    return list(dict.fromkeys(errors))
 
 
 def main() -> int:

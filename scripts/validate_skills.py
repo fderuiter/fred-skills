@@ -52,7 +52,12 @@ from _markdown_utils import (
     extract_noncode_lines as _extract_noncode_lines,
 )
 from fredlib import vetting
-from fredlib.common import FredCliError, atomic_json, read_json_object
+from fredlib.common import (
+    FredCliError,
+    atomic_json,
+    read_json_object,
+    read_utf8_text,
+)
 from skill_tools import (
     ROOT,
     estimate_tokens,
@@ -357,8 +362,8 @@ def _inspect_skill_md_raw_bytes(skill_md_path: Path) -> list[str]:
         return []
     try:
         raw_bytes = skill_md_path.read_bytes()
-    except OSError:
-        return []
+    except OSError as exc:
+        return [f"SKILL.md: {exc}"]
     if b"\x00" in raw_bytes:
         return ["Binary file (NUL byte) in skill package: SKILL.md"]
     try:
@@ -591,7 +596,13 @@ def _validate_scenario_semantics(
     package: Path, skill_name: str, scenarios: list[object]
 ) -> list[str]:
     problems: list[str] = []
-    suite_name, siblings = infer_suite_and_siblings(skill_name, package.parent.parent)
+    try:
+        suite_name, siblings = infer_suite_and_siblings(
+            skill_name, package.parent.parent
+        )
+    except (FredCliError, OSError, ValueError, TypeError, KeyError) as exc:
+        problems.append(f"Invalid suite manifest: {exc}")
+        suite_name, siblings = infer_suite_name(skill_name), set()
     non_routing_prompts: set[str] = set()
     routing_scenarios: list[dict[str, Any]] = []
 
@@ -1873,22 +1884,48 @@ def _check_scenarios_against_schema(
     return []
 
 
+def _load_evaluation_scenarios_payload(
+    scenarios_path: Path,
+    cached_texts: dict[Path, str],
+) -> tuple[Any, list[str]]:
+    if scenarios_path.is_symlink():
+        return None, [
+            "Symlink breaks standalone packaging: references/evaluation-scenarios.json"
+        ]
+    if not scenarios_path.exists():
+        return None, [
+            "Missing evaluation scenarios: references/evaluation-scenarios.json"
+        ]
+    try:
+        raw_scenarios = read_utf8_text(
+            scenarios_path,
+            label="Evaluation scenarios 'references/evaluation-scenarios.json'",
+        )
+    except FredCliError as exc:
+        if exc.code == "invalid_encoding":
+            return None, [
+                "Binary or non-UTF-8 file in skill package: references/evaluation-scenarios.json"
+            ]
+        return None, [f"references/evaluation-scenarios.json: {exc.__cause__ or exc}"]
+    cached_texts[scenarios_path] = raw_scenarios
+    try:
+        return json.loads(raw_scenarios), []
+    except json.JSONDecodeError as exc:
+        return None, [f"references/evaluation-scenarios.json: {exc}"]
+
+
 def _validate_evaluation_scenarios(
     package: Path,
     skill_name: str,
     scenario_schema: dict | None,
     cached_texts: dict[Path, str],
 ) -> list[str]:
-    scenarios_path = package / "references/evaluation-scenarios.json"
-    if not scenarios_path.is_file():
-        return ["Missing evaluation scenarios: references/evaluation-scenarios.json"]
-    try:
-        raw_scenarios = scenarios_path.read_text(encoding="utf-8")
-        if not scenarios_path.is_symlink():
-            cached_texts[scenarios_path] = raw_scenarios
-        scenarios_data = json.loads(raw_scenarios)
-    except (OSError, ValueError):
-        return []  # Malformed JSON or read error is caught during package file traversal
+    scenarios_data, load_errors = _load_evaluation_scenarios_payload(
+        package / "references/evaluation-scenarios.json",
+        cached_texts,
+    )
+    if load_errors:
+        return load_errors
 
     active_schema = scenario_schema or get_scenario_schema()
     if active_schema is None:
@@ -2235,11 +2272,15 @@ def _scan_package_files(
                 valid_closed_schemas=valid_closed_schemas,
             )
         )
-    for chain in find_deep_reference_chains(package, max_hops=1):
+    chain_read_errors: list[str] = []
+    for chain in find_deep_reference_chains(
+        package, max_hops=1, read_errors=chain_read_errors
+    ):
         errors.append(
             f"Reference chain exceeds 1-hop depth limit from SKILL.md: {chain}"
         )
-    return errors, valid_closed_schemas
+    errors.extend(chain_read_errors)
+    return list(dict.fromkeys(errors)), valid_closed_schemas
 
 
 def _validate_ui_short_description(short: object) -> tuple[list[str], str | None]:
@@ -2361,8 +2402,13 @@ def _inspect_skill_package(
         metadata, body = read_frontmatter(skill_md_path)
     except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         _, fallback_schemas = _discover_output_schemas(package)
+        extra_errors = (
+            []
+            if isinstance(exc, (OSError, UnicodeDecodeError)) and raw_skill_errors
+            else [str(exc)]
+        )
         return _ParsedSkillPackage(
-            errors=[*raw_skill_errors, str(exc)],
+            errors=list(dict.fromkeys([*raw_skill_errors, *extra_errors])),
             output_schemas=[
                 p.relative_to(package).as_posix() for p in fallback_schemas
             ],
@@ -2445,7 +2491,7 @@ def _inspect_skill_package(
     )
     raw_description = metadata.get("description")
     return _ParsedSkillPackage(
-        errors=errors,
+        errors=list(dict.fromkeys(errors)),
         output_schemas=[p.relative_to(package).as_posix() for p in output_schemas],
         has_output_schema=has_output_schema,
         worked_example_blocks=worked_blocks,
@@ -2967,7 +3013,10 @@ def _description_content_tokens(description: str) -> frozenset[str]:
 
 
 def _resolve_package_suites(root: Path, pkg_names: Sequence[str]) -> dict[str, str]:
-    configured = skill_to_suite_map(root)
+    try:
+        configured = skill_to_suite_map(root)
+    except (FredCliError, OSError, ValueError, TypeError, KeyError):
+        configured = {}
     known_suites = tuple(dict.fromkeys(configured.values()))
     return {
         pkg: configured.get(pkg) or infer_suite_name(pkg, known_suites)
@@ -3059,12 +3108,13 @@ def _curated_pack_skills(packs: Mapping[str, object]) -> set[str]:
 def _validate_curated_pack_coverage(
     root: Path, packs: Mapping[str, object]
 ) -> list[str]:
-    if not packs or not (root / "catalog/suites.json").is_file():
+    suites_path = root / "catalog/suites.json"
+    if not packs or (not suites_path.exists() and not suites_path.is_symlink()):
         return []
     try:
         members = sorted(suite_members(root))
-    except (OSError, ValueError, KeyError):
-        return []
+    except (FredCliError, OSError, ValueError, TypeError, KeyError) as exc:
+        return [f"Invalid suite manifest: {exc}"]
     covered = _curated_pack_skills(packs)
     return [
         f"Skill '{name}' in catalog/suites.json must belong to at least one curated pack in catalog/packs.json"
@@ -3114,7 +3164,8 @@ def _validate_routing_and_budget_gates(
 
 
 def _validate_suite_manifest(root: Path) -> list[str]:
-    if not (root / "catalog/suites.json").is_file():
+    suites_path = root / "catalog/suites.json"
+    if not suites_path.exists() and not suites_path.is_symlink():
         return []
     problems: list[str] = []
     try:
@@ -3127,7 +3178,7 @@ def _validate_suite_manifest(root: Path) -> list[str]:
                 problems.append(
                     f"{name}: Suite skill missing required UI metadata: agents/openai.yaml"
                 )
-    except (OSError, ValueError, KeyError) as exc:
+    except (FredCliError, OSError, ValueError, TypeError, KeyError) as exc:
         problems.append(f"Invalid suite manifest: {exc}")
     problems.extend(_validate_root_cursor_manifest(root))
     return problems
@@ -3226,14 +3277,14 @@ class _DocExpectations:
 def _load_optional_json_dict(
     path: Path, rel_label: str
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    if not path.is_file():
-        return None, []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return None, [f"{rel_label}: {exc}"]
-    if not isinstance(data, dict):
-        return None, [f"{rel_label}: expected JSON object"]
+        data = read_json_object(
+            path,
+            label=f"Catalog '{rel_label}'",
+            optional=True,
+        )
+    except FredCliError as exc:
+        return None, [f"{rel_label}: {exc.message}"]
     return data, []
 
 
@@ -3916,7 +3967,7 @@ def validate_with_telemetry(
         method_dup_pct=method_dup_pct,
         duration=duration,
     )
-    return problems, telemetry
+    return list(dict.fromkeys(problems)), telemetry
 
 
 def validate(root: Path = ROOT) -> list[str]:

@@ -13,7 +13,13 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from skill_tools import git_blob_bytes, git_tag_exists, run_local_git
+from skill_tools import (
+    FredCliError,
+    git_blob_bytes,
+    git_tag_exists,
+    read_utf8_text,
+    run_local_git,
+)
 
 __all__ = [
     "CORE_INVARIANT_DOCS",
@@ -128,22 +134,26 @@ def discover_untagged_release_notes(
 ) -> list[str]:
     """Return ['docs/release-notes-<VERSION>.md'] when VERSION is untagged and present."""
     version_path = root / "VERSION"
-    if not version_path.is_file():
-        if fallback_root is None or not (fallback_root / "VERSION").is_file():
+    if not version_path.exists() and not version_path.is_symlink():
+        if fallback_root is None:
             return []
-        version_path = fallback_root / "VERSION"
-    ver = version_path.read_text(encoding="utf-8").strip()
+        fb_path = fallback_root / "VERSION"
+        if not fb_path.exists() and not fb_path.is_symlink():
+            return []
+        version_path = fb_path
+    raw_ver = read_utf8_text(version_path, label="VERSION file", optional=True)
+    ver = raw_ver.strip() if raw_ver is not None else ""
     if not ver or git_tag_exists(root, f"v{ver}"):
         return []
     candidate = f"docs/release-notes-{ver}.md"
-    return [candidate] if (root / candidate).is_file() else []
+    cand_path = root / candidate
+    return [candidate] if (cand_path.exists() or cand_path.is_symlink()) else []
 
 
 def _read_active_version(root: Path) -> str:
     version_path = root / "VERSION"
-    if not version_path.is_file():
-        return ""
-    return version_path.read_text(encoding="utf-8").strip()
+    raw_ver = read_utf8_text(version_path, label="VERSION file", optional=True)
+    return raw_ver.strip() if raw_ver is not None else ""
 
 
 def list_local_v_tag_versions(root: Path) -> set[str]:
@@ -188,7 +198,15 @@ def check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
                 f"file missing or symlink after refs/tags/v{tag_ver}"
             )
         ]
-    if doc_path.read_bytes() != blob_bytes:
+    try:
+        actual_bytes = doc_path.read_bytes()
+    except OSError as exc:
+        raise FredCliError(
+            f"Unable to read release notes '{doc_path}': {exc}",
+            code="io_error",
+            hint=f"Check file permissions and readability for '{doc_path}'.",
+        ) from exc
+    if actual_bytes != blob_bytes:
         return [
             (
                 f"{rel_path}: tagged release notes immutability violation; "

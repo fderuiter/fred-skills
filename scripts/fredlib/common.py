@@ -36,6 +36,7 @@ from skill_tools import (
     is_audit_ledger_shape,
     read_json_object,
     read_suites_catalog,
+    read_utf8_text,
     recipe_to_suite_map,
     skill_to_suite_map,
     suite_for_skills,
@@ -48,6 +49,7 @@ _DOMAIN_KIND_KEY_SETS = DOMAIN_KIND_KEY_SETS
 _SKILL_SUITE_PREFIXES = SKILL_SUITE_PREFIXES
 _non_fenced_lines = non_fenced_lines
 _parse_reference_link_definition = parse_reference_link_definition
+_read_utf8_text = read_utf8_text
 
 _DEFAULT_SUITE_CONTRACTS: dict[str, dict[str, Any]] = {
     "repository-audits": {
@@ -352,15 +354,13 @@ def _suite_shared_assets(suite_name: str, root: Path = ROOT) -> list[tuple[Path,
         return []
     assets: list[tuple[Path, Path]] = []
     for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
-        try:
-            manifest = read_json_object(
-                manifest_path,
-                label="Shared resource manifest 'manifest.json'",
-            )
-        except FredCliError as exc:
-            if exc.code == "missing_file":
-                continue
-            raise
+        manifest = read_json_object(
+            manifest_path,
+            label="Shared resource manifest 'manifest.json'",
+            optional=True,
+        )
+        if manifest is None:
+            continue
         if manifest.get("suite", "repository-audits") != suite_name:
             continue
         for raw_entry in manifest.get("files", []):

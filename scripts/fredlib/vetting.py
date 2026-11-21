@@ -15,7 +15,13 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
-from .common import ROOT, non_fenced_lines, parse_reference_link_definition
+from .common import (
+    ROOT,
+    FredCliError,
+    non_fenced_lines,
+    parse_reference_link_definition,
+    read_utf8_text,
+)
 
 __all__ = [
     "SKILL_CAPABILITY_ALLOWLIST",
@@ -1878,14 +1884,46 @@ def _vet_js_ts_source(
     return findings
 
 
-def _has_shebang(path: Path) -> bool:
-    if path.is_symlink() or not path.is_file():
-        return False
+def _probe_shebang(
+    path: Path, *, root: Path | None = None
+) -> tuple[bool, list[dict[str, Any]]]:
+    file_label = _format_file_label(path, root)
+    if path.is_symlink():
+        return (
+            False,
+            [
+                _finding(
+                    file_label,
+                    1,
+                    "symlink-file",
+                    "filesystem",
+                    f"Symlinked file is not permitted: {file_label}",
+                )
+            ],
+        )
+    if not path.is_file():
+        return False, []
     try:
         with path.open("rb") as handle:
-            return handle.read(2) == b"#!"
-    except OSError:
-        return False
+            return handle.read(2) == b"#!", []
+    except OSError as exc:
+        return (
+            False,
+            [
+                _finding(
+                    file_label,
+                    1,
+                    "unreadable-file",
+                    "filesystem",
+                    f"Unable to read file '{file_label}': {exc}",
+                )
+            ],
+        )
+
+
+def _has_shebang(path: Path) -> bool:
+    has_sb, probe_findings = _probe_shebang(path)
+    return has_sb and not probe_findings
 
 
 def vet_script(
@@ -1922,6 +1960,17 @@ def vet_script(
                 "binary-script",
                 "script",
                 "Non-UTF-8 or binary executable in scripts directory is not permitted",
+            ),
+        ]
+    except OSError as exc:
+        return [
+            *findings,
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read script file '{file_label}': {exc}",
             ),
         ]
 
@@ -1982,7 +2031,7 @@ def _scan_hidden_unicode_bytes_or_text(
 ) -> list[dict[str, Any]]:
     try:
         text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+    except (OSError, UnicodeDecodeError):
         return []
     return _scan_hidden_unicode_text(text, file_label, category=category)
 
@@ -2292,6 +2341,16 @@ def _vet_svg_file(path: Path, *, root: Path | None = None) -> list[dict[str, Any
                 "medium",
             )
         ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read SVG file '{file_label}': {exc}",
+            )
+        ]
     return _vet_svg_text(svg_text, file_label)
 
 
@@ -2446,6 +2505,16 @@ def vet_markdown(path: Path, *, root: Path | None = None) -> list[dict[str, Any]
                     "Instruction file is not valid UTF-8",
                 ),
                 "medium",
+            )
+        ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read instruction file '{file_label}': {exc}",
             )
         ]
     return _vet_markdown_text(text, file_label)
@@ -2614,6 +2683,18 @@ def _resolve_bounded_local_path(
     return candidate, []
 
 
+def _record_shim_target_findings(
+    target_resolved: Path,
+    target_label: str,
+    findings: list[dict[str, Any]],
+    next_ctx: _RepoScanContext,
+) -> int:
+    next_ctx.vetted_md_targets.add(target_resolved)
+    added = 1 if _mark_config_scanned(next_ctx, target_label) else 0
+    next_ctx.findings.extend(findings)
+    return added
+
+
 def _follow_markdown_shim_target(target_path: Path, next_ctx: _RepoScanContext) -> int:
     target_resolved = target_path.resolve()
     if (
@@ -2623,21 +2704,67 @@ def _follow_markdown_shim_target(target_path: Path, next_ctx: _RepoScanContext) 
         return 0
     suffix = target_path.suffix.lower()
     target_label = _format_file_label(target_path, next_ctx.repo_root)
-    if suffix in _SCRIPT_SUFFIXES or _has_shebang(target_path):
-        next_ctx.vetted_md_targets.add(target_resolved)
-        added = 1 if _mark_config_scanned(next_ctx, target_label) else 0
-        next_ctx.findings.extend(
+    if suffix in _SCRIPT_SUFFIXES:
+        return _record_shim_target_findings(
+            target_resolved,
+            target_label,
             vet_script(
                 target_path, next_ctx.allowed_capabilities, root=next_ctx.repo_root
-            )
+            ),
+            next_ctx,
         )
-        return added
     if suffix == ".svg":
-        next_ctx.vetted_md_targets.add(target_resolved)
-        added = 1 if _mark_config_scanned(next_ctx, target_label) else 0
-        next_ctx.findings.extend(_vet_svg_file(target_path, root=next_ctx.repo_root))
-        return added
+        return _record_shim_target_findings(
+            target_resolved,
+            target_label,
+            _vet_svg_file(target_path, root=next_ctx.repo_root),
+            next_ctx,
+        )
+    is_shebang, probe_findings = _probe_shebang(target_path, root=next_ctx.repo_root)
+    if probe_findings:
+        return _record_shim_target_findings(
+            target_resolved, target_label, probe_findings, next_ctx
+        )
+    if is_shebang:
+        return _record_shim_target_findings(
+            target_resolved,
+            target_label,
+            vet_script(
+                target_path, next_ctx.allowed_capabilities, root=next_ctx.repo_root
+            ),
+            next_ctx,
+        )
     return _vet_markdown_with_shims(target_path, next_ctx)
+
+
+def _read_instruction_text(
+    inst_path: Path, rel_label: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    try:
+        return inst_path.read_text(encoding="utf-8"), []
+    except UnicodeDecodeError:
+        return None, [
+            _with_severity(
+                _finding(
+                    rel_label,
+                    1,
+                    "invalid-encoding",
+                    "prompt",
+                    "Instruction file is not valid UTF-8",
+                ),
+                "medium",
+            )
+        ]
+    except OSError as exc:
+        return None, [
+            _finding(
+                rel_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read instruction file '{rel_label}': {exc}",
+            )
+        ]
 
 
 def _vet_markdown_with_shims(inst_path: Path, ctx: _RepoScanContext) -> int:
@@ -2677,21 +2804,9 @@ def _vet_markdown_with_shims(inst_path: Path, ctx: _RepoScanContext) -> int:
 
     ctx.vetted_md_targets.add(resolved)
     scanned_count = 1 if _mark_config_scanned(ctx, rel_label) else 0
-    try:
-        text = inst_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        ctx.findings.append(
-            _with_severity(
-                _finding(
-                    rel_label,
-                    1,
-                    "invalid-encoding",
-                    "prompt",
-                    "Instruction file is not valid UTF-8",
-                ),
-                "medium",
-            )
-        )
+    text, read_findings = _read_instruction_text(inst_path, rel_label)
+    if text is None:
+        ctx.findings.extend(read_findings)
         return scanned_count
 
     ctx.findings.extend(_vet_markdown_text(text, rel_label))
@@ -2937,6 +3052,36 @@ def _inspect_mcp_server_entry(
     return findings
 
 
+def _read_mcp_config_text(
+    path: Path, file_label: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    try:
+        return path.read_text(encoding="utf-8"), []
+    except UnicodeDecodeError:
+        return None, [
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-encoding",
+                    "agent-config",
+                    "MCP configuration file is not valid UTF-8",
+                ),
+                "medium",
+            )
+        ]
+    except OSError as exc:
+        return None, [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read MCP configuration file '{file_label}': {exc}",
+            )
+        ]
+
+
 def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, Any]]:
     """Inspect an MCP configuration JSON file for unsafe commands, transports, or secrets."""
     file_label = _format_file_label(path, root)
@@ -2953,21 +3098,9 @@ def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, An
     if not path.is_file():
         raise ValueError(f"MCP configuration file not found: {path}")
 
-    try:
-        raw_text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return [
-            _with_severity(
-                _finding(
-                    file_label,
-                    1,
-                    "invalid-encoding",
-                    "agent-config",
-                    "MCP configuration file is not valid UTF-8",
-                ),
-                "medium",
-            )
-        ]
+    raw_text, read_findings = _read_mcp_config_text(path, file_label)
+    if raw_text is None:
+        return read_findings
 
     findings = _scan_hidden_unicode_text(raw_text, file_label, category="agent-config")
     try:
@@ -3325,6 +3458,16 @@ def _vet_agent_yaml(
                     "YAML configuration file is not valid UTF-8",
                 ),
                 "medium",
+            )
+        ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read YAML configuration file '{file_label}': {exc}",
             )
         ]
     return _vet_agent_yaml_text(
@@ -3892,6 +4035,36 @@ def _inspect_manifest_object(
     return findings
 
 
+def _read_host_manifest_text(
+    path: Path, file_label: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    try:
+        return path.read_text(encoding="utf-8"), []
+    except UnicodeDecodeError:
+        return None, [
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-encoding",
+                    "agent-config",
+                    "Host manifest file is not valid UTF-8",
+                ),
+                "medium",
+            )
+        ]
+    except OSError as exc:
+        return None, [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read host manifest file '{file_label}': {exc}",
+            )
+        ]
+
+
 def _vet_host_json_manifest(
     path: Path,
     *,
@@ -3916,24 +4089,9 @@ def _vet_host_json_manifest(
     if not path.is_file():
         raise ValueError(f"Host manifest file not found: {path}")
 
-    try:
-        raw_text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return (
-            [
-                _with_severity(
-                    _finding(
-                        file_label,
-                        1,
-                        "invalid-encoding",
-                        "agent-config",
-                        "Host manifest file is not valid UTF-8",
-                    ),
-                    "medium",
-                )
-            ],
-            refs,
-        )
+    raw_text, read_findings = _read_host_manifest_text(path, file_label)
+    if raw_text is None:
+        return read_findings, refs
 
     findings = _scan_hidden_unicode_text(raw_text, file_label, category="agent-config")
     try:
@@ -4098,7 +4256,12 @@ def _vet_skill_content_file(
             )
         findings.extend(vet_script(entry, effective_caps, root=package))
         return findings
-    if top_dir == "scripts" or suffix in _SCRIPT_SUFFIXES or _has_shebang(entry):
+    if top_dir == "scripts" or suffix in _SCRIPT_SUFFIXES:
+        return vet_script(entry, effective_caps, root=package)
+    is_shebang, probe_findings = _probe_shebang(entry, root=package)
+    if probe_findings:
+        return probe_findings
+    if is_shebang:
         return vet_script(entry, effective_caps, root=package)
     if suffix in {".md", ".mdc"}:
         return vet_markdown(entry, root=package)
@@ -4245,31 +4408,150 @@ def vet_skill(
     }
 
 
-def _read_hosts_map(hosts_path: Path) -> Mapping[str, Any]:
-    if not hosts_path.is_file() or hosts_path.is_symlink():
-        return {}
+def _load_hosts_catalog_raw(
+    hosts_path: Path,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    hosts_label = "catalog/hosts.json"
+    if not hosts_path.exists() and not hosts_path.is_symlink():
+        return None, []
+    if hosts_path.is_symlink():
+        return None, [
+            _finding(
+                hosts_label,
+                1,
+                "symlink-file",
+                "filesystem",
+                "Symlinked hosts catalog file is not permitted",
+            )
+        ]
+    if hosts_path.is_dir():
+        return None, [
+            _with_severity(
+                _finding(
+                    hosts_label,
+                    1,
+                    "invalid-manifest",
+                    "agent-config",
+                    "Hosts catalog path must be a JSON file",
+                ),
+                "medium",
+            )
+        ]
     try:
-        doc = json.loads(hosts_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+        return (
+            read_utf8_text(
+                hosts_path,
+                label="Hosts catalog 'catalog/hosts.json'",
+                optional=True,
+            ),
+            [],
+        )
+    except FredCliError as exc:
+        if exc.code == "invalid_encoding":
+            return None, [
+                _with_severity(
+                    _finding(
+                        hosts_label,
+                        1,
+                        "invalid-encoding",
+                        "agent-config",
+                        "Hosts catalog file is not valid UTF-8",
+                    ),
+                    "medium",
+                )
+            ]
+        return None, [
+            _finding(
+                hosts_label,
+                1,
+                "unreadable-file",
+                "filesystem",
+                f"Unable to read hosts catalog '{hosts_label}': {exc.__cause__ or exc}",
+            )
+        ]
+
+
+def _extract_hosts_catalog_dirs(
+    raw_text: str,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    hosts_label = "catalog/hosts.json"
+    try:
+        doc = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        return [], [
+            _with_severity(
+                _finding(
+                    hosts_label,
+                    exc.lineno,
+                    "invalid-json",
+                    "agent-config",
+                    f"Malformed JSON in hosts catalog: {exc.msg}",
+                ),
+                "medium",
+            )
+        ]
     if not isinstance(doc, Mapping):
-        return {}
-    hosts = doc.get("hosts", {})
-    return hosts if isinstance(hosts, Mapping) else {}
-
-
-def _discover_host_skill_dirs(root: Path) -> list[str]:
-    dirs: list[str] = list(_DEFAULT_HOST_SKILL_DIRS)
-    for cfg in _read_hosts_map(root / "catalog/hosts.json").values():
+        return [], [
+            _with_severity(
+                _finding(
+                    hosts_label,
+                    1,
+                    "invalid-manifest",
+                    "agent-config",
+                    "Hosts catalog root must be a JSON object",
+                ),
+                "medium",
+            )
+        ]
+    hosts = doc.get("hosts")
+    if not isinstance(hosts, Mapping):
+        return [], [
+            _with_severity(
+                _finding(
+                    hosts_label,
+                    1,
+                    "invalid-manifest",
+                    "agent-config",
+                    "Hosts catalog must define a 'hosts' mapping",
+                ),
+                "medium",
+            )
+        ]
+    extra_dirs: list[str] = []
+    for cfg in hosts.values():
         if not isinstance(cfg, Mapping):
-            continue
+            return [], [
+                _with_severity(
+                    _finding(
+                        hosts_label,
+                        1,
+                        "invalid-manifest",
+                        "agent-config",
+                        "Each entry in hosts catalog 'hosts' must be a JSON object",
+                    ),
+                    "medium",
+                )
+            ]
         proj = cfg.get("project_path")
-        if not isinstance(proj, str) or not proj.strip():
-            continue
-        norm = proj.strip().strip("/")
-        if norm and norm not in dirs:
+        if isinstance(proj, str) and proj.strip():
+            norm = proj.strip().strip("/")
+            if norm:
+                extra_dirs.append(norm)
+    return extra_dirs, []
+
+
+def _discover_host_skill_dirs(root: Path) -> tuple[list[str], list[dict[str, Any]]]:
+    dirs: list[str] = list(_DEFAULT_HOST_SKILL_DIRS)
+    raw_text, findings = _load_hosts_catalog_raw(root / "catalog/hosts.json")
+    if raw_text is None:
+        return dirs, findings
+    extra_dirs, parse_findings = _extract_hosts_catalog_dirs(raw_text)
+    if parse_findings:
+        return dirs, parse_findings
+    for norm in extra_dirs:
+        if norm not in dirs:
             dirs.append(norm)
-    return dirs
+    return dirs, []
 
 
 def _prefix_skill_findings(
@@ -4290,6 +4572,19 @@ def _is_trusted_toolkit_skill(candidate: Path, root: Path) -> bool:
         return skills_root.is_dir() and candidate.resolve().is_relative_to(skills_root)
     except OSError:
         return False
+
+
+def _vet_script_or_markdown_file(
+    target: Path,
+    allowed_capabilities: Collection[str] | None,
+    parent: Path,
+) -> list[dict[str, Any]]:
+    is_shebang, probe_findings = _probe_shebang(target, root=parent)
+    if probe_findings:
+        return probe_findings
+    if is_shebang:
+        return vet_script(target, allowed_capabilities, root=parent)
+    return vet_markdown(target, root=parent)
 
 
 def _vet_single_file_target(
@@ -4317,10 +4612,12 @@ def _vet_single_file_target(
         )
     elif suffix_lower == ".svg":
         file_findings = _vet_svg_file(target, root=parent)
-    elif suffix_lower in _SCRIPT_SUFFIXES or _has_shebang(target):
+    elif suffix_lower in _SCRIPT_SUFFIXES:
         file_findings = vet_script(target, allowed_capabilities, root=parent)
     else:
-        file_findings = vet_markdown(target, root=parent)
+        file_findings = _vet_script_or_markdown_file(
+            target, allowed_capabilities, parent
+        )
 
     return {
         "target": str(target),
@@ -4704,7 +5001,12 @@ def _vet_repository_target(
         allowed=_normalize_capabilities(allowed_capabilities),
     )
     scanned_files = 0
-    for rel_skill_root in _discover_host_skill_dirs(root):
+    host_skill_dirs, host_catalog_findings = _discover_host_skill_dirs(root)
+    if host_catalog_findings:
+        scanned_files += 1
+        ctx.configs_scanned.append("catalog/hosts.json")
+        ctx.findings.extend(host_catalog_findings)
+    for rel_skill_root in host_skill_dirs:
         scanned_files += _scan_host_skills_dir(rel_skill_root, ctx)
     scanned_files += _scan_repo_instructions(ctx)
     scanned_files += _scan_repo_mcp_configs(ctx)

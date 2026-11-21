@@ -39,7 +39,13 @@ from _doc_invariants import (
     validate_historical_release_notes_immutability,
 )
 from _markdown_utils import match_atx_heading, scan_markdown_fences
-from skill_tools import FredCliError, git_blob_bytes, run_local_git
+from skill_tools import (
+    FredCliError,
+    git_blob_bytes,
+    read_json_object,
+    read_utf8_text,
+    run_local_git,
+)
 
 fred: ModuleType | None
 try:
@@ -336,13 +342,15 @@ def extract_blocks_from_file(
 ) -> list[CommandBlock]:
     """Extract fenced code blocks and commands from a markdown file within an optional line range."""
     del root
-    if not file_path.is_file():
+    raw_text = read_utf8_text(
+        file_path,
+        label="Documentation file",
+        optional=True,
+    )
+    if raw_text is None:
         return []
 
-    try:
-        lines = file_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
+    lines = raw_text.splitlines()
 
     raw_blocks = _parse_fenced_blocks(lines)
     heading_map = _headings_by_block_start(
@@ -547,7 +555,10 @@ def verify_toolkit_subcommands(root: Path = ROOT) -> list[str]:
     """Verify bidirectional parity between documented CLI subcommands in docs/toolkit.md and scripts/fred.py LIFECYCLE_GROUPS."""
     toolkit_path = root / "docs/toolkit.md"
     start_line, end_line = DOCUMENTED_RANGES.get("docs/toolkit.md", (1, None))
-    blocks = extract_blocks_from_file(toolkit_path, start_line, end_line, root=root)
+    try:
+        blocks = extract_blocks_from_file(toolkit_path, start_line, end_line, root=root)
+    except FredCliError as exc:
+        return [f"docs/toolkit.md: {exc.message}"]
 
     groups = get_registered_fred_subcommands(root)
     all_registered: set[str] = {cmd for cmds in groups.values() for cmd in cmds}
@@ -1464,13 +1475,21 @@ def _parse_with_argparse(
 def _load_marketplace_plugins(root: Path) -> tuple[str | None, set[str], str]:
     """Load marketplace name and registered plugin names from marketplace.json."""
     marketplace_manifest = root / ".claude-plugin/marketplace.json"
-    if not marketplace_manifest.is_file():
-        return None, set(), f"Marketplace manifest missing at {marketplace_manifest}"
     try:
-        data = json.loads(marketplace_manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return None, set(), f"Invalid marketplace manifest: {exc}"
-    names = {item["name"] for item in data.get("plugins", []) if "name" in item}
+        data = read_json_object(
+            marketplace_manifest,
+            label="Marketplace manifest '.claude-plugin/marketplace.json'",
+            optional=True,
+        )
+    except FredCliError as exc:
+        return None, set(), f"Invalid marketplace manifest: {exc.message}"
+    if data is None:
+        return None, set(), f"Marketplace manifest missing at {marketplace_manifest}"
+    names = {
+        item["name"]
+        for item in data.get("plugins", [])
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    }
     return str(data.get("name", "fred-skills")), names, ""
 
 
@@ -2037,18 +2056,42 @@ _PACK_ARCHIVE_RE = re.compile(
 def _read_expected_version(root: Path) -> str:
     """Read expected VERSION from root, falling back to repository ROOT."""
     candidate = root / "VERSION"
-    source = candidate if candidate.is_file() else ROOT / "VERSION"
-    return source.read_text(encoding="utf-8").strip() if source.is_file() else "0.0.0"
+    source = (
+        candidate
+        if (candidate.exists() or candidate.is_symlink())
+        else ROOT / "VERSION"
+    )
+    raw_ver = read_utf8_text(source, label="VERSION file", optional=True)
+    return raw_ver.strip() if raw_ver is not None else "0.0.0"
 
 
 def _load_known_packs(root: Path) -> dict[str, list[str]]:
     """Load canonical pack definitions from catalog/packs.json."""
     candidate = root / "catalog/packs.json"
-    source = candidate if candidate.is_file() else ROOT / "catalog/packs.json"
-    if not source.is_file():
+    source = (
+        candidate
+        if (candidate.exists() or candidate.is_symlink())
+        else ROOT / "catalog/packs.json"
+    )
+    doc = read_json_object(
+        source,
+        label="Packs catalog 'catalog/packs.json'",
+        optional=True,
+    )
+    if doc is None:
         return {}
-    raw = json.loads(source.read_text(encoding="utf-8")).get("packs", {})
-    return {str(name): list(cfg.get("skills", [])) for name, cfg in raw.items()}
+    raw = doc.get("packs", {})
+    if not isinstance(raw, Mapping):
+        raise FredCliError(
+            f"Malformed packs catalog '{source}': expected 'packs' object",
+            code="invalid_catalog",
+            hint=f"Ensure '{source}' contains a JSON object under 'packs'.",
+        )
+    return {
+        str(name): list(cfg.get("skills", []))
+        for name, cfg in raw.items()
+        if isinstance(cfg, Mapping)
+    }
 
 
 def _load_known_skills(root: Path) -> set[str]:
@@ -2062,16 +2105,40 @@ def _load_known_skills(root: Path) -> set[str]:
 
 def _load_tagged_packs(root: Path, tag: str) -> set[str]:
     """Load canonical pack names from refs/tags/<tag>:catalog/packs.json."""
-    raw_bytes = git_blob_bytes(root, f"refs/tags/{tag}:catalog/packs.json")
+    blob_ref = f"refs/tags/{tag}:catalog/packs.json"
+    raw_bytes = git_blob_bytes(root, blob_ref)
     if raw_bytes is None:
         return set()
     try:
-        loaded = json.loads(raw_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return set()
-    packs = loaded.get("packs") if isinstance(loaded, dict) else None
+        raw_text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FredCliError(
+            f"Invalid UTF-8 encoding in tagged packs catalog '{blob_ref}': {exc}",
+            code="invalid_encoding",
+            hint=f"Ensure 'catalog/packs.json' at tag '{tag}' is valid UTF-8.",
+        ) from exc
+    try:
+        loaded = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise FredCliError(
+            f"Malformed JSON in tagged packs catalog '{blob_ref}' (line {exc.lineno}, column {exc.colno}): {exc.msg}",
+            code="invalid_json",
+            hint=f"Fix the JSON syntax in 'catalog/packs.json' at tag '{tag}'.",
+        ) from exc
+    if not isinstance(loaded, dict):
+        actual = type(loaded).__name__
+        raise FredCliError(
+            f"Expected JSON object in tagged packs catalog '{blob_ref}', got {actual}",
+            code="invalid_json_root",
+            hint=f"Ensure the root value in '{blob_ref}' is a JSON object.",
+        )
+    packs = loaded.get("packs")
     if not isinstance(packs, dict):
-        return set()
+        raise FredCliError(
+            f"Malformed tagged packs catalog '{blob_ref}': expected 'packs' object",
+            code="invalid_catalog",
+            hint=f"Ensure '{blob_ref}' contains a JSON object under 'packs'.",
+        )
     return {str(name) for name in packs}
 
 
@@ -2110,14 +2177,17 @@ def _check_pack_against_catalog(
 ) -> tuple[bool, str]:
     """Verify pack_name exists at refs/tags/v<expected_ver> when tagged, else catalog/packs.json."""
     tag = f"v{expected_ver}"
-    if git_tag_exists(root, tag):
-        if pack_name not in _load_tagged_packs(root, tag):
-            return (
-                False,
-                f"Pack '{pack_name}' in archive '{filename}' does not exist at tag 'refs/tags/{tag}'",
-            )
-        return True, ""
-    known_packs = _load_known_packs(root)
+    try:
+        if git_tag_exists(root, tag):
+            if pack_name not in _load_tagged_packs(root, tag):
+                return (
+                    False,
+                    f"Pack '{pack_name}' in archive '{filename}' does not exist at tag 'refs/tags/{tag}'",
+                )
+            return True, ""
+        known_packs = _load_known_packs(root)
+    except FredCliError as exc:
+        return False, exc.message
     if known_packs and pack_name not in known_packs:
         return (
             False,
@@ -2132,7 +2202,10 @@ def _check_skill_archive_against_catalog(
     root: Path,
 ) -> tuple[bool, str]:
     """Verify skill_name exists at refs/tags/v<VERSION> when tagged, else skills/*/SKILL.md."""
-    tag = f"v{_read_expected_version(root)}"
+    try:
+        tag = f"v{_read_expected_version(root)}"
+    except FredCliError as exc:
+        return False, exc.message
     if git_tag_exists(root, tag):
         if skill_name not in _load_tagged_skills(root, tag):
             return (
@@ -2169,7 +2242,10 @@ def _split_pack_archive_stem(
 
 def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
     """Verify pack or CLI archive version and canonical pack name against VERSION and catalog/packs.json."""
-    expected_ver = _read_expected_version(root)
+    try:
+        expected_ver = _read_expected_version(root)
+    except FredCliError as exc:
+        return False, exc.message
     parsed = _split_pack_archive_stem(filename, expected_ver)
     if parsed is None:
         return False, f"Malformed release pack archive filename: {filename}"
@@ -2206,7 +2282,10 @@ def _validate_curl_release_url(url: str, root: Path) -> tuple[bool, str]:
     if marker not in url:
         return True, ""
     tag, sep, asset = url.split(marker, 1)[1].partition("/")
-    expected_tag = f"v{_read_expected_version(root)}"
+    try:
+        expected_tag = f"v{_read_expected_version(root)}"
+    except FredCliError as exc:
+        return False, exc.message
     if not sep or not asset:
         return False, f"Incomplete release download URL: {url}"
     if tag != expected_tag:
@@ -2803,22 +2882,25 @@ def _format_release_count_mismatch(rel_path: str, mismatch: Any) -> str:
 
 def _verify_doc_release_counts(rel_path: str, root: Path) -> list[str]:
     """Verify documented total and starter pack skill counts against catalog/packs.json."""
-    if not _is_release_count_doc(rel_path, root):
-        return []
-    doc_path = root / rel_path
-    packs = _load_known_packs(root)
-    if not doc_path.is_file() or "complete" not in packs:
-        return []
+    try:
+        if not _is_release_count_doc(rel_path, root):
+            return []
+        doc_path = root / rel_path
+        packs = _load_known_packs(root)
+        if "complete" not in packs:
+            return []
+        doc_text = read_utf8_text(doc_path, label="Documentation file", optional=True)
+        if doc_text is None:
+            return []
+    except FredCliError as exc:
+        return [f"{rel_path}: {exc.message}"]
     rules = build_prose_count_rules(
         DocCountExpectations(
             total_skills=len(packs["complete"]),
             starter_skills=len(packs.get("starter", [])),
         )
     )
-    mismatches = find_prose_count_mismatches(
-        doc_path.read_text(encoding="utf-8"),
-        rules,
-    )
+    mismatches = find_prose_count_mismatches(doc_text, rules)
     return [_format_release_count_mismatch(rel_path, m) for m in mismatches]
 
 
@@ -2899,11 +2981,12 @@ def _load_audit_schema(root: Path) -> dict[str, Any] | None:
     """Load shared/repo-audit/resources/assets/audit.schema.json from root or ROOT."""
     rel = "shared/repo-audit/resources/assets/audit.schema.json"
     candidate = root / rel
-    source = candidate if candidate.is_file() else ROOT / rel
-    if not source.is_file():
-        return None
-    loaded: dict[str, Any] = json.loads(source.read_text(encoding="utf-8"))
-    return loaded
+    source = candidate if (candidate.exists() or candidate.is_symlink()) else ROOT / rel
+    return read_json_object(
+        source,
+        label=f"Audit schema '{rel}'",
+        optional=True,
+    )
 
 
 def _validate_audit_json_schema(
@@ -3002,7 +3085,7 @@ def _extract_ast_target_names(node: ast.AST) -> set[str]:
 
 def _collect_ast_symbols(source_path: Path) -> set[str]:
     """Parse a Python module via AST and collect all defined symbol names."""
-    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    tree = ast.parse(read_utf8_text(source_path, label="Python module"))
     symbols: set[str] = set()
     for item in tree.body:
         symbols.update(_extract_ast_target_names(item))
@@ -3101,12 +3184,18 @@ def verify_runbook_citations(
     """Verify docs/runbooks.md contains AST-valid symbol citations and zero raw line citations."""
     rel_path = "docs/runbooks.md"
     doc_path = root / rel_path
-    if not doc_path.is_file():
-        return [f"{rel_path}: File does not exist"]
-    lines = doc_path.read_text(encoding="utf-8").splitlines()
-    active_blocks = (
-        blocks if blocks is not None else extract_blocks_from_file(doc_path, root=root)
-    )
+    try:
+        raw_text = read_utf8_text(doc_path, label="Documentation file", optional=True)
+        if raw_text is None:
+            return [f"{rel_path}: File does not exist"]
+        lines = raw_text.splitlines()
+        active_blocks = (
+            blocks
+            if blocks is not None
+            else extract_blocks_from_file(doc_path, root=root)
+        )
+    except FredCliError as exc:
+        return [f"{rel_path}: {exc.message}"]
     non_fenced = _non_fenced_lines(lines, active_blocks)
     errors = _check_runbook_line_citations(rel_path, lines, non_fenced)
     cache: dict[Path, set[str]] = {}
@@ -3114,9 +3203,12 @@ def verify_runbook_citations(
     for line_no, line in non_fenced:
         for mod_key, sym in _extract_line_symbol_citations(line):
             citation_count += 1
-            err = _validate_symbol_in_module(
-                rel_path, line_no, mod_key, sym, root, cache
-            )
+            try:
+                err = _validate_symbol_in_module(
+                    rel_path, line_no, mod_key, sym, root, cache
+                )
+            except FredCliError as exc:
+                err = f"{rel_path}:L{line_no}: {exc.message}"
             if err is not None:
                 errors.append(err)
     if citation_count == 0:
@@ -3137,11 +3229,14 @@ def _verify_file_snippets(
     if not should_execute:
         return []
 
-    errors = _verify_doc_release_counts(rel_path, root)
-    if rel_path == "docs/runbooks.md":
-        errors.extend(verify_runbook_citations(root=root, blocks=blocks))
-    for block in blocks:
-        errors.extend(_verify_single_block(rel_path, block, root))
+    try:
+        errors = _verify_doc_release_counts(rel_path, root)
+        if rel_path == "docs/runbooks.md":
+            errors.extend(verify_runbook_citations(root=root, blocks=blocks))
+        for block in blocks:
+            errors.extend(_verify_single_block(rel_path, block, root))
+    except FredCliError as exc:
+        return [f"{rel_path}: {exc.message}"]
     return errors
 
 
@@ -3175,30 +3270,44 @@ def verify_all_snippets(
     )
 
     if _should_check_release_notes_immutability(target_rel_paths):
-        errors.extend(
-            validate_historical_release_notes_immutability(
-                root,
-                target_rel_paths=target_rel_paths,
+        try:
+            errors.extend(
+                validate_historical_release_notes_immutability(
+                    root,
+                    target_rel_paths=target_rel_paths,
+                )
             )
-        )
+        except FredCliError as exc:
+            errors.append(exc.message)
 
     if _should_check_toolkit(root, target_rel_paths):
         subcmd_errors = verify_toolkit_subcommands(root=root)
         errors.extend(subcmd_errors)
 
-    ranges_to_check: Mapping[str, tuple[int | None, int | None]] | None = None
+    active_ranges: Mapping[str, tuple[int | None, int | None]]
     if target_rel_paths is not None:
-        ranges_to_check = {
+        active_ranges = {
             rel_path: DOCUMENTED_RANGES.get(rel_path, (None, None))
             for rel_path in sorted(target_rel_paths)
         }
+    else:
+        active_ranges = (
+            DOCUMENTED_RANGES
+            if root.resolve() == ROOT.resolve()
+            else _discover_default_doc_ranges(root)
+        )
 
-    blocks_by_file = discover_doc_blocks(root=root, ranges=ranges_to_check)
-    for rel_path, blocks in blocks_by_file.items():
+    for rel_path, (s_line, e_line) in active_ranges.items():
+        doc_path = root / rel_path
+        try:
+            blocks = extract_blocks_from_file(doc_path, s_line, e_line, root=root)
+        except FredCliError as exc:
+            errors.append(f"{rel_path}: {exc.message}")
+            continue
         file_errors = _verify_file_snippets(rel_path, blocks, root, should_execute=True)
         errors.extend(file_errors)
 
-    return errors
+    return list(dict.fromkeys(errors))
 
 
 def _print_cli_exception(exc: FredCliError | subprocess.TimeoutExpired) -> None:
