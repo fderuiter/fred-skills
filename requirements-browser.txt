@@ -1,2 +1,2 @@
 # Optional report/explorer browser verification; not needed by the CLI or skills.
-playwright==1.62.0
+playwright==1.65.2
