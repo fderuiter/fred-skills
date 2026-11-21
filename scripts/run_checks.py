@@ -248,6 +248,11 @@ def build_phase_commands(
                 str(scripts_dir / "verify_workflow_actions.py"),
                 "--check",
             ],
+            [
+                python_executable,
+                str(scripts_dir / "bump_version.py"),
+                "--check",
+            ],
             validate_cmd,
         ]
     if phase == "docs":

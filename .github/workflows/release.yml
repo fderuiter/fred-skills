@@ -31,178 +31,9 @@ env:
   PYTHONIOENCODING: utf-8
 
 jobs:
-  prepare:
-    if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    concurrency:
-      group: skills-release-prepare-main
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    outputs:
-      bumped: ${{ steps.bump.outputs.bumped }}
-      release_tag: ${{ steps.bump.outputs.release_tag }}
-      target_sha: ${{ steps.bump.outputs.target_sha }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: refs/heads/main
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - name: Advance SemVer and push release commit
-        id: bump
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
-          GITHUB_REF_VALUE: ${{ github.ref }}
-          GITHUB_SERVER_URL: ${{ github.server_url }}
-          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
-          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          set -eu
-
-          write_summary() {
-            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-              {
-                echo "### Release Prepare"
-                echo "- **Outcome**: $1"
-                echo "- **Release tag**: \`${2:-none}\`"
-                echo "- **Target SHA**: \`$3\`"
-              } >> "$GITHUB_STEP_SUMMARY"
-            fi
-          }
-
-          if [ "${EVENT_NAME:-}" = "workflow_run" ]; then
-            if [ "${WORKFLOW_CONCLUSION:-}" != "success" ] || [ "${WORKFLOW_EVENT:-}" != "push" ] || [ "${WORKFLOW_HEAD_BRANCH:-}" != "main" ]; then
-              echo "Error: prepare job requires workflow_run conclusion=success, event=push, and head_branch=main" >&2
-              exit 1
-            fi
-          elif [ "${EVENT_NAME:-}" != "push" ] || [ "${GITHUB_REF_VALUE:-}" != "refs/heads/main" ]; then
-            echo "Error: prepare job may only run on push to refs/heads/main" >&2
-            exit 1
-          fi
-
-          PY_BIN="${PYTHON_BIN:-}"
-          if [ -z "$PY_BIN" ]; then
-            if command -v python3 >/dev/null 2>&1; then
-              PY_BIN="python3"
-            elif command -v python >/dev/null 2>&1; then
-              PY_BIN="python"
-            else
-              echo "Error: python3 is required to run scripts/bump_version.py" >&2
-              exit 1
-            fi
-          fi
-
-          if [ -n "${GH_TOKEN:-}" ]; then
-            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
-            SERVER_URL="${SERVER_URL%/}"
-            AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
-            export GIT_CONFIG_COUNT=1
-            export GIT_CONFIG_KEY_0="http.${SERVER_URL}/.extraheader"
-            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
-          fi
-
-          FETCH_ERR_FILE="$(mktemp)"
-          trap 'rm -f "$FETCH_ERR_FILE"' EXIT
-          FETCH_OK="true"
-          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
-            git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
-          else
-            git fetch --tags --force origin "+refs/heads/main:refs/remotes/origin/main" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
-          fi
-          if [ "$FETCH_OK" != "true" ]; then
-            echo "Error: Failed to fetch full history and tags for origin/main: $(cat "$FETCH_ERR_FILE")" >&2
-            exit 1
-          fi
-
-          git checkout -B main refs/remotes/origin/main >/dev/null 2>&1
-          CURRENT_HEAD="$(git rev-parse --verify HEAD)"
-
-          TRIGGER_SHA="${WORKFLOW_SHA:-$CURRENT_HEAD}"
-          if ! printf '%s' "$TRIGGER_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "Error: Invalid trigger SHA '$TRIGGER_SHA'" >&2
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$TRIGGER_SHA" refs/remotes/origin/main >/dev/null 2>&1; then
-            echo "Error: Trigger commit '$TRIGGER_SHA' is not an ancestor of origin/main" >&2
-            exit 1
-          fi
-
-          TRIGGER_AUTHOR="$(git log -1 --format='%an' "$TRIGGER_SHA" 2>/dev/null || true)"
-          if [ "${GITHUB_ACTOR_NAME:-}" = "github-actions[bot]" ] || [ "$TRIGGER_AUTHOR" = "github-actions[bot]" ]; then
-            CURRENT_TAG="v$(tr -d '[:space:]' < VERSION)"
-            if [ -n "${GITHUB_OUTPUT:-}" ]; then
-              {
-                echo "bumped=false"
-                echo "release_tag=$CURRENT_TAG"
-                echo "target_sha=$CURRENT_HEAD"
-              } >> "$GITHUB_OUTPUT"
-            fi
-            write_summary "Skipped automated actor commit" "$CURRENT_TAG" "$CURRENT_HEAD"
-            exit 0
-          fi
-
-          BUMP_JSON="$("$PY_BIN" -S scripts/bump_version.py --json)"
-          PARSED_LINES="$(
-            BUMP_PAYLOAD="$BUMP_JSON" "$PY_BIN" -S - <<'PY'
-          import json
-          import os
-
-          data = json.loads(os.environ["BUMP_PAYLOAD"])
-          print("true" if data.get("bumped") else "false")
-          print(str(data.get("new_version", "")))
-          print(str(data.get("release_tag", "")))
-          print(str(data.get("bump_kind", "none")))
-          print(str(data.get("reason", "")))
-          PY
-          )"
-          BUMPED="$(printf '%s\n' "$PARSED_LINES" | sed -n '1p')"
-          NEW_VERSION="$(printf '%s\n' "$PARSED_LINES" | sed -n '2p')"
-          RELEASE_TAG="$(printf '%s\n' "$PARSED_LINES" | sed -n '3p')"
-          BUMP_KIND="$(printf '%s\n' "$PARSED_LINES" | sed -n '4p')"
-          BUMP_REASON="$(printf '%s\n' "$PARSED_LINES" | sed -n '5p')"
-
-          if [ "$BUMPED" = "true" ]; then
-            git add -A
-            git \
-              -c user.name="github-actions[bot]" \
-              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "chore(release): bump version to v${NEW_VERSION}" >/dev/null
-            git push origin HEAD:refs/heads/main
-            TARGET_SHA="$(git rev-parse --verify HEAD)"
-            OUTCOME_MSG="Pushed ${BUMP_KIND} SemVer bump commit to origin/main"
-          else
-            TARGET_SHA="$CURRENT_HEAD"
-            OUTCOME_MSG="No SemVer bump needed (${BUMP_REASON})"
-          fi
-
-          if [ -n "${GITHUB_OUTPUT:-}" ]; then
-            {
-              echo "bumped=$BUMPED"
-              echo "release_tag=$RELEASE_TAG"
-              echo "target_sha=$TARGET_SHA"
-            } >> "$GITHUB_OUTPUT"
-          fi
-          write_summary "$OUTCOME_MSG" "$RELEASE_TAG" "$TARGET_SHA"
-
   preflight:
-    needs: prepare
     if: >-
       !cancelled() &&
-      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       (
         (
           github.event_name == 'workflow_run' &&
@@ -226,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ needs.prepare.outputs.target_sha || github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
       - name: Evaluate release preflight gate
         id: gate
@@ -235,7 +66,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
           EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_SHA: ${{ needs.prepare.outputs.target_sha || github.event.workflow_run.head_sha || github.sha }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
@@ -577,10 +408,9 @@ jobs:
           write_summary "$DECISION_TEXT" "$TAG" "$TARGET_SHA"
 
   validate:
-    needs: [prepare, preflight]
+    needs: preflight
     if: >-
       !cancelled() &&
-      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       needs.preflight.result == 'success' &&
       needs.preflight.outputs.should_build == 'true' &&
       needs.preflight.outputs.needs_validation != 'false'
@@ -588,13 +418,12 @@ jobs:
       contents: read
     uses: ./.github/workflows/validate.yml
     with:
-      ref: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+      ref: ${{ needs.preflight.outputs.target_sha }}
 
   build:
-    needs: [prepare, preflight, validate]
+    needs: [preflight, validate]
     if: >-
       !cancelled() &&
-      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       needs.preflight.result == 'success' &&
       (
         needs.validate.result == 'success' ||
@@ -608,8 +437,36 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
+      - name: Fetch full history and tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -eu
+          if [ -n "${GH_TOKEN:-}" ]; then
+            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+            SERVER_URL="${SERVER_URL%/}"
+            AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
+            export GIT_CONFIG_COUNT=1
+            export GIT_CONFIG_KEY_0="http.${SERVER_URL}/.extraheader"
+            export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $AUTH_HEADER"
+          fi
+          FETCH_ERR_FILE="$(mktemp)"
+          trap 'rm -f "$FETCH_ERR_FILE"' EXIT
+          FETCH_OK="true"
+          if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+            git fetch --unshallow --tags --force origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/*:refs/tags/*" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          else
+            git fetch --tags --force origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/*:refs/tags/*" >/dev/null 2>"$FETCH_ERR_FILE" || FETCH_OK="false"
+          fi
+          if [ "$FETCH_OK" != "true" ]; then
+            echo "Error: Failed to fetch full history and tags in build job: $(cat "$FETCH_ERR_FILE")" >&2
+            exit 1
+          fi
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
@@ -617,6 +474,8 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Install validation dependencies
         run: python -m pip install -r requirements-dev.txt
+      - name: Validate source and fixtures
+        run: make check
       - name: Package release assets
         run: python scripts/fred.py release --all --output dist/release
       - name: Verify release manifest and checksums
@@ -633,10 +492,9 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [prepare, preflight, validate, build]
+    needs: [preflight, validate, build]
     if: >-
       !cancelled() &&
-      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') &&
       needs.preflight.result == 'success' &&
       (
         needs.validate.result == 'success' ||
@@ -656,7 +514,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          ref: ${{ needs.preflight.outputs.target_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify release prerequisites
@@ -670,7 +528,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
-          TARGET_SHA: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
           WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
@@ -828,7 +686,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
-          TARGET_SHA: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -eu
 
@@ -1010,7 +868,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
-          TARGET_SHA: ${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WORKFLOW_EVENT: ${{ github.event.workflow_run.event }}
           WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}

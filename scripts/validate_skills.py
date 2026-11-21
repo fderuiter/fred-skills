@@ -40,6 +40,7 @@ from _doc_invariants import (
     find_prose_count_mismatches,
     git_tag_exists,
     parse_prose_int,
+    validate_historical_release_notes_immutability,
 )
 from _markdown_utils import (
     extract_fenced_blocks as _extract_fenced_blocks,
@@ -57,7 +58,6 @@ from skill_tools import (
     estimate_tokens,
     extract_relative_links,
     find_deep_reference_chains,
-    git_blob_bytes,
     infer_suite_and_siblings,
     infer_suite_name,
     read_frontmatter,
@@ -3579,66 +3579,6 @@ def _validate_specific_doc_invariants(
     return handler(rel_path, text, exp)
 
 
-def _list_v_tag_versions(root: Path) -> set[str]:
-    if not (root / ".git").exists() or not shutil.which("git"):
-        return set()
-    proc = run_local_git(
-        root,
-        "for-each-ref",
-        "--format=%(refname:strip=2)",
-        "refs/tags/v*",
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return set()
-    return {
-        raw[1:]
-        for line in proc.stdout.splitlines()
-        if (raw := line.strip()).startswith("v") and len(raw) > 1
-    }
-
-
-def _discover_tagged_release_note_versions(root: Path) -> list[str]:
-    if not (root / ".git").exists():
-        return []
-    tagged = _list_v_tag_versions(root)
-    docs_dir = root / "docs"
-    if docs_dir.is_dir():
-        for note_path in sorted(docs_dir.glob("release-notes-*.md")):
-            ver = note_path.name.removeprefix("release-notes-").removesuffix(".md")
-            if ver and git_tag_exists(root, f"v{ver}"):
-                tagged.add(ver)
-    return sorted(tagged)
-
-
-def _check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
-    rel_path = f"docs/release-notes-{tag_ver}.md"
-    doc_path = root / rel_path
-    blob_bytes = git_blob_bytes(root, f"refs/tags/v{tag_ver}:{rel_path}")
-    if blob_bytes is None:
-        if doc_path.exists() or doc_path.is_symlink():
-            msg = (
-                f"{rel_path}: tagged release notes immutability violation; "
-                f"file did not exist at refs/tags/v{tag_ver}"
-            )
-            return [msg]
-        return []
-    if doc_path.is_symlink() or not doc_path.is_file():
-        msg = (
-            f"{rel_path}: tagged release notes immutability violation; "
-            f"file missing or symlink after refs/tags/v{tag_ver}"
-        )
-        return [msg]
-    if doc_path.read_bytes() != blob_bytes:
-        msg = (
-            f"{rel_path}: tagged release notes immutability violation; "
-            f"content must remain byte-identical to refs/tags/v{tag_ver}:{rel_path}"
-        )
-        return [msg]
-    return []
-
-
 _TAG_IMMUTABLE_PACKAGED_PATHS: tuple[str, ...] = ("skills", "catalog/packs.json")
 
 
@@ -3702,10 +3642,7 @@ def _validate_version_tag_immutability(root: Path) -> list[str]:
 
 
 def _validate_tagged_release_notes_immutability(root: Path) -> list[str]:
-    errors: list[str] = []
-    for tag_ver in _discover_tagged_release_note_versions(root):
-        errors.extend(_check_single_tagged_release_note(root, tag_ver))
-    return errors
+    return validate_historical_release_notes_immutability(root)
 
 
 def _validate_single_doc_file(

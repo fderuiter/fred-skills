@@ -13,6 +13,7 @@ fix:
 	$(RUFF) check --fix .
 	$(PYTHON) scripts/sync_audit_resources.py
 	$(PYTHON) scripts/build_catalog.py
+	$(PYTHON) scripts/bump_version.py
 	$(PYTHON) scripts/build_experience.py
 
 test:
