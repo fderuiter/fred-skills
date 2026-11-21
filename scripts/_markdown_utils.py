@@ -37,6 +37,7 @@ __all__ = [
 ]
 
 ATX_HEADING_RE = re.compile(r"^[ \t]{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+_ATX_HEADING_SCAN_RE = re.compile(r"^([ \t]*)(#{1,6})\s+(.+?)\s*#*\s*$")
 _FENCE_OPEN_RE = re.compile(r"^([ \t]*)(`{3,}|~{3,})(.*)$")
 _TABLE_DELIM_CELL_RE = re.compile(r"^:?-{3,}:?$")
 _REF_LINK_DEF_RE = re.compile(
@@ -226,12 +227,16 @@ def extract_noncode_lines(
     ]
 
 
-def match_atx_heading(line: str) -> tuple[int, str] | None:
+def match_atx_heading(
+    line: str,
+    *,
+    max_indent: int | None = 3,
+) -> tuple[int, str] | None:
     """Match an ATX Markdown heading and return (level, heading_text)."""
-    match = ATX_HEADING_RE.match(line.rstrip("\r\n"))
-    if match is None:
+    match = _ATX_HEADING_SCAN_RE.match(line.rstrip("\r\n"))
+    if match is None or not _indent_within_limit(match.group(1), max_indent):
         return None
-    return len(match.group(1)), match.group(2).strip()
+    return len(match.group(2)), match.group(3).strip()
 
 
 def slugify_markdown_heading(heading_text: str) -> str:

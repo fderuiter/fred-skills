@@ -35,6 +35,8 @@ EXCLUDE_DIRS = {
 NESTED_EXCLUDE_DIRS = {".git", ".venv", "node_modules", "__pycache__"}
 DOC_EXTENSIONS = {".md", ".html"}
 _HTML_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+_HTML_CODE_PRE_RE = re.compile(r"(?is)<(pre|code)\b.*?</\1>")
+_UNRESOLVED_HTML_SHIM_RE = re.compile(r"<p>\s*(@[^\s<>]+\.md)\s*</p>", re.IGNORECASE)
 
 
 def _strip_non_link_blocks(content: str, is_html: bool) -> str:
@@ -131,6 +133,13 @@ def check_file_links(
     except ValueError:
         rel_file = file_path
 
+    if is_html and effective_reject_md:
+        prose_html = _HTML_CODE_PRE_RE.sub("", scannable)
+        for shim_match in _UNRESOLVED_HTML_SHIM_RE.finditer(prose_html):
+            errors.append(
+                f"{rel_file.as_posix()}: Unresolved Markdown shim '{shim_match.group(1)}' in staged HTML"
+            )
+
     for target in targets:
         fragment = extract_link_fragment(target)
         resolved = resolve_relative_link_target(target, file_dir)
@@ -199,14 +208,8 @@ def _collect_dir_doc_files(directory: Path) -> list[Path]:
     return collected
 
 
-def _check_orphan_docs_guides(
-    docs_dir: Path,
-    scan_files: list[Path],
-    display_root: Path,
-) -> list[str]:
-    """Verify every documentation file in docs_dir has at least one inbound relative link."""
-    if not docs_dir.is_dir():
-        return []
+def _collect_inbound_link_targets(scan_files: list[Path]) -> set[Path]:
+    """Return resolved filesystem paths targeted by relative links across scan_files."""
     inbound_targets: set[Path] = set()
     for src_file in scan_files:
         if not src_file.is_file():
@@ -225,25 +228,54 @@ def _check_orphan_docs_guides(
             inbound_targets.add(resolved_target)
             if resolved_target.is_dir() and (resolved_target / "index.html").is_file():
                 inbound_targets.add((resolved_target / "index.html").resolve())
+    return inbound_targets
 
+
+def _format_display_rel(path: Path, display_root: Path) -> str:
+    resolved_path = path.resolve()
+    try:
+        return resolved_path.relative_to(display_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _check_orphan_docs_guides(
+    docs_dir: Path,
+    scan_files: list[Path],
+    display_root: Path,
+    *,
+    site_root: Path | None = None,
+) -> list[str]:
+    """Verify documentation files in docs_dir (and optional staged site_root) have inbound links."""
+    inbound_targets = _collect_inbound_link_targets(scan_files)
     orphan_errors: list[str] = []
-    for guide_path in sorted(docs_dir.rglob("*")):
-        if not guide_path.is_file() or guide_path.suffix.lower() not in DOC_EXTENSIONS:
-            continue
-        rel_parts = guide_path.relative_to(docs_dir).parts
-        if any(part in NESTED_EXCLUDE_DIRS for part in rel_parts):
-            continue
-        resolved_guide = guide_path.resolve()
-        if resolved_guide not in inbound_targets:
-            try:
-                rel_guide = resolved_guide.relative_to(
-                    display_root.resolve()
-                ).as_posix()
-            except ValueError:
-                rel_guide = guide_path.as_posix()
-            orphan_errors.append(
-                f"{rel_guide}: Orphaned documentation file in docs/ (zero inbound relative links)"
-            )
+
+    if docs_dir.is_dir():
+        for guide_path in sorted(docs_dir.rglob("*")):
+            if (
+                not guide_path.is_file()
+                or guide_path.suffix.lower() not in DOC_EXTENSIONS
+            ):
+                continue
+            rel_parts = guide_path.relative_to(docs_dir).parts
+            if any(part in NESTED_EXCLUDE_DIRS for part in rel_parts):
+                continue
+            if guide_path.resolve() not in inbound_targets:
+                rel_guide = _format_display_rel(guide_path, display_root)
+                orphan_errors.append(
+                    f"{rel_guide}: Orphaned documentation file in docs/ (zero inbound relative links)"
+                )
+
+    if site_root is not None and site_root.is_dir():
+        for root_html in sorted(site_root.glob("*.html")):
+            if not root_html.is_file() or root_html.name.lower() == "index.html":
+                continue
+            if root_html.resolve() not in inbound_targets:
+                rel_page = _format_display_rel(root_html, display_root)
+                orphan_errors.append(
+                    f"{rel_page}: Orphaned root HTML page in staged site (zero inbound relative links)"
+                )
+
     return orphan_errors
 
 
@@ -253,7 +285,7 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
     resolved_root = root.resolve()
     staged_site = (resolved_root / "dist" / "site").resolve()
     file_policies: dict[Path, tuple[Path | None, bool | None]] = {}
-    orphan_check_scopes: list[tuple[Path, list[Path]]] = []
+    orphan_check_scopes: list[tuple[Path, list[Path], Path | None]] = []
 
     if target_files:
         for raw_target in target_files:
@@ -280,8 +312,14 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
                         resolved_candidate,
                         True if is_staged_dir else None,
                     )
-                if (resolved_candidate / "docs").is_dir():
-                    orphan_check_scopes.append((resolved_candidate / "docs", dir_files))
+                if (resolved_candidate / "docs").is_dir() or is_staged_dir:
+                    orphan_check_scopes.append(
+                        (
+                            resolved_candidate / "docs",
+                            dir_files,
+                            resolved_candidate if is_staged_dir else None,
+                        )
+                    )
             elif resolved_candidate.suffix.lower() in DOC_EXTENSIONS:
                 file_policies.setdefault(resolved_candidate, (None, None))
     else:
@@ -295,13 +333,14 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
             repo_files.append(path)
             file_policies[path.resolve()] = (resolved_root, False)
         if (resolved_root / "docs").is_dir():
-            orphan_check_scopes.append((resolved_root / "docs", repo_files))
+            orphan_check_scopes.append((resolved_root / "docs", repo_files, None))
         if staged_site.is_dir():
             staged_files = _collect_dir_doc_files(staged_site)
             for sf in staged_files:
                 file_policies[sf.resolve()] = (staged_site, True)
-            if (staged_site / "docs").is_dir():
-                orphan_check_scopes.append((staged_site / "docs", staged_files))
+            orphan_check_scopes.append(
+                (staged_site / "docs", staged_files, staged_site)
+            )
 
     anchor_cache: dict[Path, set[str]] = {}
     for doc_file in sorted(file_policies):
@@ -318,9 +357,14 @@ def check_docs(root: Path = ROOT, target_files: list[Path] | None = None) -> lis
             )
         )
 
-    for docs_dir, scope_files in orphan_check_scopes:
+    for docs_dir, scope_files, staged_root in orphan_check_scopes:
         errors.extend(
-            _check_orphan_docs_guides(docs_dir, scope_files, display_root=resolved_root)
+            _check_orphan_docs_guides(
+                docs_dir,
+                scope_files,
+                display_root=resolved_root,
+                site_root=staged_root,
+            )
         )
 
     return errors

@@ -13,6 +13,7 @@ import unittest
 import urllib.parse
 import urllib.request
 from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,61 @@ from tests.catalog_oracles import (
     expected_pack_count,
     expected_total_skills,
 )
+
+
+class _HtmlNode:
+    """Minimal stdlib DOM node for asserting compiled HTML element sequence."""
+
+    def __init__(self, tag: str, attrs: dict[str, str]) -> None:
+        self.tag = tag
+        self.attrs = attrs
+        self.children: list[_HtmlNode | str] = []
+
+    def text(self) -> str:
+        return "".join(c if isinstance(c, str) else c.text() for c in self.children)
+
+    def elem_children(self) -> list[_HtmlNode]:
+        return [c for c in self.children if isinstance(c, _HtmlNode)]
+
+
+class _HtmlTreeParser(HTMLParser):
+    _VOID_TAGS = frozenset(
+        {"area", "base", "br", "col", "hr", "img", "input", "link", "meta"}
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.root = _HtmlNode("root", {})
+        self._stack: list[_HtmlNode] = [self.root]
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        node = _HtmlNode(tag, {k: (v or "") for k, v in attrs})
+        self._stack[-1].children.append(node)
+        if tag not in self._VOID_TAGS:
+            self._stack.append(node)
+
+    def handle_endtag(self, tag: str) -> None:
+        for idx in range(len(self._stack) - 1, 0, -1):
+            if self._stack[idx].tag == tag:
+                del self._stack[idx:]
+                break
+
+    def handle_data(self, data: str) -> None:
+        self._stack[-1].children.append(data)
+
+
+def _parse_html_nodes(html_text: str) -> list[_HtmlNode]:
+    parser = _HtmlTreeParser()
+    parser.feed(html_text)
+    nodes: list[_HtmlNode] = []
+
+    def _visit(cur: _HtmlNode) -> None:
+        nodes.append(cur)
+        for child in cur.elem_children():
+            _visit(child)
+
+    _visit(parser.root)
+    return nodes
 
 
 class BuildSiteTests(unittest.TestCase):
@@ -70,6 +126,9 @@ class BuildSiteTests(unittest.TestCase):
         self.assertTrue((self.site_dir / ".nojekyll").is_file())
         self.assertTrue((self.site_dir / "index.html").is_file())
         self.assertTrue((self.site_dir / "README.html").is_file())
+        self.assertTrue((self.site_dir / "AGENTS.html").is_file())
+        self.assertTrue((self.site_dir / "CLAUDE.html").is_file())
+        self.assertTrue((self.site_dir / "GEMINI.html").is_file())
         self.assertTrue((self.site_dir / "docs/index.html").is_file())
         self.assertTrue((self.site_dir / "docs/explorer.html").is_file())
         self.assertTrue((self.site_dir / "skills/index.html").is_file())
@@ -140,6 +199,8 @@ class BuildSiteTests(unittest.TestCase):
         self.assertIn("../README.html", docs_hub_links)
         self.assertIn("../CONTRIBUTING.html", docs_hub_links)
         self.assertIn("../AGENTS.html", docs_hub_links)
+        self.assertIn("../CLAUDE.html", docs_hub_links)
+        self.assertIn("../GEMINI.html", docs_hub_links)
         self.assertIn("../SECURITY.html", docs_hub_links)
         self.assertIn("../evals/README.html", docs_hub_links)
         self.assertIn("../skills/index.html", docs_hub_links)
@@ -431,9 +492,14 @@ class BuildSiteTests(unittest.TestCase):
                 "/fred-skills/",
                 "/fred-skills/index.html",
                 "/fred-skills/README.html",
+                "/fred-skills/AGENTS.html",
+                "/fred-skills/CLAUDE.html",
+                "/fred-skills/GEMINI.html",
                 "/fred-skills/docs/",
                 "/fred-skills/docs/index.html",
                 "/fred-skills/docs/explorer.html",
+                "/fred-skills/docs/runbooks.html",
+                "/fred-skills/docs/integration.html",
                 "/fred-skills/docs/release-notes-0.2.0.html",
                 "/fred-skills/skills/",
                 "/fred-skills/skills/index.html",
@@ -566,6 +632,28 @@ class BuildSiteTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertNotEqual(0, direct_cli.returncode, bad_href)
+
+            # Verify orphaned root HTML pages and unresolved @*.md shims in dist/site/ fail check_docs
+            (staged / "docs/index.html").write_text(
+                '<!doctype html><html><body><a href="../index.html">Home</a></body></html>\n',
+                encoding="utf-8",
+            )
+            orphan_root_html = staged / "ORPHAN.html"
+            orphan_root_html.write_text(
+                '<!doctype html><html><body><p>@AGENTS.md</p><a href="index.html">Home</a></body></html>\n',
+                encoding="utf-8",
+            )
+            orphan_and_shim_errs = check_docs(root=fake_repo)
+            self.assertTrue(
+                any("Orphaned root HTML page" in e for e in orphan_and_shim_errs),
+                orphan_and_shim_errs,
+            )
+            self.assertTrue(
+                any("Unresolved Markdown shim" in e for e in orphan_and_shim_errs),
+                orphan_and_shim_errs,
+            )
+            orphan_root_html.unlink()
+            self.assertEqual([], check_docs(root=fake_repo))
 
     def test_compile_markdown_renders_yaml_frontmatter_and_full_guide_navigation(
         self,
@@ -724,6 +812,213 @@ class BuildSiteTests(unittest.TestCase):
             self.assertNotIn("[api-ref]:", rendered_html)
             # Inner ```json fence inside ````markdown remains literal code rather than closing early
             self.assertIn("```json", rendered_html)
+
+    def test_host_shims_compile_to_linked_agents_html_without_raw_directive(
+        self,
+    ) -> None:
+        """CLAUDE.html and GEMINI.html resolve @AGENTS.md shims into linked AGENTS.html notices and canonical instructions."""
+        agents_html = (self.site_dir / "AGENTS.html").read_text(encoding="utf-8")
+        self.assertIn(
+            '<h1 id="working-in-fred-skills">Working in fred-skills</h1>', agents_html
+        )
+
+        for shim_name in ("CLAUDE.html", "GEMINI.html"):
+            shim_html = (self.site_dir / shim_name).read_text(encoding="utf-8")
+            self.assertIn('<a href="AGENTS.html">AGENTS.html</a>', shim_html, shim_name)
+            self.assertIn(
+                '<h1 id="working-in-fred-skills">Working in fred-skills</h1>',
+                shim_html,
+                shim_name,
+            )
+            self.assertIn(
+                '<a href="CONTRIBUTING.html">CONTRIBUTING.md</a>',
+                shim_html,
+                shim_name,
+            )
+            self.assertIn("make check", shim_html, shim_name)
+            self.assertNotIn("<p>@AGENTS.md</p>", shim_html, shim_name)
+            self.assertNotIn("@AGENTS.md", shim_html, shim_name)
+
+        # Verify cycle protection, boundary confinement, and cross-directory relative link relocation
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir) / "repo"
+            (tmp_root / "sub").mkdir(parents=True)
+            (tmp_root / "AGENTS.md").write_text(
+                "# Canonical Guide\n\nRead [Contributing](CONTRIBUTING.md).\n",
+                encoding="utf-8",
+            )
+            (tmp_root / "CONTRIBUTING.md").write_text("# Contrib\n", encoding="utf-8")
+            (tmp_root / "sub/SHIM.md").write_text("@../AGENTS.md\n", encoding="utf-8")
+            (tmp_root / "LOOP_A.md").write_text("@LOOP_B.md\n", encoding="utf-8")
+            (tmp_root / "LOOP_B.md").write_text("@LOOP_A.md\n", encoding="utf-8")
+
+            compiled = frozenset(
+                {
+                    "AGENTS.md",
+                    "CONTRIBUTING.md",
+                    "sub/SHIM.md",
+                    "LOOP_A.md",
+                    "LOOP_B.md",
+                }
+            )
+            sub_title, sub_html = build_site.compile_markdown(
+                "@../AGENTS.md\n",
+                source_rel_path="sub/SHIM.md",
+                compiled_md_paths=compiled,
+                root=tmp_root,
+            )
+            self.assertEqual("Canonical Guide", sub_title)
+            self.assertIn('<a href="../AGENTS.html">../AGENTS.html</a>', sub_html)
+            self.assertIn('<a href="../CONTRIBUTING.html">Contributing</a>', sub_html)
+
+            _, loop_html = build_site.compile_markdown(
+                "@LOOP_B.md\n",
+                source_rel_path="LOOP_A.md",
+                compiled_md_paths=compiled,
+                root=tmp_root,
+            )
+            self.assertIn('<a href="LOOP_B.html">LOOP_B.html</a>', loop_html)
+
+            _, escaped_outside = build_site.compile_markdown(
+                "@../../outside.md\n",
+                source_rel_path="AGENTS.md",
+                compiled_md_paths=compiled,
+                root=tmp_root,
+            )
+            self.assertIn("<p>@../../outside.md</p>", escaped_outside)
+
+    def test_nested_list_blocks_preserve_exact_source_order_and_zero_leaked_tokens(
+        self,
+    ) -> None:
+        """All 18 multi-block list items keep exact DOM sequence and zero compiled pages leak raw # or > markers."""
+        strip_code_re = re.compile(r"(?is)<(pre|code|script|style)\b.*?</\1>")
+        leaked_heading_re = re.compile(r"(?:^|>|\s)#{2,6}\s+\S+")
+        leaked_quote_re = re.compile(
+            r"(?:^|<(?:li|p|div|section|blockquote)[^>]*>)\s*&gt;\s*\S+"
+        )
+
+        for html_path in sorted(self.site_dir.rglob("*.html")):
+            rel = html_path.relative_to(self.site_dir).as_posix()
+            prose = strip_code_re.sub("", html_path.read_text(encoding="utf-8"))
+            self.assertEqual([], leaked_heading_re.findall(prose), rel)
+            self.assertEqual([], leaked_quote_re.findall(prose), rel)
+
+        # 1. Verify all 16 multi-block list items with trailing blocks and 4 indented #### Scenario headings in docs/runbooks.html
+        runbooks_nodes = _parse_html_nodes(
+            (self.site_dir / "docs/runbooks.html").read_text(encoding="utf-8")
+        )
+        runbooks_lis = [n for n in runbooks_nodes if n.tag == "li"]
+        trailing_items: list[tuple[list[str], _HtmlNode]] = []
+        for li in runbooks_lis:
+            child_tags = [c.tag for c in li.elem_children()]
+            seen_nested = False
+            has_trailing = False
+            for c_tag in child_tags:
+                if c_tag in {"pre", "ul", "ol", "h4"}:
+                    if c_tag == "h4":
+                        has_trailing = True
+                    seen_nested = True
+                elif seen_nested and c_tag in {"p", "blockquote"}:
+                    has_trailing = True
+            if has_trailing:
+                trailing_items.append((child_tags, li))
+
+        self.assertEqual(16, len(trailing_items))
+        for child_tags, li in trailing_items:
+            self.assertEqual("p", child_tags[0], li.text()[:80])
+
+        drift_li = next(
+            li
+            for _, li in trailing_items
+            if "Check for workspace drift or active operation locks:" in li.text()
+        )
+        self.assertEqual(
+            ["p", "pre", "p", "ul", "p", "pre", "p"],
+            [c.tag for c in drift_li.elem_children()],
+        )
+
+        scenario_li = next(
+            li
+            for _, li in trailing_items
+            if "Interpret failure signatures and determine remediation:" in li.text()
+        )
+        self.assertEqual(
+            ["p", "h4", "p", "ul", "h4", "p", "ul", "h4", "p", "ul", "h4", "p", "ul"],
+            [c.tag for c in scenario_li.elem_children()],
+        )
+        scenario_h4s = [c for c in scenario_li.elem_children() if c.tag == "h4"]
+        self.assertEqual(4, len(scenario_h4s))
+        scenario_ids = [h.attrs.get("id", "") for h in scenario_h4s]
+        self.assertEqual(4, len(set(scenario_ids)), scenario_ids)
+        self.assertTrue(all(bool(s_id) for s_id in scenario_ids), scenario_ids)
+
+        # 2. Verify docs/integration.html renders <blockquote> after <pre> inside its <li> parent
+        integration_nodes = _parse_html_nodes(
+            (self.site_dir / "docs/integration.html").read_text(encoding="utf-8")
+        )
+        marketplace_li = next(
+            n
+            for n in integration_nodes
+            if n.tag == "li"
+            and "Marketplace install (" in n.text()
+            and "Stage-1 context budget warning:" in n.text()
+        )
+        self.assertEqual(
+            ["p", "pre", "blockquote"],
+            [c.tag for c in marketplace_li.elem_children()],
+        )
+        self.assertIn(
+            "starter@fred-skills",
+            marketplace_li.elem_children()[1].text(),
+        )
+        self.assertIn(
+            "Stage-1 context budget warning:",
+            marketplace_li.elem_children()[2].text(),
+        )
+
+        # 3. Verify skills/repo-audit-diagnostics/SKILL.html renders trailing <p> after nested <ul>
+        diag_nodes = _parse_html_nodes(
+            (self.site_dir / "skills/repo-audit-diagnostics/SKILL.html").read_text(
+                encoding="utf-8"
+            )
+        )
+        detect_li = next(
+            n
+            for n in diag_nodes
+            if n.tag == "li" and "Detect failure signatures:" in n.text()
+        )
+        self.assertEqual(
+            ["p", "ul", "p"],
+            [c.tag for c in detect_li.elem_children()],
+        )
+        self.assertIn(
+            "Pinpoint the precise transcript line and failed command or tool invocation.",
+            detect_li.elem_children()[2].text(),
+        )
+
+        # 4. Verify nested tables, deeper list-relative headings, and XSS escaping inside list items
+        nested_md = (
+            "10. Lead instruction:\n\n"
+            "    #### Deep Heading <script>alert(1)</script>\n\n"
+            "    | Col | Value |\n"
+            "    | --- | --- |\n"
+            "    | `a | b` | <b>raw</b> |\n\n"
+            "    > Quoted warning\n\n"
+            "    Closing note.\n"
+        )
+        _, nested_html = build_site.compile_markdown(
+            nested_md,
+            source_rel_path="docs/sample.md",
+            compiled_md_paths=frozenset(),
+            root=ROOT,
+        )
+        self.assertNotIn("<script>", nested_html)
+        self.assertNotIn("<b>raw</b>", nested_html)
+        nested_li = next(n for n in _parse_html_nodes(nested_html) if n.tag == "li")
+        self.assertEqual(
+            ["p", "h4", "div", "blockquote", "p"],
+            [c.tag for c in nested_li.elem_children()],
+        )
 
 
 if __name__ == "__main__":

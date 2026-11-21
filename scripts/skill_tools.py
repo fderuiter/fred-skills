@@ -384,7 +384,7 @@ def extract_document_anchors(content: str, suffix: str = ".md") -> set[str]:
     seen_slugs: dict[str, int] = {}
 
     for _, line in non_fenced_lines(content):
-        heading = match_atx_heading(line)
+        heading = match_atx_heading(line, max_indent=None)
         if heading is not None:
             anchors.add(unique_heading_slug(heading[1], seen_slugs))
 
