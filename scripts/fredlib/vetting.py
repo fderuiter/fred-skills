@@ -10,6 +10,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -608,19 +609,59 @@ _YAML_KEY_VALUE_RE = re.compile(r"^([ \t]*)(-\s+)?([A-Za-z0-9_.-]+)\s*:(.*)$")
 _YAML_LIST_ITEM_RE = re.compile(r"^([ \t]*)-\s+(.+)$")
 
 
+@dataclass(frozen=True, slots=True)
+class _ConfigSourceContext:
+    raw_text: str
+    file_label: str
+    fallback_line: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundaryContext:
+    base_dir: Path
+    boundary_root: Path
+    source_label: str
+    category: str = "agent-config"
+
+
+@dataclass(frozen=True, slots=True)
+class _RepoScanContext:
+    repo_root: Path
+    root: Path
+    allowed_capabilities: Collection[str] | None
+    allowed: frozenset[str]
+    seen_configs: set[str] = field(default_factory=set)
+    configs_scanned: list[str] = field(default_factory=list)
+    seen_skills: set[str] = field(default_factory=set)
+    skills_scanned: list[str] = field(default_factory=list)
+    vetted_md_targets: set[Path] = field(default_factory=set)
+    findings: list[dict[str, Any]] = field(default_factory=list)
+    active_chain: frozenset[Path] = frozenset()
+
+
+def _mark_config_scanned(ctx: _RepoScanContext, rel_label: str) -> bool:
+    if rel_label in ctx.seen_configs:
+        return False
+    ctx.seen_configs.add(rel_label)
+    ctx.configs_scanned.append(rel_label)
+    return True
+
+
 def _format_file_label(path: Path, root: Path | None) -> str:
-    if root is not None:
-        try:
-            resolved_root = root.resolve()
-            if not path.is_symlink():
-                resolved_path = path.resolve()
-                if resolved_path.is_relative_to(resolved_root):
-                    return resolved_path.relative_to(resolved_root).as_posix()
-            elif path.parent.resolve().is_relative_to(resolved_root):
-                parent_rel = path.parent.resolve().relative_to(resolved_root)
-                return (parent_rel / path.name).as_posix()
-        except OSError:
-            pass
+    if root is None:
+        return path.as_posix()
+    try:
+        resolved_root = root.resolve()
+        if not path.is_symlink():
+            resolved_path = path.resolve()
+            if resolved_path.is_relative_to(resolved_root):
+                return resolved_path.relative_to(resolved_root).as_posix()
+            return path.as_posix()
+        resolved_parent = path.parent.resolve()
+        if resolved_parent.is_relative_to(resolved_root):
+            return (resolved_parent.relative_to(resolved_root) / path.name).as_posix()
+    except OSError:
+        return path.as_posix()
     return path.as_posix()
 
 
@@ -628,7 +669,6 @@ def _finding(
     file_label: str,
     line: int,
     rule: str,
-    severity: str,
     category: str,
     message: str,
 ) -> dict[str, Any]:
@@ -636,10 +676,15 @@ def _finding(
         "file": file_label,
         "line": max(1, line),
         "rule": rule,
-        "severity": severity,
+        "severity": "high",
         "category": category,
         "message": message,
     }
+
+
+def _with_severity(finding: dict[str, Any], severity: str) -> dict[str, Any]:
+    finding["severity"] = severity
+    return finding
 
 
 def _normalize_capabilities(
@@ -691,29 +736,33 @@ def _match_sensitive_path(raw_path: str) -> tuple[str, str] | None:
     return None
 
 
+def _joined_part_str(val: ast.AST) -> str | None:
+    if isinstance(val, ast.Constant) and isinstance(val.value, str):
+        return val.value
+    if isinstance(val, ast.FormattedValue) and val.format_spec is None:
+        return _const_str(val.value)
+    return None
+
+
+def _joined_const_str(node: ast.JoinedStr) -> str | None:
+    parts: list[str] = []
+    for val in node.values:
+        part = _joined_part_str(val)
+        if part is None:
+            return None
+        parts.append(part)
+    return "".join(parts)
+
+
 def _const_str(node: ast.AST | None) -> str | None:
-    if node is None:
-        return None
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left = _const_str(node.left)
         right = _const_str(node.right)
-        if left is not None and right is not None:
-            return left + right
+        return left + right if left is not None and right is not None else None
     if isinstance(node, ast.JoinedStr):
-        parts: list[str] = []
-        for val in node.values:
-            if isinstance(val, ast.Constant) and isinstance(val.value, str):
-                parts.append(val.value)
-            elif isinstance(val, ast.FormattedValue) and val.format_spec is None:
-                inner = _const_str(val.value)
-                if inner is None:
-                    return None
-                parts.append(inner)
-            else:
-                return None
-        return "".join(parts)
+        return _joined_const_str(node)
     return None
 
 
@@ -767,13 +816,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         self._seen_keys: set[tuple[int, str, str]] = set()
 
     def _add(
-        self, line: int, rule: str, severity: str, category: str, message: str
+        self, line: int, rule: str, message: str, *, severity: str = "high"
     ) -> None:
         key = (max(1, line), rule, message)
         if key not in self._seen_keys:
             self._seen_keys.add(key)
             self.findings.append(
-                _finding(self.file_label, line, rule, severity, category, message)
+                _with_severity(
+                    _finding(self.file_label, line, rule, "script", message),
+                    severity,
+                )
             )
 
     def _check_imported_target(self, line: int, target_mod: str, label: str) -> None:
@@ -783,8 +835,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "network-client",
-                "high",
-                "script",
                 f"Python script imports network module '{label}'",
             )
         if _is_dynamic_module_name(target_mod) and not _capability_permitted(
@@ -793,8 +843,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "dynamic-execution",
-                "high",
-                "script",
                 f"Python script imports dynamic loader module '{label}'",
             )
         if target_mod == "builtins" and not _capability_permitted(
@@ -803,8 +851,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "dynamic-execution",
-                "high",
-                "script",
                 "Python script imports 'builtins' namespace directly",
             )
         if _is_ffi_module_name(target_mod) and not _capability_permitted(
@@ -813,8 +859,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "dynamic-execution",
-                "high",
-                "script",
                 f"Python script imports native FFI module '{label}'",
             )
         if (
@@ -823,8 +867,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "process-execution",
-                "high",
-                "script",
                 f"Python script imports process execution module '{label}' (requires capability 'process-execution')",
             )
         if (
@@ -833,8 +875,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "shell-execution",
-                "high",
-                "script",
                 f"Python script imports pseudo-terminal execution module '{label}'",
             )
 
@@ -849,6 +889,87 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._check_imported_target(node.lineno, mod, mod)
         self.generic_visit(node)
 
+    def _check_import_from_network(
+        self, line: int, base_mod: str, alias_name: str, full: str
+    ) -> None:
+        if _capability_permitted("network", self.allowed):
+            return
+        if _is_network_module_name(full):
+            self._add(
+                line,
+                "network-client",
+                f"Python script imports network client '{full}'",
+            )
+            return
+        if (
+            base_mod not in {"", "urllib"}
+            and _is_network_module_name(base_mod)
+            and full not in _SAFE_URLLIB_MODULES
+        ):
+            self._add(
+                line,
+                "network-client",
+                f"Python script imports network client '{base_mod}'",
+            )
+            return
+        if alias_name in _PYTHON_NETWORK_CALLS:
+            self._add(
+                line,
+                "network-client",
+                f"Python script imports network client '{full}'",
+            )
+
+    def _check_import_from_loaders(self, line: int, base_mod: str, full: str) -> None:
+        if (
+            _is_dynamic_module_name(base_mod) or _is_dynamic_module_name(full)
+        ) and not _capability_permitted("dynamic-execution", self.allowed):
+            self._add(
+                line,
+                "dynamic-execution",
+                f"Python script imports dynamic loader '{full}'",
+            )
+        if base_mod == "builtins" and not _capability_permitted(
+            "dynamic-execution", self.allowed
+        ):
+            self._add(
+                line,
+                "dynamic-execution",
+                f"Python script imports builtin '{full}'",
+            )
+        if (
+            _is_ffi_module_name(base_mod) or _is_ffi_module_name(full)
+        ) and not _capability_permitted("native-ffi", self.allowed):
+            self._add(
+                line,
+                "dynamic-execution",
+                f"Python script imports native FFI symbol '{full}'",
+            )
+
+    def _check_import_from_process(
+        self, line: int, base_mod: str, alias_name: str, full: str
+    ) -> None:
+        if base_mod == "subprocess" and not _process_capability_permitted(self.allowed):
+            self._add(
+                line,
+                "process-execution",
+                f"Python script imports process execution symbol '{full}' (requires capability 'process-execution')",
+            )
+        if alias_name in _PYTHON_SHELL_ATTR_CALLS.get(base_mod, frozenset()):
+            if not _capability_permitted("shell-execution", self.allowed):
+                self._add(
+                    line,
+                    "shell-execution",
+                    f"Python script imports shell/process execution '{full}'",
+                )
+        elif base_mod == "pty" and not _capability_permitted(
+            "shell-execution", self.allowed
+        ):
+            self._add(
+                line,
+                "shell-execution",
+                f"Python script imports pseudo-terminal symbol '{full}'",
+            )
+
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         base_mod = node.module or ""
         for alias in node.names:
@@ -858,100 +979,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             full = f"{base_mod}.{alias.name}" if base_mod else alias.name
             bound = alias.asname or alias.name
             self._imported_aliases[bound] = full
-
-            if _is_network_module_name(full) or (
-                base_mod not in {"", "urllib"}
-                and _is_network_module_name(base_mod)
-                and full not in _SAFE_URLLIB_MODULES
-            ):
-                if not _capability_permitted("network", self.allowed):
-                    target_label = (
-                        full if _is_network_module_name(full) else (base_mod or full)
-                    )
-                    self._add(
-                        node.lineno,
-                        "network-client",
-                        "high",
-                        "script",
-                        f"Python script imports network client '{target_label}'",
-                    )
-            elif alias.name in _PYTHON_NETWORK_CALLS and not _capability_permitted(
-                "network", self.allowed
-            ):
-                self._add(
-                    node.lineno,
-                    "network-client",
-                    "high",
-                    "script",
-                    f"Python script imports network client '{full}'",
-                )
-
-            if (
-                _is_dynamic_module_name(base_mod) or _is_dynamic_module_name(full)
-            ) and not _capability_permitted("dynamic-execution", self.allowed):
-                self._add(
-                    node.lineno,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    f"Python script imports dynamic loader '{full}'",
-                )
-
-            if base_mod == "builtins" and not _capability_permitted(
-                "dynamic-execution", self.allowed
-            ):
-                self._add(
-                    node.lineno,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    f"Python script imports builtin '{full}'",
-                )
-
-            if (
-                _is_ffi_module_name(base_mod) or _is_ffi_module_name(full)
-            ) and not _capability_permitted("native-ffi", self.allowed):
-                self._add(
-                    node.lineno,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    f"Python script imports native FFI symbol '{full}'",
-                )
-
-            if base_mod == "subprocess" and not _process_capability_permitted(
-                self.allowed
-            ):
-                self._add(
-                    node.lineno,
-                    "process-execution",
-                    "high",
-                    "script",
-                    f"Python script imports process execution symbol '{full}' (requires capability 'process-execution')",
-                )
-
-            if (
-                base_mod in _PYTHON_SHELL_ATTR_CALLS
-                and alias.name in _PYTHON_SHELL_ATTR_CALLS[base_mod]
-                and not _capability_permitted("shell-execution", self.allowed)
-            ):
-                self._add(
-                    node.lineno,
-                    "shell-execution",
-                    "high",
-                    "script",
-                    f"Python script imports shell/process execution '{full}'",
-                )
-            elif base_mod == "pty" and not _capability_permitted(
-                "shell-execution", self.allowed
-            ):
-                self._add(
-                    node.lineno,
-                    "shell-execution",
-                    "high",
-                    "script",
-                    f"Python script imports pseudo-terminal symbol '{full}'",
-                )
+            self._check_import_from_network(node.lineno, base_mod, alias.name, full)
+            self._check_import_from_loaders(node.lineno, base_mod, full)
+            self._check_import_from_process(node.lineno, base_mod, alias.name, full)
         self.generic_visit(node)
 
     def _resolve_sys_modules_lookup(self, node: ast.AST) -> str | None:
@@ -965,36 +995,39 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return _const_str(node.args[0]) or "sys.modules"
         return None
 
+    def _resolve_attrgetter_attr(self, func_expr: ast.AST) -> str | None:
+        if (
+            isinstance(func_expr, ast.Call)
+            and len(func_expr.args) == 1
+            and self._resolve_callee(func_expr.func) == "operator.attrgetter"
+        ):
+            return _const_str(func_expr.args[0])
+        if isinstance(func_expr, ast.Name) and func_expr.id in self._attrgetters:
+            attrs = self._attrgetters[func_expr.id]
+            return attrs[0] if len(attrs) == 1 else None
+        return None
+
+    def _resolve_call_callee(self, func: ast.Call) -> str | None:
+        inner_callee = self._resolve_callee(func.func)
+        if inner_callee in {"getattr", "builtins.getattr"} and len(func.args) >= 2:
+            target = self._resolve_callee(func.args[0])
+            attr = _const_str(func.args[1])
+            if target and attr:
+                return f"{target}.{attr}"
+        if not func.args:
+            return None
+        ag_attr = self._resolve_attrgetter_attr(func.func)
+        if not ag_attr:
+            return None
+        target = self._resolve_callee(func.args[0])
+        return f"{target}.{ag_attr}" if target else None
+
     def _resolve_callee(self, func: ast.AST) -> str | None:
         sys_mod = self._resolve_sys_modules_lookup(func)
         if sys_mod is not None:
             return sys_mod
-
         if isinstance(func, ast.Call):
-            inner_callee = self._resolve_callee(func.func)
-            if inner_callee in {"getattr", "builtins.getattr"} and len(func.args) >= 2:
-                target = self._resolve_callee(func.args[0])
-                attr = _const_str(func.args[1])
-                if target and attr:
-                    return f"{target}.{attr}"
-            if isinstance(func.func, ast.Call) and func.args:
-                ag_callee = self._resolve_callee(func.func.func)
-                if ag_callee == "operator.attrgetter" and len(func.func.args) == 1:
-                    target = self._resolve_callee(func.args[0])
-                    attr = _const_str(func.func.args[0])
-                    if target and attr:
-                        return f"{target}.{attr}"
-            if (
-                isinstance(func.func, ast.Name)
-                and func.func.id in self._attrgetters
-                and func.args
-            ):
-                attrs = self._attrgetters[func.func.id]
-                target = self._resolve_callee(func.args[0])
-                if target and len(attrs) == 1 and attrs[0]:
-                    return f"{target}.{attrs[0]}"
-            return None
-
+            return self._resolve_call_callee(func)
         raw = _dotted_name(func)
         if raw is None:
             return None
@@ -1051,6 +1084,91 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         resolved = self._resolve_callee(node)
         return resolved in {"os.environ", "os.environb", "posix.environ", "nt.environ"}
 
+    def _check_reflective_os_family(
+        self,
+        line: int,
+        target_name: str,
+        attr_values: list[str | None],
+        *,
+        via: str,
+    ) -> None:
+        root_mod = target_name.split(".")[0]
+        shell_attrs = _PYTHON_SHELL_ATTR_CALLS.get(root_mod, frozenset())
+        for attr in attr_values:
+            if attr in {"environ", "environb", "getenv", "getenvb"}:
+                if not _capability_permitted("env:*", self.allowed):
+                    self._add(
+                        line,
+                        "undeclared-credential-read",
+                        f"Reflective '{via}' environment lookup '{target_name}.{attr}' (requires capability 'env:*')",
+                    )
+                return
+            if attr in shell_attrs:
+                if not _capability_permitted("shell-execution", self.allowed):
+                    self._add(
+                        line,
+                        "shell-execution",
+                        f"Reflective '{via}' lookup invokes '{target_name}.{attr}'",
+                    )
+                return
+        if not _capability_permitted("dynamic-execution", self.allowed):
+            self._add(
+                line,
+                "dynamic-execution",
+                f"Reflective '{via}' lookup on execution module '{target_name}'",
+            )
+
+    def _check_reflective_exec_module(
+        self,
+        line: int,
+        target_name: str,
+        attr_values: list[str | None],
+        *,
+        via: str,
+    ) -> None:
+        root_mod = target_name.split(".")[0]
+        net_attr = next(
+            (
+                a
+                for a in attr_values
+                if a and _is_network_module_name(f"{target_name}.{a}")
+            ),
+            None,
+        )
+        if net_attr is not None:
+            if not _capability_permitted("network", self.allowed):
+                self._add(
+                    line,
+                    "network-client",
+                    f"Reflective '{via}' lookup '{target_name}.{net_attr}' accesses network client",
+                )
+            return
+        if root_mod == "subprocess":
+            if not _process_capability_permitted(self.allowed):
+                self._add(
+                    line,
+                    "process-execution",
+                    f"Reflective '{via}' lookup on '{target_name}' spawns external processes (requires capability 'process-execution')",
+                )
+            return
+        if root_mod in {"os", "posix", "nt", "pty", "asyncio"}:
+            self._check_reflective_os_family(line, target_name, attr_values, via=via)
+            return
+        if root_mod in _PYTHON_FFI_MODULES:
+            if not _capability_permitted("native-ffi", self.allowed):
+                self._add(
+                    line,
+                    "dynamic-execution",
+                    f"Reflective '{via}' lookup on native FFI module '{target_name}'",
+                )
+            return
+        if not _capability_permitted("dynamic-execution", self.allowed):
+            self._add(
+                line,
+                "dynamic-execution",
+                f"Reflective '{via}' lookup on '{target_name}'",
+            )
+
     def _check_reflective_lookup(
         self,
         line: int,
@@ -1062,226 +1180,133 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         target_name = self._resolve_callee(target_node)
         if not target_name:
             return
-        root_mod = target_name.split(".")[0]
-
-        is_net = _is_network_module_name(target_name) or target_name in {
-            "urllib",
-            "http",
-        }
-        if is_net:
+        if _is_network_module_name(target_name) or target_name in {"urllib", "http"}:
             if not _capability_permitted("network", self.allowed):
                 self._add(
                     line,
                     "network-client",
-                    "high",
-                    "script",
                     f"Reflective '{via}' lookup on network module '{target_name}'",
                 )
             return
-
         if target_name == "sys.modules":
             if not _capability_permitted("dynamic-execution", self.allowed):
                 self._add(
                     line,
                     "dynamic-execution",
-                    "high",
-                    "script",
                     f"Reflective '{via}' lookup on 'sys.modules'",
                 )
             return
+        if target_name.split(".")[0] in _REFLECTIVE_EXEC_MODULES:
+            self._check_reflective_exec_module(line, target_name, attr_values, via=via)
 
-        if root_mod not in _REFLECTIVE_EXEC_MODULES:
-            return
-
-        for attr in attr_values:
-            if attr and _is_network_module_name(f"{target_name}.{attr}"):
-                if not _capability_permitted("network", self.allowed):
-                    self._add(
-                        line,
-                        "network-client",
-                        "high",
-                        "script",
-                        f"Reflective '{via}' lookup '{target_name}.{attr}' accesses network client",
-                    )
-                return
-
-        if root_mod == "subprocess":
-            if not _process_capability_permitted(self.allowed):
-                self._add(
-                    line,
-                    "process-execution",
-                    "high",
-                    "script",
-                    f"Reflective '{via}' lookup on '{target_name}' spawns external processes (requires capability 'process-execution')",
-                )
-            return
-
-        if root_mod in {"os", "posix", "nt", "pty", "asyncio"}:
-            for attr in attr_values:
-                if attr in {"environ", "environb", "getenv", "getenvb"}:
-                    if not _capability_permitted("env:*", self.allowed):
-                        self._add(
-                            line,
-                            "undeclared-credential-read",
-                            "high",
-                            "script",
-                            f"Reflective '{via}' environment lookup '{target_name}.{attr}' (requires capability 'env:*')",
-                        )
-                    return
-                if (
-                    root_mod in _PYTHON_SHELL_ATTR_CALLS
-                    and attr in _PYTHON_SHELL_ATTR_CALLS[root_mod]
-                ):
-                    if not _capability_permitted("shell-execution", self.allowed):
-                        self._add(
-                            line,
-                            "shell-execution",
-                            "high",
-                            "script",
-                            f"Reflective '{via}' lookup invokes '{target_name}.{attr}'",
-                        )
-                    return
-            if not _capability_permitted("dynamic-execution", self.allowed):
-                self._add(
-                    line,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    f"Reflective '{via}' lookup on execution module '{target_name}'",
-                )
-            return
-
-        if root_mod in _PYTHON_FFI_MODULES:
-            if not _capability_permitted("native-ffi", self.allowed):
-                self._add(
-                    line,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    f"Reflective '{via}' lookup on native FFI module '{target_name}'",
-                )
-            return
-
-        if not _capability_permitted("dynamic-execution", self.allowed):
-            self._add(
-                line,
-                "dynamic-execution",
-                "high",
-                "script",
-                f"Reflective '{via}' lookup on '{target_name}'",
-            )
+    def _single_subprocess_token(self, node: ast.AST) -> str | None:
+        direct = _const_str(node)
+        if direct is not None:
+            return direct
+        parts = self._extract_path_parts(node)
+        return "/".join(parts) if parts else None
 
     def _extract_subprocess_arg_tokens(self, node: ast.Call) -> list[str]:
+        candidates: list[ast.AST] = list(node.args[:1])
+        candidates.extend(
+            kw.value for kw in node.keywords if kw.arg in {"args", "executable"}
+        )
         tokens: list[str] = []
-        candidates: list[ast.AST] = []
-        if node.args:
-            candidates.append(node.args[0])
-        for kw in node.keywords:
-            if kw.arg in {"args", "executable"}:
-                candidates.append(kw.value)
         for item in candidates:
-            direct = _const_str(item)
-            if direct is not None:
-                tokens.append(direct)
-            elif isinstance(item, (ast.List, ast.Tuple)):
-                for elt in item.elts:
-                    elt_str = _const_str(elt)
-                    if elt_str is not None:
-                        tokens.append(elt_str)
-                    else:
-                        parts = self._extract_path_parts(elt)
-                        if parts:
-                            tokens.append("/".join(parts))
-            else:
-                parts = self._extract_path_parts(item)
-                if parts:
-                    tokens.append("/".join(parts))
+            elts = (
+                list(item.elts) if isinstance(item, (ast.List, ast.Tuple)) else [item]
+            )
+            for elt in elts:
+                tok = self._single_subprocess_token(elt)
+                if tok is not None:
+                    tokens.append(tok)
         return tokens
 
-    def _inspect_subprocess_call(self, node: ast.Call, callee: str, short: str) -> None:
-        is_shell_helper = short in {"getoutput", "getstatusoutput"}
-        has_shell_true = False
+    @staticmethod
+    def _call_enables_shell(node: ast.Call, short: str) -> bool:
+        if short in {"getoutput", "getstatusoutput"}:
+            return True
         for kw in node.keywords:
-            if kw.arg == "shell":
-                is_false = (
-                    isinstance(kw.value, ast.Constant) and kw.value.value is False
-                )
-                if not is_false:
-                    has_shell_true = True
+            if kw.arg == "shell" and not (
+                isinstance(kw.value, ast.Constant) and kw.value.value is False
+            ):
+                return True
+        return False
 
-        if (is_shell_helper or has_shell_true) and not _capability_permitted(
-            "shell-execution", self.allowed
+    def _inspect_subprocess_python_dash_c(
+        self, line: int, first_bin: str, tokens: list[str]
+    ) -> None:
+        if not (first_bin.startswith("python") and "-c" in tokens):
+            return
+        c_idx = tokens.index("-c")
+        if c_idx + 1 >= len(tokens):
+            return
+        for sub_finding in _vet_python_source(
+            tokens[c_idx + 1], self.file_label, self.allowed
         ):
             self._add(
-                node.lineno,
-                "shell-execution",
-                "high",
-                "script",
-                f"Call to '{callee}' enables shell execution",
-            )
-        elif not _process_capability_permitted(self.allowed):
-            self._add(
-                node.lineno,
-                "process-execution",
-                "high",
-                "script",
-                f"Call to '{callee}' spawns an external process (requires capability 'process-execution')",
+                line,
+                sub_finding["rule"],
+                sub_finding["message"],
+                severity=sub_finding["severity"],
             )
 
-        tokens = self._extract_subprocess_arg_tokens(node)
-        if not tokens:
-            return
-
+    def _inspect_subprocess_tokens(
+        self, line: int, callee: str, tokens: list[str]
+    ) -> None:
         joined = " ".join(tokens)
         first_bin = Path(tokens[0].strip().replace("\\", "/")).name.lower()
-
         if (
             first_bin in _NETWORK_BINARY_NAMES
             or _SHELL_NETWORK_RE.search(joined) is not None
         ) and not _capability_permitted("network", self.allowed):
             self._add(
-                node.lineno,
+                line,
                 "network-client",
-                "high",
-                "script",
                 f"Subprocess call '{callee}' invokes network command '{tokens[0]}'",
             )
-
         if (
             first_bin in _SHELL_BINARY_NAMES
             or _SHELL_DYNAMIC_EXEC_RE.search(joined) is not None
         ) and not _capability_permitted("shell-execution", self.allowed):
             self._add(
-                node.lineno,
+                line,
                 "shell-execution",
-                "high",
-                "script",
                 f"Subprocess call '{callee}' invokes shell interpreter '{tokens[0]}'",
             )
+        self._inspect_subprocess_python_dash_c(line, first_bin, tokens)
+        self._inspect_subprocess_credentials(line, first_bin, tokens, joined)
 
-        if first_bin.startswith("python") and "-c" in tokens:
-            c_idx = tokens.index("-c")
-            if c_idx + 1 < len(tokens):
-                for sub_finding in _vet_python_source(
-                    tokens[c_idx + 1], self.file_label, self.allowed
-                ):
-                    self._add(
-                        node.lineno,
-                        sub_finding["rule"],
-                        sub_finding["severity"],
-                        sub_finding["category"],
-                        sub_finding["message"],
-                    )
-
+    def _inspect_subprocess_credentials(
+        self, line: int, first_bin: str, tokens: list[str], joined: str
+    ) -> None:
         for tok in tokens:
-            self._check_path_string(node.lineno, tok)
+            self._check_path_string(line, tok)
         for path_match in _SHELL_SENSITIVE_PATH_RE.finditer(joined):
-            self._check_path_string(node.lineno, path_match.group(0))
+            self._check_path_string(line, path_match.group(0))
         for env_match in _SHELL_ENV_SECRET_RE.finditer(joined):
-            self._check_env_name(node.lineno, env_match.group(1))
+            self._check_env_name(line, env_match.group(1))
         if first_bin in {"printenv", "env"}:
             for tok in tokens[1:]:
-                self._check_env_name(node.lineno, tok)
+                self._check_env_name(line, tok)
+
+    def _inspect_subprocess_call(self, node: ast.Call, callee: str, short: str) -> None:
+        if self._call_enables_shell(node, short):
+            if not _capability_permitted("shell-execution", self.allowed):
+                self._add(
+                    node.lineno,
+                    "shell-execution",
+                    f"Call to '{callee}' enables shell execution",
+                )
+        elif not _process_capability_permitted(self.allowed):
+            self._add(
+                node.lineno,
+                "process-execution",
+                f"Call to '{callee}' spawns an external process (requires capability 'process-execution')",
+            )
+        tokens = self._extract_subprocess_arg_tokens(node)
+        if tokens:
+            self._inspect_subprocess_tokens(node.lineno, callee, tokens)
 
     def _check_env_name(self, line: int, env_name: str) -> None:
         cleaned = env_name.strip()
@@ -1293,8 +1318,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 self._add(
                     line,
                     "undeclared-credential-read",
-                    "high",
-                    "script",
                     f"Undeclared credential environment read '{cleaned}' (requires capability '{cap}')",
                 )
 
@@ -1309,8 +1332,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "undeclared-credential-read",
-                "high",
-                "script",
                 "Undeclared bulk environment read 'os.environ' (requires capability 'env:*')",
             )
 
@@ -1323,67 +1344,70 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             self._add(
                 line,
                 "undeclared-credential-read",
-                "high",
-                "script",
                 f"Undeclared sensitive path access '{label}' (requires capability '{cap}')",
             )
+
+    def _extract_div_path_parts(self, node: ast.BinOp) -> list[str]:
+        left_parts = self._extract_path_parts(node.left)
+        if left_parts is None:
+            left_parts = (
+                [f"<{node.left.id}>"] if isinstance(node.left, ast.Name) else ["<expr>"]
+            )
+        right_str = _const_str(node.right)
+        right_part = right_str if right_str is not None else "<expr>"
+        return [*left_parts, right_part]
+
+    def _extract_attr_call_path_parts(
+        self, func: ast.Attribute, args: list[ast.expr], short: str | None
+    ) -> list[str] | None:
+        attr = func.attr
+        if attr == "home" and short == "home":
+            return ["~"]
+        if attr == "joinpath":
+            base_parts = self._extract_path_parts(func.value) or ["<path>"]
+            arg_parts = [_const_str(a) or "<expr>" for a in args]
+            return [*base_parts, *arg_parts]
+        if attr in {"expanduser", "resolve", "absolute"} and not args:
+            exp_parts = self._extract_path_parts(func.value)
+            return exp_parts if exp_parts is not None else ["~"]
+        return None
+
+    def _extract_call_path_parts(self, node: ast.Call) -> list[str] | None:
+        callee = self._resolve_callee(node.func)
+        short = callee.rsplit(".", 1)[-1] if callee else None
+        if isinstance(node.func, ast.Attribute):
+            attr_res = self._extract_attr_call_path_parts(node.func, node.args, short)
+            if attr_res is not None:
+                return attr_res
+        if short not in {
+            "Path",
+            "PurePath",
+            "PurePosixPath",
+            "PureWindowsPath",
+            "expanduser",
+            "join",
+        }:
+            return None
+        if not node.args:
+            return ["."]
+        parts: list[str] = []
+        for arg in node.args:
+            sub = self._extract_path_parts(arg)
+            parts.extend(sub if sub is not None else ["<expr>"])
+        return parts
 
     def _extract_path_parts(self, node: ast.AST) -> list[str] | None:
         str_val = _const_str(node)
         if str_val is not None:
             return [str_val]
-
         if isinstance(node, ast.Name):
-            if node.id in self._path_vars:
-                return list(self._path_vars[node.id])
-            return None
-
+            return (
+                list(self._path_vars[node.id]) if node.id in self._path_vars else None
+            )
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            left_parts = self._extract_path_parts(node.left)
-            if left_parts is None:
-                left_parts = (
-                    [f"<{node.left.id}>"]
-                    if isinstance(node.left, ast.Name)
-                    else ["<expr>"]
-                )
-            right_str = _const_str(node.right)
-            right_part = right_str if right_str is not None else "<expr>"
-            return [*left_parts, right_part]
-
+            return self._extract_div_path_parts(node)
         if isinstance(node, ast.Call):
-            callee = self._resolve_callee(node.func)
-            short = callee.rsplit(".", 1)[-1] if callee else None
-
-            if isinstance(node.func, ast.Attribute):
-                attr = node.func.attr
-                if attr in {"home"} and short == "home":
-                    return ["~"]
-                if attr == "joinpath":
-                    base_parts = self._extract_path_parts(node.func.value) or ["<path>"]
-                    arg_parts = [_const_str(a) or "<expr>" for a in node.args]
-                    return [*base_parts, *arg_parts]
-                if attr in {"expanduser", "resolve", "absolute"} and not node.args:
-                    exp_parts = self._extract_path_parts(node.func.value)
-                    return exp_parts if exp_parts is not None else ["~"]
-
-            if short in {
-                "Path",
-                "PurePath",
-                "PurePosixPath",
-                "PureWindowsPath",
-                "expanduser",
-                "join",
-            }:
-                if not node.args:
-                    return ["."]
-                parts: list[str] = []
-                for arg in node.args:
-                    sub = self._extract_path_parts(arg)
-                    if sub is not None:
-                        parts.extend(sub)
-                    else:
-                        parts.append("<expr>")
-                return parts
+            return self._extract_call_path_parts(node)
         return None
 
     def _mark_inner_path_nodes(self, node: ast.AST) -> None:
@@ -1422,8 +1446,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 self._add(
                     node.lineno,
                     "dynamic-execution",
-                    "high",
-                    "script",
                     "Python script accesses '__builtins__' namespace directly",
                 )
             elif id(node) not in self._safe_environ_nodes and self._is_os_environ_expr(
@@ -1443,16 +1465,12 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             resolved = self._resolve_callee(node)
             if resolved:
                 mod_prefix, _, attr_name = resolved.rpartition(".")
-                if (
-                    mod_prefix in _PYTHON_SHELL_ATTR_CALLS
-                    and attr_name in _PYTHON_SHELL_ATTR_CALLS[mod_prefix]
-                    and not _capability_permitted("shell-execution", self.allowed)
-                ):
+                if attr_name in _PYTHON_SHELL_ATTR_CALLS.get(
+                    mod_prefix, frozenset()
+                ) and not _capability_permitted("shell-execution", self.allowed):
                     self._add(
                         node.lineno,
                         "shell-execution",
-                        "high",
-                        "script",
                         f"Python script invokes shell/process execution '{resolved}'",
                     )
         self.generic_visit(node)
@@ -1469,37 +1487,120 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 self._check_env_name(node.lineno, key_str)
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:
-        if (
+    def _check_call_environ_method(self, node: ast.Call) -> None:
+        if not (
             isinstance(node.func, ast.Attribute)
             and self._is_os_environ_expr(node.func.value)
             and node.func.attr in {"get", "pop", "setdefault"}
             and node.args
         ):
-            key_str = _const_str(node.args[0])
-            if key_str is not None:
-                self._safe_environ_nodes.add(id(node.func))
-                self._safe_environ_nodes.add(id(node.func.value))
-                self._check_env_name(node.lineno, key_str)
+            return
+        key_str = _const_str(node.args[0])
+        if key_str is not None:
+            self._safe_environ_nodes.add(id(node.func))
+            self._safe_environ_nodes.add(id(node.func.value))
+            self._check_env_name(node.lineno, key_str)
 
-        if isinstance(node.func, ast.Call) and node.args:
-            inner_callee = self._resolve_callee(node.func.func)
-            if inner_callee == "operator.attrgetter":
+    def _check_call_attrgetter(self, node: ast.Call) -> None:
+        if not node.args:
+            return
+        if isinstance(node.func, ast.Call):
+            if self._resolve_callee(node.func.func) == "operator.attrgetter":
                 attrs = [_const_str(arg) for arg in node.func.args]
                 self._check_reflective_lookup(
                     node.lineno, node.args[0], attrs, via="operator.attrgetter"
                 )
-        elif (
-            isinstance(node.func, ast.Name)
-            and node.func.id in self._attrgetters
-            and node.args
-        ):
+        elif isinstance(node.func, ast.Name) and node.func.id in self._attrgetters:
             self._check_reflective_lookup(
                 node.lineno,
                 node.args[0],
                 self._attrgetters[node.func.id],
                 via="operator.attrgetter",
             )
+
+    def _check_call_network_or_dynamic(
+        self, node: ast.Call, callee: str, short: str, mod_prefix: str
+    ) -> None:
+        if callee in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
+            self._check_reflective_lookup(
+                node.lineno,
+                node.args[0],
+                [_const_str(node.args[1])],
+                via="getattr",
+            )
+        if (
+            _is_network_module_name(callee) or short in _PYTHON_NETWORK_CALLS
+        ) and not _capability_permitted("network", self.allowed):
+            self._add(
+                node.lineno,
+                "network-client",
+                f"Python script invokes network client '{callee}'",
+            )
+        if (
+            callee
+            in {
+                "eval",
+                "exec",
+                "builtins.eval",
+                "builtins.exec",
+                "__import__",
+                "builtins.__import__",
+            }
+            or _is_dynamic_module_name(callee)
+            or _is_dynamic_module_name(mod_prefix)
+        ) and not _capability_permitted("dynamic-execution", self.allowed):
+            self._add(
+                node.lineno,
+                "dynamic-execution",
+                f"Python script invokes dynamic code execution '{callee}'",
+            )
+        if callee in {"compile", "builtins.compile"} and len(node.args) >= 3:
+            mode_val = _const_str(node.args[2])
+            if mode_val in {"eval", "exec", "single"} and not _capability_permitted(
+                "dynamic-execution", self.allowed
+            ):
+                self._add(
+                    node.lineno,
+                    "dynamic-execution",
+                    f"Python script compiles dynamic '{mode_val}' code object",
+                )
+
+    def _check_call_process_or_io(
+        self, node: ast.Call, callee: str, short: str
+    ) -> None:
+        mod_prefix, _, attr_name = callee.rpartition(".")
+        if attr_name in _PYTHON_SHELL_ATTR_CALLS.get(
+            mod_prefix, frozenset()
+        ) and not _capability_permitted("shell-execution", self.allowed):
+            self._add(
+                node.lineno,
+                "shell-execution",
+                f"Python script invokes shell/process execution '{callee}'",
+            )
+        if (
+            mod_prefix == "subprocess"
+            or (not mod_prefix and short in _SUBPROCESS_CALL_NAMES)
+            or callee == "asyncio.create_subprocess_exec"
+        ):
+            self._inspect_subprocess_call(node, callee, short)
+        if (
+            callee in {"os.getenv", "os.getenvb", "posix.getenv", "nt.getenv"}
+            and node.args
+        ):
+            key_str = _const_str(node.args[0])
+            if key_str is not None:
+                self._check_env_name(node.lineno, key_str)
+            else:
+                self._check_bulk_env_read(node.lineno)
+        if short == "open" and node.args:
+            arg_parts = self._extract_path_parts(node.args[0])
+            if arg_parts:
+                self._mark_inner_path_nodes(node.args[0])
+                self._check_path_string(node.lineno, "/".join(arg_parts))
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self._check_call_environ_method(node)
+        self._check_call_attrgetter(node)
 
         sys_mod = self._resolve_sys_modules_lookup(node)
         if sys_mod and sys_mod != "sys.modules":
@@ -1508,98 +1609,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         callee = self._resolve_callee(node.func)
         if callee:
             short = callee.rsplit(".", 1)[-1]
-            mod_prefix, _, attr_name = callee.rpartition(".")
-
-            if callee in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
-                self._check_reflective_lookup(
-                    node.lineno,
-                    node.args[0],
-                    [_const_str(node.args[1])],
-                    via="getattr",
-                )
-
-            if (
-                _is_network_module_name(callee) or short in _PYTHON_NETWORK_CALLS
-            ) and not _capability_permitted("network", self.allowed):
-                self._add(
-                    node.lineno,
-                    "network-client",
-                    "high",
-                    "script",
-                    f"Python script invokes network client '{callee}'",
-                )
-
-            if (
-                callee
-                in {
-                    "eval",
-                    "exec",
-                    "builtins.eval",
-                    "builtins.exec",
-                    "__import__",
-                    "builtins.__import__",
-                }
-                or _is_dynamic_module_name(callee)
-                or _is_dynamic_module_name(mod_prefix)
-            ) and not _capability_permitted("dynamic-execution", self.allowed):
-                self._add(
-                    node.lineno,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    f"Python script invokes dynamic code execution '{callee}'",
-                )
-
-            if callee in {"compile", "builtins.compile"} and len(node.args) >= 3:
-                mode_val = _const_str(node.args[2])
-                if mode_val in {
-                    "eval",
-                    "exec",
-                    "single",
-                } and not _capability_permitted("dynamic-execution", self.allowed):
-                    self._add(
-                        node.lineno,
-                        "dynamic-execution",
-                        "high",
-                        "script",
-                        f"Python script compiles dynamic '{mode_val}' code object",
-                    )
-
-            if (
-                mod_prefix in _PYTHON_SHELL_ATTR_CALLS
-                and attr_name in _PYTHON_SHELL_ATTR_CALLS[mod_prefix]
-                and not _capability_permitted("shell-execution", self.allowed)
-            ):
-                self._add(
-                    node.lineno,
-                    "shell-execution",
-                    "high",
-                    "script",
-                    f"Python script invokes shell/process execution '{callee}'",
-                )
-
-            if (
-                mod_prefix == "subprocess"
-                or (not mod_prefix and short in _SUBPROCESS_CALL_NAMES)
-                or callee == "asyncio.create_subprocess_exec"
-            ):
-                self._inspect_subprocess_call(node, callee, short)
-
-            if (
-                callee in {"os.getenv", "os.getenvb", "posix.getenv", "nt.getenv"}
-                and node.args
-            ):
-                key_str = _const_str(node.args[0])
-                if key_str is not None:
-                    self._check_env_name(node.lineno, key_str)
-                else:
-                    self._check_bulk_env_read(node.lineno)
-
-            if short == "open" and node.args:
-                arg_parts = self._extract_path_parts(node.args[0])
-                if arg_parts:
-                    self._mark_inner_path_nodes(node.args[0])
-                    self._check_path_string(node.lineno, "/".join(arg_parts))
+            mod_prefix, _, _ = callee.rpartition(".")
+            self._check_call_network_or_dynamic(node, callee, short, mod_prefix)
+            self._check_call_process_or_io(node, callee, short)
 
         if id(node) not in self._checked_path_nodes:
             path_parts = self._extract_path_parts(node)
@@ -1639,13 +1651,15 @@ def _vet_python_source(
         tree = ast.parse(source, filename=file_label)
     except SyntaxError as exc:
         findings = [
-            _finding(
-                file_label,
-                exc.lineno or 1,
-                "syntax-error",
+            _with_severity(
+                _finding(
+                    file_label,
+                    exc.lineno or 1,
+                    "syntax-error",
+                    "script",
+                    f"Unable to parse Python script AST: {exc.msg}",
+                ),
                 "medium",
-                "script",
-                f"Unable to parse Python script AST: {exc.msg}",
             )
         ]
         findings.extend(_vet_shell_source(source, file_label, allowed))
@@ -1656,71 +1670,195 @@ def _vet_python_source(
     return visitor.findings
 
 
+def _vet_shell_line_credentials(
+    raw_line: str, line_no: int, file_label: str, allowed: frozenset[str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for path_match in _SHELL_SENSITIVE_PATH_RE.finditer(raw_line):
+        matched = _match_sensitive_path(path_match.group(0))
+        if matched is None:
+            continue
+        cap, label = matched
+        if not _capability_permitted(cap, allowed):
+            findings.append(
+                _finding(
+                    file_label,
+                    line_no,
+                    "undeclared-credential-read",
+                    "script",
+                    f"Undeclared sensitive path access '{label}' (requires capability '{cap}')",
+                )
+            )
+    for env_match in _SHELL_ENV_SECRET_RE.finditer(raw_line):
+        env_name = env_match.group(1)
+        if env_name in _SAFE_ENV_VARS or env_name.startswith("FRED_"):
+            continue
+        cap = f"env:{env_name}"
+        if not _capability_permitted(cap, allowed):
+            findings.append(
+                _finding(
+                    file_label,
+                    line_no,
+                    "undeclared-credential-read",
+                    "script",
+                    f"Undeclared credential environment read '{env_name}' (requires capability '{cap}')",
+                )
+            )
+    return findings
+
+
+def _vet_shell_line(
+    raw_line: str, line_no: int, file_label: str, allowed: frozenset[str]
+) -> list[dict[str, Any]]:
+    stripped = raw_line.strip()
+    if not stripped or (stripped.startswith("#") and not stripped.startswith("#!")):
+        return []
+    findings: list[dict[str, Any]] = []
+    if _SHELL_NETWORK_RE.search(raw_line) and not _capability_permitted(
+        "network", allowed
+    ):
+        findings.append(
+            _finding(
+                file_label,
+                line_no,
+                "network-client",
+                "script",
+                "Script invokes a network client or socket device",
+            )
+        )
+    if _SHELL_DYNAMIC_EXEC_RE.search(raw_line) and not _capability_permitted(
+        "shell-execution", allowed
+    ):
+        findings.append(
+            _finding(
+                file_label,
+                line_no,
+                "shell-execution",
+                "script",
+                "Script uses dynamic eval, subshell '-c', or pipe-to-shell execution",
+            )
+        )
+    findings.extend(_vet_shell_line_credentials(raw_line, line_no, file_label, allowed))
+    return findings
+
+
 def _vet_shell_source(
     source: str, file_label: str, allowed: frozenset[str]
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for idx, raw_line in enumerate(source.splitlines(), start=1):
-        stripped = raw_line.strip()
-        if not stripped or (stripped.startswith("#") and not stripped.startswith("#!")):
+        findings.extend(_vet_shell_line(raw_line, idx, file_label, allowed))
+    return findings
+
+
+def _strip_js_block_comments_line(
+    raw_line: str, in_block_comment: bool
+) -> tuple[str, bool]:
+    line = raw_line
+    if in_block_comment:
+        if "*/" not in line:
+            return "", True
+        line = line.split("*/", 1)[1]
+        in_block_comment = False
+    while "/*" in line:
+        before, after = line.split("/*", 1)
+        if "*/" not in after:
+            return before, True
+        line = before + " " + after.split("*/", 1)[1]
+    return line, in_block_comment
+
+
+def _vet_js_ts_line_credentials(
+    line: str, line_no: int, file_label: str, allowed: frozenset[str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for env_match in _JS_ENV_ACCESS_RE.finditer(line):
+        env_name = (
+            env_match.group(1) or env_match.group(2) or env_match.group(3) or ""
+        ).strip()
+        if (
+            not env_name
+            or env_name in _SAFE_ENV_VARS
+            or env_name.startswith("FRED_")
+            or not _SECRET_ENV_PATTERN.match(env_name)
+        ):
             continue
-        if _SHELL_NETWORK_RE.search(raw_line) and not _capability_permitted(
-            "network", allowed
-        ):
+        cap = f"env:{env_name}"
+        if not _capability_permitted(cap, allowed):
             findings.append(
                 _finding(
                     file_label,
-                    idx,
-                    "network-client",
-                    "high",
+                    line_no,
+                    "undeclared-credential-read",
                     "script",
-                    "Script invokes a network client or socket device",
+                    f"Undeclared credential environment read '{env_name}' (requires capability '{cap}')",
                 )
             )
-        if _SHELL_DYNAMIC_EXEC_RE.search(raw_line) and not _capability_permitted(
-            "shell-execution", allowed
-        ):
+    for lit_match in _JS_STRING_LITERAL_RE.finditer(line):
+        matched = _match_sensitive_path(lit_match.group(1))
+        if matched is None:
+            continue
+        cap, label = matched
+        if not _capability_permitted(cap, allowed):
             findings.append(
                 _finding(
                     file_label,
-                    idx,
-                    "shell-execution",
-                    "high",
+                    line_no,
+                    "undeclared-credential-read",
                     "script",
-                    "Script uses dynamic eval, subshell '-c', or pipe-to-shell execution",
+                    f"Undeclared sensitive path access '{label}' (requires capability '{cap}')",
                 )
             )
-        for path_match in _SHELL_SENSITIVE_PATH_RE.finditer(raw_line):
-            matched = _match_sensitive_path(path_match.group(0))
-            if matched is not None:
-                cap, label = matched
-                if not _capability_permitted(cap, allowed):
-                    findings.append(
-                        _finding(
-                            file_label,
-                            idx,
-                            "undeclared-credential-read",
-                            "high",
-                            "script",
-                            f"Undeclared sensitive path access '{label}' (requires capability '{cap}')",
-                        )
-                    )
-        for env_match in _SHELL_ENV_SECRET_RE.finditer(raw_line):
-            env_name = env_match.group(1)
-            if env_name in _SAFE_ENV_VARS or env_name.startswith("FRED_"):
-                continue
-            cap = f"env:{env_name}"
-            if not _capability_permitted(cap, allowed):
-                findings.append(
-                    _finding(
-                        file_label,
-                        idx,
-                        "undeclared-credential-read",
-                        "high",
-                        "script",
-                        f"Undeclared credential environment read '{env_name}' (requires capability '{cap}')",
-                    )
-                )
+    return findings
+
+
+def _vet_js_ts_line(
+    line: str, line_no: int, file_label: str, allowed: frozenset[str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    if _JS_NETWORK_RE.search(line) and not _capability_permitted("network", allowed):
+        findings.append(
+            _finding(
+                file_label,
+                line_no,
+                "network-client",
+                "script",
+                "JavaScript/TypeScript script invokes a network client",
+            )
+        )
+    if _JS_EXEC_RE.search(line) and not _process_capability_permitted(allowed):
+        findings.append(
+            _finding(
+                file_label,
+                line_no,
+                "shell-execution",
+                "script",
+                "JavaScript/TypeScript script invokes child process execution",
+            )
+        )
+    if _JS_DYNAMIC_RE.search(line) and not _capability_permitted(
+        "dynamic-execution", allowed
+    ):
+        findings.append(
+            _finding(
+                file_label,
+                line_no,
+                "dynamic-execution",
+                "script",
+                "JavaScript/TypeScript script invokes dynamic code evaluation",
+            )
+        )
+    if _JS_BULK_ENV_RE.search(line) and not _capability_permitted("env:*", allowed):
+        findings.append(
+            _finding(
+                file_label,
+                line_no,
+                "undeclared-credential-read",
+                "script",
+                "Undeclared bulk environment read 'process.env' (requires capability 'env:*')",
+            )
+        )
+    findings.extend(_vet_js_ts_line_credentials(line, line_no, file_label, allowed))
     return findings
 
 
@@ -1730,110 +1868,13 @@ def _vet_js_ts_source(
     findings: list[dict[str, Any]] = []
     in_block_comment = False
     for idx, raw_line in enumerate(source.splitlines(), start=1):
-        line = raw_line
-        if in_block_comment:
-            if "*/" not in line:
-                continue
-            line = line.split("*/", 1)[1]
-            in_block_comment = False
-        while "/*" in line:
-            before, after = line.split("/*", 1)
-            if "*/" in after:
-                line = before + " " + after.split("*/", 1)[1]
-            else:
-                line = before
-                in_block_comment = True
-                break
+        line, in_block_comment = _strip_js_block_comments_line(
+            raw_line, in_block_comment
+        )
         stripped = line.strip()
         if not stripped or stripped.startswith("//"):
             continue
-
-        if _JS_NETWORK_RE.search(line) and not _capability_permitted(
-            "network", allowed
-        ):
-            findings.append(
-                _finding(
-                    file_label,
-                    idx,
-                    "network-client",
-                    "high",
-                    "script",
-                    "JavaScript/TypeScript script invokes a network client",
-                )
-            )
-        if _JS_EXEC_RE.search(line) and not _process_capability_permitted(allowed):
-            findings.append(
-                _finding(
-                    file_label,
-                    idx,
-                    "shell-execution",
-                    "high",
-                    "script",
-                    "JavaScript/TypeScript script invokes child process execution",
-                )
-            )
-        if _JS_DYNAMIC_RE.search(line) and not _capability_permitted(
-            "dynamic-execution", allowed
-        ):
-            findings.append(
-                _finding(
-                    file_label,
-                    idx,
-                    "dynamic-execution",
-                    "high",
-                    "script",
-                    "JavaScript/TypeScript script invokes dynamic code evaluation",
-                )
-            )
-        if _JS_BULK_ENV_RE.search(line) and not _capability_permitted("env:*", allowed):
-            findings.append(
-                _finding(
-                    file_label,
-                    idx,
-                    "undeclared-credential-read",
-                    "high",
-                    "script",
-                    "Undeclared bulk environment read 'process.env' (requires capability 'env:*')",
-                )
-            )
-        for env_match in _JS_ENV_ACCESS_RE.finditer(line):
-            env_name = (
-                env_match.group(1) or env_match.group(2) or env_match.group(3) or ""
-            ).strip()
-            if (
-                not env_name
-                or env_name in _SAFE_ENV_VARS
-                or env_name.startswith("FRED_")
-            ):
-                continue
-            if _SECRET_ENV_PATTERN.match(env_name):
-                cap = f"env:{env_name}"
-                if not _capability_permitted(cap, allowed):
-                    findings.append(
-                        _finding(
-                            file_label,
-                            idx,
-                            "undeclared-credential-read",
-                            "high",
-                            "script",
-                            f"Undeclared credential environment read '{env_name}' (requires capability '{cap}')",
-                        )
-                    )
-        for lit_match in _JS_STRING_LITERAL_RE.finditer(line):
-            matched = _match_sensitive_path(lit_match.group(1))
-            if matched is not None:
-                cap, label = matched
-                if not _capability_permitted(cap, allowed):
-                    findings.append(
-                        _finding(
-                            file_label,
-                            idx,
-                            "undeclared-credential-read",
-                            "high",
-                            "script",
-                            f"Undeclared sensitive path access '{label}' (requires capability '{cap}')",
-                        )
-                    )
+        findings.extend(_vet_js_ts_line(line, idx, file_label, allowed))
     return findings
 
 
@@ -1861,7 +1902,6 @@ def vet_script(
                 file_label,
                 1,
                 "symlink-file",
-                "high",
                 "filesystem",
                 "Symlinked script file is not permitted",
             )
@@ -1880,7 +1920,6 @@ def vet_script(
                 file_label,
                 1,
                 "binary-script",
-                "high",
                 "script",
                 "Non-UTF-8 or binary executable in scripts directory is not permitted",
             ),
@@ -1923,18 +1962,18 @@ def _scan_hidden_unicode_text(
             label = _classify_hidden_unicode(
                 ch, is_file_start=(line_idx == 1 and col_idx == 0)
             )
-            if label is not None and ord(ch) not in seen_on_line:
-                seen_on_line.add(ord(ch))
-                findings.append(
-                    _finding(
-                        file_label,
-                        line_idx,
-                        "hidden-unicode",
-                        "high",
-                        category,
-                        f"Hidden Unicode character U+{ord(ch):04X} ({label})",
-                    )
+            if label is None or ord(ch) in seen_on_line:
+                continue
+            seen_on_line.add(ord(ch))
+            findings.append(
+                _finding(
+                    file_label,
+                    line_idx,
+                    "hidden-unicode",
+                    category,
+                    f"Hidden Unicode character U+{ord(ch):04X} ({label})",
                 )
+            )
     return findings
 
 
@@ -1977,6 +2016,177 @@ def _is_remote_network_url(raw_target: str) -> bool:
     )
 
 
+def _inspect_svg_xml_stylesheets(
+    svg_text: str, file_label: str
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for style_pi in _SVG_XML_STYLESHEET_RE.finditer(svg_text):
+        href = style_pi.group(1).strip()
+        line_no = svg_text.count("\n", 0, style_pi.start()) + 1
+        if href.lower().startswith(("javascript:", "vbscript:", "data:")):
+            findings.append(
+                _finding(
+                    file_label,
+                    line_no,
+                    "svg-active-content",
+                    "asset",
+                    f"SVG xml-stylesheet directive uses executable URI '{href}'",
+                )
+            )
+        elif _is_remote_network_url(href):
+            findings.append(
+                _finding(
+                    file_label,
+                    line_no,
+                    "svg-remote-url",
+                    "asset",
+                    f"SVG xml-stylesheet directive references remote URL '{href}'",
+                )
+            )
+    return findings
+
+
+def _parse_svg_root(
+    svg_text: str, file_label: str
+) -> tuple[ET.Element | None, list[dict[str, Any]]]:
+    try:
+        svg_root = ET.fromstring(svg_text)
+    except ET.ParseError as exc:
+        line_no = exc.position[0] if hasattr(exc, "position") else 1
+        return None, [
+            _with_severity(
+                _finding(
+                    file_label,
+                    line_no,
+                    "invalid-svg",
+                    "asset",
+                    f"Invalid SVG XML: {exc}",
+                ),
+                "medium",
+            )
+        ]
+    root_tag = svg_root.tag.rsplit("}", 1)[-1]
+    if root_tag != "svg":
+        return None, [
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-svg",
+                    "asset",
+                    f"Invalid SVG root element: {root_tag}",
+                ),
+                "medium",
+            )
+        ]
+    return svg_root, []
+
+
+def _inspect_svg_attributes(
+    elem: ET.Element,
+    raw_tag: str,
+    elem_line: int,
+    *,
+    svg_text: str,
+    file_label: str,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for raw_attr, raw_val in elem.attrib.items():
+        local_attr = raw_attr.rsplit("}", 1)[-1].lower()
+        attr_line = _find_line_number(svg_text, raw_val) if raw_val else elem_line
+        if local_attr.startswith("on"):
+            findings.append(
+                _finding(
+                    file_label,
+                    _find_line_number(svg_text, local_attr) or elem_line,
+                    "svg-event-handler",
+                    "asset",
+                    f"SVG element '<{raw_tag}>' defines inline event handler '{local_attr}'",
+                )
+            )
+            continue
+        if local_attr in _SVG_URI_ATTRS:
+            cleaned = raw_val.strip()
+            if cleaned.lower().startswith(("javascript:", "vbscript:", "data:")):
+                findings.append(
+                    _finding(
+                        file_label,
+                        attr_line,
+                        "svg-active-content",
+                        "asset",
+                        f"SVG attribute '{local_attr}' uses executable or embedded URI '{cleaned}'",
+                    )
+                )
+            elif _is_remote_network_url(cleaned):
+                findings.append(
+                    _finding(
+                        file_label,
+                        attr_line,
+                        "svg-remote-url",
+                        "asset",
+                        f"SVG attribute '{local_attr}' references remote URL '{cleaned}'",
+                    )
+                )
+        _inspect_svg_css_urls(
+            raw_val,
+            svg_text=svg_text,
+            fallback_line=attr_line,
+            file_label=file_label,
+            findings=findings,
+        )
+    return findings
+
+
+def _inspect_svg_element(
+    elem: ET.Element, *, svg_text: str, file_label: str
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    raw_tag = elem.tag.rsplit("}", 1)[-1]
+    local_tag = raw_tag.lower()
+    elem_line = _find_line_number(svg_text, f"<{raw_tag}")
+
+    if local_tag in _SVG_ACTIVE_TAGS:
+        findings.append(
+            _finding(
+                file_label,
+                elem_line,
+                "svg-active-content",
+                "asset",
+                f"SVG contains disallowed active element '<{raw_tag}>'",
+            )
+        )
+    if local_tag == "style":
+        _inspect_svg_css_urls(
+            "".join(elem.itertext()),
+            svg_text=svg_text,
+            fallback_line=elem_line,
+            file_label=file_label,
+            findings=findings,
+        )
+    if local_tag in {"set", "animate", "animatetransform", "animatemotion"}:
+        anim_attr = (
+            (elem.attrib.get("attributeName") or elem.attrib.get("attributename") or "")
+            .strip()
+            .lower()
+        )
+        if anim_attr.startswith("on"):
+            findings.append(
+                _finding(
+                    file_label,
+                    elem_line,
+                    "svg-event-handler",
+                    "asset",
+                    f"SVG animation targets event handler attribute '{anim_attr}'",
+                )
+            )
+    findings.extend(
+        _inspect_svg_attributes(
+            elem, raw_tag, elem_line, svg_text=svg_text, file_label=file_label
+        )
+    )
+    return findings
+
+
 def _vet_svg_text(svg_text: str, file_label: str) -> list[dict[str, Any]]:
     if "\x00" in svg_text:
         return [
@@ -1984,7 +2194,6 @@ def _vet_svg_text(svg_text: str, file_label: str) -> list[dict[str, Any]]:
                 file_label,
                 1,
                 "invalid-svg",
-                "high",
                 "asset",
                 "Binary NUL byte in SVG file",
             )
@@ -2000,169 +2209,22 @@ def _vet_svg_text(svg_text: str, file_label: str) -> list[dict[str, Any]]:
                 file_label,
                 line_no,
                 "svg-active-content",
-                "high",
                 "asset",
                 "SVG contains disallowed XML entity or external DTD declaration",
             )
         )
         return findings
 
-    for style_pi in _SVG_XML_STYLESHEET_RE.finditer(svg_text):
-        href = style_pi.group(1).strip()
-        line_no = svg_text.count("\n", 0, style_pi.start()) + 1
-        if href.lower().startswith(("javascript:", "vbscript:", "data:")):
-            findings.append(
-                _finding(
-                    file_label,
-                    line_no,
-                    "svg-active-content",
-                    "high",
-                    "asset",
-                    f"SVG xml-stylesheet directive uses executable URI '{href}'",
-                )
-            )
-        elif _is_remote_network_url(href):
-            findings.append(
-                _finding(
-                    file_label,
-                    line_no,
-                    "svg-remote-url",
-                    "high",
-                    "asset",
-                    f"SVG xml-stylesheet directive references remote URL '{href}'",
-                )
-            )
-
-    try:
-        svg_root = ET.fromstring(svg_text)
-    except ET.ParseError as exc:
-        line_no = exc.position[0] if hasattr(exc, "position") else 1
-        findings.append(
-            _finding(
-                file_label,
-                line_no,
-                "invalid-svg",
-                "medium",
-                "asset",
-                f"Invalid SVG XML: {exc}",
-            )
-        )
-        return findings
-
-    root_tag = svg_root.tag.rsplit("}", 1)[-1]
-    if root_tag != "svg":
-        findings.append(
-            _finding(
-                file_label,
-                1,
-                "invalid-svg",
-                "medium",
-                "asset",
-                f"Invalid SVG root element: {root_tag}",
-            )
-        )
+    findings.extend(_inspect_svg_xml_stylesheets(svg_text, file_label))
+    svg_root, root_errors = _parse_svg_root(svg_text, file_label)
+    if svg_root is None:
+        findings.extend(root_errors)
         return findings
 
     for elem in svg_root.iter():
-        raw_tag = elem.tag.rsplit("}", 1)[-1]
-        local_tag = raw_tag.lower()
-        elem_line = _find_line_number(svg_text, f"<{raw_tag}")
-
-        if local_tag in _SVG_ACTIVE_TAGS:
-            findings.append(
-                _finding(
-                    file_label,
-                    elem_line,
-                    "svg-active-content",
-                    "high",
-                    "asset",
-                    f"SVG contains disallowed active element '<{raw_tag}>'",
-                )
-            )
-
-        if local_tag == "style":
-            css_text = "".join(elem.itertext())
-            _inspect_svg_css_urls(
-                css_text,
-                svg_text=svg_text,
-                fallback_line=elem_line,
-                file_label=file_label,
-                findings=findings,
-            )
-
-        if local_tag in {"set", "animate", "animatetransform", "animatemotion"}:
-            anim_attr = (
-                (
-                    elem.attrib.get("attributeName")
-                    or elem.attrib.get("attributename")
-                    or ""
-                )
-                .strip()
-                .lower()
-            )
-            if anim_attr.startswith("on"):
-                findings.append(
-                    _finding(
-                        file_label,
-                        elem_line,
-                        "svg-event-handler",
-                        "high",
-                        "asset",
-                        f"SVG animation targets event handler attribute '{anim_attr}'",
-                    )
-                )
-
-        for raw_attr, raw_val in elem.attrib.items():
-            local_attr = raw_attr.rsplit("}", 1)[-1].lower()
-            attr_line = _find_line_number(svg_text, raw_val) if raw_val else elem_line
-
-            if local_attr.startswith("on"):
-                findings.append(
-                    _finding(
-                        file_label,
-                        _find_line_number(svg_text, local_attr) or elem_line,
-                        "svg-event-handler",
-                        "high",
-                        "asset",
-                        f"SVG element '<{raw_tag}>' defines inline event handler '{local_attr}'",
-                    )
-                )
-                continue
-
-            if local_attr in _SVG_URI_ATTRS:
-                cleaned = raw_val.strip()
-                lowered = cleaned.lower()
-                if lowered.startswith(("javascript:", "vbscript:", "data:")):
-                    findings.append(
-                        _finding(
-                            file_label,
-                            attr_line,
-                            "svg-active-content",
-                            "high",
-                            "asset",
-                            f"SVG attribute '{local_attr}' uses executable or embedded URI '{cleaned}'",
-                        )
-                    )
-                elif _is_remote_network_url(cleaned):
-                    findings.append(
-                        _finding(
-                            file_label,
-                            attr_line,
-                            "svg-remote-url",
-                            "high",
-                            "asset",
-                            f"SVG attribute '{local_attr}' references remote URL '{cleaned}'",
-                        )
-                    )
-
-            _inspect_svg_css_urls(
-                raw_val,
-                svg_text=svg_text,
-                fallback_line=attr_line,
-                file_label=file_label,
-                findings=findings,
-            )
-
+        findings.extend(
+            _inspect_svg_element(elem, svg_text=svg_text, file_label=file_label)
+        )
     return findings
 
 
@@ -2185,7 +2247,6 @@ def _inspect_svg_css_urls(
                     file_label,
                     line_no,
                     "svg-active-content",
-                    "high",
                     "asset",
                     f"SVG style reference uses executable or embedded URI '{target}'",
                 )
@@ -2196,7 +2257,6 @@ def _inspect_svg_css_urls(
                     file_label,
                     line_no,
                     "svg-remote-url",
-                    "high",
                     "asset",
                     f"SVG style reference loads remote URL '{target}'",
                 )
@@ -2211,7 +2271,6 @@ def _vet_svg_file(path: Path, *, root: Path | None = None) -> list[dict[str, Any
                 file_label,
                 1,
                 "symlink-file",
-                "high",
                 "filesystem",
                 "Symlinked SVG file is not permitted",
             )
@@ -2222,54 +2281,126 @@ def _vet_svg_file(path: Path, *, root: Path | None = None) -> list[dict[str, Any
         svg_text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return [
-            _finding(
-                file_label,
-                1,
-                "invalid-svg",
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-svg",
+                    "asset",
+                    "SVG file is not valid UTF-8",
+                ),
                 "medium",
-                "asset",
-                "SVG file is not valid UTF-8",
             )
         ]
     return _vet_svg_text(svg_text, file_label)
 
 
-def _vet_markdown_text(text: str, file_label: str) -> list[dict[str, Any]]:
-    findings = _scan_hidden_unicode_text(text, file_label, category="prompt")
-    non_fenced = non_fenced_lines(text, max_indent=3)
-
+def _collect_markdown_ref_defs(non_fenced: list[tuple[int, str]]) -> dict[str, str]:
     ref_defs: dict[str, str] = {}
     for _, raw_line in non_fenced:
         ref_def = parse_reference_link_definition(raw_line)
         if ref_def is not None:
             ref_defs[ref_def[0]] = ref_def[1]
+    return ref_defs
 
-    in_html_comment = False
-    for line_no, raw_line in non_fenced:
-        masked = _strip_inline_code(raw_line)
 
-        if in_html_comment:
-            if "-->" in masked:
-                in_html_comment = False
-                masked = masked.split("-->", 1)[1]
-            else:
-                continue
+def _consume_markdown_html_comment(
+    masked: str, line_no: int, file_label: str, in_html_comment: bool
+) -> tuple[str | None, bool, list[dict[str, Any]]]:
+    if in_html_comment:
+        if "-->" not in masked:
+            return None, True, []
+        in_html_comment = False
+        masked = masked.split("-->", 1)[1]
+    if "<!--" not in masked:
+        return masked, False, []
+    finding = _finding(
+        file_label,
+        line_no,
+        "html-comment",
+        "prompt",
+        "HTML comment outside fenced code block can hide prompt instructions",
+    )
+    after_open = masked.split("<!--", 1)[1]
+    return masked, ("-->" not in after_open), [finding]
 
-        if "<!--" in masked:
+
+def _inspect_markdown_ref_images(
+    masked: str, line_no: int, file_label: str, ref_defs: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for ref_use in _MD_REF_IMAGE_USE_RE.finditer(masked):
+        if masked[ref_use.end() : ref_use.end() + 1] == "(":
+            continue
+        ref_key = (ref_use.group(2) or ref_use.group(1) or "").strip().lower()
+        resolved_url = ref_defs.get(ref_key, "")
+        if resolved_url.lower().startswith(("http://", "https://", "//")):
             findings.append(
                 _finding(
                     file_label,
                     line_no,
-                    "html-comment",
-                    "high",
+                    "remote-image",
                     "prompt",
-                    "HTML comment outside fenced code block can hide prompt instructions",
+                    f"Remote reference Markdown image '{resolved_url}' can exfiltrate context",
                 )
             )
-            after_open = masked.split("<!--", 1)[1]
-            if "-->" not in after_open:
-                in_html_comment = True
+    return findings
 
+
+def _inspect_markdown_images(
+    masked: str, line_no: int, file_label: str, ref_defs: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    remote_found = False
+    for img_match in _MD_INLINE_IMAGE_RE.finditer(masked):
+        target = img_match.group(1)
+        if _is_remote_url(target) and target.lower().startswith(
+            ("http://", "https://", "//")
+        ):
+            findings.append(
+                _finding(
+                    file_label,
+                    line_no,
+                    "remote-image",
+                    "prompt",
+                    f"Remote Markdown image '{target}' can exfiltrate context",
+                )
+            )
+            remote_found = True
+
+    if not remote_found:
+        findings.extend(
+            _inspect_markdown_ref_images(masked, line_no, file_label, ref_defs)
+        )
+
+    for html_img in _HTML_IMG_RE.finditer(masked):
+        src = (html_img.group(1) or html_img.group(2) or "").strip()
+        if src.lower().startswith(("http://", "https://", "//")):
+            findings.append(
+                _finding(
+                    file_label,
+                    line_no,
+                    "remote-image",
+                    "prompt",
+                    f"Remote HTML image '{src}' can exfiltrate context",
+                )
+            )
+    return findings
+
+
+def _vet_markdown_text(text: str, file_label: str) -> list[dict[str, Any]]:
+    findings = _scan_hidden_unicode_text(text, file_label, category="prompt")
+    non_fenced = non_fenced_lines(text, max_indent=3)
+    ref_defs = _collect_markdown_ref_defs(non_fenced)
+
+    in_html_comment = False
+    for line_no, raw_line in non_fenced:
+        masked, in_html_comment, comment_findings = _consume_markdown_html_comment(
+            _strip_inline_code(raw_line), line_no, file_label, in_html_comment
+        )
+        findings.extend(comment_findings)
+        if masked is None:
+            continue
         for pattern, description in _PROMPT_OVERRIDE_PATTERNS:
             if pattern.search(masked):
                 findings.append(
@@ -2277,62 +2408,12 @@ def _vet_markdown_text(text: str, file_label: str) -> list[dict[str, Any]]:
                         file_label,
                         line_no,
                         "prompt-override",
-                        "high",
                         "prompt",
                         description,
                     )
                 )
                 break
-
-        remote_found = False
-        for img_match in _MD_INLINE_IMAGE_RE.finditer(masked):
-            target = img_match.group(1)
-            if _is_remote_url(target) and target.lower().startswith(
-                ("http://", "https://", "//")
-            ):
-                findings.append(
-                    _finding(
-                        file_label,
-                        line_no,
-                        "remote-image",
-                        "high",
-                        "prompt",
-                        f"Remote Markdown image '{target}' can exfiltrate context",
-                    )
-                )
-                remote_found = True
-
-        if not remote_found:
-            for ref_use in _MD_REF_IMAGE_USE_RE.finditer(masked):
-                if masked[ref_use.end() : ref_use.end() + 1] == "(":
-                    continue
-                ref_key = (ref_use.group(2) or ref_use.group(1) or "").strip().lower()
-                resolved_url = ref_defs.get(ref_key, "")
-                if resolved_url.lower().startswith(("http://", "https://", "//")):
-                    findings.append(
-                        _finding(
-                            file_label,
-                            line_no,
-                            "remote-image",
-                            "high",
-                            "prompt",
-                            f"Remote reference Markdown image '{resolved_url}' can exfiltrate context",
-                        )
-                    )
-
-        for html_img in _HTML_IMG_RE.finditer(masked):
-            src = (html_img.group(1) or html_img.group(2) or "").strip()
-            if src.lower().startswith(("http://", "https://", "//")):
-                findings.append(
-                    _finding(
-                        file_label,
-                        line_no,
-                        "remote-image",
-                        "high",
-                        "prompt",
-                        f"Remote HTML image '{src}' can exfiltrate context",
-                    )
-                )
+        findings.extend(_inspect_markdown_images(masked, line_no, file_label, ref_defs))
 
     return findings
 
@@ -2346,7 +2427,6 @@ def vet_markdown(path: Path, *, root: Path | None = None) -> list[dict[str, Any]
                 file_label,
                 1,
                 "symlink-file",
-                "high",
                 "filesystem",
                 "Symlinked instruction file is not permitted",
             )
@@ -2357,16 +2437,34 @@ def vet_markdown(path: Path, *, root: Path | None = None) -> list[dict[str, Any]
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return [
-            _finding(
-                file_label,
-                1,
-                "invalid-encoding",
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-encoding",
+                    "prompt",
+                    "Instruction file is not valid UTF-8",
+                ),
                 "medium",
-                "prompt",
-                "Instruction file is not valid UTF-8",
             )
         ]
     return _vet_markdown_text(text, file_label)
+
+
+def _strip_shim_html_comment_line(
+    masked: str, in_html_comment: bool
+) -> tuple[str | None, bool]:
+    if in_html_comment:
+        if "-->" not in masked:
+            return None, True
+        masked = masked.split("-->", 1)[1]
+        in_html_comment = False
+    if "<!--" in masked:
+        before, after = masked.split("<!--", 1)
+        if "-->" in after:
+            return before + " " + after.split("-->", 1)[1], False
+        return before, True
+    return masked, in_html_comment
 
 
 def _extract_markdown_shim_directives(
@@ -2375,20 +2473,11 @@ def _extract_markdown_shim_directives(
     directives: list[tuple[int, str]] = []
     in_html_comment = False
     for line_no, raw_line in non_fenced_lines(text, max_indent=3):
-        masked = _strip_inline_code(raw_line)
-        if in_html_comment:
-            if "-->" not in masked:
-                continue
-            masked = masked.split("-->", 1)[1]
-            in_html_comment = False
-        if "<!--" in masked:
-            before, after = masked.split("<!--", 1)
-            if "-->" in after:
-                masked = before + " " + after.split("-->", 1)[1]
-            else:
-                masked = before
-                in_html_comment = True
-
+        masked, in_html_comment = _strip_shim_html_comment_line(
+            _strip_inline_code(raw_line), in_html_comment
+        )
+        if masked is None:
+            continue
         trimmed = masked.strip()
         is_pure_shim_line = trimmed.startswith("@") and " " not in trimmed
         for match in _MD_SHIM_TOKEN_RE.finditer(masked):
@@ -2437,14 +2526,44 @@ def _has_symlink_between(candidate: Path, boundary_root: Path) -> bool:
     return False
 
 
+def _check_resolved_within_boundary(
+    candidate: Path,
+    cleaned: str,
+    *,
+    line: int,
+    boundary: _BoundaryContext,
+) -> list[dict[str, Any]]:
+    resolved_boundary = boundary.boundary_root.resolve()
+    try:
+        resolved_candidate = candidate.resolve()
+    except OSError:
+        return [
+            _finding(
+                boundary.source_label,
+                line,
+                "escaping-path",
+                "filesystem",
+                f"Referenced path '{cleaned}' could not be resolved safely",
+            )
+        ]
+    if not resolved_candidate.is_relative_to(resolved_boundary):
+        return [
+            _finding(
+                boundary.source_label,
+                line,
+                "escaping-path",
+                "filesystem",
+                f"Reference '{cleaned}' escapes repository/package boundary",
+            )
+        ]
+    return []
+
+
 def _resolve_bounded_local_path(
     raw_ref: str,
     *,
-    base_dir: Path,
-    boundary_root: Path,
-    source_label: str,
     line: int,
-    category: str,
+    boundary: _BoundaryContext,
 ) -> tuple[Path | None, list[dict[str, Any]]]:
     cleaned = raw_ref.strip()
     if not cleaned:
@@ -2452,11 +2571,10 @@ def _resolve_bounded_local_path(
     if _is_remote_network_url(cleaned):
         return None, [
             _finding(
-                source_label,
+                boundary.source_label,
                 line,
                 "remote-url",
-                "high",
-                category,
+                boundary.category,
                 f"Remote reference '{cleaned}' is not permitted in local configuration",
             )
         ]
@@ -2469,184 +2587,131 @@ def _resolve_bounded_local_path(
     ):
         return None, [
             _finding(
-                source_label,
+                boundary.source_label,
                 line,
                 "escaping-path",
-                "high",
                 "filesystem",
                 f"Reference '{cleaned}' escapes repository/package boundary",
             )
         ]
 
-    candidate = base_dir / norm
-    resolved_boundary = boundary_root.resolve()
-    if _has_symlink_between(candidate, boundary_root):
+    candidate = boundary.base_dir / norm
+    if _has_symlink_between(candidate, boundary.boundary_root):
         return None, [
             _finding(
-                source_label,
+                boundary.source_label,
                 line,
                 "symlink-file",
-                "high",
                 "filesystem",
                 f"Referenced path '{cleaned}' traverses or targets a symlink",
             )
         ]
-    try:
-        resolved_candidate = candidate.resolve()
-    except OSError:
-        return None, [
-            _finding(
-                source_label,
-                line,
-                "escaping-path",
-                "high",
-                "filesystem",
-                f"Referenced path '{cleaned}' could not be resolved safely",
-            )
-        ]
-    if not resolved_candidate.is_relative_to(resolved_boundary):
-        return None, [
-            _finding(
-                source_label,
-                line,
-                "escaping-path",
-                "high",
-                "filesystem",
-                f"Reference '{cleaned}' escapes repository/package boundary",
-            )
-        ]
+    bound_errors = _check_resolved_within_boundary(
+        candidate, cleaned, line=line, boundary=boundary
+    )
+    if bound_errors:
+        return None, bound_errors
     return candidate, []
 
 
-def _vet_markdown_with_shims(
-    inst_path: Path,
-    *,
-    repo_root: Path,
-    seen_configs: set[str],
-    configs_scanned: list[str],
-    active_chain: frozenset[Path],
-    vetted_targets: set[Path],
-    allowed_capabilities: Collection[str] | None,
-) -> tuple[list[dict[str, Any]], int]:
-    rel_label = _format_file_label(inst_path, repo_root)
-    if inst_path.is_symlink() or _has_symlink_between(inst_path, repo_root):
-        if rel_label not in seen_configs:
-            seen_configs.add(rel_label)
-            configs_scanned.append(rel_label)
-        return (
-            [
-                _finding(
-                    rel_label,
-                    1,
-                    "symlink-file",
-                    "high",
-                    "filesystem",
-                    "Symlinked instruction file is not permitted",
-                )
-            ],
-            1,
+def _follow_markdown_shim_target(target_path: Path, next_ctx: _RepoScanContext) -> int:
+    target_resolved = target_path.resolve()
+    if (
+        target_resolved in next_ctx.active_chain
+        or target_resolved in next_ctx.vetted_md_targets
+    ):
+        return 0
+    suffix = target_path.suffix.lower()
+    target_label = _format_file_label(target_path, next_ctx.repo_root)
+    if suffix in _SCRIPT_SUFFIXES or _has_shebang(target_path):
+        next_ctx.vetted_md_targets.add(target_resolved)
+        added = 1 if _mark_config_scanned(next_ctx, target_label) else 0
+        next_ctx.findings.extend(
+            vet_script(
+                target_path, next_ctx.allowed_capabilities, root=next_ctx.repo_root
+            )
         )
+        return added
+    if suffix == ".svg":
+        next_ctx.vetted_md_targets.add(target_resolved)
+        added = 1 if _mark_config_scanned(next_ctx, target_label) else 0
+        next_ctx.findings.extend(_vet_svg_file(target_path, root=next_ctx.repo_root))
+        return added
+    return _vet_markdown_with_shims(target_path, next_ctx)
+
+
+def _vet_markdown_with_shims(inst_path: Path, ctx: _RepoScanContext) -> int:
+    rel_label = _format_file_label(inst_path, ctx.repo_root)
+    if inst_path.is_symlink() or _has_symlink_between(inst_path, ctx.repo_root):
+        _mark_config_scanned(ctx, rel_label)
+        ctx.findings.append(
+            _finding(
+                rel_label,
+                1,
+                "symlink-file",
+                "filesystem",
+                "Symlinked instruction file is not permitted",
+            )
+        )
+        return 1
 
     resolved = inst_path.resolve()
-    if not resolved.is_relative_to(repo_root):
-        return (
-            [
-                _finding(
-                    rel_label,
-                    1,
-                    "escaping-path",
-                    "high",
-                    "filesystem",
-                    f"Instruction file escapes repository boundary: {rel_label}",
-                )
-            ],
-            0,
+    if not resolved.is_relative_to(ctx.repo_root):
+        ctx.findings.append(
+            _finding(
+                rel_label,
+                1,
+                "escaping-path",
+                "filesystem",
+                f"Instruction file escapes repository boundary: {rel_label}",
+            )
         )
+        return 0
 
-    if resolved in active_chain or resolved in vetted_targets:
-        return [], 0
+    if (
+        resolved in ctx.active_chain
+        or resolved in ctx.vetted_md_targets
+        or not inst_path.is_file()
+    ):
+        return 0
 
-    if not inst_path.is_file():
-        return [], 0
-
-    vetted_targets.add(resolved)
-    scanned_count = 0
-    if rel_label not in seen_configs:
-        seen_configs.add(rel_label)
-        configs_scanned.append(rel_label)
-        scanned_count += 1
-
+    ctx.vetted_md_targets.add(resolved)
+    scanned_count = 1 if _mark_config_scanned(ctx, rel_label) else 0
     try:
         text = inst_path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return (
-            [
+        ctx.findings.append(
+            _with_severity(
                 _finding(
                     rel_label,
                     1,
                     "invalid-encoding",
-                    "medium",
                     "prompt",
                     "Instruction file is not valid UTF-8",
-                )
-            ],
-            scanned_count,
+                ),
+                "medium",
+            )
         )
+        return scanned_count
 
-    findings = _vet_markdown_text(text, rel_label)
-    next_chain = active_chain | {resolved}
-
+    ctx.findings.extend(_vet_markdown_text(text, rel_label))
+    next_ctx = replace(ctx, active_chain=ctx.active_chain | {resolved})
+    boundary = _BoundaryContext(
+        base_dir=inst_path.parent,
+        boundary_root=ctx.repo_root,
+        source_label=rel_label,
+        category="prompt",
+    )
     for line_no, raw_token in _extract_markdown_shim_directives(text, inst_path.parent):
         target_path, bound_findings = _resolve_bounded_local_path(
-            raw_token,
-            base_dir=inst_path.parent,
-            boundary_root=repo_root,
-            source_label=rel_label,
-            line=line_no,
-            category="prompt",
+            raw_token, line=line_no, boundary=boundary
         )
         if bound_findings:
-            findings.extend(bound_findings)
+            ctx.findings.extend(bound_findings)
             continue
-        if target_path is None or not target_path.is_file():
-            continue
-
-        suffix = target_path.suffix.lower()
-        target_resolved = target_path.resolve()
-        if target_resolved in next_chain or target_resolved in vetted_targets:
-            continue
-
-        target_label = _format_file_label(target_path, repo_root)
-        if suffix in _SCRIPT_SUFFIXES or _has_shebang(target_path):
-            vetted_targets.add(target_resolved)
-            if target_label not in seen_configs:
-                seen_configs.add(target_label)
-                configs_scanned.append(target_label)
-                scanned_count += 1
-            findings.extend(
-                vet_script(target_path, allowed_capabilities, root=repo_root)
-            )
-        elif suffix == ".svg":
-            vetted_targets.add(target_resolved)
-            if target_label not in seen_configs:
-                seen_configs.add(target_label)
-                configs_scanned.append(target_label)
-                scanned_count += 1
-            findings.extend(_vet_svg_file(target_path, root=repo_root))
-        else:
-            sub_findings, sub_count = _vet_markdown_with_shims(
-                target_path,
-                repo_root=repo_root,
-                seen_configs=seen_configs,
-                configs_scanned=configs_scanned,
-                active_chain=next_chain,
-                vetted_targets=vetted_targets,
-                allowed_capabilities=allowed_capabilities,
-            )
-            findings.extend(sub_findings)
-            scanned_count += sub_count
-
-    return findings, scanned_count
+        if target_path is not None and target_path.is_file():
+            scanned_count += _follow_markdown_shim_target(target_path, next_ctx)
+    return scanned_count
 
 
 def _find_line_number(raw_text: str, needle: str) -> int:
@@ -2668,38 +2733,37 @@ def _inspect_endpoint_url(
     url_val: str,
     *,
     owner_label: str,
-    raw_text: str,
-    fallback_line: int,
-    file_label: str,
+    source: _ConfigSourceContext,
     insecure_rule: str = "mcp-insecure-transport",
     remote_rule: str = "mcp-remote-endpoint",
 ) -> list[dict[str, Any]]:
     cleaned = url_val.strip()
     if not cleaned:
         return []
-    url_line = _find_line_number(raw_text, url_val) or fallback_line
+    url_line = _find_line_number(source.raw_text, url_val) or source.fallback_line
     parsed = urlsplit(cleaned)
     scheme = parsed.scheme.lower()
     if scheme == "http" and not _is_loopback_host(parsed.hostname):
         return [
             _finding(
-                file_label,
+                source.file_label,
                 url_line,
                 insecure_rule,
-                "high",
                 "agent-config",
                 f"{owner_label} uses unencrypted HTTP transport '{cleaned}'",
             )
         ]
     if scheme in {"https", "ws", "wss"} and not _is_loopback_host(parsed.hostname):
         return [
-            _finding(
-                file_label,
-                url_line,
-                remote_rule,
+            _with_severity(
+                _finding(
+                    source.file_label,
+                    url_line,
+                    remote_rule,
+                    "agent-config",
+                    f"{owner_label} connects to remote endpoint '{cleaned}'",
+                ),
                 "medium",
-                "agent-config",
-                f"{owner_label} connects to remote endpoint '{cleaned}'",
             )
         ]
     return []
@@ -2710,9 +2774,7 @@ def _inspect_secret_mapping(
     *,
     owner_label: str,
     map_field: str,
-    raw_text: str,
-    fallback_line: int,
-    file_label: str,
+    source: _ConfigSourceContext,
     rule: str = "mcp-inline-secret",
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
@@ -2725,13 +2787,12 @@ def _inspect_secret_mapping(
         if _MCP_INLINE_SECRET_VALUE_RE.search(stripped_val) or (
             _MCP_SECRET_KEY_NAME_RE.search(key) and len(stripped_val) >= 8
         ):
-            val_line = _find_line_number(raw_text, key) or fallback_line
+            val_line = _find_line_number(source.raw_text, key) or source.fallback_line
             findings.append(
                 _finding(
-                    file_label,
+                    source.file_label,
                     val_line,
                     rule,
-                    "high",
                     "agent-config",
                     f"{owner_label} stores a literal credential in {map_field}.{key}",
                 )
@@ -2743,22 +2804,19 @@ def _inspect_prompt_string(
     field_val: str,
     *,
     owner_label: str,
-    raw_text: str,
-    fallback_line: int,
-    file_label: str,
+    source: _ConfigSourceContext,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     cleaned = field_val.strip()
     if not cleaned:
         return findings
-    line_no = _find_line_number(raw_text, cleaned[:40]) or fallback_line
+    line_no = _find_line_number(source.raw_text, cleaned[:40]) or source.fallback_line
     if "<!--" in cleaned:
         findings.append(
             _finding(
-                file_label,
+                source.file_label,
                 line_no,
                 "html-comment",
-                "high",
                 "agent-config",
                 f"{owner_label} contains HTML comment that can conceal prompt instructions",
             )
@@ -2767,10 +2825,9 @@ def _inspect_prompt_string(
         if pattern.search(cleaned):
             findings.append(
                 _finding(
-                    file_label,
+                    source.file_label,
                     line_no,
                     "prompt-override",
-                    "high",
                     "agent-config",
                     f"{owner_label}: {desc}",
                 )
@@ -2784,15 +2841,13 @@ def _inspect_mcp_command_and_args(
     args: list[str],
     *,
     owner_label: str,
-    raw_text: str,
-    fallback_line: int,
-    file_label: str,
+    source: _ConfigSourceContext,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     cleaned_cmd = command.strip()
     if not cleaned_cmd:
         return findings
-    cmd_line = _find_line_number(raw_text, command) or fallback_line
+    cmd_line = _find_line_number(source.raw_text, command) or source.fallback_line
     cmd_base = Path(cleaned_cmd.replace("\\", "/")).name.lower()
     joined = " ".join([cleaned_cmd, *args])
     if (
@@ -2802,10 +2857,9 @@ def _inspect_mcp_command_and_args(
     ):
         findings.append(
             _finding(
-                file_label,
+                source.file_label,
                 cmd_line,
                 "mcp-shell-execution",
-                "high",
                 "agent-config",
                 f"{owner_label} executes shell or network command '{cleaned_cmd}'",
             )
@@ -2816,13 +2870,15 @@ def _inspect_mcp_command_and_args(
             not re.search(r"@\d", pkg.lstrip("@")) for pkg in pkg_args[:1]
         ):
             findings.append(
-                _finding(
-                    file_label,
-                    cmd_line,
-                    "mcp-unpinned-package",
+                _with_severity(
+                    _finding(
+                        source.file_label,
+                        cmd_line,
+                        "mcp-unpinned-package",
+                        "agent-config",
+                        f"{owner_label} runs 'npx -y' without an explicit pinned package version",
+                    ),
                     "medium",
-                    "agent-config",
-                    f"{owner_label} runs 'npx -y' without an explicit pinned package version",
                 )
             )
     return findings
@@ -2837,19 +2893,16 @@ def _inspect_mcp_server_entry(
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     server_line = _find_line_number(raw_text, f'"{server_name}"')
+    source = _ConfigSourceContext(
+        raw_text=raw_text, file_label=file_label, fallback_line=server_line
+    )
     owner = f"MCP server '{server_name}'"
 
     for url_key in ("url", "serverUrl", "httpUrl", "sseUrl"):
         url_val = cfg.get(url_key)
         if isinstance(url_val, str) and url_val.strip():
             findings.extend(
-                _inspect_endpoint_url(
-                    url_val,
-                    owner_label=owner,
-                    raw_text=raw_text,
-                    fallback_line=server_line,
-                    file_label=file_label,
-                )
+                _inspect_endpoint_url(url_val, owner_label=owner, source=source)
             )
             break
 
@@ -2859,12 +2912,7 @@ def _inspect_mcp_server_entry(
     if isinstance(command, str) and command.strip():
         findings.extend(
             _inspect_mcp_command_and_args(
-                command,
-                args,
-                owner_label=owner,
-                raw_text=raw_text,
-                fallback_line=server_line,
-                file_label=file_label,
+                command, args, owner_label=owner, source=source
             )
         )
 
@@ -2873,12 +2921,7 @@ def _inspect_mcp_server_entry(
         if isinstance(mapping, Mapping):
             findings.extend(
                 _inspect_secret_mapping(
-                    mapping,
-                    owner_label=owner,
-                    map_field=map_field,
-                    raw_text=raw_text,
-                    fallback_line=server_line,
-                    file_label=file_label,
+                    mapping, owner_label=owner, map_field=map_field, source=source
                 )
             )
 
@@ -2887,11 +2930,7 @@ def _inspect_mcp_server_entry(
         if isinstance(field_val, str) and field_val.strip():
             findings.extend(
                 _inspect_prompt_string(
-                    field_val,
-                    owner_label=f"{owner} {text_field}",
-                    raw_text=raw_text,
-                    fallback_line=server_line,
-                    file_label=file_label,
+                    field_val, owner_label=f"{owner} {text_field}", source=source
                 )
             )
 
@@ -2907,7 +2946,6 @@ def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, An
                 file_label,
                 1,
                 "symlink-file",
-                "high",
                 "filesystem",
                 "Symlinked MCP configuration file is not permitted",
             )
@@ -2919,13 +2957,15 @@ def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, An
         raw_text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return [
-            _finding(
-                file_label,
-                1,
-                "invalid-encoding",
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-encoding",
+                    "agent-config",
+                    "MCP configuration file is not valid UTF-8",
+                ),
                 "medium",
-                "agent-config",
-                "MCP configuration file is not valid UTF-8",
             )
         ]
 
@@ -2934,26 +2974,30 @@ def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, An
         data = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         findings.append(
-            _finding(
-                file_label,
-                exc.lineno,
-                "invalid-json",
+            _with_severity(
+                _finding(
+                    file_label,
+                    exc.lineno,
+                    "invalid-json",
+                    "agent-config",
+                    f"Malformed MCP JSON configuration: {exc.msg}",
+                ),
                 "medium",
-                "agent-config",
-                f"Malformed MCP JSON configuration: {exc.msg}",
             )
         )
         return findings
 
     if not isinstance(data, Mapping):
         findings.append(
-            _finding(
-                file_label,
-                1,
-                "invalid-mcp-config",
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-mcp-config",
+                    "agent-config",
+                    "MCP configuration root must be a JSON object",
+                ),
                 "medium",
-                "agent-config",
-                "MCP configuration root must be a JSON object",
             )
         )
         return findings
@@ -3000,107 +3044,195 @@ def _strip_yaml_comment_and_quotes(raw_val: str) -> str:
     return val.strip()
 
 
+def _yaml_line_indent(line: str) -> int:
+    return len(line.expandtabs(2)) - len(line.lstrip(" \t").expandtabs(2))
+
+
+def _consume_yaml_block_scalar(
+    lines: list[str], start_idx: int, indent: int, indicator: str
+) -> tuple[str, int]:
+    block_parts: list[str] = []
+    idx = start_idx
+    total = len(lines)
+    while idx < total:
+        cont = lines[idx]
+        cont_strip = cont.strip()
+        if not cont_strip:
+            block_parts.append("")
+            idx += 1
+            continue
+        if _yaml_line_indent(cont) <= indent:
+            break
+        block_parts.append(cont_strip)
+        idx += 1
+    joiner = "\n" if indicator.startswith("|") else " "
+    return joiner.join(block_parts).strip(), idx
+
+
+def _consume_yaml_list_items(
+    lines: list[str], start_idx: int, indent: int
+) -> list[str]:
+    items: list[str] = []
+    scan = start_idx
+    total = len(lines)
+    while scan < total:
+        sub = lines[scan]
+        sub_strip = sub.strip()
+        if not sub_strip or sub_strip.startswith("#"):
+            scan += 1
+            continue
+        if _yaml_line_indent(sub) < indent:
+            break
+        list_match = _YAML_LIST_ITEM_RE.match(sub)
+        if (
+            list_match
+            and len(list_match.group(1).expandtabs(2)) >= indent
+            and not _YAML_KEY_VALUE_RE.match(sub)
+        ):
+            items.append(_strip_yaml_comment_and_quotes(list_match.group(2)))
+            scan += 1
+            continue
+        break
+    return items
+
+
+def _consume_yaml_folded_scalar(
+    lines: list[str], start_idx: int, indent: int, first_part: str
+) -> tuple[str, int]:
+    scalar_parts = [first_part]
+    idx = start_idx
+    total = len(lines)
+    while idx < total:
+        cont = lines[idx]
+        cont_strip = cont.strip()
+        if (
+            not cont_strip
+            or cont_strip.startswith("#")
+            or _yaml_line_indent(cont) <= indent
+            or _YAML_KEY_VALUE_RE.match(cont)
+            or _YAML_LIST_ITEM_RE.match(cont)
+        ):
+            break
+        scalar_parts.append(_strip_yaml_comment_and_quotes(cont_strip))
+        idx += 1
+    return " ".join(scalar_parts).strip(), idx
+
+
 def _parse_yaml_entries(
     raw_text: str,
 ) -> tuple[list[tuple[int, str, str]], dict[int, list[str]]]:
     """Extract (line_no, key, joined_value) pairs and list values from YAML text using stdlib."""
     kv_entries: list[tuple[int, str, str]] = []
     list_values: dict[int, list[str]] = {}
-
     lines = raw_text.splitlines()
     idx = 0
     total = len(lines)
     while idx < total:
         raw_line = lines[idx]
         stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#") or stripped in {"---", "..."}:
-            idx += 1
-            continue
-
-        kv_match = _YAML_KEY_VALUE_RE.match(raw_line)
+        kv_match = (
+            None
+            if (not stripped or stripped.startswith("#") or stripped in {"---", "..."})
+            else _YAML_KEY_VALUE_RE.match(raw_line)
+        )
         if not kv_match:
             idx += 1
             continue
 
-        indent = len(kv_match.group(1).expandtabs(2))
-        if kv_match.group(2):
-            indent += len(kv_match.group(2))
+        indent = len(kv_match.group(1).expandtabs(2)) + len(kv_match.group(2) or "")
         key = kv_match.group(3)
         rest = _strip_yaml_comment_and_quotes(kv_match.group(4))
         line_no = idx + 1
 
         if rest in {"|", "|-", "|+", ">", ">-", ">+"}:
-            block_parts: list[str] = []
-            idx += 1
-            while idx < total:
-                cont = lines[idx]
-                cont_strip = cont.strip()
-                if not cont_strip:
-                    block_parts.append("")
-                    idx += 1
-                    continue
-                cont_indent = len(cont.expandtabs(2)) - len(
-                    cont.lstrip(" \t").expandtabs(2)
-                )
-                if cont_indent <= indent:
-                    break
-                block_parts.append(cont_strip)
-                idx += 1
-            joiner = "\n" if rest.startswith("|") else " "
-            kv_entries.append((line_no, key, joiner.join(block_parts).strip()))
-            continue
-
-        if not rest:
-            items: list[str] = []
-            scan = idx + 1
-            while scan < total:
-                sub = lines[scan]
-                sub_strip = sub.strip()
-                if not sub_strip or sub_strip.startswith("#"):
-                    scan += 1
-                    continue
-                sub_indent = len(sub.expandtabs(2)) - len(
-                    sub.lstrip(" \t").expandtabs(2)
-                )
-                if sub_indent < indent:
-                    break
-                list_match = _YAML_LIST_ITEM_RE.match(sub)
-                if (
-                    list_match
-                    and len(list_match.group(1).expandtabs(2)) >= indent
-                    and not _YAML_KEY_VALUE_RE.match(sub)
-                ):
-                    items.append(_strip_yaml_comment_and_quotes(list_match.group(2)))
-                    scan += 1
-                    continue
-                break
+            joined, idx = _consume_yaml_block_scalar(lines, idx + 1, indent, rest)
+            kv_entries.append((line_no, key, joined))
+        elif not rest:
+            items = _consume_yaml_list_items(lines, idx + 1, indent)
             if items:
                 list_values[line_no] = items
             kv_entries.append((line_no, key, ""))
             idx += 1
-            continue
-
-        scalar_parts = [rest]
-        idx += 1
-        while idx < total:
-            cont = lines[idx]
-            cont_strip = cont.strip()
-            if not cont_strip or cont_strip.startswith("#"):
-                break
-            cont_indent = len(cont.expandtabs(2)) - len(
-                cont.lstrip(" \t").expandtabs(2)
-            )
-            if (
-                cont_indent <= indent
-                or _YAML_KEY_VALUE_RE.match(cont)
-                or _YAML_LIST_ITEM_RE.match(cont)
-            ):
-                break
-            scalar_parts.append(_strip_yaml_comment_and_quotes(cont_strip))
-            idx += 1
-        kv_entries.append((line_no, key, " ".join(scalar_parts).strip()))
+        else:
+            joined, idx = _consume_yaml_folded_scalar(lines, idx + 1, indent, rest)
+            kv_entries.append((line_no, key, joined))
 
     return kv_entries, list_values
+
+
+def _inspect_yaml_field_value(
+    key: str,
+    val: str,
+    *,
+    source: _ConfigSourceContext,
+    boundary_root: Path | None,
+) -> list[dict[str, Any]]:
+    key_lower = key.lower()
+    line_no = source.fallback_line
+    findings = _inspect_prompt_string(
+        val, owner_label=f"YAML field '{key}'", source=source
+    )
+    if not _ENV_PLACEHOLDER_RE.match(val) and (
+        _MCP_INLINE_SECRET_VALUE_RE.search(val)
+        or (_MCP_SECRET_KEY_NAME_RE.search(key) and len(val) >= 8)
+    ):
+        findings.append(
+            _finding(
+                source.file_label,
+                line_no,
+                "mcp-inline-secret",
+                "agent-config",
+                f"YAML configuration stores a literal credential in '{key}'",
+            )
+        )
+    if key_lower in {
+        "url",
+        "serverurl",
+        "server_url",
+        "httpurl",
+        "sseurl",
+        "endpoint",
+    }:
+        findings.extend(
+            _inspect_endpoint_url(
+                val, owner_label=f"YAML endpoint '{key}'", source=source
+            )
+        )
+    if key_lower in {"icon_small", "icon_large", "icon", "logo"}:
+        if _is_remote_url(val):
+            findings.append(
+                _finding(
+                    source.file_label,
+                    line_no,
+                    "remote-image",
+                    "agent-config",
+                    f"YAML UI field '{key}' references remote or embedded URI '{val}'",
+                )
+            )
+        elif boundary_root is not None:
+            boundary = _BoundaryContext(
+                base_dir=boundary_root,
+                boundary_root=boundary_root,
+                source_label=source.file_label,
+            )
+            _, path_errs = _resolve_bounded_local_path(
+                val, line=line_no, boundary=boundary
+            )
+            findings.extend(path_errs)
+    return findings
+
+
+def _parse_yaml_command_spec(
+    key_lower: str, val: str, line_no: int
+) -> tuple[tuple[int, str], list[str]] | None:
+    if key_lower not in {"command", "bash", "shell", "script"}:
+        return None
+    if val.startswith("[") and val.endswith("]"):
+        parts = [
+            _strip_yaml_comment_and_quotes(p) for p in val[1:-1].split(",") if p.strip()
+        ]
+        return ((line_no, parts[0]), parts[1:]) if parts else None
+    return (line_no, val), []
 
 
 def _vet_agent_yaml_text(
@@ -3118,122 +3250,45 @@ def _vet_agent_yaml_text(
 
     for line_no, key, val in kv_entries:
         key_lower = key.lower()
-
         if key == "args" and line_no in list_values:
             pending_args = list_values[line_no]
             continue
-
         if pending_cmd is not None and key_lower != "args":
             cmd_line, cmd_val = pending_cmd
+            cmd_source = _ConfigSourceContext(
+                raw_text=raw_text, file_label=file_label, fallback_line=cmd_line
+            )
             findings.extend(
                 _inspect_yaml_command(
-                    cmd_val,
-                    pending_args,
-                    line_no=cmd_line,
-                    raw_text=raw_text,
-                    file_label=file_label,
-                    allowed=allowed,
+                    cmd_val, pending_args, source=cmd_source, allowed=allowed
                 )
             )
             pending_cmd = None
             pending_args = []
-
         if not val:
             continue
-
+        field_source = _ConfigSourceContext(
+            raw_text=raw_text, file_label=file_label, fallback_line=line_no
+        )
         findings.extend(
-            _inspect_prompt_string(
-                val,
-                owner_label=f"YAML field '{key}'",
-                raw_text=raw_text,
-                fallback_line=line_no,
-                file_label=file_label,
+            _inspect_yaml_field_value(
+                key, val, source=field_source, boundary_root=boundary_root
             )
         )
-
-        if not _ENV_PLACEHOLDER_RE.match(val) and (
-            _MCP_INLINE_SECRET_VALUE_RE.search(val)
-            or (_MCP_SECRET_KEY_NAME_RE.search(key) and len(val) >= 8)
-        ):
-            findings.append(
-                _finding(
-                    file_label,
-                    line_no,
-                    "mcp-inline-secret",
-                    "high",
-                    "agent-config",
-                    f"YAML configuration stores a literal credential in '{key}'",
-                )
-            )
-
-        if key_lower in {
-            "url",
-            "serverurl",
-            "server_url",
-            "httpurl",
-            "sseurl",
-            "endpoint",
-        }:
-            findings.extend(
-                _inspect_endpoint_url(
-                    val,
-                    owner_label=f"YAML endpoint '{key}'",
-                    raw_text=raw_text,
-                    fallback_line=line_no,
-                    file_label=file_label,
-                )
-            )
-
-        if key_lower in {"icon_small", "icon_large", "icon", "logo"}:
-            if _is_remote_url(val):
-                findings.append(
-                    _finding(
-                        file_label,
-                        line_no,
-                        "remote-image",
-                        "high",
-                        "agent-config",
-                        f"YAML UI field '{key}' references remote or embedded URI '{val}'",
-                    )
-                )
-            elif boundary_root is not None:
-                _, path_errs = _resolve_bounded_local_path(
-                    val,
-                    base_dir=boundary_root,
-                    boundary_root=boundary_root,
-                    source_label=file_label,
-                    line=line_no,
-                    category="agent-config",
-                )
-                findings.extend(path_errs)
-
-        if key_lower in {"command", "bash", "shell", "script"}:
-            if val.startswith("[") and val.endswith("]"):
-                parts = [
-                    _strip_yaml_comment_and_quotes(p)
-                    for p in val[1:-1].split(",")
-                    if p.strip()
-                ]
-                if parts:
-                    pending_cmd = (line_no, parts[0])
-                    pending_args = parts[1:]
-            else:
-                pending_cmd = (line_no, val)
-                pending_args = []
+        cmd_spec = _parse_yaml_command_spec(key_lower, val, line_no)
+        if cmd_spec is not None:
+            pending_cmd, pending_args = cmd_spec
 
     if pending_cmd is not None:
         cmd_line, cmd_val = pending_cmd
+        cmd_source = _ConfigSourceContext(
+            raw_text=raw_text, file_label=file_label, fallback_line=cmd_line
+        )
         findings.extend(
             _inspect_yaml_command(
-                cmd_val,
-                pending_args,
-                line_no=cmd_line,
-                raw_text=raw_text,
-                file_label=file_label,
-                allowed=allowed,
+                cmd_val, pending_args, source=cmd_source, allowed=allowed
             )
         )
-
     return findings
 
 
@@ -3251,7 +3306,6 @@ def _vet_agent_yaml(
                 file_label,
                 1,
                 "symlink-file",
-                "high",
                 "filesystem",
                 "Symlinked YAML configuration file is not permitted",
             )
@@ -3262,13 +3316,15 @@ def _vet_agent_yaml(
         raw_text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return [
-            _finding(
-                file_label,
-                1,
-                "invalid-encoding",
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-encoding",
+                    "agent-config",
+                    "YAML configuration file is not valid UTF-8",
+                ),
                 "medium",
-                "agent-config",
-                "YAML configuration file is not valid UTF-8",
             )
         ]
     return _vet_agent_yaml_text(
@@ -3283,38 +3339,36 @@ def _inspect_yaml_command(
     cmd_val: str,
     args: list[str],
     *,
-    line_no: int,
-    raw_text: str,
-    file_label: str,
+    source: _ConfigSourceContext,
     allowed: frozenset[str],
 ) -> list[dict[str, Any]]:
+    line_no = source.fallback_line
     findings = _inspect_mcp_command_and_args(
         cmd_val,
         args,
         owner_label="YAML command entry",
-        raw_text=raw_text,
-        fallback_line=line_no,
-        file_label=file_label,
+        source=source,
     )
     joined = " ".join([cmd_val, *args])
-    for sub in _vet_shell_source(joined, file_label, allowed):
+    for sub in _vet_shell_source(joined, source.file_label, allowed):
         findings.append(
-            _finding(
-                file_label,
-                line_no,
-                sub["rule"],
+            _with_severity(
+                _finding(
+                    source.file_label,
+                    line_no,
+                    sub["rule"],
+                    "agent-config",
+                    sub["message"],
+                ),
                 sub["severity"],
-                "agent-config",
-                sub["message"],
             )
         )
     if not findings and not _process_capability_permitted(allowed):
         findings.append(
             _finding(
-                file_label,
+                source.file_label,
                 line_no,
                 "shell-execution",
-                "high",
                 "agent-config",
                 f"YAML configuration defines executable command '{cmd_val}'",
             )
@@ -3373,81 +3427,167 @@ def _extract_local_script_from_hook_cmd(command: str) -> str | None:
     return None
 
 
-def _inspect_hook_entries(
-    hooks_obj: Any,
+def _inspect_config_shell_command(
+    cmd_val: str,
     *,
-    raw_text: str,
-    file_label: str,
+    exec_message: str,
+    source: _ConfigSourceContext,
     allowed: frozenset[str],
     refs: _ManifestRefs,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    if isinstance(hooks_obj, str):
-        line_no = _find_line_number(raw_text, hooks_obj)
-        refs.hook_paths.append((line_no, hooks_obj))
-        return findings
-    if isinstance(hooks_obj, list):
-        for item in hooks_obj:
-            if isinstance(item, str):
-                refs.hook_paths.append((_find_line_number(raw_text, item), item))
-            elif isinstance(item, Mapping):
-                findings.extend(
-                    _inspect_single_hook_dict(
-                        item,
-                        event_label="hook",
-                        raw_text=raw_text,
-                        file_label=file_label,
-                        allowed=allowed,
-                        refs=refs,
-                    )
+    cmd_line = _find_line_number(source.raw_text, cmd_val) or source.fallback_line
+    if not _capability_permitted("shell-execution", allowed):
+        findings.append(
+            _finding(
+                source.file_label,
+                cmd_line,
+                "shell-execution",
+                "agent-config",
+                exec_message,
+            )
+        )
+    for sub in _vet_shell_source(cmd_val, source.file_label, allowed):
+        if sub["rule"] != "shell-execution":
+            findings.append(
+                _with_severity(
+                    _finding(
+                        source.file_label,
+                        cmd_line,
+                        sub["rule"],
+                        "agent-config",
+                        sub["message"],
+                    ),
+                    sub["severity"],
                 )
-        return findings
-    if not isinstance(hooks_obj, Mapping):
-        return findings
+            )
+    local_script = _extract_local_script_from_hook_cmd(cmd_val)
+    if local_script is not None:
+        refs.script_paths.append((cmd_line, local_script))
+    return findings
 
-    for event_name, event_val in hooks_obj.items():
-        if not isinstance(event_name, str):
+
+def _iter_event_hook_dicts(event_val: Any) -> list[Mapping[str, Any]]:
+    if isinstance(event_val, Mapping):
+        return [event_val]
+    if not isinstance(event_val, list):
+        return []
+    hooks: list[Mapping[str, Any]] = []
+    for entry in event_val:
+        if not isinstance(entry, Mapping):
             continue
-        if isinstance(event_val, Mapping):
+        nested = entry.get("hooks")
+        if isinstance(nested, list):
+            hooks.extend(sub for sub in nested if isinstance(sub, Mapping))
+        else:
+            hooks.append(entry)
+    return hooks
+
+
+def _inspect_hook_list_entries(
+    hooks_list: list[Any],
+    *,
+    source: _ConfigSourceContext,
+    allowed: frozenset[str],
+    refs: _ManifestRefs,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for item in hooks_list:
+        if isinstance(item, str):
+            refs.hook_paths.append((_find_line_number(source.raw_text, item), item))
+        elif isinstance(item, Mapping):
             findings.extend(
                 _inspect_single_hook_dict(
-                    event_val,
-                    event_label=f"hook '{event_name}'",
-                    raw_text=raw_text,
-                    file_label=file_label,
+                    item,
+                    event_label="hook",
+                    source=source,
                     allowed=allowed,
                     refs=refs,
                 )
             )
-        elif isinstance(event_val, list):
-            for entry in event_val:
-                if not isinstance(entry, Mapping):
-                    continue
-                nested = entry.get("hooks")
-                if isinstance(nested, list):
-                    for sub_hook in nested:
-                        if isinstance(sub_hook, Mapping):
-                            findings.extend(
-                                _inspect_single_hook_dict(
-                                    sub_hook,
-                                    event_label=f"hook '{event_name}'",
-                                    raw_text=raw_text,
-                                    file_label=file_label,
-                                    allowed=allowed,
-                                    refs=refs,
-                                )
-                            )
-                else:
-                    findings.extend(
-                        _inspect_single_hook_dict(
-                            entry,
-                            event_label=f"hook '{event_name}'",
-                            raw_text=raw_text,
-                            file_label=file_label,
-                            allowed=allowed,
-                            refs=refs,
-                        )
-                    )
+    return findings
+
+
+def _inspect_hook_entries(
+    hooks_obj: Any,
+    *,
+    source: _ConfigSourceContext,
+    allowed: frozenset[str],
+    refs: _ManifestRefs,
+) -> list[dict[str, Any]]:
+    if isinstance(hooks_obj, str):
+        refs.hook_paths.append(
+            (_find_line_number(source.raw_text, hooks_obj), hooks_obj)
+        )
+        return []
+    if isinstance(hooks_obj, list):
+        return _inspect_hook_list_entries(
+            hooks_obj, source=source, allowed=allowed, refs=refs
+        )
+    if not isinstance(hooks_obj, Mapping):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for event_name, event_val in hooks_obj.items():
+        if not isinstance(event_name, str):
+            continue
+        for hook_dict in _iter_event_hook_dicts(event_val):
+            findings.extend(
+                _inspect_single_hook_dict(
+                    hook_dict,
+                    event_label=f"hook '{event_name}'",
+                    source=source,
+                    allowed=allowed,
+                    refs=refs,
+                )
+            )
+    return findings
+
+
+def _inspect_hook_urls_and_secrets(
+    hook: Mapping[str, Any],
+    *,
+    owner_label: str,
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for url_key in ("url", "endpoint", "httpUrl"):
+        url_val = hook.get(url_key)
+        if isinstance(url_val, str) and url_val.strip():
+            findings.extend(
+                _inspect_endpoint_url(url_val, owner_label=owner_label, source=source)
+            )
+    for map_field in ("env", "headers"):
+        mapping = hook.get(map_field)
+        if isinstance(mapping, Mapping):
+            findings.extend(
+                _inspect_secret_mapping(
+                    mapping,
+                    owner_label=owner_label,
+                    map_field=map_field,
+                    source=source,
+                )
+            )
+    return findings
+
+
+def _inspect_hook_prompts(
+    hook: Mapping[str, Any],
+    *,
+    owner_label: str,
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for text_field in ("prompt", "instructions", "systemMessage", "description"):
+        text_val = hook.get(text_field)
+        if isinstance(text_val, str) and text_val.strip():
+            findings.extend(
+                _inspect_prompt_string(
+                    text_val,
+                    owner_label=f"{owner_label} {text_field}",
+                    source=source,
+                )
+            )
     return findings
 
 
@@ -3455,85 +3595,37 @@ def _inspect_single_hook_dict(
     hook: Mapping[str, Any],
     *,
     event_label: str,
-    raw_text: str,
-    file_label: str,
+    source: _ConfigSourceContext,
     allowed: frozenset[str],
     refs: _ManifestRefs,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    fallback_line = _find_line_number(raw_text, '"hooks"')
+    hook_source = replace(
+        source, fallback_line=_find_line_number(source.raw_text, '"hooks"')
+    )
+    owner_label = f"Agent {event_label}"
 
     for cmd_key in ("command", "bash", "shell", "script"):
         cmd_val = hook.get(cmd_key)
         if isinstance(cmd_val, str) and cmd_val.strip():
-            cmd_line = _find_line_number(raw_text, cmd_val) or fallback_line
-            if not _capability_permitted("shell-execution", allowed):
-                findings.append(
-                    _finding(
-                        file_label,
-                        cmd_line,
-                        "shell-execution",
-                        "high",
-                        "agent-config",
-                        f"Agent {event_label} executes shell command '{cmd_val.strip()}'",
-                    )
-                )
-            for sub in _vet_shell_source(cmd_val, file_label, allowed):
-                if sub["rule"] != "shell-execution":
-                    findings.append(
-                        _finding(
-                            file_label,
-                            cmd_line,
-                            sub["rule"],
-                            sub["severity"],
-                            "agent-config",
-                            sub["message"],
-                        )
-                    )
-            local_script = _extract_local_script_from_hook_cmd(cmd_val)
-            if local_script is not None:
-                refs.script_paths.append((cmd_line, local_script))
-
-    for url_key in ("url", "endpoint", "httpUrl"):
-        url_val = hook.get(url_key)
-        if isinstance(url_val, str) and url_val.strip():
             findings.extend(
-                _inspect_endpoint_url(
-                    url_val,
-                    owner_label=f"Agent {event_label}",
-                    raw_text=raw_text,
-                    fallback_line=fallback_line,
-                    file_label=file_label,
+                _inspect_config_shell_command(
+                    cmd_val,
+                    exec_message=f"{owner_label} executes shell command '{cmd_val.strip()}'",
+                    source=hook_source,
+                    allowed=allowed,
+                    refs=refs,
                 )
             )
 
-    for map_field in ("env", "headers"):
-        mapping = hook.get(map_field)
-        if isinstance(mapping, Mapping):
-            findings.extend(
-                _inspect_secret_mapping(
-                    mapping,
-                    owner_label=f"Agent {event_label}",
-                    map_field=map_field,
-                    raw_text=raw_text,
-                    fallback_line=fallback_line,
-                    file_label=file_label,
-                )
-            )
-
-    for text_field in ("prompt", "instructions", "systemMessage", "description"):
-        text_val = hook.get(text_field)
-        if isinstance(text_val, str) and text_val.strip():
-            findings.extend(
-                _inspect_prompt_string(
-                    text_val,
-                    owner_label=f"Agent {event_label} {text_field}",
-                    raw_text=raw_text,
-                    fallback_line=fallback_line,
-                    file_label=file_label,
-                )
-            )
-
+    findings.extend(
+        _inspect_hook_urls_and_secrets(
+            hook, owner_label=owner_label, source=hook_source
+        )
+    )
+    findings.extend(
+        _inspect_hook_prompts(hook, owner_label=owner_label, source=hook_source)
+    )
     return findings
 
 
@@ -3548,6 +3640,220 @@ def _collect_string_or_list_refs(
                 out.append((_find_line_number(raw_text, item), item.strip()))
 
 
+def _inspect_manifest_base_urls(
+    env_map: Mapping[str, Any],
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for base_key in ("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_API_BASE"):
+        base_val = env_map.get(base_key)
+        if isinstance(base_val, str) and base_val.strip():
+            base_source = replace(
+                source, fallback_line=_find_line_number(source.raw_text, base_key)
+            )
+            findings.extend(
+                _inspect_endpoint_url(
+                    base_val,
+                    owner_label=f"Manifest env.{base_key}",
+                    source=base_source,
+                )
+            )
+    return findings
+
+
+def _inspect_manifest_env_and_headers(
+    data: Mapping[str, Any],
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for map_field in ("env", "headers"):
+        mapping = data.get(map_field)
+        if not isinstance(mapping, Mapping):
+            continue
+        findings.extend(
+            _inspect_secret_mapping(
+                mapping,
+                owner_label="Manifest configuration",
+                map_field=map_field,
+                source=source,
+            )
+        )
+        if map_field == "env":
+            findings.extend(_inspect_manifest_base_urls(mapping, source))
+    return findings
+
+
+def _inspect_manifest_string_field(
+    key: str,
+    val: str,
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    stripped_val = val.strip()
+    key_line = _find_line_number(source.raw_text, key)
+    if not _ENV_PLACEHOLDER_RE.match(stripped_val) and (
+        _MCP_INLINE_SECRET_VALUE_RE.search(stripped_val)
+        or (_MCP_SECRET_KEY_NAME_RE.search(key) and len(stripped_val) >= 8)
+    ):
+        findings.append(
+            _finding(
+                source.file_label,
+                key_line,
+                "mcp-inline-secret",
+                "agent-config",
+                f"Manifest stores a literal credential in '{key}'",
+            )
+        )
+    if key in _MANIFEST_PROMPT_KEYS:
+        findings.extend(
+            _inspect_prompt_string(
+                stripped_val,
+                owner_label=f"Manifest '{key}'",
+                source=replace(source, fallback_line=key_line),
+            )
+        )
+    return findings
+
+
+def _inspect_company_announcements(
+    items: list[Any],
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    ann_source = replace(
+        source,
+        fallback_line=_find_line_number(source.raw_text, "companyAnnouncements"),
+    )
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            findings.extend(
+                _inspect_prompt_string(
+                    item,
+                    owner_label="Manifest 'companyAnnouncements'",
+                    source=ann_source,
+                )
+            )
+    return findings
+
+
+def _inspect_manifest_top_level_fields(
+    data: Mapping[str, Any],
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for key, val in data.items():
+        if not isinstance(key, str) or key in {"env", "headers"}:
+            continue
+        if isinstance(val, str) and val.strip():
+            findings.extend(_inspect_manifest_string_field(key, val, source))
+        elif key == "companyAnnouncements" and isinstance(val, list):
+            findings.extend(_inspect_company_announcements(val, source))
+    return findings
+
+
+def _inspect_manifest_mcp_mapping(
+    mcp_val: Mapping[Any, Any],
+    source: _ConfigSourceContext,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for s_name, s_cfg in mcp_val.items():
+        if isinstance(s_name, str) and isinstance(s_cfg, Mapping):
+            findings.extend(
+                _inspect_mcp_server_entry(
+                    s_name,
+                    s_cfg,
+                    raw_text=source.raw_text,
+                    file_label=source.file_label,
+                )
+            )
+    return findings
+
+
+def _inspect_manifest_mcp_and_hooks(
+    data: Mapping[str, Any],
+    *,
+    source: _ConfigSourceContext,
+    allowed: frozenset[str],
+    refs: _ManifestRefs,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for mcp_key in ("mcpServers", "servers", "mcp"):
+        mcp_val = data.get(mcp_key)
+        if isinstance(mcp_val, Mapping):
+            findings.extend(_inspect_manifest_mcp_mapping(mcp_val, source))
+        elif mcp_val is not None:
+            _collect_string_or_list_refs(mcp_val, source.raw_text, refs.mcp_paths)
+
+    if "hooks" in data:
+        findings.extend(
+            _inspect_hook_entries(
+                data["hooks"],
+                source=source,
+                allowed=allowed,
+                refs=refs,
+            )
+        )
+    return findings
+
+
+def _collect_manifest_refs_and_icons(
+    data: Mapping[str, Any],
+    *,
+    source: _ConfigSourceContext,
+    refs: _ManifestRefs,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for icon_key in ("logo", "icon"):
+        icon_val = data.get(icon_key)
+        if not isinstance(icon_val, str) or not icon_val.strip():
+            continue
+        icon_line = _find_line_number(source.raw_text, icon_val)
+        if _is_remote_url(icon_val):
+            findings.append(
+                _finding(
+                    source.file_label,
+                    icon_line,
+                    "remote-image",
+                    "agent-config",
+                    f"Manifest '{icon_key}' references remote or embedded URI '{icon_val}'",
+                )
+            )
+        else:
+            refs.doc_paths.append((icon_line, icon_val.strip()))
+
+    _collect_string_or_list_refs(data.get("skills"), source.raw_text, refs.skill_paths)
+    _collect_string_or_list_refs(
+        data.get("contextFileName"), source.raw_text, refs.doc_paths
+    )
+    for doc_key in ("rules", "commands", "agents", "prompts"):
+        _collect_string_or_list_refs(data.get(doc_key), source.raw_text, refs.doc_paths)
+    return findings
+
+
+def _inspect_manifest_plugins(
+    plugins: Any,
+    *,
+    source: _ConfigSourceContext,
+    allowed: frozenset[str],
+    refs: _ManifestRefs,
+) -> list[dict[str, Any]]:
+    if not isinstance(plugins, list):
+        return []
+    findings: list[dict[str, Any]] = []
+    for plugin_entry in plugins:
+        if isinstance(plugin_entry, Mapping):
+            findings.extend(
+                _inspect_manifest_object(
+                    plugin_entry,
+                    raw_text=source.raw_text,
+                    file_label=source.file_label,
+                    allowed=allowed,
+                    refs=refs,
+                )
+            )
+    return findings
+
+
 def _inspect_manifest_object(
     data: Mapping[str, Any],
     *,
@@ -3557,178 +3863,32 @@ def _inspect_manifest_object(
     refs: _ManifestRefs,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    source = _ConfigSourceContext(raw_text=raw_text, file_label=file_label)
 
     for helper_key in _SETTINGS_HELPER_COMMAND_KEYS:
         helper_cmd = data.get(helper_key)
         if isinstance(helper_cmd, str) and helper_cmd.strip():
-            cmd_line = _find_line_number(raw_text, helper_cmd)
-            if not _capability_permitted("shell-execution", allowed):
-                findings.append(
-                    _finding(
-                        file_label,
-                        cmd_line,
-                        "shell-execution",
-                        "high",
-                        "agent-config",
-                        f"Settings '{helper_key}' executes shell helper command '{helper_cmd.strip()}'",
-                    )
-                )
-            for sub in _vet_shell_source(helper_cmd, file_label, allowed):
-                if sub["rule"] != "shell-execution":
-                    findings.append(
-                        _finding(
-                            file_label,
-                            cmd_line,
-                            sub["rule"],
-                            sub["severity"],
-                            "agent-config",
-                            sub["message"],
-                        )
-                    )
-            local_script = _extract_local_script_from_hook_cmd(helper_cmd)
-            if local_script is not None:
-                refs.script_paths.append((cmd_line, local_script))
-
-    for map_field in ("env", "headers"):
-        mapping = data.get(map_field)
-        if isinstance(mapping, Mapping):
             findings.extend(
-                _inspect_secret_mapping(
-                    mapping,
-                    owner_label="Manifest configuration",
-                    map_field=map_field,
-                    raw_text=raw_text,
-                    fallback_line=1,
-                    file_label=file_label,
+                _inspect_config_shell_command(
+                    helper_cmd,
+                    exec_message=f"Settings '{helper_key}' executes shell helper command '{helper_cmd.strip()}'",
+                    source=source,
+                    allowed=allowed,
+                    refs=refs,
                 )
             )
-            if map_field == "env":
-                for base_key in (
-                    "ANTHROPIC_BASE_URL",
-                    "OPENAI_BASE_URL",
-                    "GEMINI_API_BASE",
-                ):
-                    base_val = mapping.get(base_key)
-                    if isinstance(base_val, str) and base_val.strip():
-                        findings.extend(
-                            _inspect_endpoint_url(
-                                base_val,
-                                owner_label=f"Manifest env.{base_key}",
-                                raw_text=raw_text,
-                                fallback_line=_find_line_number(raw_text, base_key),
-                                file_label=file_label,
-                            )
-                        )
 
-    for key, val in data.items():
-        if not isinstance(key, str):
-            continue
-        if key in {"env", "headers"}:
-            continue
-        if isinstance(val, str) and val.strip():
-            stripped_val = val.strip()
-            if not _ENV_PLACEHOLDER_RE.match(stripped_val) and (
-                _MCP_INLINE_SECRET_VALUE_RE.search(stripped_val)
-                or (_MCP_SECRET_KEY_NAME_RE.search(key) and len(stripped_val) >= 8)
-            ):
-                findings.append(
-                    _finding(
-                        file_label,
-                        _find_line_number(raw_text, key),
-                        "mcp-inline-secret",
-                        "high",
-                        "agent-config",
-                        f"Manifest stores a literal credential in '{key}'",
-                    )
-                )
-            if key in _MANIFEST_PROMPT_KEYS:
-                findings.extend(
-                    _inspect_prompt_string(
-                        stripped_val,
-                        owner_label=f"Manifest '{key}'",
-                        raw_text=raw_text,
-                        fallback_line=_find_line_number(raw_text, key),
-                        file_label=file_label,
-                    )
-                )
-        elif key == "companyAnnouncements" and isinstance(val, list):
-            for item in val:
-                if isinstance(item, str) and item.strip():
-                    findings.extend(
-                        _inspect_prompt_string(
-                            item,
-                            owner_label="Manifest 'companyAnnouncements'",
-                            raw_text=raw_text,
-                            fallback_line=_find_line_number(raw_text, key),
-                            file_label=file_label,
-                        )
-                    )
-
-    for mcp_key in ("mcpServers", "servers", "mcp"):
-        mcp_val = data.get(mcp_key)
-        if isinstance(mcp_val, Mapping):
-            for s_name, s_cfg in mcp_val.items():
-                if isinstance(s_name, str) and isinstance(s_cfg, Mapping):
-                    findings.extend(
-                        _inspect_mcp_server_entry(
-                            s_name,
-                            s_cfg,
-                            raw_text=raw_text,
-                            file_label=file_label,
-                        )
-                    )
-        elif mcp_val is not None:
-            _collect_string_or_list_refs(mcp_val, raw_text, refs.mcp_paths)
-
-    if "hooks" in data:
-        findings.extend(
-            _inspect_hook_entries(
-                data["hooks"],
-                raw_text=raw_text,
-                file_label=file_label,
-                allowed=allowed,
-                refs=refs,
-            )
+    findings.extend(_inspect_manifest_env_and_headers(data, source))
+    findings.extend(_inspect_manifest_top_level_fields(data, source))
+    findings.extend(
+        _inspect_manifest_mcp_and_hooks(data, source=source, allowed=allowed, refs=refs)
+    )
+    findings.extend(_collect_manifest_refs_and_icons(data, source=source, refs=refs))
+    findings.extend(
+        _inspect_manifest_plugins(
+            data.get("plugins"), source=source, allowed=allowed, refs=refs
         )
-
-    for icon_key in ("logo", "icon"):
-        icon_val = data.get(icon_key)
-        if isinstance(icon_val, str) and icon_val.strip():
-            if _is_remote_url(icon_val):
-                findings.append(
-                    _finding(
-                        file_label,
-                        _find_line_number(raw_text, icon_val),
-                        "remote-image",
-                        "high",
-                        "agent-config",
-                        f"Manifest '{icon_key}' references remote or embedded URI '{icon_val}'",
-                    )
-                )
-            else:
-                refs.doc_paths.append(
-                    (_find_line_number(raw_text, icon_val), icon_val.strip())
-                )
-
-    _collect_string_or_list_refs(data.get("skills"), raw_text, refs.skill_paths)
-    _collect_string_or_list_refs(data.get("contextFileName"), raw_text, refs.doc_paths)
-    for doc_key in ("rules", "commands", "agents", "prompts"):
-        _collect_string_or_list_refs(data.get(doc_key), raw_text, refs.doc_paths)
-
-    plugins = data.get("plugins")
-    if isinstance(plugins, list):
-        for plugin_entry in plugins:
-            if isinstance(plugin_entry, Mapping):
-                findings.extend(
-                    _inspect_manifest_object(
-                        plugin_entry,
-                        raw_text=raw_text,
-                        file_label=file_label,
-                        allowed=allowed,
-                        refs=refs,
-                    )
-                )
-
+    )
     return findings
 
 
@@ -3747,7 +3907,6 @@ def _vet_host_json_manifest(
                     file_label,
                     1,
                     "symlink-file",
-                    "high",
                     "filesystem",
                     "Symlinked host manifest file is not permitted",
                 )
@@ -3762,13 +3921,15 @@ def _vet_host_json_manifest(
     except UnicodeDecodeError:
         return (
             [
-                _finding(
-                    file_label,
-                    1,
-                    "invalid-encoding",
+                _with_severity(
+                    _finding(
+                        file_label,
+                        1,
+                        "invalid-encoding",
+                        "agent-config",
+                        "Host manifest file is not valid UTF-8",
+                    ),
                     "medium",
-                    "agent-config",
-                    "Host manifest file is not valid UTF-8",
                 )
             ],
             refs,
@@ -3779,26 +3940,30 @@ def _vet_host_json_manifest(
         data = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         findings.append(
-            _finding(
-                file_label,
-                exc.lineno,
-                "invalid-json",
+            _with_severity(
+                _finding(
+                    file_label,
+                    exc.lineno,
+                    "invalid-json",
+                    "agent-config",
+                    f"Malformed host manifest JSON: {exc.msg}",
+                ),
                 "medium",
-                "agent-config",
-                f"Malformed host manifest JSON: {exc.msg}",
             )
         )
         return findings, refs
 
     if not isinstance(data, Mapping):
         findings.append(
-            _finding(
-                file_label,
-                1,
-                "invalid-manifest",
+            _with_severity(
+                _finding(
+                    file_label,
+                    1,
+                    "invalid-manifest",
+                    "agent-config",
+                    "Host manifest root must be a JSON object",
+                ),
                 "medium",
-                "agent-config",
-                "Host manifest root must be a JSON object",
             )
         )
         return findings, refs
@@ -3822,6 +3987,12 @@ def _validate_manifest_refs_in_skill(
     source_label: str,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    boundary = _BoundaryContext(
+        base_dir=package,
+        boundary_root=package,
+        source_label=source_label,
+        category="agent-config",
+    )
     all_refs = [
         *refs.mcp_paths,
         *refs.hook_paths,
@@ -3833,12 +4004,7 @@ def _validate_manifest_refs_in_skill(
         if raw_ref == ".":
             continue
         _, path_errs = _resolve_bounded_local_path(
-            raw_ref,
-            base_dir=package,
-            boundary_root=package,
-            source_label=source_label,
-            line=line_no,
-            category="agent-config",
+            raw_ref, line=line_no, boundary=boundary
         )
         findings.extend(path_errs)
     return findings
@@ -3873,6 +4039,137 @@ def _is_host_manifest_rel(rel_posix: str, name_lower: str) -> bool:
     } or name_lower in {"gemini-extension.json", "hooks.json"}
 
 
+def _vet_skill_config_file(
+    entry: Path,
+    *,
+    rel_posix: str,
+    top_dir: str,
+    package: Path,
+    effective_caps: frozenset[str],
+) -> list[dict[str, Any]] | None:
+    suffix = entry.suffix.lower()
+    name_lower = entry.name.lower()
+    if _is_mcp_filename(name_lower):
+        return vet_mcp_config(entry, root=package)
+    if _is_host_manifest_rel(rel_posix, name_lower) or (
+        top_dir == "hooks" and suffix == ".json"
+    ):
+        manifest_findings, manifest_refs = _vet_host_json_manifest(
+            entry, root=package, allowed=effective_caps
+        )
+        return [
+            *manifest_findings,
+            *_validate_manifest_refs_in_skill(
+                manifest_refs, package=package, source_label=rel_posix
+            ),
+        ]
+    if suffix in {".yaml", ".yml"} and top_dir in {"agents", "hooks", ""}:
+        return _vet_agent_yaml(
+            entry,
+            boundary_root=package,
+            root=package,
+            allowed=effective_caps,
+        )
+    if suffix == ".svg":
+        return _vet_svg_file(entry, root=package)
+    return None
+
+
+def _vet_skill_content_file(
+    entry: Path,
+    *,
+    rel_posix: str,
+    top_dir: str,
+    package: Path,
+    effective_caps: frozenset[str],
+) -> list[dict[str, Any]] | None:
+    suffix = entry.suffix.lower()
+    if top_dir == "hooks" and suffix not in {".md", ".mdc"}:
+        findings: list[dict[str, Any]] = []
+        if not _process_capability_permitted(effective_caps):
+            findings.append(
+                _finding(
+                    rel_posix,
+                    1,
+                    "shell-execution",
+                    "agent-config",
+                    f"Untrusted hook script '{rel_posix}' executes automatically on host events",
+                )
+            )
+        findings.extend(vet_script(entry, effective_caps, root=package))
+        return findings
+    if top_dir == "scripts" or suffix in _SCRIPT_SUFFIXES or _has_shebang(entry):
+        return vet_script(entry, effective_caps, root=package)
+    if suffix in {".md", ".mdc"}:
+        return vet_markdown(entry, root=package)
+    return None
+
+
+def _vet_skill_entry(
+    entry: Path,
+    *,
+    package: Path,
+    package_resolved: Path,
+    effective_caps: frozenset[str],
+) -> tuple[int, list[dict[str, Any]]]:
+    rel_parts = entry.relative_to(package).parts
+    if any(part in _EXCLUDED_DIR_NAMES for part in rel_parts):
+        return 0, []
+    rel_posix = entry.relative_to(package).as_posix()
+    if entry.is_symlink():
+        return (
+            0,
+            [
+                _finding(
+                    rel_posix,
+                    1,
+                    "symlink-file",
+                    "filesystem",
+                    f"Symlink is not permitted inside skill package: {rel_posix}",
+                )
+            ],
+        )
+    if not entry.resolve().is_relative_to(package_resolved):
+        return (
+            0,
+            [
+                _finding(
+                    rel_posix,
+                    1,
+                    "escaping-path",
+                    "filesystem",
+                    f"File escapes skill package boundary: {rel_posix}",
+                )
+            ],
+        )
+    if (
+        not entry.is_file()
+        or entry.suffix in _EXCLUDED_FILE_SUFFIXES
+        or entry.name in _EXCLUDED_FILE_NAMES
+    ):
+        return 0, []
+
+    top_dir = rel_parts[0] if len(rel_parts) > 1 else ""
+    matched = _vet_skill_config_file(
+        entry,
+        rel_posix=rel_posix,
+        top_dir=top_dir,
+        package=package,
+        effective_caps=effective_caps,
+    )
+    if matched is None:
+        matched = _vet_skill_content_file(
+            entry,
+            rel_posix=rel_posix,
+            top_dir=top_dir,
+            package=package,
+            effective_caps=effective_caps,
+        )
+    if matched is None:
+        return 0, []
+    return 1, matched
+
+
 def vet_skill(
     package: Path,
     allowed_capabilities: Collection[str] | None = None,
@@ -3894,7 +4191,6 @@ def vet_skill(
                     label,
                     1,
                     "symlink-directory",
-                    "high",
                     "filesystem",
                     "Skill package directory must not be a symlink",
                 )
@@ -3921,104 +4217,23 @@ def vet_skill(
                 "SKILL.md",
                 1,
                 "missing-skill-manifest",
-                "high",
                 "prompt",
                 "Skill directory is missing SKILL.md",
             )
         )
 
-    for entry in sorted(
+    sorted_entries = sorted(
         package.rglob("*"), key=lambda p: p.relative_to(package).as_posix()
-    ):
-        rel_parts = entry.relative_to(package).parts
-        if any(part in _EXCLUDED_DIR_NAMES for part in rel_parts):
-            continue
-        rel_posix = entry.relative_to(package).as_posix()
-        if entry.is_symlink():
-            findings.append(
-                _finding(
-                    rel_posix,
-                    1,
-                    "symlink-file",
-                    "high",
-                    "filesystem",
-                    f"Symlink is not permitted inside skill package: {rel_posix}",
-                )
-            )
-            continue
-        if not entry.resolve().is_relative_to(package_resolved):
-            findings.append(
-                _finding(
-                    rel_posix,
-                    1,
-                    "escaping-path",
-                    "high",
-                    "filesystem",
-                    f"File escapes skill package boundary: {rel_posix}",
-                )
-            )
-            continue
-        if not entry.is_file():
-            continue
-        if (
-            entry.suffix in _EXCLUDED_FILE_SUFFIXES
-            or entry.name in _EXCLUDED_FILE_NAMES
-        ):
-            continue
-
-        top_dir = rel_parts[0] if len(rel_parts) > 1 else ""
-        suffix = entry.suffix.lower()
-        name_lower = entry.name.lower()
-
-        if _is_mcp_filename(name_lower):
-            scanned_files += 1
-            findings.extend(vet_mcp_config(entry, root=package))
-        elif _is_host_manifest_rel(rel_posix, name_lower) or (
-            top_dir == "hooks" and suffix == ".json"
-        ):
-            scanned_files += 1
-            manifest_findings, manifest_refs = _vet_host_json_manifest(
-                entry, root=package, allowed=effective_caps
-            )
-            findings.extend(manifest_findings)
-            findings.extend(
-                _validate_manifest_refs_in_skill(
-                    manifest_refs, package=package, source_label=rel_posix
-                )
-            )
-        elif suffix in {".yaml", ".yml"} and top_dir in {"agents", "hooks", ""}:
-            scanned_files += 1
-            findings.extend(
-                _vet_agent_yaml(
-                    entry,
-                    boundary_root=package,
-                    root=package,
-                    allowed=effective_caps,
-                )
-            )
-        elif suffix == ".svg":
-            scanned_files += 1
-            findings.extend(_vet_svg_file(entry, root=package))
-        elif top_dir == "hooks" and suffix not in {".md", ".mdc"}:
-            scanned_files += 1
-            if not _process_capability_permitted(effective_caps):
-                findings.append(
-                    _finding(
-                        rel_posix,
-                        1,
-                        "shell-execution",
-                        "high",
-                        "agent-config",
-                        f"Untrusted hook script '{rel_posix}' executes automatically on host events",
-                    )
-                )
-            findings.extend(vet_script(entry, effective_caps, root=package))
-        elif top_dir == "scripts" or suffix in _SCRIPT_SUFFIXES or _has_shebang(entry):
-            scanned_files += 1
-            findings.extend(vet_script(entry, effective_caps, root=package))
-        elif suffix in {".md", ".mdc"}:
-            scanned_files += 1
-            findings.extend(vet_markdown(entry, root=package))
+    )
+    for entry in sorted_entries:
+        count, entry_findings = _vet_skill_entry(
+            entry,
+            package=package,
+            package_resolved=package_resolved,
+            effective_caps=effective_caps,
+        )
+        scanned_files += count
+        findings.extend(entry_findings)
 
     return {
         "target": str(package),
@@ -4030,23 +4245,30 @@ def vet_skill(
     }
 
 
+def _read_hosts_map(hosts_path: Path) -> Mapping[str, Any]:
+    if not hosts_path.is_file() or hosts_path.is_symlink():
+        return {}
+    try:
+        doc = json.loads(hosts_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(doc, Mapping):
+        return {}
+    hosts = doc.get("hosts", {})
+    return hosts if isinstance(hosts, Mapping) else {}
+
+
 def _discover_host_skill_dirs(root: Path) -> list[str]:
     dirs: list[str] = list(_DEFAULT_HOST_SKILL_DIRS)
-    hosts_path = root / "catalog/hosts.json"
-    if hosts_path.is_file() and not hosts_path.is_symlink():
-        try:
-            doc = json.loads(hosts_path.read_text(encoding="utf-8"))
-            hosts = doc.get("hosts", {})
-            if isinstance(hosts, Mapping):
-                for cfg in hosts.values():
-                    if isinstance(cfg, Mapping):
-                        proj = cfg.get("project_path")
-                        if isinstance(proj, str) and proj.strip():
-                            norm = proj.strip().strip("/")
-                            if norm and norm not in dirs:
-                                dirs.append(norm)
-        except (OSError, json.JSONDecodeError):
-            pass
+    for cfg in _read_hosts_map(root / "catalog/hosts.json").values():
+        if not isinstance(cfg, Mapping):
+            continue
+        proj = cfg.get("project_path")
+        if not isinstance(proj, str) or not proj.strip():
+            continue
+        norm = proj.strip().strip("/")
+        if norm and norm not in dirs:
+            dirs.append(norm)
     return dirs
 
 
@@ -4111,265 +4333,391 @@ def _vet_single_file_target(
     }
 
 
-def _scan_referenced_skill_dir(
-    skill_dir: Path,
-    *,
-    repo_root: Path,
-    root: Path,
-    allowed_capabilities: Collection[str] | None,
-    seen_skills: set[str],
-    skills_scanned: list[str],
-    findings: list[dict[str, Any]],
-) -> int:
-    rel_skill = _format_file_label(skill_dir, repo_root)
-    if rel_skill in {"", "."} or rel_skill in seen_skills:
+def _scan_referenced_skill_dir(skill_dir: Path, ctx: _RepoScanContext) -> int:
+    rel_skill = _format_file_label(skill_dir, ctx.repo_root)
+    if rel_skill in {"", "."} or rel_skill in ctx.seen_skills:
         return 0
-    seen_skills.add(rel_skill)
-    trusted = _is_trusted_toolkit_skill(skill_dir, root)
+    ctx.seen_skills.add(rel_skill)
+    trusted = _is_trusted_toolkit_skill(skill_dir, ctx.root)
     sub_res = vet_skill(
         skill_dir,
-        allowed_capabilities,
+        ctx.allowed_capabilities,
         trust_builtin_allowlists=trusted,
-        root=root,
+        root=ctx.root,
     )
-    skills_scanned.append(rel_skill)
-    findings.extend(_prefix_skill_findings(sub_res["findings"], rel_skill))
+    ctx.skills_scanned.append(rel_skill)
+    ctx.findings.extend(_prefix_skill_findings(sub_res["findings"], rel_skill))
     return int(sub_res["scanned_files"])
+
+
+def _follow_repo_mcp_refs(
+    mcp_paths: list[tuple[int, str]],
+    *,
+    boundary: _BoundaryContext,
+    ctx: _RepoScanContext,
+) -> int:
+    scanned_count = 0
+    for line_no, raw_mcp in mcp_paths:
+        mcp_path, errs = _resolve_bounded_local_path(
+            raw_mcp, line=line_no, boundary=boundary
+        )
+        if errs:
+            ctx.findings.extend(errs)
+            continue
+        if mcp_path is None or not mcp_path.is_file():
+            continue
+        mcp_label = _format_file_label(mcp_path, ctx.repo_root)
+        if _mark_config_scanned(ctx, mcp_label):
+            scanned_count += 1
+            ctx.findings.extend(vet_mcp_config(mcp_path, root=ctx.repo_root))
+    return scanned_count
+
+
+def _vet_repo_hook_file(hook_path: Path, ctx: _RepoScanContext) -> int:
+    hook_label = _format_file_label(hook_path, ctx.repo_root)
+    if not _mark_config_scanned(ctx, hook_label):
+        return 0
+    scanned_count = 1
+    suffix = hook_path.suffix.lower()
+    if suffix == ".json":
+        sub_f, sub_refs = _vet_host_json_manifest(
+            hook_path, root=ctx.repo_root, allowed=ctx.allowed
+        )
+        ctx.findings.extend(sub_f)
+        scanned_count += _follow_repo_manifest_refs(
+            sub_refs, source_label=hook_label, ctx=ctx
+        )
+    elif suffix in {".yaml", ".yml"}:
+        ctx.findings.extend(
+            _vet_agent_yaml(
+                hook_path,
+                boundary_root=ctx.repo_root,
+                root=ctx.repo_root,
+                allowed=ctx.allowed,
+            )
+        )
+    else:
+        ctx.findings.extend(
+            vet_script(hook_path, ctx.allowed_capabilities, root=ctx.repo_root)
+        )
+    return scanned_count
+
+
+def _follow_repo_hook_refs(
+    hook_paths: list[tuple[int, str]],
+    *,
+    boundary: _BoundaryContext,
+    ctx: _RepoScanContext,
+) -> int:
+    scanned_count = 0
+    for line_no, raw_hook in hook_paths:
+        hook_path, errs = _resolve_bounded_local_path(
+            raw_hook, line=line_no, boundary=boundary
+        )
+        if errs:
+            ctx.findings.extend(errs)
+            continue
+        if hook_path is not None and hook_path.is_file():
+            scanned_count += _vet_repo_hook_file(hook_path, ctx)
+    return scanned_count
+
+
+def _follow_repo_script_refs(
+    script_paths: list[tuple[int, str]],
+    *,
+    boundary: _BoundaryContext,
+    ctx: _RepoScanContext,
+) -> int:
+    scanned_count = 0
+    for line_no, raw_script in script_paths:
+        script_path, errs = _resolve_bounded_local_path(
+            raw_script, line=line_no, boundary=boundary
+        )
+        if errs:
+            ctx.findings.extend(errs)
+            continue
+        if script_path is None or not script_path.is_file():
+            continue
+        script_label = _format_file_label(script_path, ctx.repo_root)
+        if _mark_config_scanned(ctx, script_label):
+            scanned_count += 1
+            ctx.findings.extend(
+                vet_script(script_path, ctx.allowed_capabilities, root=ctx.repo_root)
+            )
+    return scanned_count
+
+
+def _has_skill_manifest(skill_dir: Path) -> bool:
+    skill_md = skill_dir / "SKILL.md"
+    return skill_md.exists() or skill_md.is_symlink()
+
+
+def _scan_skill_ref_directory(skill_path: Path, ctx: _RepoScanContext) -> int:
+    if _has_skill_manifest(skill_path):
+        return _scan_referenced_skill_dir(skill_path, ctx)
+    scanned_count = 0
+    for child in sorted(skill_path.iterdir(), key=lambda p: p.name):
+        if child.is_symlink():
+            rel_child = _format_file_label(child, ctx.repo_root)
+            ctx.findings.append(
+                _finding(
+                    rel_child,
+                    1,
+                    "symlink-directory",
+                    "filesystem",
+                    f"Skill directory must not be a symlink: {rel_child}",
+                )
+            )
+        elif child.is_dir() and _has_skill_manifest(child):
+            scanned_count += _scan_referenced_skill_dir(child, ctx)
+    return scanned_count
+
+
+def _follow_repo_skill_refs(
+    skill_paths: list[tuple[int, str]],
+    *,
+    boundary: _BoundaryContext,
+    ctx: _RepoScanContext,
+) -> int:
+    scanned_count = 0
+    for line_no, raw_skill in skill_paths:
+        if raw_skill in {".", "./"}:
+            continue
+        skill_path, errs = _resolve_bounded_local_path(
+            raw_skill, line=line_no, boundary=boundary
+        )
+        if errs:
+            ctx.findings.extend(errs)
+            continue
+        if skill_path is not None and skill_path.is_dir():
+            scanned_count += _scan_skill_ref_directory(skill_path, ctx)
+    return scanned_count
+
+
+def _vet_repo_doc_directory(doc_dir: Path, ctx: _RepoScanContext) -> int:
+    scanned_count = 0
+    fresh_ctx = replace(ctx, active_chain=frozenset())
+    for md_entry in sorted(doc_dir.rglob("*")):
+        if md_entry.is_symlink():
+            rel_md = _format_file_label(md_entry, ctx.repo_root)
+            ctx.findings.append(
+                _finding(
+                    rel_md,
+                    1,
+                    "symlink-file",
+                    "filesystem",
+                    f"Symlinked instruction file is not permitted: {rel_md}",
+                )
+            )
+        elif md_entry.is_file() and md_entry.suffix.lower() in {".md", ".mdc"}:
+            scanned_count += _vet_markdown_with_shims(md_entry, fresh_ctx)
+    return scanned_count
+
+
+def _vet_repo_doc_target(doc_path: Path, ctx: _RepoScanContext) -> int:
+    if doc_path.is_dir():
+        return _vet_repo_doc_directory(doc_path, ctx)
+    if not doc_path.is_file():
+        return 0
+    doc_suffix = doc_path.suffix.lower()
+    if doc_suffix == ".svg":
+        doc_label = _format_file_label(doc_path, ctx.repo_root)
+        if not _mark_config_scanned(ctx, doc_label):
+            return 0
+        ctx.findings.extend(_vet_svg_file(doc_path, root=ctx.repo_root))
+        return 1
+    if doc_suffix in {".md", ".mdc", ".markdown", ".txt", ""}:
+        return _vet_markdown_with_shims(
+            doc_path, replace(ctx, active_chain=frozenset())
+        )
+    return 0
+
+
+def _follow_repo_doc_refs(
+    doc_paths: list[tuple[int, str]],
+    *,
+    boundary: _BoundaryContext,
+    ctx: _RepoScanContext,
+) -> int:
+    scanned_count = 0
+    for line_no, raw_doc in doc_paths:
+        doc_path, errs = _resolve_bounded_local_path(
+            raw_doc, line=line_no, boundary=boundary
+        )
+        if errs:
+            ctx.findings.extend(errs)
+            continue
+        if doc_path is not None and doc_path.exists():
+            scanned_count += _vet_repo_doc_target(doc_path, ctx)
+    return scanned_count
 
 
 def _follow_repo_manifest_refs(
     refs: _ManifestRefs,
     *,
     source_label: str,
-    repo_root: Path,
-    root: Path,
-    allowed_capabilities: Collection[str] | None,
-    allowed: frozenset[str],
-    seen_configs: set[str],
-    configs_scanned: list[str],
-    seen_skills: set[str],
-    skills_scanned: list[str],
-    vetted_md_targets: set[Path],
-    findings: list[dict[str, Any]],
+    ctx: _RepoScanContext,
 ) -> int:
-    scanned_count = 0
-
-    for line_no, raw_mcp in refs.mcp_paths:
-        mcp_path, errs = _resolve_bounded_local_path(
-            raw_mcp,
-            base_dir=repo_root,
-            boundary_root=repo_root,
-            source_label=source_label,
-            line=line_no,
-            category="agent-config",
-        )
-        if errs:
-            findings.extend(errs)
-            continue
-        if mcp_path is not None and mcp_path.is_file():
-            mcp_label = _format_file_label(mcp_path, repo_root)
-            if mcp_label not in seen_configs:
-                seen_configs.add(mcp_label)
-                configs_scanned.append(mcp_label)
-                scanned_count += 1
-                findings.extend(vet_mcp_config(mcp_path, root=repo_root))
-
-    for line_no, raw_hook in refs.hook_paths:
-        hook_path, errs = _resolve_bounded_local_path(
-            raw_hook,
-            base_dir=repo_root,
-            boundary_root=repo_root,
-            source_label=source_label,
-            line=line_no,
-            category="agent-config",
-        )
-        if errs:
-            findings.extend(errs)
-            continue
-        if hook_path is None or not hook_path.exists():
-            continue
-        if hook_path.is_file():
-            hook_label = _format_file_label(hook_path, repo_root)
-            if hook_label in seen_configs:
-                continue
-            seen_configs.add(hook_label)
-            configs_scanned.append(hook_label)
-            scanned_count += 1
-            if hook_path.suffix.lower() == ".json":
-                sub_f, sub_refs = _vet_host_json_manifest(
-                    hook_path, root=repo_root, allowed=allowed
-                )
-                findings.extend(sub_f)
-                scanned_count += _follow_repo_manifest_refs(
-                    sub_refs,
-                    source_label=hook_label,
-                    repo_root=repo_root,
-                    root=root,
-                    allowed_capabilities=allowed_capabilities,
-                    allowed=allowed,
-                    seen_configs=seen_configs,
-                    configs_scanned=configs_scanned,
-                    seen_skills=seen_skills,
-                    skills_scanned=skills_scanned,
-                    vetted_md_targets=vetted_md_targets,
-                    findings=findings,
-                )
-            elif hook_path.suffix.lower() in {".yaml", ".yml"}:
-                findings.extend(
-                    _vet_agent_yaml(
-                        hook_path,
-                        boundary_root=repo_root,
-                        root=repo_root,
-                        allowed=allowed,
-                    )
-                )
-            else:
-                findings.extend(
-                    vet_script(hook_path, allowed_capabilities, root=repo_root)
-                )
-
-    for line_no, raw_script in refs.script_paths:
-        script_path, errs = _resolve_bounded_local_path(
-            raw_script,
-            base_dir=repo_root,
-            boundary_root=repo_root,
-            source_label=source_label,
-            line=line_no,
-            category="agent-config",
-        )
-        if errs:
-            findings.extend(errs)
-            continue
-        if script_path is not None and script_path.is_file():
-            script_label = _format_file_label(script_path, repo_root)
-            if script_label not in seen_configs:
-                seen_configs.add(script_label)
-                configs_scanned.append(script_label)
-                scanned_count += 1
-                findings.extend(
-                    vet_script(script_path, allowed_capabilities, root=repo_root)
-                )
-
-    for line_no, raw_skill in refs.skill_paths:
-        if raw_skill in {".", "./"}:
-            continue
-        skill_path, errs = _resolve_bounded_local_path(
-            raw_skill,
-            base_dir=repo_root,
-            boundary_root=repo_root,
-            source_label=source_label,
-            line=line_no,
-            category="agent-config",
-        )
-        if errs:
-            findings.extend(errs)
-            continue
-        if skill_path is None or not skill_path.exists():
-            continue
-        if skill_path.is_dir():
-            if (skill_path / "SKILL.md").exists() or (
-                skill_path / "SKILL.md"
-            ).is_symlink():
-                scanned_count += _scan_referenced_skill_dir(
-                    skill_path,
-                    repo_root=repo_root,
-                    root=root,
-                    allowed_capabilities=allowed_capabilities,
-                    seen_skills=seen_skills,
-                    skills_scanned=skills_scanned,
-                    findings=findings,
-                )
-            else:
-                for child in sorted(skill_path.iterdir(), key=lambda p: p.name):
-                    if child.is_symlink():
-                        rel_child = _format_file_label(child, repo_root)
-                        findings.append(
-                            _finding(
-                                rel_child,
-                                1,
-                                "symlink-directory",
-                                "high",
-                                "filesystem",
-                                f"Skill directory must not be a symlink: {rel_child}",
-                            )
-                        )
-                    elif child.is_dir() and (
-                        (child / "SKILL.md").exists()
-                        or (child / "SKILL.md").is_symlink()
-                    ):
-                        scanned_count += _scan_referenced_skill_dir(
-                            child,
-                            repo_root=repo_root,
-                            root=root,
-                            allowed_capabilities=allowed_capabilities,
-                            seen_skills=seen_skills,
-                            skills_scanned=skills_scanned,
-                            findings=findings,
-                        )
-
-    for line_no, raw_doc in refs.doc_paths:
-        doc_path, errs = _resolve_bounded_local_path(
-            raw_doc,
-            base_dir=repo_root,
-            boundary_root=repo_root,
-            source_label=source_label,
-            line=line_no,
-            category="agent-config",
-        )
-        if errs:
-            findings.extend(errs)
-            continue
-        if doc_path is None or not doc_path.exists():
-            continue
-        if doc_path.is_file():
-            doc_suffix = doc_path.suffix.lower()
-            doc_label = _format_file_label(doc_path, repo_root)
-            if doc_suffix == ".svg":
-                if doc_label not in seen_configs:
-                    seen_configs.add(doc_label)
-                    configs_scanned.append(doc_label)
-                    scanned_count += 1
-                    findings.extend(_vet_svg_file(doc_path, root=repo_root))
-            elif doc_suffix in {".md", ".mdc", ".markdown", ".txt", ""}:
-                md_f, md_c = _vet_markdown_with_shims(
-                    doc_path,
-                    repo_root=repo_root,
-                    seen_configs=seen_configs,
-                    configs_scanned=configs_scanned,
-                    active_chain=frozenset(),
-                    vetted_targets=vetted_md_targets,
-                    allowed_capabilities=allowed_capabilities,
-                )
-                findings.extend(md_f)
-                scanned_count += md_c
-        elif doc_path.is_dir():
-            for md_entry in sorted(doc_path.rglob("*")):
-                if md_entry.is_symlink():
-                    rel_md = _format_file_label(md_entry, repo_root)
-                    findings.append(
-                        _finding(
-                            rel_md,
-                            1,
-                            "symlink-file",
-                            "high",
-                            "filesystem",
-                            f"Symlinked instruction file is not permitted: {rel_md}",
-                        )
-                    )
-                elif md_entry.is_file() and md_entry.suffix.lower() in {".md", ".mdc"}:
-                    md_f, md_c = _vet_markdown_with_shims(
-                        md_entry,
-                        repo_root=repo_root,
-                        seen_configs=seen_configs,
-                        configs_scanned=configs_scanned,
-                        active_chain=frozenset(),
-                        vetted_targets=vetted_md_targets,
-                        allowed_capabilities=allowed_capabilities,
-                    )
-                    findings.extend(md_f)
-                    scanned_count += md_c
-
+    boundary = _BoundaryContext(
+        base_dir=ctx.repo_root,
+        boundary_root=ctx.repo_root,
+        source_label=source_label,
+        category="agent-config",
+    )
+    scanned_count = _follow_repo_mcp_refs(refs.mcp_paths, boundary=boundary, ctx=ctx)
+    scanned_count += _follow_repo_hook_refs(refs.hook_paths, boundary=boundary, ctx=ctx)
+    scanned_count += _follow_repo_script_refs(
+        refs.script_paths, boundary=boundary, ctx=ctx
+    )
+    scanned_count += _follow_repo_skill_refs(
+        refs.skill_paths, boundary=boundary, ctx=ctx
+    )
+    scanned_count += _follow_repo_doc_refs(refs.doc_paths, boundary=boundary, ctx=ctx)
     return scanned_count
+
+
+def _scan_host_skills_dir(rel_skill_root: str, ctx: _RepoScanContext) -> int:
+    host_skills_dir = ctx.repo_root / rel_skill_root
+    if host_skills_dir.is_symlink():
+        ctx.findings.append(
+            _finding(
+                rel_skill_root,
+                1,
+                "symlink-directory",
+                "filesystem",
+                f"Host skill directory must not be a symlink: {rel_skill_root}",
+            )
+        )
+        return 0
+    if not host_skills_dir.is_dir():
+        return 0
+
+    scanned_files = 0
+    for child in sorted(host_skills_dir.iterdir(), key=lambda p: p.name):
+        rel_child = f"{rel_skill_root}/{child.name}"
+        if child.is_symlink():
+            ctx.findings.append(
+                _finding(
+                    rel_child,
+                    1,
+                    "symlink-directory",
+                    "filesystem",
+                    f"Skill directory must not be a symlink: {rel_child}",
+                )
+            )
+            continue
+        if not child.is_dir():
+            continue
+        has_scripts = (child / "scripts").exists() or (child / "hooks").exists()
+        if _has_skill_manifest(child) or has_scripts:
+            scanned_files += _scan_referenced_skill_dir(child, ctx)
+    return scanned_files
+
+
+def _scan_repo_instructions(ctx: _RepoScanContext) -> int:
+    candidate_paths: list[Path] = [
+        ctx.repo_root / rel for rel in _REPO_INSTRUCTION_FILES
+    ]
+    for pattern in _REPO_INSTRUCTION_GLOBS:
+        candidate_paths.extend(sorted(ctx.repo_root.glob(pattern)))
+
+    scanned_files = 0
+    fresh_ctx = replace(ctx, active_chain=frozenset())
+    for inst_path in candidate_paths:
+        if inst_path.exists() or inst_path.is_symlink():
+            scanned_files += _vet_markdown_with_shims(inst_path, fresh_ctx)
+    return scanned_files
+
+
+def _scan_repo_mcp_configs(ctx: _RepoScanContext) -> int:
+    scanned_files = 0
+    for rel_mcp in _REPO_MCP_FILES:
+        mcp_path = ctx.repo_root / rel_mcp
+        if not mcp_path.exists() and not mcp_path.is_symlink():
+            continue
+        rel_label = _format_file_label(mcp_path, ctx.repo_root)
+        if _mark_config_scanned(ctx, rel_label):
+            scanned_files += 1
+            ctx.findings.extend(vet_mcp_config(mcp_path, root=ctx.repo_root))
+    return scanned_files
+
+
+def _scan_repo_host_manifests(ctx: _RepoScanContext) -> int:
+    scanned_files = 0
+    for rel_manifest in _REPO_HOST_MANIFEST_FILES:
+        manifest_path = ctx.repo_root / rel_manifest
+        if not manifest_path.exists() and not manifest_path.is_symlink():
+            continue
+        rel_label = _format_file_label(manifest_path, ctx.repo_root)
+        if not _mark_config_scanned(ctx, rel_label):
+            continue
+        scanned_files += 1
+        manifest_findings, manifest_refs = _vet_host_json_manifest(
+            manifest_path,
+            root=ctx.repo_root,
+            allowed=ctx.allowed,
+        )
+        ctx.findings.extend(manifest_findings)
+        scanned_files += _follow_repo_manifest_refs(
+            manifest_refs,
+            source_label=rel_label,
+            ctx=ctx,
+        )
+    return scanned_files
+
+
+def _vet_standalone_skill_target(
+    target: Path,
+    allowed_capabilities: Collection[str] | None,
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    trusted = _is_trusted_toolkit_skill(target, root)
+    skill_res = vet_skill(
+        target,
+        allowed_capabilities,
+        trust_builtin_allowlists=trusted,
+        root=root,
+    )
+    return {
+        "target": str(target),
+        "kind": "skill",
+        "skill": skill_res["skill"],
+        "passed": skill_res["passed"],
+        "scanned_files": skill_res["scanned_files"],
+        "skills_scanned": [skill_res["skill"]],
+        "configs_scanned": [],
+        "findings": skill_res["findings"],
+    }
+
+
+def _vet_repository_target(
+    target: Path,
+    allowed_capabilities: Collection[str] | None,
+    *,
+    root: Path,
+) -> dict[str, Any]:
+    ctx = _RepoScanContext(
+        repo_root=target.resolve(),
+        root=root,
+        allowed_capabilities=allowed_capabilities,
+        allowed=_normalize_capabilities(allowed_capabilities),
+    )
+    scanned_files = 0
+    for rel_skill_root in _discover_host_skill_dirs(root):
+        scanned_files += _scan_host_skills_dir(rel_skill_root, ctx)
+    scanned_files += _scan_repo_instructions(ctx)
+    scanned_files += _scan_repo_mcp_configs(ctx)
+    scanned_files += _scan_repo_host_manifests(ctx)
+    return {
+        "target": str(target),
+        "kind": "repository",
+        "passed": len(ctx.findings) == 0,
+        "scanned_files": scanned_files,
+        "skills_scanned": ctx.skills_scanned,
+        "configs_scanned": ctx.configs_scanned,
+        "findings": ctx.findings,
+    }
 
 
 def vet_target(
@@ -4393,7 +4741,6 @@ def vet_target(
                     label,
                     1,
                     "symlink-target",
-                    "high",
                     "filesystem",
                     "Target path must not be a symlink",
                 )
@@ -4401,160 +4748,8 @@ def vet_target(
         }
     if not target.exists():
         raise FileNotFoundError(f"Target path not found: {target}")
-
     if target.is_file():
         return _vet_single_file_target(target, allowed_capabilities)
-
-    # If the directory itself is a standalone skill package (contains SKILL.md), vet it directly.
-    skill_md = target / "SKILL.md"
-    if skill_md.is_file() or skill_md.is_symlink():
-        trusted = _is_trusted_toolkit_skill(target, root)
-        skill_res = vet_skill(
-            target,
-            allowed_capabilities,
-            trust_builtin_allowlists=trusted,
-            root=root,
-        )
-        return {
-            "target": str(target),
-            "kind": "skill",
-            "skill": skill_res["skill"],
-            "passed": skill_res["passed"],
-            "scanned_files": skill_res["scanned_files"],
-            "skills_scanned": [skill_res["skill"]],
-            "configs_scanned": [],
-            "findings": skill_res["findings"],
-        }
-
-    # Repository / project agent configuration scan.
-    repo_root = target.resolve()
-    allowed = _normalize_capabilities(allowed_capabilities)
-    findings: list[dict[str, Any]] = []
-    scanned_files = 0
-    seen_skills: set[str] = set()
-    skills_scanned: list[str] = []
-    configs_scanned: list[str] = []
-    seen_configs: set[str] = set()
-    vetted_md_targets: set[Path] = set()
-
-    for rel_skill_root in _discover_host_skill_dirs(root):
-        host_skills_dir = repo_root / rel_skill_root
-        if host_skills_dir.is_symlink():
-            findings.append(
-                _finding(
-                    rel_skill_root,
-                    1,
-                    "symlink-directory",
-                    "high",
-                    "filesystem",
-                    f"Host skill directory must not be a symlink: {rel_skill_root}",
-                )
-            )
-            continue
-        if not host_skills_dir.is_dir():
-            continue
-        for child in sorted(host_skills_dir.iterdir(), key=lambda p: p.name):
-            rel_child = f"{rel_skill_root}/{child.name}"
-            if child.is_symlink():
-                findings.append(
-                    _finding(
-                        rel_child,
-                        1,
-                        "symlink-directory",
-                        "high",
-                        "filesystem",
-                        f"Skill directory must not be a symlink: {rel_child}",
-                    )
-                )
-                continue
-            if not child.is_dir():
-                continue
-            child_skill_md = child / "SKILL.md"
-            has_scripts = (child / "scripts").exists() or (child / "hooks").exists()
-            if not (
-                child_skill_md.exists() or child_skill_md.is_symlink() or has_scripts
-            ):
-                continue
-            scanned_files += _scan_referenced_skill_dir(
-                child,
-                repo_root=repo_root,
-                root=root,
-                allowed_capabilities=allowed_capabilities,
-                seen_skills=seen_skills,
-                skills_scanned=skills_scanned,
-                findings=findings,
-            )
-
-    candidate_instruction_paths: list[Path] = [
-        repo_root / rel for rel in _REPO_INSTRUCTION_FILES
-    ]
-    for pattern in _REPO_INSTRUCTION_GLOBS:
-        candidate_instruction_paths.extend(sorted(repo_root.glob(pattern)))
-
-    for inst_path in candidate_instruction_paths:
-        if not inst_path.exists() and not inst_path.is_symlink():
-            continue
-        md_findings, md_count = _vet_markdown_with_shims(
-            inst_path,
-            repo_root=repo_root,
-            seen_configs=seen_configs,
-            configs_scanned=configs_scanned,
-            active_chain=frozenset(),
-            vetted_targets=vetted_md_targets,
-            allowed_capabilities=allowed_capabilities,
-        )
-        findings.extend(md_findings)
-        scanned_files += md_count
-
-    for rel_mcp in _REPO_MCP_FILES:
-        mcp_path = repo_root / rel_mcp
-        if not mcp_path.exists() and not mcp_path.is_symlink():
-            continue
-        rel_label = _format_file_label(mcp_path, repo_root)
-        if rel_label in seen_configs:
-            continue
-        seen_configs.add(rel_label)
-        configs_scanned.append(rel_label)
-        scanned_files += 1
-        findings.extend(vet_mcp_config(mcp_path, root=repo_root))
-
-    for rel_manifest in _REPO_HOST_MANIFEST_FILES:
-        manifest_path = repo_root / rel_manifest
-        if not manifest_path.exists() and not manifest_path.is_symlink():
-            continue
-        rel_label = _format_file_label(manifest_path, repo_root)
-        if rel_label in seen_configs:
-            continue
-        seen_configs.add(rel_label)
-        configs_scanned.append(rel_label)
-        scanned_files += 1
-        manifest_findings, manifest_refs = _vet_host_json_manifest(
-            manifest_path,
-            root=repo_root,
-            allowed=allowed,
-        )
-        findings.extend(manifest_findings)
-        scanned_files += _follow_repo_manifest_refs(
-            manifest_refs,
-            source_label=rel_label,
-            repo_root=repo_root,
-            root=root,
-            allowed_capabilities=allowed_capabilities,
-            allowed=allowed,
-            seen_configs=seen_configs,
-            configs_scanned=configs_scanned,
-            seen_skills=seen_skills,
-            skills_scanned=skills_scanned,
-            vetted_md_targets=vetted_md_targets,
-            findings=findings,
-        )
-
-    return {
-        "target": str(target),
-        "kind": "repository",
-        "passed": len(findings) == 0,
-        "scanned_files": scanned_files,
-        "skills_scanned": skills_scanned,
-        "configs_scanned": configs_scanned,
-        "findings": findings,
-    }
+    if _has_skill_manifest(target):
+        return _vet_standalone_skill_target(target, allowed_capabilities, root=root)
+    return _vet_repository_target(target, allowed_capabilities, root=root)

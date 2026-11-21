@@ -156,6 +156,57 @@ class VettingModuleTests(unittest.TestCase):
                     self.assertIn(top, sys.stdlib_module_names)
                     self.assertNotIn(node.module, banned_network)
 
+    def test_vetting_scanners_stay_flat_and_bounded(self) -> None:
+        vetting_path = ROOT / "scripts/fredlib/vetting.py"
+        tree = ast.parse(
+            vetting_path.read_text(encoding="utf-8"), filename=str(vetting_path)
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            params = [
+                *node.args.posonlyargs,
+                *node.args.args,
+                *node.args.kwonlyargs,
+            ]
+            if params and params[0].arg in {"self", "cls"}:
+                params = params[1:]
+            total_params = (
+                len(params)
+                + int(node.args.vararg is not None)
+                + int(node.args.kwarg is not None)
+            )
+            self.assertLessEqual(
+                total_params,
+                5,
+                f"vetting.py:{node.name}@L{node.lineno} exceeds 5 parameters ({total_params})",
+            )
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.stmt) and sub is not node:
+                    self.assertLessEqual(
+                        sub.col_offset - node.col_offset,
+                        16,
+                        f"vetting.py:{node.name}@L{sub.lineno} exceeds 4 relative statement indentation levels",
+                    )
+
+        ruff_bin = shutil.which("ruff")
+        ruff_cmd = (
+            [ruff_bin] if ruff_bin is not None else [sys.executable, "-m", "ruff"]
+        )
+        proc = subprocess.run(
+            [
+                *ruff_cmd,
+                "check",
+                "--select",
+                "C901,PLR0911,PLR0912,PLR0913,PLR0915",
+                str(vetting_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+
     def test_vet_script_flags_network_shell_eval_exec_and_credential_reads(
         self,
     ) -> None:
