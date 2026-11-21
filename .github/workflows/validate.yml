@@ -82,7 +82,7 @@ jobs:
       - name: Run unit and documentation test suites
         run: python scripts/run_checks.py --phase tests
       - name: Verify workflow action pins upstream
-        if: github.event_name != 'workflow_call' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        if: github.workflow == 'Validate skill packages' && github.event_name != 'workflow_call' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         shell: bash
         env:
           BASE_REF: ${{ (github.event_name == 'pull_request' && format('origin/{0}', github.base_ref)) || (github.event_name == 'merge_group' && github.event.merge_group.base_sha) || github.event.before }}

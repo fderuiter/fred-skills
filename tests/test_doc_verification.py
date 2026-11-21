@@ -2213,6 +2213,145 @@ class DocSnippetVerificationTests(unittest.TestCase):
         self.assertIn("Error [git_timeout]:", err_git.getvalue())
         self.assertIn("Hint:", err_git.getvalue())
 
+    def test_tagless_clone_fails_closed_for_historical_release_notes_and_bump_check_runs(
+        self,
+    ) -> None:
+        """verify_doc_snippets.py fails closed on --depth=1 --no-tags clones and validates bump_version.py --check."""
+        ok_bump, msg_bump = execute_snippet_command(
+            "python scripts/bump_version.py --check", root=ROOT
+        )
+        self.assertTrue(ok_bump, msg_bump)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            seed = base / "seed"
+            seed.mkdir(parents=True)
+            (seed / "docs").mkdir(parents=True)
+
+            def git_seed(*args: str) -> None:
+                subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Test",
+                        "-c",
+                        "user.email=test@example.com",
+                        "-c",
+                        "core.autocrlf=false",
+                        *args,
+                    ],
+                    cwd=seed,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+            git_seed("init")
+            v020_notes = b"# 0.2.0 - Tagged snapshot\n\nTotal: 42 skills.\n"
+            (seed / "VERSION").write_bytes(b"0.2.0\n")
+            (seed / "README.md").write_bytes(b"# Sample Docs\n")
+            (seed / "docs/release-notes-0.2.0.md").write_bytes(v020_notes)
+            git_seed("add", "VERSION", "README.md", "docs/release-notes-0.2.0.md")
+            git_seed("commit", "-m", "Release 0.2.0")
+            git_seed("tag", "v0.2.0")
+
+            (seed / "VERSION").write_bytes(b"0.3.0\n")
+            (seed / "docs/release-notes-0.3.0.md").write_bytes(
+                b"# 0.3.0 - Active notes\n\nTotal: 57 skills.\n"
+            )
+            git_seed("add", "VERSION", "docs/release-notes-0.3.0.md")
+            git_seed("commit", "-m", "Advance to 0.3.0")
+
+            tagless_clone = base / "tagless"
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.autocrlf=false",
+                    "clone",
+                    "--depth=1",
+                    "--no-tags",
+                    seed.as_uri(),
+                    str(tagless_clone),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            proc_tagless = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/verify_doc_snippets.py"),
+                    "--root",
+                    str(tagless_clone),
+                    "docs/release-notes-0.2.0.md",
+                ],
+                cwd=tagless_clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                1,
+                proc_tagless.returncode,
+                f"Expected verify_doc_snippets.py to fail closed on tagless clone, got stdout={proc_tagless.stdout!r} stderr={proc_tagless.stderr!r}",
+            )
+            self.assertIn("docs/release-notes-0.2.0.md", proc_tagless.stderr)
+            self.assertIn("refs/tags/v0.2.0", proc_tagless.stderr)
+
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.autocrlf=false",
+                    "-C",
+                    str(tagless_clone),
+                    "fetch",
+                    "origin",
+                    "refs/tags/v0.2.0:refs/tags/v0.2.0",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            proc_with_tag = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/verify_doc_snippets.py"),
+                    "--root",
+                    str(tagless_clone),
+                    "docs/release-notes-0.2.0.md",
+                ],
+                cwd=tagless_clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, proc_with_tag.returncode, proc_with_tag.stderr)
+
+            (tagless_clone / "docs/release-notes-0.2.0.md").write_bytes(
+                b"# 0.2.0 - Mutated after tag\n"
+            )
+            proc_mutated = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(ROOT / "scripts/verify_doc_snippets.py"),
+                    "--root",
+                    str(tagless_clone),
+                    "docs/release-notes-0.2.0.md",
+                ],
+                cwd=tagless_clone,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, proc_mutated.returncode)
+            self.assertIn("immutability violation", proc_mutated.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

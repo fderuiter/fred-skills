@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   workflow_run:
-    workflows: [Validate skill packages]
+    workflows: [Validate skill packages, Release]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -170,6 +170,7 @@ jobs:
             API_RESPONSE_PATH="$API_OUT_FILE" \
             DESCENDANTS_PATH="$DESCENDANTS_FILE" \
             EVENT_MODE="$EVENT_NAME" \
+            WORKFLOW_EVENT_MODE="${WORKFLOW_EVENT:-}" \
             CHECK_TARGET_SHA="$TARGET_SHA" \
             "$PY_BIN" -S - <<'PY'
           import json
@@ -208,15 +209,19 @@ jobs:
                   validated_shas.add(head_sha)
 
           event_mode = os.environ["EVENT_MODE"]
+          workflow_event_mode = os.environ.get("WORKFLOW_EVENT_MODE", "")
           target_sha = os.environ["CHECK_TARGET_SHA"]
           descendants_raw = Path(os.environ["DESCENDANTS_PATH"]).read_text(encoding="utf-8")
           descendants = [
               tok for tok in descendants_raw.splitlines() if sha_re.fullmatch(tok.strip())
           ]
 
-          if event_mode == "workflow_dispatch" and target_sha not in validated_shas:
+          if (
+              event_mode == "workflow_dispatch"
+              or (event_mode == "workflow_run" and workflow_event_mode == "workflow_run")
+          ) and target_sha not in validated_shas:
               sys.stderr.write(
-                  f"Error: Refusing workflow_dispatch Pages deploy for unvalidated commit '{target_sha}' "
+                  f"Error: Refusing {event_mode} Pages deploy for unvalidated commit '{target_sha}' "
                   "(no completed 'Validate skill packages' run with conclusion 'success' on main)\n"
               )
               sys.exit(1)

@@ -1304,13 +1304,20 @@ class PackageTests(unittest.TestCase):
         self.assertEqual([[sys.executable, "-m", "mypy"]], typecheck_cmds)
 
         default_pkg_cmds = build_phase_commands("packages", root=ROOT)
-        self.assertEqual(5, len(default_pkg_cmds))
+        self.assertEqual(6, len(default_pkg_cmds))
         self.assertTrue(
             any(
                 cmd[-2].endswith("verify_workflow_actions.py") and cmd[-1] == "--check"
                 for cmd in default_pkg_cmds
             ),
             "packages phase must verify workflow action pins offline",
+        )
+        self.assertTrue(
+            any(
+                cmd[-2].endswith("bump_version.py") and cmd[-1] == "--check"
+                for cmd in default_pkg_cmds
+            ),
+            "packages phase must enforce scripts/bump_version.py --check",
         )
         self.assertFalse(
             any("--telemetry" in cmd for cmd in default_pkg_cmds),
@@ -2157,6 +2164,99 @@ class PackageTests(unittest.TestCase):
         )
         (git_fixture / "docs/release-notes-0.1.0.md").unlink()
         self.assertEqual([], _validate_documentation_invariants(git_fixture))
+
+        # Shallow tagless Git clone (--depth=1 --no-tags) must fail closed instead of skipping immutability
+        tagless_clone = self.root / "tagless-notes-clone"
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.autocrlf=false",
+                "clone",
+                "--depth=1",
+                "--no-tags",
+                git_fixture.as_uri(),
+                str(tagless_clone),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for item in git_fixture.iterdir():
+            if item.name == ".git":
+                continue
+            dst_item = tagless_clone / item.name
+            if dst_item.exists() or dst_item.is_symlink():
+                if dst_item.is_dir() and not dst_item.is_symlink():
+                    for sub in item.rglob("*"):
+                        if sub.is_file():
+                            rel_sub = sub.relative_to(item)
+                            target_sub = dst_item / rel_sub
+                            if not target_sub.exists():
+                                target_sub.parent.mkdir(parents=True, exist_ok=True)
+                                target_sub.write_bytes(sub.read_bytes())
+                continue
+            if item.is_symlink() or item.is_dir():
+                shutil.copytree(item.resolve(), dst_item)
+            else:
+                dst_item.write_bytes(item.read_bytes())
+
+        tagless_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(tagless_clone),
+                "--no-ledger",
+            ],
+            cwd=tagless_clone,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            1,
+            tagless_proc.returncode,
+            f"Expected tagless clone to fail closed, got stdout={tagless_proc.stdout!r} stderr={tagless_proc.stderr!r}",
+        )
+        self.assertIn("docs/release-notes-0.2.0.md", tagless_proc.stdout)
+        self.assertIn("refs/tags/v0.2.0", tagless_proc.stdout)
+
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.autocrlf=false",
+                "-C",
+                str(tagless_clone),
+                "fetch",
+                "origin",
+                "refs/tags/v0.2.0:refs/tags/v0.2.0",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        fetched_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(tagless_clone),
+                "--no-ledger",
+            ],
+            cwd=tagless_clone,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            fetched_proc.returncode,
+            f"Expected clone with fetched v0.2.0 tag to pass, got stdout={fetched_proc.stdout!r} stderr={fetched_proc.stderr!r}",
+        )
 
     def test_version_tag_immutability_gate_blocks_skill_and_pack_drift_and_preserves_historical_notes(
         self,

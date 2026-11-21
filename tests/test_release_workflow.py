@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -445,54 +446,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIs(dispatch_inputs["publish"]["default"], False)
 
         jobs = self.workflow_data["jobs"]
-        self.assertIn("prepare", jobs)
+        self.assertNotIn("prepare", jobs)
+        self.assertNotIn("skills-release-prepare-main", self.workflow_text)
         self.assertIn("preflight", jobs)
         self.assertIn("validate", jobs)
         self.assertIn("build", jobs)
         self.assertIn("release", jobs)
 
-        prepare = jobs["prepare"]
-        self.assertEqual(prepare.get("permissions"), {"contents": "write"})
-        self.assertEqual(
-            prepare.get("concurrency"),
-            {
-                "group": "skills-release-prepare-main",
-                "cancel-in-progress": False,
-            },
-        )
-        self.assertIn("github.event_name == 'workflow_run'", str(prepare.get("if", "")))
-        self.assertIn(
-            "github.event.workflow_run.conclusion == 'success'",
-            str(prepare.get("if", "")),
-        )
-        self.assertIn(
-            "github.event.workflow_run.event == 'push'", str(prepare.get("if", ""))
-        )
-        self.assertIn(
-            "github.event.workflow_run.head_branch == 'main'",
-            str(prepare.get("if", "")),
-        )
-        self.assertIn(
-            "github.actor != 'github-actions[bot]'", str(prepare.get("if", ""))
-        )
-        self.assertEqual(
-            set(prepare.get("outputs", {}).keys()),
-            {"bumped", "release_tag", "target_sha"},
-        )
-        prepare_checkout = prepare["steps"][0]
-        self.assertEqual(prepare_checkout.get("uses"), CHECKOUT_SHA)
-        self.assertEqual(prepare_checkout["with"].get("ref"), "refs/heads/main")
-        self.assertEqual(prepare_checkout["with"].get("fetch-depth"), 0)
-        self.assertIs(prepare_checkout["with"].get("persist-credentials"), False)
-        prepare_py = prepare["steps"][1]
-        self.assertEqual(prepare_py.get("uses"), SETUP_PYTHON_SHA)
-        self.assertEqual(prepare_py["with"].get("python-version"), "3.12")
-
         preflight = jobs["preflight"]
         self.assertNotIn("concurrency", preflight)
-        self.assertEqual(preflight.get("needs"), "prepare")
-        self.assertIn("needs.prepare.result == 'success'", str(preflight.get("if", "")))
-        self.assertIn("needs.prepare.result == 'skipped'", str(preflight.get("if", "")))
+        self.assertNotIn("needs", preflight)
         self.assertIn(
             "github.event_name == 'workflow_run'", str(preflight.get("if", ""))
         )
@@ -522,17 +485,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(preflight_checkout.get("uses"), CHECKOUT_SHA)
         self.assertEqual(
             preflight_checkout.get("with", {}).get("ref"),
-            "${{ needs.prepare.outputs.target_sha || github.event.workflow_run.head_sha || github.sha }}",
+            "${{ github.event.workflow_run.head_sha || github.sha }}",
         )
         self.assertIs(
             preflight_checkout.get("with", {}).get("persist-credentials"), False
         )
 
-        expected_handoff_ref = "${{ needs.preflight.outputs.target_sha || needs.prepare.outputs.target_sha }}"
+        expected_handoff_ref = "${{ needs.preflight.outputs.target_sha }}"
 
         validate_job = jobs["validate"]
         self.assertNotIn("concurrency", validate_job)
-        self.assertEqual(validate_job.get("needs"), ["prepare", "preflight"])
+        self.assertEqual(validate_job.get("needs"), "preflight")
         self.assertIn(
             "needs.preflight.outputs.should_build == 'true'",
             str(validate_job.get("if", "")),
@@ -560,7 +523,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             build["timeout-minutes"] * 60,
             run_checks.TESTS_PHASE_TIMEOUT + 600,
         )
-        self.assertEqual(build.get("needs"), ["prepare", "preflight", "validate"])
+        self.assertEqual(build.get("needs"), ["preflight", "validate"])
         self.assertIn(
             "needs.preflight.outputs.should_build == 'true'", str(build.get("if", ""))
         )
@@ -573,12 +536,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         build_checkout = build["steps"][0]
         self.assertEqual(build_checkout.get("uses"), CHECKOUT_SHA)
         self.assertEqual(build_checkout["with"]["ref"], expected_handoff_ref)
+        self.assertEqual(build_checkout["with"]["fetch-depth"], 0)
+        self.assertIs(build_checkout["with"]["fetch-tags"], True)
         self.assertIs(build_checkout["with"]["persist-credentials"], False)
 
         release = jobs["release"]
-        self.assertEqual(
-            release.get("needs"), ["prepare", "preflight", "validate", "build"]
-        )
+        self.assertEqual(release.get("needs"), ["preflight", "validate", "build"])
         self.assertIn(
             "needs.preflight.outputs.should_publish == 'true'",
             str(release.get("if", "")),
@@ -732,20 +695,65 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     )
 
     def test_build_job_preserves_existing_steps(self) -> None:
-        """The build job must package, verify checksums, and upload without rerunning make check or run_checks.py."""
+        """The build job fetches full history and tags, runs make check, packages assets, and verifies checksums."""
         build_job = self.workflow_data["jobs"]["build"]
         step_names = [s.get("name") for s in build_job["steps"] if "name" in s]
+        self.assertIn("Fetch full history and tags", step_names)
         self.assertIn("Install validation dependencies", step_names)
-        self.assertNotIn("Validate source and fixtures", step_names)
+        self.assertIn("Validate source and fixtures", step_names)
         self.assertIn("Package release assets", step_names)
         self.assertIn("Verify release manifest and checksums", step_names)
+        self.assertLess(
+            step_names.index("Fetch full history and tags"),
+            step_names.index("Validate source and fixtures"),
+        )
+        self.assertLess(
+            step_names.index("Validate source and fixtures"),
+            step_names.index("Package release assets"),
+        )
         run_cmds = "\n".join(s.get("run", "") for s in build_job["steps"])
-        self.assertNotIn("make check", run_cmds)
-        self.assertNotIn("run_checks.py", run_cmds)
+        self.assertIn("make check", run_cmds)
         self.assertIn("scripts/fred.py release --all", run_cmds)
         self.assertIn("scripts/fred.py verify-release", run_cmds)
         self.assertIn("sha256sum -c SHA256SUMS", run_cmds)
         self.assertIn("sha256sum -c checksums.sha256", run_cmds)
+
+        fetch_step = next(
+            s
+            for s in build_job["steps"]
+            if s.get("name") == "Fetch full history and tags"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            origin, _, _ = self._setup_origin_and_clone(
+                base,
+                version_text="0.2.0\n",
+                license_text="MIT License\n",
+                remote_tag="v0.2.0",
+            )
+            seed = base / "seed"
+            _write_lf(seed / "VERSION", "0.3.0\n")
+            _git(seed, "add", "VERSION")
+            _git(seed, "commit", "-m", "Advance to 0.3.0")
+            _git(seed, "push", "origin", "HEAD:refs/heads/main")
+            shallow_build = base / "shallow-build"
+            _git(
+                base,
+                "clone",
+                "--depth=1",
+                "--no-tags",
+                origin.as_uri(),
+                shallow_build.as_posix(),
+            )
+            fetch_proc = self._run_shell_script(
+                fetch_step["run"],
+                cwd=shallow_build,
+                env=_isolated_env(shallow_build, {}),
+            )
+            self.assertEqual(0, fetch_proc.returncode, fetch_proc.stderr)
+            self.assertTrue(
+                _git(shallow_build, "rev-parse", "--verify", "refs/tags/v0.2.0")
+            )
 
     def test_release_job_verifies_prerequisites_and_checksums_before_attestation(
         self,
@@ -874,35 +882,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         merged_env = _isolated_env(cwd, {"GITHUB_OUTPUT": str(output_file), **env_vars})
         proc = self._run_shell_script(
             gate_step["run"],
-            cwd=cwd,
-            env=merged_env,
-        )
-        return proc, _parse_github_output(output_file)
-
-    def _run_prepare_step(
-        self, cwd: Path, env_vars: dict[str, str]
-    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
-        prepare_steps = self.workflow_data["jobs"]["prepare"]["steps"]
-        bump_step = next(
-            s
-            for s in prepare_steps
-            if s.get("name") == "Advance SemVer and push release commit"
-        )
-        output_file = cwd / ".test-prepare-output.txt"
-        output_file.unlink(missing_ok=True)
-        summary_file = cwd / ".test-prepare-summary.md"
-        summary_file.unlink(missing_ok=True)
-        merged_env = _isolated_env(
-            cwd,
-            {
-                "PYTHON_BIN": sys.executable,
-                "GITHUB_OUTPUT": str(output_file),
-                "GITHUB_STEP_SUMMARY": str(summary_file),
-                **env_vars,
-            },
-        )
-        proc = self._run_shell_script(
-            bump_step["run"],
             cwd=cwd,
             env=merged_env,
         )
@@ -2424,7 +2403,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("release-artifacts", doc_text)
         self.assertIn("[LICENSE](../LICENSE)", doc_text)
         self.assertIn("scripts/bump_version.py", doc_text)
-        self.assertIn("prepare", doc_text)
+        self.assertIn("bump_version.py --check", doc_text)
+        self.assertIn("make fix", doc_text)
+        self.assertIn("fetch-depth: 0", doc_text)
+        self.assertIn("make check", doc_text)
+        self.assertNotIn("skills-release-prepare-main", doc_text)
         self.assertIn("workflow_run", doc_text)
         self.assertIn("needs_validation", doc_text)
         self.assertIn("--first-parent", doc_text)
@@ -2780,103 +2763,262 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("Error [subprocess_timeout]:", err_raw.getvalue())
             self.assertNotIn("Traceback", err_raw.getvalue())
 
-    def test_prepare_job_shell_step_pushes_bump_commit_and_hands_off_target_sha(
+    def test_bump_version_check_mode_expanded_distributable_paths_and_make_fix_61_manifests(
         self,
     ) -> None:
-        """jobs.prepare pushes a SemVer bump commit to origin/main, enforces actor guard, and hands target_sha to preflight."""
+        """bump_version.py --check enforces all expanded DISTRIBUTABLE_PATHS and 61-manifest sync restored by make fix."""
+        self.assertEqual(
+            (
+                "skills/",
+                "catalog/",
+                "shared/",
+                "scripts/fredlib/",
+                "scripts/fred.py",
+                "scripts/skill_tools.py",
+                "scripts/audit_to_sarif.py",
+                "scripts/package_skills.py",
+                "scripts/validate_*.py",
+                "schemas/",
+                "LICENSE",
+            ),
+            bump_version.DISTRIBUTABLE_PATHS,
+        )
+        makefile_text = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertLess(
+            makefile_text.index("$(PYTHON) scripts/build_catalog.py"),
+            makefile_text.index("$(PYTHON) scripts/bump_version.py"),
+        )
+        self.assertLess(
+            makefile_text.index("$(PYTHON) scripts/bump_version.py"),
+            makefile_text.index("$(PYTHON) scripts/build_experience.py"),
+        )
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir)
-            origin, repo = self._create_bump_fixture_repo(base)
-            gh_env, _ = _install_fake_gh(
-                base,
-                {"releases": [{"tag": "v0.2.0", "draft": False}]},
-            )
+            _, repo = self._create_bump_fixture_repo(base / "paths")
+            for extra_rel, extra_body in (
+                ("scripts/fred.py", "#!/usr/bin/env python3\n"),
+                ("scripts/audit_to_sarif.py", "#!/usr/bin/env python3\n"),
+                ("scripts/package_skills.py", "#!/usr/bin/env python3\n"),
+                ("scripts/validate_skills.py", "#!/usr/bin/env python3\n"),
+                ("schemas/skill.schema.json", '{"type": "object"}\n'),
+            ):
+                target = repo / extra_rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _write_lf(target, extra_body)
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "--amend", "-m", "Release 0.2.0")
+            _git(repo, "tag", "-f", "-a", "v0.2.0", "-m", "Release v0.2.0")
 
-            # 1. Tests-only commit on main -> bumped=false, no extra commit pushed
-            _write_lf(repo / "tests/test_noop.py", "a = 1\n")
-            _git(repo, "add", "tests/test_noop.py")
-            _git(repo, "commit", "-m", "test: add noop test")
-            noop_sha = _git(repo, "rev-parse", "HEAD")
-            _git(repo, "push", "origin", "HEAD:refs/heads/main")
+            # Clean tagged baseline passes --check
+            self.assertEqual(0, bump_version.main(["--root", str(repo), "--check"]))
 
-            prep_noop, out_noop = self._run_prepare_step(
-                repo,
-                {
-                    "EVENT_NAME": "push",
-                    "GITHUB_REF_VALUE": "refs/heads/main",
-                    "GITHUB_ACTOR_NAME": "contributor",
-                    "WORKFLOW_SHA": noop_sha,
-                },
-            )
-            self.assertEqual(0, prep_noop.returncode, prep_noop.stderr)
-            self.assertEqual("false", out_noop.get("bumped"))
-            self.assertEqual(noop_sha, out_noop.get("target_sha"))
+            # Modifying non-distributable files (tests/, docs/releasing.md) still passes --check
+            _write_lf(repo / "tests/test_non_dist.py", "x = 1\n")
+            self.assertEqual(0, bump_version.main(["--root", str(repo), "--check"]))
+            (repo / "tests/test_non_dist.py").unlink()
 
-            # 2. Catalog membership change on main -> minor bump 0.2.0 -> 0.3.0 pushed to origin/main
-            packs_doc = json.loads(
-                (repo / "catalog/packs.json").read_text(encoding="utf-8")
+            # Modifying ANY path in expanded DISTRIBUTABLE_PATHS after refs/tags/v0.2.0 exists fails --check
+            distributable_mutations = (
+                ("skills/skill-alpha/SKILL.md", "\n<!-- updated -->\n"),
+                ("catalog/hosts.json", "\n"),
+                ("shared/repo-audit/manifest.json", "\n"),
+                ("scripts/fredlib/__init__.py", "# updated\n"),
+                ("scripts/fred.py", "# updated\n"),
+                ("scripts/skill_tools.py", "# updated\n"),
+                ("scripts/audit_to_sarif.py", "# updated\n"),
+                ("scripts/package_skills.py", "# updated\n"),
+                ("scripts/validate_skills.py", "# updated\n"),
+                ("scripts/validate_extra.py", "# new validator\n"),
+                ("schemas/skill.schema.json", "\n"),
+                ("LICENSE", "# updated\n"),
             )
-            packs_doc["packs"]["starter"]["skills"].append("skill-beta")
+            for rel_path, suffix in distributable_mutations:
+                with self.subTest(distributable_path=rel_path):
+                    p = repo / rel_path
+                    existed = p.exists()
+                    orig_bytes = p.read_bytes() if existed else b""
+                    try:
+                        _write_lf(p, orig_bytes.decode("utf-8") + suffix)
+                        check_proc = subprocess.run(
+                            [
+                                sys.executable,
+                                "-B",
+                                str(ROOT / "scripts/bump_version.py"),
+                                "--root",
+                                str(repo),
+                                "--check",
+                                "--json",
+                            ],
+                            cwd=repo,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            1,
+                            check_proc.returncode,
+                            f"Expected --check to fail for {rel_path}, got: {check_proc.stdout} {check_proc.stderr}",
+                        )
+                        payload = json.loads(check_proc.stdout)
+                        self.assertTrue(payload["bumped"])
+                        self.assertIn(rel_path, payload["changed_distributable_files"])
+                    finally:
+                        if existed:
+                            p.write_bytes(orig_bytes)
+                        else:
+                            p.unlink(missing_ok=True)
+
+            # Build a 57-skill repository fixture (VERSION + 60 JSON manifests = 61 versioned manifests)
+            repo61 = base / "repo61"
+            repo61.mkdir(parents=True)
+            _git(repo61, "init")
+            for dir_rel in ("scripts", "catalog", "docs", "evals", "shared"):
+                (repo61 / dir_rel).mkdir(parents=True, exist_ok=True)
+            for script_rel in (
+                "scripts/bump_version.py",
+                "scripts/skill_tools.py",
+                "scripts/_markdown_utils.py",
+                "scripts/_doc_invariants.py",
+            ):
+                _write_lf(
+                    repo61 / script_rel,
+                    (ROOT / script_rel).read_text(encoding="utf-8"),
+                )
             _write_lf(
-                repo / "catalog/packs.json", json.dumps(packs_doc, indent=2) + "\n"
+                repo61 / "Makefile",
+                "PYTHON ?= python3\n\nfix:\n\t$(PYTHON) scripts/bump_version.py\n",
             )
-            _git(repo, "add", "catalog/packs.json")
-            _git(repo, "commit", "-m", "feat(packs): expand starter pack")
-            merge_sha = _git(repo, "rev-parse", "HEAD")
-            _git(repo, "push", "origin", "HEAD:refs/heads/main")
+            _write_lf(repo61 / "LICENSE", "MIT License\n")
+            _write_lf(repo61 / "VERSION", "0.2.0\n")
 
-            prep_bump, out_bump = self._run_prepare_step(
-                repo,
-                {
-                    "EVENT_NAME": "push",
-                    "GITHUB_REF_VALUE": "refs/heads/main",
-                    "GITHUB_ACTOR_NAME": "contributor",
-                    "WORKFLOW_SHA": merge_sha,
-                },
+            skill_entries = []
+            skill_names = []
+            for idx in range(1, 58):
+                sname = f"skill-{idx:02d}"
+                sdesc = f"Skill {idx:02d} description."
+                skill_names.append(sname)
+                skill_entries.append({"name": sname, "description": sdesc})
+                sdir = repo61 / "skills" / sname
+                (sdir / ".cursor-plugin").mkdir(parents=True, exist_ok=True)
+                _write_lf(
+                    sdir / "SKILL.md",
+                    f"---\nname: {sname}\ndescription: {sdesc}\n---\n\n# {sname}\n",
+                )
+
+            _write_lf(
+                repo61 / "catalog/suites.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "suites": [
+                            {
+                                "name": "repository-audits",
+                                "phases": [
+                                    {"id": 0, "title": "Core", "skills": skill_names}
+                                ],
+                            }
+                        ],
+                    },
+                    indent=2,
+                )
+                + "\n",
             )
-            self.assertEqual(0, prep_bump.returncode, prep_bump.stderr)
-            self.assertEqual("true", out_bump.get("bumped"))
-            self.assertEqual("v0.3.0", out_bump.get("release_tag"))
-            pushed_sha = out_bump.get("target_sha", "")
-            self.assertNotEqual(merge_sha, pushed_sha)
-            self.assertEqual(_git(origin, "rev-parse", "refs/heads/main"), pushed_sha)
+            _write_lf(
+                repo61 / "catalog/skills.json",
+                json.dumps({"schema_version": "1.0", "skills": skill_entries}, indent=2)
+                + "\n",
+            )
+            _write_lf(
+                repo61 / "catalog/packs.json",
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "packs": {
+                            "starter": {
+                                "description": "Starter pack.",
+                                "skills": skill_names[:5],
+                            },
+                            "complete": {
+                                "description": "Complete pack.",
+                                "skills": skill_names,
+                            },
+                        },
+                    },
+                    indent=2,
+                )
+                + "\n",
+            )
+            _write_lf(
+                repo61 / "catalog/hosts.json",
+                json.dumps(
+                    {"schema_version": "1.0", "hosts": {"codex": {}, "claude": {}}},
+                    indent=2,
+                )
+                + "\n",
+            )
+            _write_lf(
+                repo61 / "evals/cases.json",
+                json.dumps({"cases": [{"id": "c1"}]}, indent=2) + "\n",
+            )
+            _write_lf(
+                repo61 / "README.md",
+                "# Test\nSee [0.2.0 release notes](docs/release-notes-0.2.0.md).\n",
+            )
+            _write_lf(
+                repo61 / "docs/releasing.md",
+                "# Releasing\nSee [release-notes-0.2.0.md](release-notes-0.2.0.md).\n",
+            )
+            _write_lf(
+                repo61 / "docs/explorer.html",
+                '<a href="release-notes-0.2.0.md">Release notes</a>\n',
+            )
+            _write_lf(repo61 / "docs/usage.md", "# Usage\n")
+            _write_lf(
+                repo61 / "docs/release-notes-0.2.0.md",
+                "# 0.2.0 — Initial snapshot\n\nTotal: 57 skills.\n",
+            )
+            rendered_60 = bump_version.render_versioned_manifests(repo61, "0.2.0")
+            self.assertEqual(60, len(rendered_60))
+            for rel, content in rendered_60.items():
+                target = repo61 / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _write_lf(target, content)
+
+            _git(repo61, "add", "-A")
+            _git(repo61, "commit", "-m", "Release 0.2.0")
+            _git(repo61, "tag", "v0.2.0")
+
+            _write_lf(repo61 / "LICENSE", "MIT License (updated)\n")
+            self.assertEqual(1, bump_version.main(["--root", str(repo61), "--check"]))
+
+            fix_cmd = (
+                ["make", "fix", f"PYTHON={shlex.quote(sys.executable)} -B"]
+                if shutil.which("make")
+                else [sys.executable, "-B", "scripts/bump_version.py"]
+            )
+            fix_proc = subprocess.run(
+                fix_cmd,
+                cwd=repo61,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, fix_proc.returncode, fix_proc.stderr)
             self.assertEqual(
-                "github-actions[bot]",
-                _git(repo, "log", "-1", "--format=%an", pushed_sha),
+                "0.2.1", (repo61 / "VERSION").read_text(encoding="utf-8").strip()
             )
+            self.assertTrue((repo61 / "docs/release-notes-0.2.1.md").is_file())
+            self.assertEqual(0, bump_version.main(["--root", str(repo61), "--check"]))
 
-            # 3. Hand pushed target_sha directly to preflight in the same workflow run -> schedules v0.3.0 build & publish
-            pf_proc, pf_out = self._run_preflight_script(
-                repo,
-                {
-                    **gh_env,
-                    "EVENT_NAME": "push",
-                    "REF_TYPE": "branch",
-                    "REF_NAME": "main",
-                    "WORKFLOW_SHA": pushed_sha,
-                    "INPUT_PUBLISH": "",
-                    "INPUT_TAG": "",
-                },
+            # Drifting any of the 61 manifests fails --check even when VERSION is untagged
+            _write_lf(
+                repo61 / "gemini-extension.json",
+                (repo61 / "gemini-extension.json")
+                .read_text(encoding="utf-8")
+                .replace('"0.2.1"', '"0.2.0"'),
             )
-            self.assertEqual(0, pf_proc.returncode, pf_proc.stderr)
-            self.assertEqual("true", pf_out.get("should_build"))
-            self.assertEqual("true", pf_out.get("should_publish"))
-            self.assertEqual("v0.3.0", pf_out.get("release_tag"))
-            self.assertEqual(pushed_sha, pf_out.get("target_sha"))
-
-            # 4. Commit-actor guard prevents recursive bumps when triggered by github-actions[bot] commit
-            prep_guard, out_guard = self._run_prepare_step(
-                repo,
-                {
-                    "EVENT_NAME": "push",
-                    "GITHUB_REF_VALUE": "refs/heads/main",
-                    "GITHUB_ACTOR_NAME": "contributor",
-                    "WORKFLOW_SHA": pushed_sha,
-                },
-            )
-            self.assertEqual(0, prep_guard.returncode, prep_guard.stderr)
-            self.assertEqual("false", out_guard.get("bumped"))
-            self.assertEqual(pushed_sha, out_guard.get("target_sha"))
+            self.assertEqual(1, bump_version.main(["--root", str(repo61), "--check"]))
 
     def test_workflow_run_chaining_needs_validation_and_tag_publication(self) -> None:
         """workflow_run gates main pushes, skips duplicate validate on matching SHA, validates older drafts, and pushes missing tags."""
@@ -2927,18 +3069,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 }
             },
         }
-        self.assertTrue(eval_if(str(jobs["prepare"]["if"]), valid_wf_run_ctx))
-        self.assertFalse(
-            eval_if(
-                str(jobs["prepare"]["if"]),
-                {**valid_wf_run_ctx, "actor": "github-actions[bot]"},
-            )
-        )
-
-        needs_prep_ok = {"prepare": {"result": "success"}}
-        self.assertTrue(
-            eval_if(str(jobs["preflight"]["if"]), valid_wf_run_ctx, needs_prep_ok)
-        )
+        self.assertTrue(eval_if(str(jobs["preflight"]["if"]), valid_wf_run_ctx))
         for bad_wf_run in (
             {"conclusion": "failure", "event": "push", "head_branch": "main"},
             {"conclusion": "cancelled", "event": "push", "head_branch": "main"},
@@ -2949,19 +3080,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 **valid_wf_run_ctx,
                 "event": {"workflow_run": bad_wf_run},
             }
-            self.assertFalse(eval_if(str(jobs["prepare"]["if"]), bad_ctx))
-            self.assertFalse(
-                eval_if(
-                    str(jobs["preflight"]["if"]),
-                    bad_ctx,
-                    {"prepare": {"result": "skipped"}},
-                )
-            )
+            self.assertFalse(eval_if(str(jobs["preflight"]["if"]), bad_ctx))
 
         # When needs_validation == 'false' (validated workflow_run SHA == target_sha),
         # jobs.validate skips while jobs.build and jobs.release execute.
         needs_skip_val = {
-            "prepare": {"result": "success"},
             "preflight": {
                 "result": "success",
                 "outputs": {
@@ -3307,6 +3430,7 @@ class WorkflowActionPinVerificationTests(unittest.TestCase):
         ]
         self.assertEqual(1, len(online_steps))
         condition = online_steps[0].get("if", "")
+        self.assertIn("github.workflow == 'Validate skill packages'", condition)
         self.assertIn("github.event_name != 'workflow_call'", condition)
         self.assertIn("matrix.os", condition)
         self.assertIn("matrix.python-version", condition)

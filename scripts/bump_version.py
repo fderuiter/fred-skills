@@ -34,6 +34,13 @@ DISTRIBUTABLE_PATHS: tuple[str, ...] = (
     "catalog/",
     "shared/",
     "scripts/fredlib/",
+    "scripts/fred.py",
+    "scripts/skill_tools.py",
+    "scripts/audit_to_sarif.py",
+    "scripts/package_skills.py",
+    "scripts/validate_*.py",
+    "schemas/",
+    "LICENSE",
 )
 
 _SUITE_DESCRIPTION = (
@@ -147,18 +154,51 @@ def _worktree_json_dict(root: Path, rel_path: str) -> dict[str, Any] | None:
 
 
 def detect_distributable_changes(root: Path, tag: str) -> list[str]:
-    """Return sorted distributable file paths modified between refs/tags/<tag> and HEAD."""
-    proc = run_local_git(
+    """Return sorted distributable file paths modified or added since refs/tags/<tag>."""
+    git_pathspecs = tuple(
+        f":(glob){path}" if "*" in path else path for path in DISTRIBUTABLE_PATHS
+    )
+    committed_proc = run_local_git(
         root,
         "diff",
         "--name-only",
         f"refs/tags/{tag}..HEAD",
         "--",
-        *DISTRIBUTABLE_PATHS,
+        *git_pathspecs,
         text=True,
         check=True,
     )
-    return sorted({line.strip() for line in proc.stdout.splitlines() if line.strip()})
+    worktree_proc = run_local_git(
+        root,
+        "diff",
+        "--name-only",
+        f"refs/tags/{tag}",
+        "--",
+        *git_pathspecs,
+        text=True,
+        check=True,
+    )
+    untracked_proc = run_local_git(
+        root,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "--",
+        *git_pathspecs,
+        text=True,
+        check=True,
+    )
+    changed = {
+        line.strip()
+        for output in (
+            committed_proc.stdout,
+            worktree_proc.stdout,
+            untracked_proc.stdout,
+        )
+        for line in output.splitlines()
+        if line.strip()
+    }
+    return sorted(changed)
 
 
 def _skills_membership(doc: Mapping[str, Any] | None) -> frozenset[str]:
@@ -690,6 +730,49 @@ def bump_repository_version(
     )
 
 
+def check_version_sync(root: Path, version: str) -> list[str]:
+    """Return relative file paths whose versioned manifests or release links drift from version."""
+    expected_updates: dict[str, str] = {"VERSION": f"{version}\n"}
+    if (root / "catalog/suites.json").is_file():
+        expected_updates.update(render_versioned_manifests(root, version))
+
+    for doc_rel in ("README.md", "docs/usage.md"):
+        doc_path = root / doc_rel
+        if doc_path.is_file():
+            expected_updates[doc_rel] = rewrite_doc_release_versions(
+                doc_path.read_text(encoding="utf-8"),
+                version,
+            )
+
+    explorer_path = root / "docs/explorer.html"
+    if explorer_path.is_file():
+        expected_updates["docs/explorer.html"] = _EXPLORER_RELEASE_NOTES_HREF_RE.sub(
+            lambda match: f"{match.group(1)}{version}{match.group(2)}",
+            explorer_path.read_text(encoding="utf-8"),
+        )
+
+    drifted = [
+        rel_path
+        for rel_path, expected_text in sorted(expected_updates.items())
+        if (target := root / rel_path).is_symlink()
+        or not target.is_file()
+        or target.read_bytes() != expected_text.encode("utf-8")
+    ]
+
+    docs_dir = root / "docs"
+    notes_rel = f"docs/release-notes-{version}.md"
+    notes_path = root / notes_rel
+    if (
+        not git_tag_exists(root, f"v{version}")
+        and docs_dir.is_dir()
+        and any(docs_dir.glob("release-notes-*.md"))
+        and (notes_path.is_symlink() or not notes_path.is_file())
+    ):
+        drifted.append(notes_rel)
+
+    return sorted(set(drifted))
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the CLI argument parser for bump_version.py."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -698,6 +781,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=ROOT,
         help="Repository root directory (defaults to parent of scripts/).",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Verify VERSION, plugin manifests, and release notes are synchronized without writing files.",
     )
     parser.add_argument(
         "--dry-run",
@@ -722,10 +810,61 @@ def _format_timeout_cmd(cmd: object) -> str:
     return str(cmd)
 
 
+def _handle_check_mode(
+    resolved_root: Path,
+    result: BumpResult,
+    *,
+    emit_json: bool,
+) -> int:
+    if result.bumped:
+        if emit_json:
+            print(json.dumps(result.to_dict(), indent=2))
+        changed_preview = ", ".join(result.changed_distributable_files[:5])
+        if len(result.changed_distributable_files) > 5:
+            changed_preview += f" (+{len(result.changed_distributable_files) - 5} more)"
+        print(
+            f"Error: VERSION {result.previous_version} requires a {result.bump_kind} bump "
+            f"to {result.new_version} ({result.reason}: {changed_preview}); "
+            "run 'make fix' or 'python scripts/bump_version.py'.",
+            file=sys.stderr,
+        )
+        return 1
+
+    drifted = check_version_sync(resolved_root, result.new_version)
+    if drifted:
+        if emit_json:
+            payload = result.to_dict()
+            payload["drifted_files"] = drifted
+            print(json.dumps(payload, indent=2))
+        drift_preview = ", ".join(drifted[:5])
+        if len(drifted) > 5:
+            drift_preview += f" (+{len(drifted) - 5} more)"
+        print(
+            f"Error: {len(drifted)} file(s) out of sync with VERSION {result.new_version} "
+            f"({drift_preview}); run 'make fix' or 'python scripts/bump_version.py'.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if emit_json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(
+            f"PASS: VERSION {result.new_version} and versioned manifests are synchronized ({result.reason})"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    resolved_root = args.root.resolve()
     try:
-        result = bump_repository_version(args.root.resolve(), dry_run=args.dry_run)
+        result = bump_repository_version(
+            resolved_root,
+            dry_run=args.dry_run or args.check,
+        )
+        if args.check:
+            return _handle_check_mode(resolved_root, result, emit_json=args.json)
     except FredCliError as exc:
         print(f"Error [{exc.code}]: {exc.message}", file=sys.stderr)
         if exc.hint:
