@@ -1958,6 +1958,214 @@ class PackageTests(unittest.TestCase):
         (git_fixture / "docs/release-notes-0.1.0.md").unlink()
         self.assertEqual([], _validate_documentation_invariants(git_fixture))
 
+    def test_version_tag_immutability_gate_blocks_skill_and_pack_drift_and_preserves_historical_notes(
+        self,
+    ) -> None:
+        git_repo = self.root / "version-tag-immutability"
+        git_repo.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ROOT / "skills", git_repo / "skills")
+        try:
+            for dname in ("schemas", "shared"):
+                (git_repo / dname).symlink_to(ROOT / dname, target_is_directory=True)
+        except OSError:
+            for dname in ("schemas", "shared"):
+                shutil.copytree(ROOT / dname, git_repo / dname)
+
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        for rel in (
+            "VERSION",
+            "catalog/suites.json",
+            "catalog/hosts.json",
+            "catalog/packs.json",
+            "README.md",
+            "docs/usage.md",
+            "docs/architecture.md",
+            "CONTRIBUTING.md",
+            "AGENTS.md",
+            "docs/validation.md",
+            "docs/implementation-status.md",
+            "docs/research.md",
+            "docs/releasing.md",
+            "docs/release-notes-0.2.0.md",
+            f"docs/release-notes-{active_version}.md",
+        ):
+            dst = git_repo / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((ROOT / rel).read_bytes())
+
+        def run_git(*args: str) -> None:
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "core.autocrlf=false",
+                    *args,
+                ],
+                cwd=git_repo,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        run_git("init")
+        v020_notes_bytes = (git_repo / "docs/release-notes-0.2.0.md").read_bytes()
+        active_notes_rel = f"docs/release-notes-{active_version}.md"
+        active_notes_text = (git_repo / active_notes_rel).read_text(encoding="utf-8")
+
+        # 1. Tag v0.2.0 with historical 42-skill release notes, then advance to untagged active_version (0.3.0)
+        (git_repo / "VERSION").write_text("0.2.0\n", encoding="utf-8", newline="\n")
+        (git_repo / active_notes_rel).unlink()
+        run_git("add", "VERSION", "docs/release-notes-0.2.0.md")
+        run_git("commit", "-m", "Release 0.2.0")
+        run_git("tag", "v0.2.0")
+
+        (git_repo / "VERSION").write_text(
+            f"{active_version}\n", encoding="utf-8", newline="\n"
+        )
+        (git_repo / active_notes_rel).write_text(
+            active_notes_text, encoding="utf-8", newline="\n"
+        )
+        run_git("add", "VERSION", active_notes_rel, "skills", "catalog")
+        run_git("commit", "-m", f"Advance to {active_version}")
+
+        # Preserves historical 42-skill count in 0.2.0 notes while checking HEAD count on active 0.3.0 notes
+        self.assertIn("Total: 42 skills.", v020_notes_bytes.decode("utf-8"))
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
+        expected_skills = expected_total_skills(ROOT)
+        (git_repo / active_notes_rel).write_text(
+            active_notes_text.replace(
+                f"Total: {expected_skills} skills.", "Total: 51 skills.", 1
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+        stale_active_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                active_notes_rel in e and "stale skill count 51" in e
+                for e in stale_active_errs
+            ),
+            f"Expected HEAD count check on {active_notes_rel}, got: {stale_active_errs}",
+        )
+        self.assertFalse(
+            any("docs/release-notes-0.2.0.md" in e for e in stale_active_errs),
+            f"Historical release-notes-0.2.0.md must stay frozen: {stale_active_errs}",
+        )
+        (git_repo / active_notes_rel).write_text(
+            active_notes_text, encoding="utf-8", newline="\n"
+        )
+        run_git("add", active_notes_rel)
+        run_git("commit", "--amend", "--no-edit")
+
+        # 2. Tag v<VERSION> (e.g. v0.3.0) and verify clean state + docs/tests commits pass without VERSION bump
+        active_tag = f"v{active_version}"
+        run_git("tag", active_tag)
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
+        (git_repo / "docs/releasing.md").write_text(
+            (git_repo / "docs/releasing.md").read_text(encoding="utf-8")
+            + "\nClarified maintainer checklist.\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (git_repo / "tests").mkdir(parents=True, exist_ok=True)
+        (git_repo / "tests/test_extra.py").write_text(
+            "x = 1\n", encoding="utf-8", newline="\n"
+        )
+        run_git("add", "docs/releasing.md", "tests/test_extra.py")
+        run_git("commit", "-m", "docs and tests update after tag")
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
+        # 3. Editing catalog/packs.json after refs/tags/v<VERSION> without bumping VERSION fails
+        orig_packs_bytes = (git_repo / "catalog/packs.json").read_bytes()
+        packs_doc = json.loads(orig_packs_bytes.decode("utf-8"))
+        packs_doc["packs"]["starter"]["description"] = "Mutated after tag."
+        (git_repo / "catalog/packs.json").write_text(
+            json.dumps(packs_doc, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        pack_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                f"refs/tags/{active_tag}" in e
+                and "catalog/packs.json" in e
+                and "bump VERSION" in e
+                for e in pack_errs
+            ),
+            f"Expected tag immutability failure on catalog/packs.json, got: {pack_errs}",
+        )
+        cli_pack_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(git_repo),
+                "--no-ledger",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(1, cli_pack_proc.returncode)
+        self.assertIn(
+            f"refs/tags/{active_tag}", cli_pack_proc.stdout + cli_pack_proc.stderr
+        )
+        (git_repo / "catalog/packs.json").write_bytes(orig_packs_bytes)
+
+        # 4. Modifying an existing skill or adding an untracked skill under skills/ without bumping VERSION fails
+        target_skill_md = git_repo / "skills/repo-audit-concurrency/SKILL.md"
+        orig_skill_bytes = target_skill_md.read_bytes()
+        target_skill_md.write_bytes(orig_skill_bytes + b"\n")
+        skill_edit_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                f"refs/tags/{active_tag}" in e
+                and "skills/repo-audit-concurrency/SKILL.md" in e
+                for e in skill_edit_errs
+            ),
+            f"Expected tag immutability failure on modified skill, got: {skill_edit_errs}",
+        )
+        target_skill_md.write_bytes(orig_skill_bytes)
+
+        untracked_skill = git_repo / "skills/post-tag-new-skill/SKILL.md"
+        untracked_skill.parent.mkdir(parents=True, exist_ok=True)
+        untracked_skill.write_text(
+            "---\nname: post-tag-new-skill\ndescription: Post-tag skill.\n---\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        untracked_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                f"refs/tags/{active_tag}" in e
+                and "skills/post-tag-new-skill/SKILL.md" in e
+                for e in untracked_errs
+            ),
+            f"Expected tag immutability failure on untracked skill, got: {untracked_errs}",
+        )
+        shutil.rmtree(untracked_skill.parent)
+
+        # 5. Incrementing VERSION to untagged 0.4.0 and adding release-notes-0.4.0.md allows the pack update
+        (git_repo / "catalog/packs.json").write_text(
+            json.dumps(packs_doc, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (git_repo / "VERSION").write_text("0.4.0\n", encoding="utf-8", newline="\n")
+        (git_repo / "docs/release-notes-0.4.0.md").write_text(
+            active_notes_text.replace(f"# {active_version}", "# 0.4.0", 1),
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
     def test_prompt_template_present_and_within_budget_is_valid(self):
         self.assertEqual([], validate_skill(self.skill))
 

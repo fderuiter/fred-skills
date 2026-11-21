@@ -1441,6 +1441,179 @@ class DocSnippetVerificationTests(unittest.TestCase):
                 f"Historical release-notes-0.2.0.md must be exempt from HEAD count checks: {count_errors}",
             )
 
+    def test_post_tag_skill_and_pack_urls_rejected_when_version_tag_exists(
+        self,
+    ) -> None:
+        """verify_doc_snippets rejects post-tag skill or pack release URLs when refs/tags/v<VERSION> exists locally."""
+        import json
+        from typing import Any
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            (tmp_root / "scripts").symlink_to(
+                ROOT / "scripts", target_is_directory=True
+            )
+            (tmp_root / "examples").symlink_to(
+                ROOT / "examples", target_is_directory=True
+            )
+            for rel in ("Makefile", "requirements-dev.txt", "catalog/hosts.json"):
+                dst = tmp_root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((ROOT / rel).read_bytes())
+
+            def run_git(*args: str) -> None:
+                subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Test",
+                        "-c",
+                        "user.email=test@example.com",
+                        "-c",
+                        "core.autocrlf=false",
+                        *args,
+                    ],
+                    cwd=tmp_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+            (tmp_root / "VERSION").write_text("0.3.0\n", encoding="utf-8", newline="\n")
+            alpha_dir = tmp_root / "skills/skill-alpha"
+            alpha_dir.mkdir(parents=True, exist_ok=True)
+            (alpha_dir / "SKILL.md").write_text(
+                "---\nname: skill-alpha\ndescription: Alpha skill.\n---\n\n# skill-alpha\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            packs_doc: dict[str, Any] = {
+                "schema_version": "1.0",
+                "packs": {
+                    "starter": {
+                        "description": "Starter pack.",
+                        "skills": ["skill-alpha"],
+                    },
+                    "complete": {
+                        "description": "Complete pack.",
+                        "skills": ["skill-alpha"],
+                    },
+                },
+            }
+            (tmp_root / "catalog/packs.json").write_text(
+                json.dumps(packs_doc, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            run_git("init")
+            run_git(
+                "add",
+                "VERSION",
+                "catalog/packs.json",
+                "skills/skill-alpha/SKILL.md",
+            )
+            run_git("commit", "-m", "Release 0.3.0")
+            run_git("tag", "v0.3.0")
+
+            # Tagged assets present at refs/tags/v0.3.0 pass
+            for valid_cmd in (
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-starter.tar",
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/skill-alpha.tar.gz",
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/SHA256SUMS",
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-cli.tar.gz",
+            ):
+                ok, msg = execute_snippet_command(valid_cmd, root=tmp_root)
+                self.assertTrue(ok, f"Expected tagged asset command to pass: {msg}")
+
+            # Add post-tag skill and post-tag pack in working tree without bumping VERSION
+            beta_dir = tmp_root / "skills/skill-post-tag"
+            beta_dir.mkdir(parents=True, exist_ok=True)
+            (beta_dir / "SKILL.md").write_text(
+                "---\nname: skill-post-tag\ndescription: Post-tag skill.\n---\n\n# skill-post-tag\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            packs_doc["packs"]["post-tag-pack"] = {
+                "description": "Added after v0.3.0 tag.",
+                "skills": ["skill-alpha", "skill-post-tag"],
+            }
+            packs_doc["packs"]["complete"]["skills"].append("skill-post-tag")
+            (tmp_root / "catalog/packs.json").write_text(
+                json.dumps(packs_doc, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            for drift_cmd in (
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/skill-post-tag.tar.gz",
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-post-tag-pack.tar",
+                "tar -xzf skill-post-tag.tar.gz -C /path/to/project/.agents/skills/",
+                "tar -xf fred-skills-0.3.0-post-tag-pack.tar -C /path/to/project/.agents/skills/",
+            ):
+                ok_drift, err_drift = execute_snippet_command(drift_cmd, root=tmp_root)
+                self.assertFalse(
+                    ok_drift, f"Expected post-tag command to fail: {drift_cmd}"
+                )
+                self.assertIn("refs/tags/v0.3.0", err_drift)
+
+            (tmp_root / "README.md").write_text(
+                "# fred-skills\n\n"
+                "**2 standalone skills** across suites.\n\n"
+                "```sh\n"
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/skill-post-tag.tar.gz\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            (tmp_root / "docs").mkdir(parents=True, exist_ok=True)
+            (tmp_root / "docs/usage.md").write_text(
+                "# Usage\n\n"
+                "Install the complete 2-package pack:\n\n"
+                "```sh\n"
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-post-tag-pack.tar\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            doc_errs = verify_all_snippets(
+                root=tmp_root, files=["README.md", "docs/usage.md"]
+            )
+            self.assertTrue(
+                any("README.md:L6:" in e and "refs/tags/v0.3.0" in e for e in doc_errs),
+                f"Expected README.md:L6 post-tag skill URL error, got: {doc_errs}",
+            )
+            self.assertTrue(
+                any(
+                    "docs/usage.md:L6:" in e and "refs/tags/v0.3.0" in e
+                    for e in doc_errs
+                ),
+                f"Expected docs/usage.md:L6 post-tag pack URL error, got: {doc_errs}",
+            )
+
+            # Advancing VERSION to untagged 0.4.0 and updating URLs passes against working tree
+            (tmp_root / "VERSION").write_text("0.4.0\n", encoding="utf-8", newline="\n")
+            (tmp_root / "README.md").write_text(
+                "# fred-skills\n\n"
+                "**2 standalone skills** across suites.\n\n"
+                "```sh\n"
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.4.0/skill-post-tag.tar.gz\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            (tmp_root / "docs/usage.md").write_text(
+                "# Usage\n\n"
+                "Install the complete 2-package pack:\n\n"
+                "```sh\n"
+                "curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.4.0/fred-skills-0.4.0-post-tag-pack.tar\n"
+                "```\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                [],
+                verify_all_snippets(
+                    root=tmp_root, files=["README.md", "docs/usage.md"]
+                ),
+            )
+
     def test_shell_prefixes_control_keywords_env_and_assignments_unwrapped(
         self,
     ) -> None:
