@@ -625,7 +625,7 @@ jobs:
           cd dist/release
           sha256sum -c SHA256SUMS
           sha256sum -c checksums.sha256
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-artifacts
           path: dist/release/
@@ -893,7 +893,7 @@ jobs:
           if [ -n "${GITHUB_OUTPUT:-}" ]; then
             echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: steps.release_state.outputs.should_publish == 'true'
         with:
           name: release-artifacts

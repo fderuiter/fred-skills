@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,8 @@ from unittest import mock
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import bump_version
@@ -3284,8 +3287,27 @@ class WorkflowActionPinVerificationTests(unittest.TestCase):
         ]
         self.assertEqual(1, len(online_steps))
         condition = online_steps[0].get("if", "")
+        self.assertIn("github.event_name != 'workflow_call'", condition)
         self.assertIn("matrix.os", condition)
         self.assertIn("matrix.python-version", condition)
+        self.assertIn("--changed-from", online_steps[0].get("run", ""))
+        self.assertIn("BASE_REF", online_steps[0].get("env", {}))
+
+        audit_wf_path = ROOT / ".github/workflows/audit-action-pins.yml"
+        self.assertTrue(audit_wf_path.is_file())
+        audit_data = yaml.safe_load(audit_wf_path.read_text(encoding="utf-8"))
+        audit_triggers = audit_data.get("on") or audit_data.get(True) or {}
+        self.assertIn("schedule", audit_triggers)
+        self.assertIn("workflow_dispatch", audit_triggers)
+        self.assertNotIn("pull_request", audit_triggers)
+        self.assertNotIn("push", audit_triggers)
+        self.assertEqual({"contents": "read"}, audit_data.get("permissions"))
+        audit_steps = audit_data["jobs"]["audit-pins"]["steps"]
+        audit_cmds = [s.get("run", "").strip() for s in audit_steps if "run" in s]
+        self.assertIn(
+            "python scripts/check_workflow_pins.py --verify-remote",
+            audit_cmds,
+        )
 
     def test_offline_check_rejects_mutable_refs_uppercase_shas_and_missing_comments(
         self,
@@ -3519,7 +3541,7 @@ jobs:
     def test_action_pins_lockfile_records_all_repository_actions_and_passes_offline(
         self,
     ) -> None:
-        """The committed .github/action-pins.json lockfile must record all nine repository actions and pass check_workflow_pins.py."""
+        """The committed .github/action-pins.json lockfile must record all nine repository actions with node24/composite runtimes and pass check_workflow_pins.py."""
         self.assertTrue(ACTION_PINS_LOCKFILE.is_file())
         locked, lock_errors = check_workflow_pins.load_lockfile(
             ACTION_PINS_LOCKFILE, root=ROOT
@@ -3530,41 +3552,50 @@ jobs:
                 "actions/attest-build-provenance": (
                     "4d101475d8b20a2381f78447822ac1eab6504dd8",
                     "v4.2.2",
+                    "composite",
                 ),
                 "actions/cache": (
-                    "0057852bfaa89a56745cba8c7296529d2fc39830",
-                    "v4",
+                    "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+                    "v6",
+                    "node24",
                 ),
                 "actions/checkout": (
                     "d23441a48e516b6c34aea4fa41551a30e30af803",
                     "v6",
+                    "node24",
                 ),
                 "actions/configure-pages": (
                     "45bfe0192ca1faeb007ade9deae92b16b8254a0d",
                     "v6.0.0",
+                    "node24",
                 ),
                 "actions/deploy-pages": (
                     "368f82528645a54fb793d4d04e342629a3f51346",
                     "v5.0.1",
+                    "node24",
                 ),
                 "actions/download-artifact": (
-                    "cc203385981b70ca67e1cc392babf9cc229d5806",
-                    "v4",
+                    "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+                    "v8",
+                    "node24",
                 ),
                 "actions/setup-python": (
                     "ece7cb06caefa5fff74198d8649806c4678c61a1",
                     "v6",
+                    "node24",
                 ),
                 "actions/upload-artifact": (
-                    "ea165f8d65b6e75b540449e92b4886f43607fa02",
-                    "v4",
+                    "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+                    "v7",
+                    "node24",
                 ),
                 "actions/upload-pages-artifact": (
                     "fc324d3547104276b827a68afc52ff2a11cc49c9",
                     "v5.0.0",
+                    "composite",
                 ),
             },
-            {repo: (pin.sha, pin.version) for repo, pin in locked.items()},
+            {repo: (pin.sha, pin.version, pin.runtime) for repo, pin in locked.items()},
         )
 
         self.assertEqual([], check_workflow_pins.check_pins(root=ROOT))
@@ -3826,6 +3857,505 @@ jobs:
             self.assertEqual(1, len(fail_errors), fail_errors)
             self.assertIn("Connection reset by peer", fail_errors[0])
             self.assertEqual([0.25], always_fail_slept)
+
+    def test_lockfile_and_remote_reject_deprecated_node_runtimes_and_verify_composite_steps(
+        self,
+    ) -> None:
+        """Offline lockfile and --verify-remote reject node20/node16/node12 runtimes, including composite child steps."""
+        workflow_yaml = """\
+name: RuntimeCheck
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            wf_dir = tmp_root / ".github/workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "ci.yml").write_text(workflow_yaml, encoding="utf-8")
+            lock_path = tmp_root / ".github/action-pins.json"
+
+            # 1. Offline lockfile rejects node20, node16, node12, and missing sibling runtime.
+            for bad_runtime in ("node20", "node16", "node12"):
+                lock_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "actions": {
+                                "actions/cache": {
+                                    "sha": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+                                    "version": "v6",
+                                    "runtime": bad_runtime,
+                                },
+                                "actions/attest-build-provenance": {
+                                    "sha": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                                    "version": "v4.2.2",
+                                },
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                errs = check_workflow_pins.check_pins(root=tmp_root)
+                self.assertTrue(
+                    any(f"deprecated runtime '{bad_runtime}'" in e for e in errs),
+                    errs,
+                )
+                self.assertTrue(
+                    any("must specify 'runtime'" in e for e in errs),
+                    errs,
+                )
+
+            # 2. Valid node24 + composite lockfile passes offline, then --verify-remote checks upstream action.yml + child steps.
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "actions": {
+                            "actions/cache": {
+                                "sha": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+                                "version": "v6",
+                                "runtime": "node24",
+                            },
+                            "actions/attest-build-provenance": {
+                                "sha": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                                "version": "v4.2.2",
+                                "runtime": "composite",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual([], check_workflow_pins.check_pins(root=tmp_root))
+
+            ls_remote_by_url = {
+                "https://github.com/actions/cache.git": (
+                    "55cc8345863c7cc4c66a329aec7e433d2d1c52a9\trefs/tags/v6.1.0\n"
+                ),
+                "https://github.com/actions/attest-build-provenance.git": (
+                    "4d101475d8b20a2381f78447822ac1eab6504dd8\trefs/tags/v4.2.2\n"
+                ),
+            }
+
+            def fake_ls_remote(
+                cmd: list[str], **_kwargs: Any
+            ) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=ls_remote_by_url[cmd[-1]],
+                    stderr="",
+                )
+
+            good_manifests = {
+                (
+                    "actions/cache",
+                    "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+                    "",
+                ): "runs:\n  using: node24\n  main: dist/index.js\n",
+                (
+                    "actions/attest-build-provenance",
+                    "4d101475d8b20a2381f78447822ac1eab6504dd8",
+                    "",
+                ): (
+                    "runs:\n"
+                    "  using: composite\n"
+                    "  steps:\n"
+                    "    - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d\n"
+                ),
+                (
+                    "actions/attest",
+                    "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
+                    "",
+                ): "runs:\n  using: node24\n  main: dist/index.js\n",
+            }
+            self.assertEqual(
+                [],
+                check_workflow_pins.check_pins(
+                    root=tmp_root,
+                    verify_remote=True,
+                    run_fn=fake_ls_remote,
+                    manifest_fetcher=lambda r, ref, sub: (
+                        good_manifests.get((r, ref, sub)),
+                        None
+                        if (r, ref, sub) in good_manifests
+                        else f"missing {(r, ref, sub)}",
+                    ),
+                ),
+            )
+
+            # Direct action declaring node20 or composite child declaring node20 fails --verify-remote.
+            bad_manifests = {
+                **good_manifests,
+                (
+                    "actions/cache",
+                    "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+                    "",
+                ): "runs:\n  using: node20\n  main: dist/index.js\n",
+                (
+                    "actions/attest",
+                    "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
+                    "",
+                ): "runs:\n  using: node20\n  main: dist/index.js\n",
+            }
+            remote_runtime_errs = check_workflow_pins.check_pins(
+                root=tmp_root,
+                verify_remote=True,
+                run_fn=fake_ls_remote,
+                manifest_fetcher=lambda r, ref, sub: (
+                    bad_manifests.get((r, ref, sub)),
+                    None,
+                ),
+            )
+            self.assertEqual(2, len(remote_runtime_errs), remote_runtime_errs)
+            self.assertTrue(
+                any(
+                    "actions/cache@" in e and "runs.using='node20'" in e
+                    for e in remote_runtime_errs
+                )
+            )
+            self.assertTrue(
+                any(
+                    "actions/attest@" in e and "runs.using='node20'" in e
+                    for e in remote_runtime_errs
+                )
+            )
+
+    def test_changed_from_scopes_remote_queries_to_modified_pins_and_rejects_bad_ref(
+        self,
+    ) -> None:
+        """--changed-from skips remote queries when pins are unchanged and queries only modified action repos."""
+        sha_checkout = "d23441a48e516b6c34aea4fa41551a30e30af803"
+        sha_cache_old = "1111111111111111111111111111111111111111"
+        sha_cache_new = "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+
+        def render_wf(cache_sha: str, extra_cmd: str = "echo ok") -> str:
+            return (
+                "name: CI\n"
+                "on: [push]\n"
+                "jobs:\n"
+                "  build:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                f"      - uses: actions/checkout@{sha_checkout} # v6\n"
+                f"      - uses: actions/cache@{cache_sha} # v6\n"
+                f"      - run: {extra_cmd}\n"
+            )
+
+        def render_lock(cache_sha: str) -> str:
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "actions": {
+                        "actions/cache": {
+                            "sha": cache_sha,
+                            "version": "v6",
+                            "runtime": "node24",
+                        },
+                        "actions/checkout": {
+                            "sha": sha_checkout,
+                            "version": "v6",
+                            "runtime": "node24",
+                        },
+                    },
+                },
+                indent=2,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo = Path(tmp_dir) / "repo"
+            (repo / ".github/workflows").mkdir(parents=True)
+            _git(repo, "init")
+            _write_lf(repo / ".github/workflows/ci.yml", render_wf(sha_cache_old))
+            _write_lf(repo / ".github/action-pins.json", render_lock(sha_cache_old))
+            _write_lf(repo / "README.md", "# Demo\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-m", "initial pins")
+
+            # 1. Commit editing README.md and a workflow shell command without changing action pins -> 0 remote calls.
+            _write_lf(
+                repo / ".github/workflows/ci.yml",
+                render_wf(sha_cache_old, extra_cmd="echo updated"),
+            )
+            _write_lf(repo / "README.md", "# Demo updated\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-m", "non-pin change")
+
+            queried_urls: list[str] = []
+
+            def fake_ls_remote(
+                cmd: list[str], **_kwargs: Any
+            ) -> subprocess.CompletedProcess[str]:
+                queried_urls.append(cmd[-1])
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout=f"{sha_cache_new}\trefs/tags/v6.1.0\n",
+                    stderr="",
+                )
+
+            self.assertEqual(
+                [],
+                check_workflow_pins.check_pins(
+                    root=repo,
+                    verify_remote=True,
+                    changed_from="HEAD~1",
+                    run_fn=fake_ls_remote,
+                    manifest_fetcher=lambda *_a: ("runs:\n  using: node24\n", None),
+                ),
+            )
+            self.assertEqual([], queried_urls)
+
+            # 2. Commit modifying only actions/cache -> queries only actions/cache.git, skipping actions/checkout.git.
+            _write_lf(repo / ".github/workflows/ci.yml", render_wf(sha_cache_new))
+            _write_lf(repo / ".github/action-pins.json", render_lock(sha_cache_new))
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-m", "upgrade actions/cache")
+
+            self.assertEqual(
+                [],
+                check_workflow_pins.check_pins(
+                    root=repo,
+                    verify_remote=True,
+                    changed_from="HEAD~1",
+                    run_fn=fake_ls_remote,
+                    manifest_fetcher=lambda *_a: ("runs:\n  using: node24\n", None),
+                ),
+            )
+            self.assertEqual(["https://github.com/actions/cache.git"], queried_urls)
+
+            # 3. Invalid --changed-from revision fails closed.
+            bad_ref_errs = check_workflow_pins.check_pins(
+                root=repo,
+                verify_remote=True,
+                changed_from="refs/heads/does-not-exist",
+                run_fn=fake_ls_remote,
+            )
+            self.assertEqual(1, len(bad_ref_errs), bad_ref_errs)
+            self.assertIn("Cannot resolve --changed-from", bad_ref_errs[0])
+
+    def test_validate_browser_job_guards_playwright_deps_with_dry_run_and_pins_1_65_2(
+        self,
+    ) -> None:
+        """requirements-browser.txt pins playwright==1.65.2 and validate.yml guards install-deps with --dry-run."""
+        req_text = (ROOT / "requirements-browser.txt").read_text(encoding="utf-8")
+        self.assertIn("playwright==1.65.2", req_text)
+
+        validate_data = yaml.safe_load(VALIDATE_WORKFLOW.read_text(encoding="utf-8"))
+        browser_steps = validate_data["jobs"]["browser"]["steps"]
+        cache_step = next(s for s in browser_steps if s.get("id") == "playwright-cache")
+        self.assertEqual(
+            "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+            cache_step.get("uses"),
+        )
+        self.assertEqual("~/.cache/ms-playwright", cache_step["with"]["path"])
+        self.assertIn("requirements-browser.txt", cache_step["with"]["key"])
+
+        miss_step = next(
+            s
+            for s in browser_steps
+            if s.get("if") == "steps.playwright-cache.outputs.cache-hit != 'true'"
+        )
+        hit_step = next(
+            s
+            for s in browser_steps
+            if s.get("if") == "steps.playwright-cache.outputs.cache-hit == 'true'"
+        )
+        for dep_step in (miss_step, hit_step):
+            run_script = dep_step.get("run", "")
+            self.assertIn(
+                "playwright install-deps --dry-run chromium",
+                run_script,
+            )
+            self.assertIn("playwright install-deps chromium", run_script)
+        self.assertNotIn("--with-deps", miss_step.get("run", ""))
+
+        sh_bin = None if os.name == "nt" else shutil.which("sh")
+        if sh_bin is None:
+            return
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            bin_dir = Path(tmp_dir) / "bin"
+            bin_dir.mkdir()
+            log_file = Path(tmp_dir) / "calls.log"
+            fake_py = bin_dir / "python"
+            _write_lf(
+                fake_py,
+                "#!/bin/sh\n"
+                'printf "%s\\n" "$*" >> "$FAKE_PY_LOG"\n'
+                'case "$*" in\n'
+                '  *"--dry-run"*)\n'
+                '    exit "${FAKE_DRY_RUN_EXIT:-0}"\n'
+                "    ;;\n"
+                "esac\n"
+                "exit 0\n",
+            )
+            fake_py.chmod(0o755)
+            env_base = {
+                **{k: os.environ[k] for k in _PASSTHROUGH_ENV_KEYS if k in os.environ},
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+                "FAKE_PY_LOG": str(log_file),
+            }
+
+            # Dry-run exit 0 -> skips live install-deps chromium.
+            ok_proc = subprocess.run(
+                [sh_bin, "-e", "-c", hit_step["run"]],
+                env={**env_base, "FAKE_DRY_RUN_EXIT": "0"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, ok_proc.returncode, ok_proc.stderr)
+            self.assertEqual(
+                ["-m playwright install-deps --dry-run chromium"],
+                log_file.read_text(encoding="utf-8").splitlines(),
+            )
+
+            # Dry-run exit 1 -> falls back to live install-deps chromium.
+            log_file.unlink()
+            miss_proc = subprocess.run(
+                [sh_bin, "-e", "-c", hit_step["run"]],
+                env={**env_base, "FAKE_DRY_RUN_EXIT": "1"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, miss_proc.returncode, miss_proc.stderr)
+            self.assertEqual(
+                [
+                    "-m playwright install-deps --dry-run chromium",
+                    "-m playwright install-deps chromium",
+                ],
+                log_file.read_text(encoding="utf-8").splitlines(),
+            )
+
+    def test_browser_check_prefers_bundled_chromium_isolates_temp_pngs_and_bypasses_loopback_proxies(
+        self,
+    ) -> None:
+        """tests/browser_check.py launches bundled Chromium first, keeps PNGs inside TemporaryDirectory, and bypasses proxies on 127.0.0.1."""
+        import http.server
+        import threading
+
+        from tests import browser_check
+
+        source_text = (ROOT / "tests/browser_check.py").read_text(encoding="utf-8")
+        self.assertNotIn('"/tmp/', source_text)
+        self.assertNotIn("'/tmp/", source_text)
+        parsed_args = browser_check.build_parser().parse_args(
+            ["--screenshot", "/tmp/custom-shot.png"]
+        )
+        self.assertEqual(Path("/tmp/custom-shot.png"), parsed_args.screenshot)
+
+        # 1. Bundled browser launches first even when system chromium exists on PATH.
+        launch_calls: list[dict[str, Any]] = []
+
+        class _FakeChromium:
+            def __init__(self, fail_bundled: bool = False) -> None:
+                self.fail_bundled = fail_bundled
+
+            def launch(self, **kwargs: Any) -> str:
+                launch_calls.append(kwargs)
+                if self.fail_bundled and "executable_path" not in kwargs:
+                    raise RuntimeError("Executable doesn't exist")
+                return "browser-handle"
+
+        class _FakePlaywright:
+            def __init__(self, fail_bundled: bool = False) -> None:
+                self.chromium = _FakeChromium(fail_bundled=fail_bundled)
+
+        self.assertEqual(
+            "browser-handle",
+            browser_check.launch_chromium_browser(
+                _FakePlaywright(fail_bundled=False),
+                env={},
+                which_fn=lambda name: (
+                    "/usr/bin/chromium" if name == "chromium" else None
+                ),
+            ),
+        )
+        self.assertEqual([{"headless": True}], launch_calls)
+
+        # 2. Missing bundled browser falls back to system chromium, and explicit override takes precedence.
+        launch_calls.clear()
+        self.assertEqual(
+            "browser-handle",
+            browser_check.launch_chromium_browser(
+                _FakePlaywright(fail_bundled=True),
+                env={},
+                which_fn=lambda name: (
+                    "/usr/bin/chromium" if name == "chromium" else None
+                ),
+            ),
+        )
+        self.assertEqual(
+            [
+                {"headless": True},
+                {"headless": True, "executable_path": "/usr/bin/chromium"},
+            ],
+            launch_calls,
+        )
+
+        launch_calls.clear()
+        self.assertEqual(
+            "browser-handle",
+            browser_check.launch_chromium_browser(
+                _FakePlaywright(fail_bundled=False),
+                env={"PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": "/opt/chrome/chrome"},
+                which_fn=lambda _name: None,
+            ),
+        )
+        self.assertEqual(
+            [{"headless": True, "executable_path": "/opt/chrome/chrome"}],
+            launch_calls,
+        )
+
+        # 3. NO_PROXY configuration and ProxyHandler({}) loopback opener bypass hostile proxy env vars.
+        env_map = {"NO_PROXY": "corp.internal", "no_proxy": ""}
+        browser_check.configure_loopback_no_proxy(env_map)
+        self.assertEqual("corp.internal,127.0.0.1,localhost", env_map["NO_PROXY"])
+        self.assertEqual("127.0.0.1,localhost", env_map["no_proxy"])
+
+        class _OkHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<h1>ok</h1>")
+
+            def log_message(self, _fmt: str, *_args: object) -> None:
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _OkHandler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "HTTP_PROXY": "http://127.0.0.1:9",
+                    "HTTPS_PROXY": "http://127.0.0.1:9",
+                    "http_proxy": "http://127.0.0.1:9",
+                    "https_proxy": "http://127.0.0.1:9",
+                    "NO_PROXY": "",
+                    "no_proxy": "",
+                },
+                clear=False,
+            ):
+                with browser_check.open_loopback_url(
+                    f"http://127.0.0.1:{port}/index.html", timeout=5.0
+                ) as resp:
+                    self.assertEqual(200, resp.status)
+                    self.assertEqual(b"<h1>ok</h1>", resp.read())
+                with self.assertRaises(ValueError):
+                    browser_check.open_loopback_url("https://example.com/")
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

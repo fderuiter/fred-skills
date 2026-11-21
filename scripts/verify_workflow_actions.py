@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify GitHub Actions commit SHA pins and version comments across workflows."""
+"""Verify GitHub Actions commit SHA pins, runtimes, and version comments across workflows."""
 
 from __future__ import annotations
 
@@ -19,10 +19,13 @@ import check_workflow_pins
 from check_workflow_pins import (
     DEFAULT_RETRIES,
     DEFAULT_TIMEOUT,
+    DEPRECATED_ACTION_RUNTIMES,
+    SUPPORTED_ACTION_RUNTIMES,
     ActionPin,
     LockedActionPin,
     discover_workflow_files,
     extract_inline_comment,
+    filter_changed_pins,
     inspect_workflow_file,
     load_lockfile,
     parse_ls_remote_output,
@@ -35,11 +38,14 @@ ROOT = check_workflow_pins.ROOT
 __all__ = [
     "DEFAULT_RETRIES",
     "DEFAULT_TIMEOUT",
+    "DEPRECATED_ACTION_RUNTIMES",
     "ROOT",
+    "SUPPORTED_ACTION_RUNTIMES",
     "ActionPin",
     "LockedActionPin",
     "discover_workflow_files",
     "extract_inline_comment",
+    "filter_changed_pins",
     "inspect_workflow_file",
     "load_lockfile",
     "main",
@@ -58,14 +64,16 @@ def verify_workflows(
     lockfile: Path | str | None = None,
     require_lockfile: bool = False,
     retries: int = 0,
+    changed_from: str | None = None,
 ) -> list[str]:
-    """Verify workflow action pins offline (including lockfile when present) and optionally online."""
+    """Verify workflow action pins offline (including lockfile and runtimes) and optionally online."""
     return check_workflow_pins.check_pins(
         root=root,
         workflow_files=workflow_files,
         lockfile=lockfile,
         require_lockfile=require_lockfile,
         verify_remote=online,
+        changed_from=changed_from,
         timeout=timeout,
         retries=retries,
         run_fn=subprocess.run,
@@ -74,19 +82,25 @@ def verify_workflows(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify GitHub Actions commit SHA pins and version comments across workflows."
+        description="Verify GitHub Actions commit SHA pins, runtimes, and version comments across workflows."
     )
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Validate 40-character lowercase hex SHAs, version comments, and lockfile parity offline (default mode).",
+        help="Validate 40-character lowercase hex SHAs, version comments, runtimes, and lockfile parity offline (default mode).",
     )
     parser.add_argument(
         "--online",
         "--verify-remote",
         dest="online",
         action="store_true",
-        help="Also query upstream action repositories via git ls-remote to verify commit and tag resolution.",
+        help="Also query upstream action repositories via git ls-remote and verify action.yml runtimes.",
+    )
+    parser.add_argument(
+        "--changed-from",
+        default=None,
+        metavar="REF",
+        help="Scope --online queries to action repositories with pins modified since git REF.",
     )
     parser.add_argument(
         "--timeout",
@@ -117,6 +131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout=args.timeout,
         require_lockfile=not bool(args.files),
         retries=args.retries,
+        changed_from=args.changed_from,
     )
 
     if errors:
