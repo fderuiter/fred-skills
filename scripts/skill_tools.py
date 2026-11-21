@@ -62,6 +62,7 @@ __all__ = [
     "read_frontmatter",
     "read_json_object",
     "read_suites_catalog",
+    "read_utf8_text",
     "recipe_to_suite_map",
     "resolve_relative_link_target",
     "run_bounded_subprocess",
@@ -263,22 +264,62 @@ def git_tag_exists(
     return proc.returncode == 0
 
 
-def read_json_object(
+@overload
+def read_utf8_text(
     path: Path | str,
     *,
-    label: str = "JSON file",
+    label: str = "UTF-8 file",
     hint: str | None = None,
-) -> dict[str, Any]:
+    optional: Literal[False] = False,
+) -> str: ...
+
+
+@overload
+def read_utf8_text(
+    path: Path | str,
+    *,
+    label: str = "UTF-8 file",
+    hint: str | None = None,
+    optional: Literal[True],
+) -> str | None: ...
+
+
+@overload
+def read_utf8_text(
+    path: Path | str,
+    *,
+    label: str = "UTF-8 file",
+    hint: str | None = None,
+    optional: bool = False,
+) -> str | None: ...
+
+
+def read_utf8_text(
+    path: Path | str,
+    *,
+    label: str = "UTF-8 file",
+    hint: str | None = None,
+    optional: bool = False,
+) -> str | None:
+    """Read UTF-8 text from path, returning None only when an optional file is absent."""
     p = path if isinstance(path, Path) else Path(path)
     if p.is_dir():
         raise FredCliError(
             f"Expected {label.lower()} at '{p}', got a directory",
             code="invalid_path_type",
-            hint=hint or f"Pass a JSON file path instead of directory '{p}'.",
+            hint=hint or f"Pass a file path instead of directory '{p}'.",
         )
     try:
-        raw_text = p.read_text(encoding="utf-8")
+        return p.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
+        if optional and not p.is_symlink():
+            return None
+        if optional and p.is_symlink():
+            raise FredCliError(
+                f"Unable to read {label.lower()} '{p}': dangling symlink",
+                code="io_error",
+                hint=hint or f"Check symlink target and readability for '{p}'.",
+            ) from exc
         raise FredCliError(
             f"{label} not found: {p}",
             code="missing_file",
@@ -290,6 +331,64 @@ def read_json_object(
             code="io_error",
             hint=hint or f"Check file permissions and readability for '{p}'.",
         ) from exc
+    except UnicodeDecodeError as exc:
+        raise FredCliError(
+            f"Invalid UTF-8 encoding in {label.lower()} '{p}': {exc}",
+            code="invalid_encoding",
+            hint=hint or f"Re-encode '{p}' as valid UTF-8.",
+        ) from exc
+
+
+@overload
+def read_json_object(
+    path: Path | str,
+    *,
+    label: str = "JSON file",
+    hint: str | None = None,
+    optional: Literal[False] = False,
+) -> dict[str, Any]: ...
+
+
+@overload
+def read_json_object(
+    path: Path | str,
+    *,
+    label: str = "JSON file",
+    hint: str | None = None,
+    optional: Literal[True],
+) -> dict[str, Any] | None: ...
+
+
+@overload
+def read_json_object(
+    path: Path | str,
+    *,
+    label: str = "JSON file",
+    hint: str | None = None,
+    optional: bool = False,
+) -> dict[str, Any] | None: ...
+
+
+def read_json_object(
+    path: Path | str,
+    *,
+    label: str = "JSON file",
+    hint: str | None = None,
+    optional: bool = False,
+) -> dict[str, Any] | None:
+    """Read and parse a JSON object from path, returning None only when an optional file is absent."""
+    p = path if isinstance(path, Path) else Path(path)
+    raw_text = read_utf8_text(
+        p,
+        label=label,
+        hint=hint
+        or (
+            f"Pass a JSON file path instead of directory '{p}'." if p.is_dir() else None
+        ),
+        optional=optional,
+    )
+    if raw_text is None:
+        return None
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError as exc:
@@ -417,7 +516,32 @@ def _format_package_rel(path: Path, package_root: Path, fallback: str) -> str:
     return fallback
 
 
-def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
+def _read_chain_markdown(
+    path: Path,
+    rel_label: str,
+    read_errors: list[str] | None,
+) -> str | None:
+    try:
+        return read_utf8_text(path, label=f"Markdown file '{rel_label}'")
+    except FredCliError as exc:
+        if read_errors is None:
+            raise
+        if exc.code == "invalid_encoding":
+            msg = f"Binary or non-UTF-8 file in skill package: {rel_label}"
+        else:
+            cause = exc.__cause__ if exc.__cause__ is not None else exc
+            msg = f"{rel_label}: {cause}"
+        if msg not in read_errors:
+            read_errors.append(msg)
+        return None
+
+
+def find_deep_reference_chains(
+    package: Path,
+    max_hops: int = 1,
+    *,
+    read_errors: list[str] | None = None,
+) -> list[str]:
     """Return markdown reference chains exceeding max_hops from SKILL.md."""
     if max_hops < 1:
         raise ValueError("max_hops must be at least 1")
@@ -436,9 +560,9 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
             current, path_chain, label_chain = queue.popleft()
             visited_markdown.add(current)
             depth = len(path_chain) - 1
-            try:
-                content = current.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+            current_label = label_chain[-1]
+            content = _read_chain_markdown(current, current_label, read_errors)
+            if content is None:
                 continue
             for raw_target in extract_relative_links(content):
                 resolved = resolve_relative_link_target(raw_target, current.parent)
@@ -478,9 +602,8 @@ def find_deep_reference_chains(package: Path, max_hops: int = 1) -> list[str]:
             ref_label = _format_package_rel(
                 ref_resolved, package_root, ref_md.as_posix()
             )
-            try:
-                ref_content = ref_md.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+            ref_content = _read_chain_markdown(ref_md, ref_label, read_errors)
+            if ref_content is None:
                 continue
             for raw_target in extract_relative_links(ref_content):
                 resolved = resolve_relative_link_target(raw_target, ref_md.parent)
@@ -925,14 +1048,13 @@ def _iter_suite_phase_skills(
 def read_suites_catalog(root: Path = ROOT) -> list[dict[str, Any]] | None:
     """Read catalog/suites.json, returning suite objects or None when absent."""
     suites_path = root / "catalog/suites.json"
-    try:
-        doc = read_json_object(
-            suites_path, label="Suites catalog 'catalog/suites.json'"
-        )
-    except FredCliError as exc:
-        if exc.code == "missing_file":
-            return None
-        raise
+    doc = read_json_object(
+        suites_path,
+        label="Suites catalog 'catalog/suites.json'",
+        optional=True,
+    )
+    if doc is None:
+        return None
     suites = doc.get("suites")
     if not isinstance(suites, list):
         raise FredCliError(
@@ -1015,10 +1137,21 @@ def workflow_phase_order_map(root: Path = ROOT) -> dict[str, int]:
 
 
 def suite_members(root: Path = ROOT) -> dict[str, dict]:
-    document = json.loads((root / "catalog/suites.json").read_text(encoding="utf-8"))
+    suites_path = root / "catalog/suites.json"
+    document = read_json_object(
+        suites_path,
+        label="Suites catalog 'catalog/suites.json'",
+    )
+    raw_suites = document.get("suites")
+    if not isinstance(raw_suites, list):
+        raise FredCliError(
+            f"Malformed suites catalog '{suites_path}': expected 'suites' array",
+            code="invalid_catalog",
+            hint=f"Ensure '{suites_path}' contains a JSON array under 'suites'.",
+        )
     members: dict[str, dict] = {}
     for suite_name, phase, name in _iter_suite_phase_skills(
-        document["suites"], strict=True, root=root
+        raw_suites, strict=True, root=root
     ):
         if phase is None:
             continue
@@ -1046,9 +1179,19 @@ def infer_suite_and_siblings(
     root: Path | None = None,
 ) -> tuple[str, set[str]]:
     """Resolve a skill's suite and sibling set from catalog/suites.json or prefix fallback."""
-    if root is not None and (root / "catalog/suites.json").is_file():
-        try:
-            members = suite_members(root)
+    if root is not None:
+        suites_path = root / "catalog/suites.json"
+        if suites_path.exists() or suites_path.is_symlink():
+            try:
+                members = suite_members(root)
+            except FredCliError:
+                raise
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                raise FredCliError(
+                    f"Malformed suites catalog '{suites_path}': {exc}",
+                    code="invalid_catalog",
+                    hint=f"Fix suite definitions in '{suites_path}'.",
+                ) from exc
             if skill_name in members:
                 suite_name = str(members[skill_name]["suite"])
                 siblings = {
@@ -1057,8 +1200,6 @@ def infer_suite_and_siblings(
                     if info.get("suite") == suite_name and s != skill_name
                 }
                 return suite_name, siblings
-        except (OSError, ValueError, TypeError, KeyError):
-            pass
     return infer_suite_name(skill_name), set()
 
 
@@ -1074,14 +1215,12 @@ def suite_for_skills(
     )
     if not resolved_map:
         skills_path = root / "catalog/skills.json"
-        try:
-            doc = read_json_object(
-                skills_path, label="Skills catalog 'catalog/skills.json'"
-            )
-        except FredCliError as exc:
-            if exc.code != "missing_file":
-                raise
-        else:
+        doc = read_json_object(
+            skills_path,
+            label="Skills catalog 'catalog/skills.json'",
+            optional=True,
+        )
+        if doc is not None:
             raw_skills = doc.get("skills")
             if not isinstance(raw_skills, list):
                 raise FredCliError(
@@ -1105,14 +1244,13 @@ def suite_for_skills(
 def recipe_to_suite_map(root: Path = ROOT) -> dict[str, str]:
     """Map every recipe name and alias in catalog/recipes.json to its target suite."""
     recipes_path = root / "catalog/recipes.json"
-    try:
-        doc = read_json_object(
-            recipes_path, label="Recipes catalog 'catalog/recipes.json'"
-        )
-    except FredCliError as exc:
-        if exc.code == "missing_file":
-            return {}
-        raise
+    doc = read_json_object(
+        recipes_path,
+        label="Recipes catalog 'catalog/recipes.json'",
+        optional=True,
+    )
+    if doc is None:
+        return {}
     recipes_obj = doc.get("recipes")
     if not isinstance(recipes_obj, dict):
         raise FredCliError(

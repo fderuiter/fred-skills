@@ -4472,5 +4472,134 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             self.assertNotIn("Traceback", val_proc.stderr)
 
 
+class FailClosedSharedReadersTests(unittest.TestCase):
+    """Verify shared fail-closed UTF-8 and JSON reader contracts in skill_tools and fredlib.common."""
+
+    def test_read_utf8_text_and_read_json_object_contracts(self) -> None:
+        from unittest.mock import patch
+
+        from fredlib import common
+        from skill_tools import FredCliError, read_json_object, read_utf8_text
+
+        self.assertIs(common.read_utf8_text, read_utf8_text)
+        self.assertIs(common.read_json_object, read_json_object)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            missing = base / "missing.json"
+            self.assertIsNone(read_utf8_text(missing, optional=True))
+            self.assertIsNone(read_json_object(missing, optional=True))
+
+            with self.assertRaises(FredCliError) as miss_txt:
+                read_utf8_text(missing)
+            self.assertEqual("missing_file", miss_txt.exception.code)
+
+            with self.assertRaises(FredCliError) as miss_json:
+                read_json_object(missing)
+            self.assertEqual("missing_file", miss_json.exception.code)
+
+            subdir = base / "as_dir"
+            subdir.mkdir()
+            for opt in (False, True):
+                with self.assertRaises(FredCliError) as dir_txt:
+                    read_utf8_text(subdir, optional=opt)
+                self.assertEqual("invalid_path_type", dir_txt.exception.code)
+                with self.assertRaises(FredCliError) as dir_json:
+                    read_json_object(subdir, optional=opt)
+                self.assertEqual("invalid_path_type", dir_json.exception.code)
+
+            bad_utf8 = base / "bad.json"
+            bad_utf8.write_bytes(b"\xff\xfe\x00\x01")
+            for opt in (False, True):
+                with self.assertRaises(FredCliError) as enc_txt:
+                    read_utf8_text(bad_utf8, optional=opt)
+                self.assertEqual("invalid_encoding", enc_txt.exception.code)
+                self.assertNotIsInstance(enc_txt.exception, UnicodeDecodeError)
+                with self.assertRaises(FredCliError) as enc_json:
+                    read_json_object(bad_utf8, optional=opt)
+                self.assertEqual("invalid_encoding", enc_json.exception.code)
+
+            bad_json = base / "malformed.json"
+            bad_json.write_text('{"unterminated": ', encoding="utf-8")
+            for opt in (False, True):
+                with self.assertRaises(FredCliError) as syn_err:
+                    read_json_object(bad_json, optional=opt)
+                self.assertEqual("invalid_json", syn_err.exception.code)
+
+            list_json = base / "list.json"
+            list_json.write_text("[1, 2, 3]\n", encoding="utf-8")
+            for opt in (False, True):
+                with self.assertRaises(FredCliError) as root_err:
+                    read_json_object(list_json, optional=opt)
+                self.assertEqual("invalid_json_root", root_err.exception.code)
+
+            unreadable = base / "unreadable.json"
+            unreadable.write_text('{"ok": true}\n', encoding="utf-8")
+            with patch.object(
+                Path, "read_text", side_effect=PermissionError("permission denied")
+            ):
+                for opt in (False, True):
+                    with self.assertRaises(FredCliError) as io_txt:
+                        read_utf8_text(unreadable, optional=opt)
+                    self.assertEqual("io_error", io_txt.exception.code)
+                    with self.assertRaises(FredCliError) as io_json:
+                        read_json_object(unreadable, optional=opt)
+                    self.assertEqual("io_error", io_json.exception.code)
+
+            if sys.platform != "win32":
+                dangling = base / "dangling.json"
+                dangling.symlink_to(base / "does-not-exist.json")
+                with self.assertRaises(FredCliError) as sym_err:
+                    read_json_object(dangling, optional=True)
+                self.assertEqual("io_error", sym_err.exception.code)
+
+    def test_suite_inference_and_reference_chains_fail_closed(self) -> None:
+        from skill_tools import (
+            FredCliError,
+            find_deep_reference_chains,
+            infer_suite_and_siblings,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            # Absent catalog/suites.json is cleanly ignored
+            suite_name, siblings = infer_suite_and_siblings(
+                "repo-audit-concurrency", repo
+            )
+            self.assertEqual("repository-audits", suite_name)
+            self.assertEqual(set(), siblings)
+
+            suites_path = repo / "catalog/suites.json"
+            suites_path.parent.mkdir(parents=True)
+            suites_path.write_bytes(b"\xff\xfe")
+            with self.assertRaises(FredCliError) as enc_ctx:
+                infer_suite_and_siblings("repo-audit-concurrency", repo)
+            self.assertEqual("invalid_encoding", enc_ctx.exception.code)
+
+            suites_path.write_text("{bad json", encoding="utf-8")
+            with self.assertRaises(FredCliError) as json_ctx:
+                infer_suite_and_siblings("repo-audit-concurrency", repo)
+            self.assertEqual("invalid_json", json_ctx.exception.code)
+
+            pkg = repo / "skills/sample-skill"
+            (pkg / "references").mkdir(parents=True)
+            (pkg / "SKILL.md").write_text(
+                "# Skill\n\nSee [guide](references/guide.md).\n", encoding="utf-8"
+            )
+            (pkg / "references/guide.md").write_bytes(b"\xff\xfe\x00")
+
+            with self.assertRaises(FredCliError) as chain_enc:
+                find_deep_reference_chains(pkg)
+            self.assertEqual("invalid_encoding", chain_enc.exception.code)
+
+            collected: list[str] = []
+            chains = find_deep_reference_chains(pkg, read_errors=collected)
+            self.assertEqual([], chains)
+            self.assertEqual(
+                ["Binary or non-UTF-8 file in skill package: references/guide.md"],
+                collected,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

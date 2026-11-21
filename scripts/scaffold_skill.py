@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 sys.dont_write_bytecode = True
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -31,9 +33,12 @@ from _doc_invariants import (
 )
 from skill_tools import (
     ROOT,
+    FredCliError,
     extract_markdown_preamble,
     infer_suite_name,
     read_frontmatter,
+    read_json_object,
+    read_utf8_text,
     suite_skills_by_suite,
 )
 from validate_skills import (
@@ -214,10 +219,15 @@ def _discover_suite_synced_companions(
         return [], []
     schemas: list[str] = []
     companions: list[str] = []
-    for manifest_path in sorted(shared_dir.glob("*/manifest.json")):
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+    for child in sorted(shared_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        manifest = read_json_object(
+            child / "manifest.json",
+            label=f"Shared resource manifest '{child.name}/manifest.json'",
+            optional=True,
+        )
+        if manifest is None:
             continue
         if manifest.get("suite", "repository-audits") != suite_name:
             continue
@@ -653,10 +663,14 @@ def _validate_inputs(
     if name in RESERVED_SKILL_NAMES:
         raise ValueError(f"Skill name {name!r} is reserved")
 
-    packs_path = root / "catalog/packs.json"
-    if packs_path.is_file():
-        packs = json.loads(packs_path.read_text(encoding="utf-8")).get("packs", {})
-        if name in packs:
+    packs_doc = read_json_object(
+        root / "catalog/packs.json",
+        label="Packs catalog 'catalog/packs.json'",
+        optional=True,
+    )
+    if packs_doc is not None:
+        packs = packs_doc.get("packs", {})
+        if isinstance(packs, Mapping) and name in packs:
             raise ValueError(
                 f"Skill name {name!r} collides with existing pack name in catalog/packs.json"
             )
@@ -685,23 +699,36 @@ def _validate_inputs(
         for existing_entry in sorted(skills_root.glob("*/SKILL.md")):
             if existing_entry.parent.resolve() == package_dir.resolve():
                 continue
-            try:
-                meta, _ = read_frontmatter(existing_entry)
-            except (OSError, ValueError, TypeError):
-                continue
+            meta, _ = _read_skill_frontmatter_strict(existing_entry)
             if meta.get("description") == description:
                 raise ValueError(
                     f"Activation description duplicates existing skill '{existing_entry.parent.name}'"
                 )
 
 
+def _read_skill_frontmatter_strict(path: Path) -> tuple[dict[str, Any], str]:
+    """Read SKILL.md frontmatter strictly, raising FredCliError on read or parse errors."""
+    read_utf8_text(path, label=f"Skill manifest '{path}'")
+    try:
+        meta, body = read_frontmatter(path)
+    except FredCliError:
+        raise
+    except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
+        raise FredCliError(
+            f"Invalid SKILL.md frontmatter in '{path}': {exc}",
+            code="invalid_frontmatter",
+            hint=f"Ensure '{path}' begins with a valid YAML mapping delimited by '---'.",
+        ) from exc
+    return meta, body
+
+
 def _pack_raw_chars(root: Path, skill_names: Sequence[str]) -> int:
     total = 0
     for sk in skill_names:
         skill_md = root / "skills" / sk / "SKILL.md"
-        if not skill_md.is_file():
+        if not skill_md.exists() and not skill_md.is_symlink():
             continue
-        meta, _ = read_frontmatter(skill_md)
+        meta, _ = _read_skill_frontmatter_strict(skill_md)
         desc = str(meta.get("description", "")).strip()
         total += len(sk) + len(desc)
     return total
@@ -802,9 +829,13 @@ def _sync_umbrella_pack_descriptions(packs: dict[str, Any]) -> bool:
 def _register_skill_in_packs(
     packs_path: Path, root: Path, name: str, suite_name: str
 ) -> bool:
-    if not packs_path.is_file():
+    packs_doc = read_json_object(
+        packs_path,
+        label="Packs catalog 'catalog/packs.json'",
+        optional=True,
+    )
+    if packs_doc is None:
         return False
-    packs_doc = json.loads(packs_path.read_text(encoding="utf-8"))
     packs = packs_doc.get("packs")
     if not isinstance(packs, dict) or not packs:
         return False
@@ -925,7 +956,7 @@ def _sync_prose_count_docs(root: Path) -> list[Path]:
         doc_path = root / rel_path
         if doc_path.is_symlink() or not doc_path.is_file():
             continue
-        original = doc_path.read_text(encoding="utf-8")
+        original = read_utf8_text(doc_path, label=f"Documentation file '{rel_path}'")
         rewritten = _rewrite_prose_counts_in_text(original, doc_rules)
         if rel_path == "README.md":
             intro = extract_markdown_preamble(rewritten)
@@ -953,8 +984,13 @@ def _sync_catalog_files(
     catalog_dir.mkdir(parents=True, exist_ok=True)
 
     suites_path = catalog_dir / "suites.json"
-    if suites_path.is_file():
-        suites_doc = json.loads(suites_path.read_text(encoding="utf-8"))
+    loaded_suites = read_json_object(
+        suites_path,
+        label="Suite catalog 'catalog/suites.json'",
+        optional=True,
+    )
+    if loaded_suites is not None:
+        suites_doc = loaded_suites
     else:
         default_suite = suite_name or "repository-workflows"
         suites_doc = {
@@ -1017,8 +1053,13 @@ def _sync_catalog_files(
     touched.append(suites_path)
 
     experience_path = catalog_dir / "experience.json"
-    if experience_path.is_file():
-        exp_doc = json.loads(experience_path.read_text(encoding="utf-8"))
+    loaded_exp = read_json_object(
+        experience_path,
+        label="Experience catalog 'catalog/experience.json'",
+        optional=True,
+    )
+    if loaded_exp is not None:
+        exp_doc = loaded_exp
     else:
         exp_doc = {"schema_version": "1.0", "skills": {}}
 

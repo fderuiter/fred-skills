@@ -1199,5 +1199,190 @@ class WorkflowAndContributingGuardrailTests(unittest.TestCase):
         self.assertEqual([], snippet_errors)
 
 
+class FailClosedValidationAndScaffolderTests(unittest.TestCase):
+    """Verify validate_skills and scaffold_skill fail closed on unreadable or malformed files."""
+
+    def test_validate_skills_fails_closed_and_deduplicates_errors(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _init_synthetic_repo(repo)
+            pkg = repo / "skills/baseline-audit"
+            self.assertEqual([], validate_skills.validate_skill(pkg))
+
+            # Absent catalog/suites.json is cleanly skipped
+            self.assertFalse((repo / "catalog/suites.json").exists())
+            self.assertEqual(
+                [],
+                validate_skills._validate_curated_pack_coverage(
+                    repo, {"starter": {"skills": ["baseline-audit"]}}
+                ),
+            )
+
+            # Corrupt catalog/suites.json reports errors in _validate_curated_pack_coverage,
+            # _validate_evaluation_scenarios, and validate_skill without crashing
+            suites_path = repo / "catalog/suites.json"
+            suites_path.parent.mkdir(parents=True, exist_ok=True)
+            for payload in (b"\xff\xfe", b"{bad json"):
+                suites_path.write_bytes(payload)
+                cov_errs = validate_skills._validate_curated_pack_coverage(
+                    repo, {"starter": {"skills": ["baseline-audit"]}}
+                )
+                self.assertTrue(cov_errs)
+                self.assertTrue(any("Invalid suite manifest" in e for e in cov_errs))
+
+                scen_errs = validate_skills._validate_evaluation_scenarios(
+                    pkg, "baseline-audit", None, {}
+                )
+                self.assertTrue(scen_errs)
+                self.assertTrue(any("Invalid suite manifest" in e for e in scen_errs))
+
+                pkg_errs = validate_skills.validate_skill(pkg)
+                self.assertTrue(pkg_errs)
+                self.assertEqual(len(pkg_errs), len(set(pkg_errs)))
+            suites_path.unlink()
+
+            # Corrupt references/evaluation-scenarios.json (invalid UTF-8, malformed JSON, PermissionError)
+            scen_path = pkg / "references/evaluation-scenarios.json"
+            orig_scen = scen_path.read_bytes()
+            scen_path.write_bytes(b"\xff\xfe\x00")
+            self.assertTrue(
+                validate_skills._validate_evaluation_scenarios(
+                    pkg, "baseline-audit", None, {}
+                )
+            )
+            utf8_pkg_errs = validate_skills.validate_skill(pkg)
+            self.assertTrue(utf8_pkg_errs)
+            self.assertEqual(len(utf8_pkg_errs), len(set(utf8_pkg_errs)))
+
+            scen_path.write_text("{bad json", encoding="utf-8")
+            self.assertTrue(
+                validate_skills._validate_evaluation_scenarios(
+                    pkg, "baseline-audit", None, {}
+                )
+            )
+            json_pkg_errs = validate_skills.validate_skill(pkg)
+            self.assertTrue(json_pkg_errs)
+            self.assertEqual(len(json_pkg_errs), len(set(json_pkg_errs)))
+            scen_path.write_bytes(orig_scen)
+
+            scen_resolved = scen_path.resolve()
+            orig_read_text = Path.read_text
+
+            def deny_scen(self_path: Path, *args: object, **kwargs: object) -> str:
+                if self_path.resolve() == scen_resolved:
+                    raise PermissionError("scenarios permission denied")
+                return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+            with patch.object(Path, "read_text", autospec=True, side_effect=deny_scen):
+                perm_scen_errs = validate_skills._validate_evaluation_scenarios(
+                    pkg, "baseline-audit", None, {}
+                )
+                perm_pkg_errs = validate_skills.validate_skill(pkg)
+            self.assertTrue(perm_scen_errs)
+            self.assertTrue(perm_pkg_errs)
+            self.assertEqual(len(perm_pkg_errs), len(set(perm_pkg_errs)))
+
+            # Unreadable SKILL.md reports deduplicated error without crashing
+            skill_md_resolved = (pkg / "SKILL.md").resolve()
+            orig_read_bytes = Path.read_bytes
+
+            def deny_skill_bytes(self_path: Path) -> bytes:
+                if self_path.resolve() == skill_md_resolved:
+                    raise PermissionError("SKILL.md permission denied")
+                return orig_read_bytes(self_path)
+
+            def deny_skill_text(
+                self_path: Path, *args: object, **kwargs: object
+            ) -> str:
+                if self_path.resolve() == skill_md_resolved:
+                    raise PermissionError("SKILL.md permission denied")
+                return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.object(
+                    Path, "read_bytes", autospec=True, side_effect=deny_skill_bytes
+                ),
+                patch.object(
+                    Path, "read_text", autospec=True, side_effect=deny_skill_text
+                ),
+            ):
+                skill_perm_errs = validate_skills.validate_skill(pkg)
+            self.assertEqual(1, len(skill_perm_errs))
+            self.assertIn("SKILL.md", skill_perm_errs[0])
+
+    def test_scaffold_skill_raises_fred_cli_error_on_corrupt_manifest_or_sibling_and_preserves_force(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        from skill_tools import FredCliError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _init_synthetic_repo(repo)
+
+            # Absent shared/*/manifest.json is a clean no-op
+            (repo / "shared/empty-bundle").mkdir(parents=True)
+            scaffold_skill.scaffold_skill("second-audit", root=repo)
+
+            # Corrupt shared/*/manifest.json raises FredCliError (ValueError)
+            manifest_path = repo / "shared/empty-bundle/manifest.json"
+            for bad_bytes, expected_code in (
+                (b"\xff\xfe", "invalid_encoding"),
+                (b"{bad", "invalid_json"),
+                (b"[]", "invalid_json_root"),
+            ):
+                manifest_path.write_bytes(bad_bytes)
+                with self.assertRaises(FredCliError) as man_ctx:
+                    scaffold_skill.scaffold_skill("third-audit", root=repo)
+                self.assertIsInstance(man_ctx.exception, ValueError)
+                self.assertEqual(expected_code, man_ctx.exception.code)
+            manifest_path.unlink()
+
+            # Broken sibling SKILL.md (including yaml.YAMLError, invalid UTF-8, PermissionError)
+            sibling_md = repo / "skills/second-audit/SKILL.md"
+            sibling_md.write_text(
+                "---\nname: [unclosed\n---\n# Body\n", encoding="utf-8"
+            )
+            with self.assertRaises(FredCliError) as yaml_ctx:
+                scaffold_skill.scaffold_skill("third-audit", root=repo)
+            self.assertIsInstance(yaml_ctx.exception, ValueError)
+            self.assertEqual("invalid_frontmatter", yaml_ctx.exception.code)
+
+            # CLI exits cleanly with status 1 instead of uncaught yaml.YAMLError
+            rc = scaffold_skill.main(["third-audit", "--root", str(repo)])
+            self.assertEqual(1, rc)
+
+            sibling_md.write_bytes(b"\xff\xfe\x00")
+            with self.assertRaises(FredCliError) as enc_ctx:
+                scaffold_skill.scaffold_skill("third-audit", root=repo)
+            self.assertEqual("invalid_encoding", enc_ctx.exception.code)
+
+            # --force skips target directory itself during sibling inspection and overwrites broken SKILL.md
+            scaffold_skill.scaffold_skill("second-audit", root=repo, force=True)
+            self.assertEqual(
+                [], validate_skills.validate_skill(repo / "skills/second-audit")
+            )
+
+            sibling_resolved = sibling_md.resolve()
+            orig_read_text = Path.read_text
+
+            def deny_sibling(self_path: Path, *args: object, **kwargs: object) -> str:
+                if self_path.resolve() == sibling_resolved:
+                    raise PermissionError("sibling SKILL.md permission denied")
+                return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.object(
+                    Path, "read_text", autospec=True, side_effect=deny_sibling
+                ),
+                self.assertRaises(FredCliError) as io_ctx,
+            ):
+                scaffold_skill.scaffold_skill("third-audit", root=repo)
+            self.assertEqual("io_error", io_ctx.exception.code)
+
+
 if __name__ == "__main__":
     unittest.main()

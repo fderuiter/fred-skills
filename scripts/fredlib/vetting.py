@@ -14,7 +14,13 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
-from .common import ROOT, non_fenced_lines, parse_reference_link_definition
+from .common import (
+    ROOT,
+    FredCliError,
+    non_fenced_lines,
+    parse_reference_link_definition,
+    read_utf8_text,
+)
 
 __all__ = [
     "SKILL_CAPABILITY_ALLOWLIST",
@@ -1837,14 +1843,48 @@ def _vet_js_ts_source(
     return findings
 
 
-def _has_shebang(path: Path) -> bool:
-    if path.is_symlink() or not path.is_file():
-        return False
+def _probe_shebang(
+    path: Path, *, root: Path | None = None
+) -> tuple[bool, list[dict[str, Any]]]:
+    file_label = _format_file_label(path, root)
+    if path.is_symlink():
+        return (
+            False,
+            [
+                _finding(
+                    file_label,
+                    1,
+                    "symlink-file",
+                    "high",
+                    "filesystem",
+                    f"Symlinked file is not permitted: {file_label}",
+                )
+            ],
+        )
+    if not path.is_file():
+        return False, []
     try:
         with path.open("rb") as handle:
-            return handle.read(2) == b"#!"
-    except OSError:
-        return False
+            return handle.read(2) == b"#!", []
+    except OSError as exc:
+        return (
+            False,
+            [
+                _finding(
+                    file_label,
+                    1,
+                    "unreadable-file",
+                    "high",
+                    "filesystem",
+                    f"Unable to read file '{file_label}': {exc}",
+                )
+            ],
+        )
+
+
+def _has_shebang(path: Path) -> bool:
+    has_sb, probe_findings = _probe_shebang(path)
+    return has_sb and not probe_findings
 
 
 def vet_script(
@@ -1883,6 +1923,18 @@ def vet_script(
                 "high",
                 "script",
                 "Non-UTF-8 or binary executable in scripts directory is not permitted",
+            ),
+        ]
+    except OSError as exc:
+        return [
+            *findings,
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "high",
+                "filesystem",
+                f"Unable to read script file '{file_label}': {exc}",
             ),
         ]
 
@@ -1943,7 +1995,7 @@ def _scan_hidden_unicode_bytes_or_text(
 ) -> list[dict[str, Any]]:
     try:
         text = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+    except (OSError, UnicodeDecodeError):
         return []
     return _scan_hidden_unicode_text(text, file_label, category=category)
 
@@ -2231,6 +2283,17 @@ def _vet_svg_file(path: Path, *, root: Path | None = None) -> list[dict[str, Any
                 "SVG file is not valid UTF-8",
             )
         ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "high",
+                "filesystem",
+                f"Unable to read SVG file '{file_label}': {exc}",
+            )
+        ]
     return _vet_svg_text(svg_text, file_label)
 
 
@@ -2364,6 +2427,17 @@ def vet_markdown(path: Path, *, root: Path | None = None) -> list[dict[str, Any]
                 "medium",
                 "prompt",
                 "Instruction file is not valid UTF-8",
+            )
+        ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "high",
+                "filesystem",
+                f"Unable to read instruction file '{file_label}': {exc}",
             )
         ]
     return _vet_markdown_text(text, file_label)
@@ -2592,6 +2666,20 @@ def _vet_markdown_with_shims(
             ],
             scanned_count,
         )
+    except OSError as exc:
+        return (
+            [
+                _finding(
+                    rel_label,
+                    1,
+                    "unreadable-file",
+                    "high",
+                    "filesystem",
+                    f"Unable to read instruction file '{rel_label}': {exc}",
+                )
+            ],
+            scanned_count,
+        )
 
     findings = _vet_markdown_text(text, rel_label)
     next_chain = active_chain | {resolved}
@@ -2617,7 +2705,7 @@ def _vet_markdown_with_shims(
             continue
 
         target_label = _format_file_label(target_path, repo_root)
-        if suffix in _SCRIPT_SUFFIXES or _has_shebang(target_path):
+        if suffix in _SCRIPT_SUFFIXES:
             vetted_targets.add(target_resolved)
             if target_label not in seen_configs:
                 seen_configs.add(target_label)
@@ -2634,17 +2722,35 @@ def _vet_markdown_with_shims(
                 scanned_count += 1
             findings.extend(_vet_svg_file(target_path, root=repo_root))
         else:
-            sub_findings, sub_count = _vet_markdown_with_shims(
-                target_path,
-                repo_root=repo_root,
-                seen_configs=seen_configs,
-                configs_scanned=configs_scanned,
-                active_chain=next_chain,
-                vetted_targets=vetted_targets,
-                allowed_capabilities=allowed_capabilities,
-            )
-            findings.extend(sub_findings)
-            scanned_count += sub_count
+            is_shebang, probe_findings = _probe_shebang(target_path, root=repo_root)
+            if probe_findings:
+                vetted_targets.add(target_resolved)
+                if target_label not in seen_configs:
+                    seen_configs.add(target_label)
+                    configs_scanned.append(target_label)
+                    scanned_count += 1
+                findings.extend(probe_findings)
+            elif is_shebang:
+                vetted_targets.add(target_resolved)
+                if target_label not in seen_configs:
+                    seen_configs.add(target_label)
+                    configs_scanned.append(target_label)
+                    scanned_count += 1
+                findings.extend(
+                    vet_script(target_path, allowed_capabilities, root=repo_root)
+                )
+            else:
+                sub_findings, sub_count = _vet_markdown_with_shims(
+                    target_path,
+                    repo_root=repo_root,
+                    seen_configs=seen_configs,
+                    configs_scanned=configs_scanned,
+                    active_chain=next_chain,
+                    vetted_targets=vetted_targets,
+                    allowed_capabilities=allowed_capabilities,
+                )
+                findings.extend(sub_findings)
+                scanned_count += sub_count
 
     return findings, scanned_count
 
@@ -2926,6 +3032,17 @@ def vet_mcp_config(path: Path, *, root: Path | None = None) -> list[dict[str, An
                 "medium",
                 "agent-config",
                 "MCP configuration file is not valid UTF-8",
+            )
+        ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "high",
+                "filesystem",
+                f"Unable to read MCP configuration file '{file_label}': {exc}",
             )
         ]
 
@@ -3269,6 +3386,17 @@ def _vet_agent_yaml(
                 "medium",
                 "agent-config",
                 "YAML configuration file is not valid UTF-8",
+            )
+        ]
+    except OSError as exc:
+        return [
+            _finding(
+                file_label,
+                1,
+                "unreadable-file",
+                "high",
+                "filesystem",
+                f"Unable to read YAML configuration file '{file_label}': {exc}",
             )
         ]
     return _vet_agent_yaml_text(
@@ -3773,6 +3901,20 @@ def _vet_host_json_manifest(
             ],
             refs,
         )
+    except OSError as exc:
+        return (
+            [
+                _finding(
+                    file_label,
+                    1,
+                    "unreadable-file",
+                    "high",
+                    "filesystem",
+                    f"Unable to read host manifest file '{file_label}': {exc}",
+                )
+            ],
+            refs,
+        )
 
     findings = _scan_hidden_unicode_text(raw_text, file_label, category="agent-config")
     try:
@@ -4013,12 +4155,20 @@ def vet_skill(
                     )
                 )
             findings.extend(vet_script(entry, effective_caps, root=package))
-        elif top_dir == "scripts" or suffix in _SCRIPT_SUFFIXES or _has_shebang(entry):
+        elif top_dir == "scripts" or suffix in _SCRIPT_SUFFIXES:
             scanned_files += 1
             findings.extend(vet_script(entry, effective_caps, root=package))
-        elif suffix in {".md", ".mdc"}:
-            scanned_files += 1
-            findings.extend(vet_markdown(entry, root=package))
+        else:
+            is_shebang, probe_findings = _probe_shebang(entry, root=package)
+            if probe_findings:
+                scanned_files += 1
+                findings.extend(probe_findings)
+            elif is_shebang:
+                scanned_files += 1
+                findings.extend(vet_script(entry, effective_caps, root=package))
+            elif suffix in {".md", ".mdc"}:
+                scanned_files += 1
+                findings.extend(vet_markdown(entry, root=package))
 
     return {
         "target": str(package),
@@ -4030,24 +4180,142 @@ def vet_skill(
     }
 
 
-def _discover_host_skill_dirs(root: Path) -> list[str]:
+def _discover_host_skill_dirs(root: Path) -> tuple[list[str], list[dict[str, Any]]]:
     dirs: list[str] = list(_DEFAULT_HOST_SKILL_DIRS)
     hosts_path = root / "catalog/hosts.json"
-    if hosts_path.is_file() and not hosts_path.is_symlink():
-        try:
-            doc = json.loads(hosts_path.read_text(encoding="utf-8"))
-            hosts = doc.get("hosts", {})
-            if isinstance(hosts, Mapping):
-                for cfg in hosts.values():
-                    if isinstance(cfg, Mapping):
-                        proj = cfg.get("project_path")
-                        if isinstance(proj, str) and proj.strip():
-                            norm = proj.strip().strip("/")
-                            if norm and norm not in dirs:
-                                dirs.append(norm)
-        except (OSError, json.JSONDecodeError):
-            pass
-    return dirs
+    hosts_label = "catalog/hosts.json"
+    if not hosts_path.exists() and not hosts_path.is_symlink():
+        return dirs, []
+    if hosts_path.is_symlink():
+        return (
+            dirs,
+            [
+                _finding(
+                    hosts_label,
+                    1,
+                    "symlink-file",
+                    "high",
+                    "filesystem",
+                    "Symlinked hosts catalog file is not permitted",
+                )
+            ],
+        )
+    if hosts_path.is_dir():
+        return (
+            dirs,
+            [
+                _finding(
+                    hosts_label,
+                    1,
+                    "invalid-manifest",
+                    "medium",
+                    "agent-config",
+                    "Hosts catalog path must be a JSON file",
+                )
+            ],
+        )
+    try:
+        raw_text = read_utf8_text(
+            hosts_path,
+            label="Hosts catalog 'catalog/hosts.json'",
+            optional=True,
+        )
+    except FredCliError as exc:
+        if exc.code == "invalid_encoding":
+            return (
+                dirs,
+                [
+                    _finding(
+                        hosts_label,
+                        1,
+                        "invalid-encoding",
+                        "medium",
+                        "agent-config",
+                        "Hosts catalog file is not valid UTF-8",
+                    )
+                ],
+            )
+        return (
+            dirs,
+            [
+                _finding(
+                    hosts_label,
+                    1,
+                    "unreadable-file",
+                    "high",
+                    "filesystem",
+                    f"Unable to read hosts catalog '{hosts_label}': {exc.__cause__ or exc}",
+                )
+            ],
+        )
+    if raw_text is None:
+        return dirs, []
+    try:
+        doc = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        return (
+            dirs,
+            [
+                _finding(
+                    hosts_label,
+                    exc.lineno,
+                    "invalid-json",
+                    "medium",
+                    "agent-config",
+                    f"Malformed JSON in hosts catalog: {exc.msg}",
+                )
+            ],
+        )
+    if not isinstance(doc, Mapping):
+        return (
+            dirs,
+            [
+                _finding(
+                    hosts_label,
+                    1,
+                    "invalid-manifest",
+                    "medium",
+                    "agent-config",
+                    "Hosts catalog root must be a JSON object",
+                )
+            ],
+        )
+    hosts = doc.get("hosts")
+    if not isinstance(hosts, Mapping):
+        return (
+            dirs,
+            [
+                _finding(
+                    hosts_label,
+                    1,
+                    "invalid-manifest",
+                    "medium",
+                    "agent-config",
+                    "Hosts catalog must define a 'hosts' mapping",
+                )
+            ],
+        )
+    for cfg in hosts.values():
+        if not isinstance(cfg, Mapping):
+            return (
+                dirs,
+                [
+                    _finding(
+                        hosts_label,
+                        1,
+                        "invalid-manifest",
+                        "medium",
+                        "agent-config",
+                        "Each entry in hosts catalog 'hosts' must be a JSON object",
+                    )
+                ],
+            )
+        proj = cfg.get("project_path")
+        if isinstance(proj, str) and proj.strip():
+            norm = proj.strip().strip("/")
+            if norm and norm not in dirs:
+                dirs.append(norm)
+    return dirs, []
 
 
 def _prefix_skill_findings(
@@ -4095,10 +4363,16 @@ def _vet_single_file_target(
         )
     elif suffix_lower == ".svg":
         file_findings = _vet_svg_file(target, root=parent)
-    elif suffix_lower in _SCRIPT_SUFFIXES or _has_shebang(target):
+    elif suffix_lower in _SCRIPT_SUFFIXES:
         file_findings = vet_script(target, allowed_capabilities, root=parent)
     else:
-        file_findings = vet_markdown(target, root=parent)
+        is_shebang, probe_findings = _probe_shebang(target, root=parent)
+        if probe_findings:
+            file_findings = probe_findings
+        elif is_shebang:
+            file_findings = vet_script(target, allowed_capabilities, root=parent)
+        else:
+            file_findings = vet_markdown(target, root=parent)
 
     return {
         "target": str(target),
@@ -4437,7 +4711,13 @@ def vet_target(
     seen_configs: set[str] = set()
     vetted_md_targets: set[Path] = set()
 
-    for rel_skill_root in _discover_host_skill_dirs(root):
+    host_skill_dirs, host_catalog_findings = _discover_host_skill_dirs(root)
+    if host_catalog_findings:
+        scanned_files += 1
+        configs_scanned.append("catalog/hosts.json")
+        findings.extend(host_catalog_findings)
+
+    for rel_skill_root in host_skill_dirs:
         host_skills_dir = repo_root / rel_skill_root
         if host_skills_dir.is_symlink():
             findings.append(

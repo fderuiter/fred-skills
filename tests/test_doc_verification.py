@@ -2353,5 +2353,131 @@ class DocSnippetVerificationTests(unittest.TestCase):
             self.assertIn("immutability violation", proc_mutated.stderr)
 
 
+class FailClosedDocVerificationTests(unittest.TestCase):
+    """Verify check_doc_links and verify_doc_snippets fail closed without raising UnicodeDecodeError."""
+
+    def _build_minimal_doc_repo(self, base: Path) -> None:
+        (base / "docs").mkdir(parents=True, exist_ok=True)
+        (base / "README.md").write_text(
+            "# Docs\n\n- [Guide](docs/guide.md#intro)\n- [Guide Repeat](docs/guide.md#details)\n",
+            encoding="utf-8",
+        )
+        (base / "docs/guide.md").write_text(
+            "# Guide\n\n## Intro\n\n## Details\n\n```sh\necho ok\n```\n",
+            encoding="utf-8",
+        )
+
+    def test_check_docs_reports_deduplicated_errors_on_invalid_utf8_and_permission_error(
+        self,
+    ) -> None:
+        import shutil
+
+        from check_doc_links import check_docs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self._build_minimal_doc_repo(repo)
+            self.assertEqual([], check_docs(repo))
+
+            # Invalid UTF-8 in anchor target + checked doc produces deduplicated error without UnicodeDecodeError
+            (repo / "docs/guide.md").write_bytes(b"# Guide\n\xff\xfe\n")
+            utf8_errors = check_docs(repo)
+            self.assertTrue(utf8_errors)
+            self.assertEqual(len(utf8_errors), len(set(utf8_errors)))
+            self.assertTrue(any("docs/guide.md" in err for err in utf8_errors))
+
+            # Restore valid guide, add invalid UTF-8 inbound link source under skills/
+            self._build_minimal_doc_repo(repo)
+            (repo / "skills/bad-skill").mkdir(parents=True)
+            (repo / "skills/bad-skill/SKILL.md").write_bytes(b"\xff\xfe\x00")
+            inbound_errors = check_docs(repo)
+            self.assertTrue(inbound_errors)
+            self.assertEqual(len(inbound_errors), len(set(inbound_errors)))
+            self.assertTrue(
+                any("skills/bad-skill/SKILL.md" in err for err in inbound_errors)
+            )
+
+            # PermissionError on docs/guide.md produces deduplicated error without crashing
+            shutil.rmtree(repo / "skills")
+            guide_resolved = (repo / "docs/guide.md").resolve()
+            orig_read_text = Path.read_text
+
+            def fail_guide_read(
+                self_path: Path, *args: object, **kwargs: object
+            ) -> str:
+                if self_path.resolve() == guide_resolved:
+                    raise PermissionError("simulated permission denied")
+                return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+            with patch.object(
+                Path, "read_text", autospec=True, side_effect=fail_guide_read
+            ):
+                perm_errors = check_docs(repo)
+            self.assertTrue(perm_errors)
+            self.assertEqual(len(perm_errors), len(set(perm_errors)))
+            self.assertTrue(any("docs/guide.md" in err for err in perm_errors))
+
+    def test_verify_doc_snippets_handles_optional_absent_and_corrupt_guides_and_tagged_packs(
+        self,
+    ) -> None:
+        from skill_tools import FredCliError
+        from verify_doc_snippets import (
+            _load_tagged_packs,
+            extract_blocks_from_file,
+            verify_all_snippets,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            self._build_minimal_doc_repo(repo)
+
+            # Absent optional file returns empty block list cleanly
+            self.assertEqual(
+                [],
+                extract_blocks_from_file(repo / "docs/optional-missing.md", root=repo),
+            )
+
+            # Invalid UTF-8 in existing Markdown file returns error list without UnicodeDecodeError
+            (repo / "docs/guide.md").write_bytes(b"```sh\n\xff\xfe\n```\n")
+            enc_errors = verify_all_snippets(root=repo, files=["docs/guide.md"])
+            self.assertTrue(enc_errors)
+            self.assertTrue(any("docs/guide.md" in err for err in enc_errors))
+
+            # PermissionError on existing Markdown file returns error list without crashing
+            (repo / "docs/guide.md").write_text(
+                "```sh\necho hi\n```\n", encoding="utf-8"
+            )
+            guide_resolved = (repo / "docs/guide.md").resolve()
+            orig_read_text = Path.read_text
+
+            def fail_read(self_path: Path, *args: object, **kwargs: object) -> str:
+                if self_path.resolve() == guide_resolved:
+                    raise PermissionError("simulated permission denied")
+                return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+            with patch.object(Path, "read_text", autospec=True, side_effect=fail_read):
+                perm_errors = verify_all_snippets(root=repo, files=["docs/guide.md"])
+            self.assertTrue(perm_errors)
+            self.assertTrue(any("docs/guide.md" in err for err in perm_errors))
+
+            # Tagged catalog/packs.json: absent -> empty set, invalid UTF-8 / malformed JSON -> FredCliError
+            with patch("verify_doc_snippets.git_blob_bytes", return_value=None):
+                self.assertEqual(set(), _load_tagged_packs(repo, "v0.1.0"))
+
+            with (
+                patch("verify_doc_snippets.git_blob_bytes", return_value=b"\xff\xfe"),
+                self.assertRaises(FredCliError) as enc_blob,
+            ):
+                _load_tagged_packs(repo, "v0.1.0")
+            self.assertEqual("invalid_encoding", enc_blob.exception.code)
+
+            with (
+                patch("verify_doc_snippets.git_blob_bytes", return_value=b"{bad json"),
+                self.assertRaises(FredCliError) as json_blob,
+            ):
+                _load_tagged_packs(repo, "v0.1.0")
+            self.assertEqual("invalid_json", json_blob.exception.code)
+
+
 if __name__ == "__main__":
     unittest.main()

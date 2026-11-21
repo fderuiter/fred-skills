@@ -976,6 +976,102 @@ class VettingModuleTests(unittest.TestCase):
         ]
         self.assertEqual([17, 18], remote_img_lines)
 
+    def test_vet_target_fails_closed_on_corrupt_hosts_catalog_and_shebang_probes(
+        self,
+    ) -> None:
+        from typing import Any
+        from unittest.mock import patch
+
+        repo = self.root / "clean-vet-repo"
+        repo.mkdir()
+        (repo / "AGENTS.md").write_text("# Clean Agent Rules\n", encoding="utf-8")
+
+        # Absent catalog/hosts.json is cleanly ignored
+        clean_root = self.root / "root-without-hosts"
+        clean_root.mkdir()
+        res_absent = vetting.vet_target(repo, root=clean_root)
+        self.assertTrue(res_absent["passed"], res_absent["findings"])
+
+        # Corrupt / invalid catalog/hosts.json variants fail closed
+        hosts_root = self.root / "root-with-bad-hosts"
+        (hosts_root / "catalog").mkdir(parents=True)
+        hosts_file = hosts_root / "catalog/hosts.json"
+
+        hosts_file.write_bytes(b"\xff\xfe\x00")
+        res_enc = vetting.vet_target(repo, root=hosts_root)
+        self.assertFalse(res_enc["passed"])
+        self.assertIn("invalid-encoding", {f["rule"] for f in res_enc["findings"]})
+
+        hosts_file.write_text("{malformed json", encoding="utf-8")
+        res_json = vetting.vet_target(repo, root=hosts_root)
+        self.assertFalse(res_json["passed"])
+        self.assertIn("invalid-json", {f["rule"] for f in res_json["findings"]})
+
+        hosts_file.write_text('{"hosts": []}\n', encoding="utf-8")
+        res_manifest = vetting.vet_target(repo, root=hosts_root)
+        self.assertFalse(res_manifest["passed"])
+        self.assertIn("invalid-manifest", {f["rule"] for f in res_manifest["findings"]})
+
+        hosts_resolved = hosts_file.resolve()
+        orig_read_text = Path.read_text
+
+        def deny_hosts_read(self_path: Path, *args: object, **kwargs: object) -> str:
+            if self_path.resolve() == hosts_resolved:
+                raise PermissionError("hosts catalog permission denied")
+            return orig_read_text(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+        hosts_file.write_text('{"hosts": {}}\n', encoding="utf-8")
+        with patch.object(
+            Path, "read_text", autospec=True, side_effect=deny_hosts_read
+        ):
+            res_perm = vetting.vet_target(repo, root=hosts_root)
+        self.assertFalse(res_perm["passed"])
+        self.assertIn("unreadable-file", {f["rule"] for f in res_perm["findings"]})
+
+        if sys.platform != "win32":
+            hosts_file.unlink()
+            other_file = self.root / "external-hosts.json"
+            other_file.write_text('{"hosts": {}}\n', encoding="utf-8")
+            hosts_file.symlink_to(other_file)
+            res_sym = vetting.vet_target(repo, root=hosts_root)
+            self.assertFalse(res_sym["passed"])
+            self.assertIn("symlink-file", {f["rule"] for f in res_sym["findings"]})
+
+        # Shebang probe targets: PermissionError and invalid UTF-8 fail closed
+        probe_repo = self.root / "shebang-probe-repo"
+        (probe_repo / "bin").mkdir(parents=True)
+        probe_target = probe_repo / "bin/helper"
+        probe_target.write_text("#!/bin/sh\necho safe\n", encoding="utf-8")
+        (probe_repo / "AGENTS.md").write_text("@bin/helper\n", encoding="utf-8")
+
+        probe_resolved = probe_target.resolve()
+        orig_open = Path.open
+
+        def deny_probe_open(self_path: Path, *args: Any, **kwargs: Any) -> Any:
+            if self_path.resolve() == probe_resolved:
+                raise PermissionError("probe target permission denied")
+            return orig_open(self_path, *args, **kwargs)
+
+        with patch.object(Path, "open", autospec=True, side_effect=deny_probe_open):
+            res_shim_perm = vetting.vet_target(probe_repo, root=clean_root)
+            res_file_perm = vetting.vet_target(probe_target, root=clean_root)
+        self.assertFalse(res_shim_perm["passed"])
+        self.assertIn("unreadable-file", {f["rule"] for f in res_shim_perm["findings"]})
+        self.assertFalse(res_file_perm["passed"])
+        self.assertIn("unreadable-file", {f["rule"] for f in res_file_perm["findings"]})
+
+        # Invalid UTF-8 in shebang probe target (both with and without #!)
+        probe_target.write_bytes(b"\xff\xfe\x00")
+        res_shim_utf8 = vetting.vet_target(probe_repo, root=clean_root)
+        self.assertFalse(res_shim_utf8["passed"])
+        self.assertIn(
+            "invalid-encoding", {f["rule"] for f in res_shim_utf8["findings"]}
+        )
+        probe_target.write_bytes(b"#!/bin/sh\n\xff\xfe\n")
+        res_file_bin = vetting.vet_target(probe_target, root=clean_root)
+        self.assertFalse(res_file_bin["passed"])
+        self.assertIn("binary-script", {f["rule"] for f in res_file_bin["findings"]})
+
 
 if __name__ == "__main__":
     unittest.main()

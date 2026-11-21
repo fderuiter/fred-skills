@@ -143,31 +143,71 @@ def _receipt_data_matches_host(data: Any, host_name: str) -> bool:
 
 
 def _receipt_file_matches_host(path: Path, host_name: str) -> bool:
-    if not path.is_file():
-        return False
-    try:
-        data = read_json(path)
-    except (OSError, ValueError, KeyError):
+    data = read_json_object(
+        path,
+        label=f"Installation receipt '{path}'",
+        optional=True,
+    )
+    if data is None:
         return False
     return _receipt_data_matches_host(data, host_name)
+
+
+def _validate_receipt_state_root(state_root: Path) -> bool:
+    if not state_root.exists() and not state_root.is_symlink():
+        return False
+    if not state_root.is_dir():
+        raise FredCliError(
+            f"Expected installation state directory at '{state_root}', found non-directory",
+            code="invalid_path_type",
+            hint=f"Remove or replace '{state_root}' with a valid '.fred-skills' directory.",
+        )
+    return True
+
+
+def _collect_receipt_scan_paths(
+    state_root: Path, host_name: str, scope: str | None
+) -> tuple[list[Path], list[Path]]:
+    try:
+        named: list[Path] = []
+        if scope:
+            named.append(state_root / f"{host_name}-{scope}" / "receipt.json")
+        named.extend(sorted(state_root.glob(f"{host_name}*/receipt.json")))
+        named.append(state_root / host_name / "receipt.json")
+        return list(dict.fromkeys(named)), sorted(state_root.rglob("receipt*.json"))
+    except OSError as exc:
+        raise FredCliError(
+            f"Failed to scan installation receipts in '{state_root}': {exc}",
+            code="io_error",
+            hint=f"Check directory permissions for '{state_root}'.",
+        ) from exc
 
 
 def _receipt_identifies_host(
     destination: Path, host_name: str, scope: str | None = None
 ) -> bool:
     state_root = destination / ".fred-skills"
-    if not state_root.is_dir():
+    if not _validate_receipt_state_root(state_root):
         return False
-    if scope and (state_root / f"{host_name}-{scope}" / "receipt.json").is_file():
-        return True
-    if any(state_root.glob(f"{host_name}*/receipt.json")):
-        return True
-    if (state_root / host_name / "receipt.json").is_file():
-        return True
-    return any(
-        _receipt_file_matches_host(json_file, host_name)
-        for json_file in state_root.rglob("receipt*.json")
+    named_candidates, all_receipts = _collect_receipt_scan_paths(
+        state_root, host_name, scope
     )
+    named_set = set(named_candidates)
+    matched_named = [
+        read_json_object(
+            candidate,
+            label=f"Installation receipt '{candidate}'",
+            optional=True,
+        )
+        is not None
+        for candidate in named_candidates
+    ]
+    matched_extra = [
+        _receipt_file_matches_host(json_file, host_name)
+        for json_file in all_receipts
+        if json_file not in named_set
+    ]
+    return any(matched_named) or any(matched_extra)
 
 
 def _host_marker_entries(
@@ -259,7 +299,10 @@ def _resolve_marker_host(dest: Path, scope: str, candidates: list[str]) -> str:
 def _check_host_markers(
     dest: Path, scope: str = "project", root: Path = ROOT
 ) -> list[str]:
-    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    hosts = read_json_object(
+        root / "catalog/hosts.json",
+        label="Hosts catalog 'catalog/hosts.json'",
+    )["hosts"]
     entries = _host_marker_entries(hosts, scope)
     active = _select_active_markers(dest, scope, hosts, entries)
     if not active:
@@ -288,7 +331,10 @@ def _detect_host_with_root(
         else Path(destination).resolve()
     )
     found = _check_host_markers(dest, scope, root)
-    hosts = read_json(root / "catalog/hosts.json")["hosts"]
+    hosts = read_json_object(
+        root / "catalog/hosts.json",
+        label="Hosts catalog 'catalog/hosts.json'",
+    )["hosts"]
     entries = _host_marker_entries(hosts, scope)
     candidates = [h for path, _, h in entries if path == found[0]]
     return _resolve_marker_host(dest, scope, candidates)
