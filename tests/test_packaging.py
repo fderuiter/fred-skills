@@ -20,9 +20,14 @@ from package_skills import get_suite_skills
 from run_checks import (
     ALL_PHASES,
     DEFAULT_PHASES,
+    FAST_PHASE_TIMEOUT,
+    SLOWEST_TEST_MODULES,
+    TESTS_PHASE_TIMEOUT,
     build_check_env,
     build_phase_commands,
+    discover_test_modules,
     resolve_phases,
+    resolve_workers,
     run_checks,
 )
 from skill_tools import build_outputs
@@ -849,6 +854,10 @@ class PackageTests(unittest.TestCase):
             hooks["validate-skills"].get("entry"),
             "python scripts/validate_skills.py --telemetry validation-telemetry.json",
         )
+        self.assertEqual(
+            hooks["unit-tests"].get("entry"),
+            "python scripts/run_checks.py --phase tests",
+        )
         self.assertEqual(hooks["unit-tests"].get("stages"), ["pre-push"])
         for hook_id in ["ruff-lint", "ruff-format"]:
             self.assertIn(hook_id, hooks)
@@ -875,6 +884,11 @@ class PackageTests(unittest.TestCase):
         validate_triggers = validate_wf.get("on") or validate_wf.get(True) or {}
         self.assertIn("push", validate_triggers)
         self.assertIn("pull_request", validate_triggers)
+        self.assertIn("merge_group", validate_triggers)
+        self.assertEqual(
+            validate_triggers["merge_group"],
+            {"types": ["checks_requested"]},
+        )
         self.assertIn("workflow_call", validate_triggers)
         concurrency = validate_wf.get("concurrency", {})
         self.assertIsInstance(concurrency, dict)
@@ -888,12 +902,26 @@ class PackageTests(unittest.TestCase):
         self.assertIn("github.sha", group_expr)
         self.assertIn("github.ref", group_expr)
         self.assertIn("github.run_id", group_expr)
+        self.assertIn("github.event_name == 'merge_group'", group_expr)
         self.assertIn("github.event_name == 'push'", group_expr)
         self.assertIn("github.ref == 'refs/heads/main'", group_expr)
         self.assertEqual(
             concurrency.get("cancel-in-progress"),
-            "${{ github.workflow == 'Validate skill packages' && github.ref != 'refs/heads/main' }}",
+            "${{ github.workflow == 'Validate skill packages' && github.event_name != 'merge_group' && github.ref != 'refs/heads/main' }}",
         )
+        validate_timeout_min = (
+            validate_wf.get("jobs", {}).get("validate", {}).get("timeout-minutes")
+        )
+        self.assertEqual(20, validate_timeout_min)
+        self.assertGreaterEqual(validate_timeout_min * 60, TESTS_PHASE_TIMEOUT + 600)
+        release_wf_cfg = yaml.safe_load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        )
+        build_timeout_min = (
+            release_wf_cfg.get("jobs", {}).get("build", {}).get("timeout-minutes")
+        )
+        self.assertEqual(20, build_timeout_min)
+        self.assertGreaterEqual(build_timeout_min * 60, TESTS_PHASE_TIMEOUT + 600)
         for job_name, job_cfg in validate_wf.get("jobs", {}).items():
             for step in job_cfg.get("steps", []):
                 if "run" in step:
@@ -970,6 +998,32 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(
             any("Windows fallback" in s.get("name", "") for s in validate_steps)
         )
+        merge_tree_steps = [
+            s for s in validate_steps if "git merge-tree" in s.get("run", "")
+        ]
+        self.assertEqual(1, len(merge_tree_steps))
+        self.assertEqual(
+            "github.event_name == 'pull_request'",
+            merge_tree_steps[0].get("if"),
+        )
+        self.assertEqual("bash", merge_tree_steps[0].get("shell"))
+        self.assertEqual(
+            "${{ github.base_ref }}",
+            merge_tree_steps[0].get("env", {}).get("BASE_BRANCH"),
+        )
+        self.assertIn(
+            'git merge-tree --write-tree "origin/$BASE_BRANCH" HEAD',
+            merge_tree_steps[0].get("run", ""),
+        )
+        pkg_steps = [
+            s
+            for s in validate_steps
+            if "scripts/run_checks.py --phase packages" in s.get("run", "")
+        ]
+        self.assertEqual(1, len(pkg_steps))
+        pkg_base_ref = pkg_steps[0].get("env", {}).get("BASE_REF", "")
+        self.assertIn("github.event_name == 'merge_group'", pkg_base_ref)
+        self.assertIn("github.event.merge_group.base_sha", pkg_base_ref)
 
     def test_validate_workflow_concurrency_isolates_main_pushes(self):
         import re
@@ -1063,6 +1117,26 @@ class PackageTests(unittest.TestCase):
         self.assertNotIn(branch_push_1["sha"], group_branch_1)
         self.assertEqual(group_branch_1, group_branch_2)
         self.assertIs(eval_gha_template(cancel_tpl, branch_push_1), True)
+
+        merge_group_a = {
+            "workflow": "Validate skill packages",
+            "event_name": "merge_group",
+            "ref": "refs/heads/gh-readonly-queue/main/pr-42-00000000000000000001",
+            "sha": "f9e7943000000000000000000000000000000005",
+        }
+        merge_group_b = {
+            "workflow": "Validate skill packages",
+            "event_name": "merge_group",
+            "ref": "refs/heads/gh-readonly-queue/main/pr-43-00000000000000000002",
+            "sha": "a0f8054100000000000000000000000000000006",
+        }
+        group_mg_a = eval_gha_template(group_tpl, merge_group_a)
+        group_mg_b = eval_gha_template(group_tpl, merge_group_b)
+        self.assertNotEqual(group_mg_a, group_mg_b)
+        self.assertIn(merge_group_a["sha"], group_mg_a)
+        self.assertIn(merge_group_b["sha"], group_mg_b)
+        self.assertIs(eval_gha_template(cancel_tpl, merge_group_a), False)
+        self.assertIs(eval_gha_template(cancel_tpl, merge_group_b), False)
 
         release_wf = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -1311,6 +1385,132 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(1, len(invoked))
         self.assertEqual("1", invoked[0][1]["PYTHONDONTWRITEBYTECODE"])
         self.assertIn("FAILED: phase 'lint'", err_buf.getvalue())
+
+    def test_run_checks_parallel_workers_temp_isolation_and_ordered_failures(
+        self,
+    ) -> None:
+        import contextlib
+        import io
+        import time
+
+        import run_checks as run_checks_mod
+
+        self.assertEqual(300, FAST_PHASE_TIMEOUT)
+        self.assertEqual(600, TESTS_PHASE_TIMEOUT)
+
+        discovered = discover_test_modules(ROOT)
+        self.assertEqual(len(SLOWEST_TEST_MODULES), len(discovered))
+        self.assertEqual(list(SLOWEST_TEST_MODULES), discovered)
+        self.assertEqual("tests.test_fred_cli", discovered[0])
+
+        test_cmds = build_phase_commands("tests", root=ROOT)
+        self.assertEqual(len(discovered), len(test_cmds))
+        self.assertEqual("tests.test_fred_cli", test_cmds[0][-1])
+
+        self.assertEqual(4, resolve_workers(4))
+        with self.assertRaises(ValueError):
+            resolve_workers(0)
+        bad_workers = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/run_checks.py"), "--workers", "0"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, bad_workers.returncode)
+
+        # End-to-end synthetic multi-worker execution verifies isolated per-worker temp dirs
+        synth_root = self.root / "parallel-synth"
+        synth_tests = synth_root / "tests"
+        synth_tests.mkdir(parents=True)
+        markers_dir = self.root / "worker-markers"
+        markers_dir.mkdir()
+        for idx, mod_stem in enumerate(("test_mod_a", "test_mod_b", "test_mod_c")):
+            marker_file = markers_dir / f"{mod_stem}.json"
+            (synth_tests / f"{mod_stem}.py").write_text(
+                "import json, os, sys, tempfile, unittest\n"
+                "from pathlib import Path\n"
+                f"MARKER = Path({str(marker_file)!r})\n"
+                "class ModTests(unittest.TestCase):\n"
+                "    def test_env_isolation(self) -> None:\n"
+                "        MARKER.write_text(json.dumps({\n"
+                "            'TMPDIR': os.environ.get('TMPDIR'),\n"
+                "            'TEMP': os.environ.get('TEMP'),\n"
+                "            'TMP': os.environ.get('TMP'),\n"
+                "            'RUNNER_TEMP': os.environ.get('RUNNER_TEMP'),\n"
+                "            'PYTHONDONTWRITEBYTECODE': os.environ.get('PYTHONDONTWRITEBYTECODE'),\n"
+                "            'dont_write_bytecode': sys.dont_write_bytecode,\n"
+                "            'gettempdir': tempfile.gettempdir(),\n"
+                "        }), encoding='utf-8')\n"
+                + ("        # larger file sorts first\n" * (10 - idx * 3)),
+                encoding="utf-8",
+            )
+        synth_out, synth_err = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(synth_out),
+            contextlib.redirect_stderr(synth_err),
+        ):
+            rc_synth = run_checks_mod.main(
+                [
+                    "--root",
+                    str(synth_root),
+                    "--phase",
+                    "tests",
+                    "--workers",
+                    "2",
+                ]
+            )
+        self.assertEqual(0, rc_synth, synth_err.getvalue())
+        observed_tmp_dirs: set[str] = set()
+        host_tmp = str(Path(tempfile.gettempdir()).resolve())
+        for mod_stem in ("test_mod_a", "test_mod_b", "test_mod_c"):
+            payload = json.loads(
+                (markers_dir / f"{mod_stem}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("1", payload["PYTHONDONTWRITEBYTECODE"])
+            self.assertTrue(payload["dont_write_bytecode"])
+            tmp_val = payload["TMPDIR"]
+            self.assertTrue(tmp_val)
+            self.assertEqual(tmp_val, payload["TEMP"])
+            self.assertEqual(tmp_val, payload["TMP"])
+            self.assertEqual(tmp_val, payload["RUNNER_TEMP"])
+            self.assertNotEqual(host_tmp, str(Path(tmp_val).resolve()))
+            observed_tmp_dirs.add(tmp_val)
+        self.assertEqual(3, len(observed_tmp_dirs))
+
+        # Out-of-order concurrent failures emit deterministic slowest-first failure logs
+        def out_of_order_fail(
+            cmd: list[str], *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            mod = cmd[-1]
+            if mod == "tests.test_mod_a":
+                time.sleep(0.05)
+                return subprocess.CompletedProcess(
+                    cmd, returncode=1, stdout="", stderr="FAIL_FIRST_MOD_A\n"
+                )
+            if mod == "tests.test_mod_b":
+                return subprocess.CompletedProcess(
+                    cmd, returncode=3, stdout="", stderr="FAIL_FAST_MOD_B\n"
+                )
+            return subprocess.CompletedProcess(
+                cmd, returncode=0, stdout="", stderr="OK\n"
+            )
+
+        fail_out, fail_err = io.StringIO(), io.StringIO()
+        with (
+            patch("run_checks.subprocess.run", side_effect=out_of_order_fail),
+            contextlib.redirect_stdout(fail_out),
+            contextlib.redirect_stderr(fail_err),
+        ):
+            rc_fail = run_checks(["tests"], root=synth_root, workers=2)
+        self.assertEqual(1, rc_fail)
+        err_text = fail_err.getvalue()
+        self.assertIn("FAIL_FIRST_MOD_A", err_text)
+        self.assertIn("FAIL_FAST_MOD_B", err_text)
+        self.assertLess(
+            err_text.index("FAIL_FIRST_MOD_A"),
+            err_text.index("FAIL_FAST_MOD_B"),
+        )
 
     def test_documentation_files_state_accurate_package_count(self):
         suites_doc = json.loads(
@@ -2057,6 +2257,214 @@ class PackageTests(unittest.TestCase):
             fetched_proc.returncode,
             f"Expected clone with fetched v0.2.0 tag to pass, got stdout={fetched_proc.stdout!r} stderr={fetched_proc.stderr!r}",
         )
+
+    def test_version_tag_immutability_gate_blocks_skill_and_pack_drift_and_preserves_historical_notes(
+        self,
+    ) -> None:
+        git_repo = self.root / "version-tag-immutability"
+        git_repo.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(ROOT / "skills", git_repo / "skills")
+        try:
+            for dname in ("schemas", "shared"):
+                (git_repo / dname).symlink_to(ROOT / dname, target_is_directory=True)
+        except OSError:
+            for dname in ("schemas", "shared"):
+                shutil.copytree(ROOT / dname, git_repo / dname)
+
+        active_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        for rel in (
+            "VERSION",
+            "catalog/suites.json",
+            "catalog/hosts.json",
+            "catalog/packs.json",
+            "README.md",
+            "docs/usage.md",
+            "docs/architecture.md",
+            "CONTRIBUTING.md",
+            "AGENTS.md",
+            "docs/validation.md",
+            "docs/implementation-status.md",
+            "docs/research.md",
+            "docs/releasing.md",
+            "docs/release-notes-0.2.0.md",
+            f"docs/release-notes-{active_version}.md",
+        ):
+            dst = git_repo / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((ROOT / rel).read_bytes())
+
+        def run_git(*args: str) -> None:
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "core.autocrlf=false",
+                    *args,
+                ],
+                cwd=git_repo,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        run_git("init")
+        v020_notes_bytes = (git_repo / "docs/release-notes-0.2.0.md").read_bytes()
+        active_notes_rel = f"docs/release-notes-{active_version}.md"
+        active_notes_text = (git_repo / active_notes_rel).read_text(encoding="utf-8")
+
+        # 1. Tag v0.2.0 with historical 42-skill release notes, then advance to untagged active_version (0.3.0)
+        (git_repo / "VERSION").write_text("0.2.0\n", encoding="utf-8", newline="\n")
+        (git_repo / active_notes_rel).unlink()
+        run_git("add", "VERSION", "docs/release-notes-0.2.0.md")
+        run_git("commit", "-m", "Release 0.2.0")
+        run_git("tag", "v0.2.0")
+
+        (git_repo / "VERSION").write_text(
+            f"{active_version}\n", encoding="utf-8", newline="\n"
+        )
+        (git_repo / active_notes_rel).write_text(
+            active_notes_text, encoding="utf-8", newline="\n"
+        )
+        run_git("add", "VERSION", active_notes_rel, "skills", "catalog")
+        run_git("commit", "-m", f"Advance to {active_version}")
+
+        # Preserves historical 42-skill count in 0.2.0 notes while checking HEAD count on active 0.3.0 notes
+        self.assertIn("Total: 42 skills.", v020_notes_bytes.decode("utf-8"))
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
+        expected_skills = expected_total_skills(ROOT)
+        (git_repo / active_notes_rel).write_text(
+            active_notes_text.replace(
+                f"Total: {expected_skills} skills.", "Total: 51 skills.", 1
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+        stale_active_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                active_notes_rel in e and "stale skill count 51" in e
+                for e in stale_active_errs
+            ),
+            f"Expected HEAD count check on {active_notes_rel}, got: {stale_active_errs}",
+        )
+        self.assertFalse(
+            any("docs/release-notes-0.2.0.md" in e for e in stale_active_errs),
+            f"Historical release-notes-0.2.0.md must stay frozen: {stale_active_errs}",
+        )
+        (git_repo / active_notes_rel).write_text(
+            active_notes_text, encoding="utf-8", newline="\n"
+        )
+        run_git("add", active_notes_rel)
+        run_git("commit", "--amend", "--no-edit")
+
+        # 2. Tag v<VERSION> (e.g. v0.3.0) and verify clean state + docs/tests commits pass without VERSION bump
+        active_tag = f"v{active_version}"
+        run_git("tag", active_tag)
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
+        (git_repo / "docs/releasing.md").write_text(
+            (git_repo / "docs/releasing.md").read_text(encoding="utf-8")
+            + "\nClarified maintainer checklist.\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (git_repo / "tests").mkdir(parents=True, exist_ok=True)
+        (git_repo / "tests/test_extra.py").write_text(
+            "x = 1\n", encoding="utf-8", newline="\n"
+        )
+        run_git("add", "docs/releasing.md", "tests/test_extra.py")
+        run_git("commit", "-m", "docs and tests update after tag")
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
+
+        # 3. Editing catalog/packs.json after refs/tags/v<VERSION> without bumping VERSION fails
+        orig_packs_bytes = (git_repo / "catalog/packs.json").read_bytes()
+        packs_doc = json.loads(orig_packs_bytes.decode("utf-8"))
+        packs_doc["packs"]["starter"]["description"] = "Mutated after tag."
+        (git_repo / "catalog/packs.json").write_text(
+            json.dumps(packs_doc, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        pack_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                f"refs/tags/{active_tag}" in e
+                and "catalog/packs.json" in e
+                and "bump VERSION" in e
+                for e in pack_errs
+            ),
+            f"Expected tag immutability failure on catalog/packs.json, got: {pack_errs}",
+        )
+        cli_pack_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(git_repo),
+                "--no-ledger",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(1, cli_pack_proc.returncode)
+        self.assertIn(
+            f"refs/tags/{active_tag}", cli_pack_proc.stdout + cli_pack_proc.stderr
+        )
+        (git_repo / "catalog/packs.json").write_bytes(orig_packs_bytes)
+
+        # 4. Modifying an existing skill or adding an untracked skill under skills/ without bumping VERSION fails
+        target_skill_md = git_repo / "skills/repo-audit-concurrency/SKILL.md"
+        orig_skill_bytes = target_skill_md.read_bytes()
+        target_skill_md.write_bytes(orig_skill_bytes + b"\n")
+        skill_edit_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                f"refs/tags/{active_tag}" in e
+                and "skills/repo-audit-concurrency/SKILL.md" in e
+                for e in skill_edit_errs
+            ),
+            f"Expected tag immutability failure on modified skill, got: {skill_edit_errs}",
+        )
+        target_skill_md.write_bytes(orig_skill_bytes)
+
+        untracked_skill = git_repo / "skills/post-tag-new-skill/SKILL.md"
+        untracked_skill.parent.mkdir(parents=True, exist_ok=True)
+        untracked_skill.write_text(
+            "---\nname: post-tag-new-skill\ndescription: Post-tag skill.\n---\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        untracked_errs = _validate_documentation_invariants(git_repo)
+        self.assertTrue(
+            any(
+                f"refs/tags/{active_tag}" in e
+                and "skills/post-tag-new-skill/SKILL.md" in e
+                for e in untracked_errs
+            ),
+            f"Expected tag immutability failure on untracked skill, got: {untracked_errs}",
+        )
+        shutil.rmtree(untracked_skill.parent)
+
+        # 5. Incrementing VERSION to untagged 0.4.0 and adding release-notes-0.4.0.md allows the pack update
+        (git_repo / "catalog/packs.json").write_text(
+            json.dumps(packs_doc, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (git_repo / "VERSION").write_text("0.4.0\n", encoding="utf-8", newline="\n")
+        (git_repo / "docs/release-notes-0.4.0.md").write_text(
+            active_notes_text.replace(f"# {active_version}", "# 0.4.0", 1),
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.assertEqual([], _validate_documentation_invariants(git_repo))
 
     def test_prompt_template_present_and_within_budget_is_valid(self):
         self.assertEqual([], validate_skill(self.skill))
@@ -4461,7 +4869,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(2, rc_val_raw)
         self.assertIn("Error [subprocess_timeout]:", err_val_raw.getvalue())
 
-        # 3. run_checks.py enforces 300s fast phases, 900s tests phase, and returns non-zero cleanly on timeout
+        # 3. run_checks.py enforces 300s fast phases, 600s tests phase, and returns 124 cleanly on timeout
         observed_timeouts: list[tuple[str, object]] = []
 
         def record_timeout_run(
@@ -4469,7 +4877,7 @@ class PackageTests(unittest.TestCase):
         ) -> subprocess.CompletedProcess[str]:
             observed_timeouts.append((cmd[-1], kwargs.get("timeout")))
             if "-v" in cmd:
-                raise subprocess.TimeoutExpired(cmd=cmd, timeout=900)
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=TESTS_PHASE_TIMEOUT)
             return subprocess.CompletedProcess(cmd, returncode=0)
 
         out_chk, err_chk = io.StringIO(), io.StringIO()
@@ -4478,11 +4886,25 @@ class PackageTests(unittest.TestCase):
             contextlib.redirect_stdout(out_chk),
             contextlib.redirect_stderr(err_chk),
         ):
-            rc_chk = run_checks(["lint", "tests"], root=ROOT)
-        self.assertNotEqual(0, rc_chk)
-        self.assertEqual([(".", 300), ("-v", 900)], observed_timeouts)
-        self.assertIn("timed out after 900s", err_chk.getvalue())
+            rc_chk = run_checks(["lint", "tests"], root=ROOT, workers=1)
+        self.assertEqual(124, rc_chk)
+        self.assertEqual(
+            [(".", 300), ("tests.test_fred_cli", 600)],
+            observed_timeouts,
+        )
+        self.assertIn("timed out after 600s", err_chk.getvalue())
         self.assertNotIn("Traceback", err_chk.getvalue())
+
+        out_par_to, err_par_to = io.StringIO(), io.StringIO()
+        with (
+            patch("run_checks.subprocess.run", side_effect=record_timeout_run),
+            contextlib.redirect_stdout(out_par_to),
+            contextlib.redirect_stderr(err_par_to),
+        ):
+            rc_par_to = run_checks(["tests"], root=ROOT, workers=4)
+        self.assertEqual(124, rc_par_to)
+        self.assertIn("timed out after 600s", err_par_to.getvalue())
+        self.assertNotIn("Traceback", err_par_to.getvalue())
 
         # 4. examples/walkthrough/run_demo.py enforces timeout=30 and returns exit code 1 cleanly on timeout
         demo_path = ROOT / "examples/walkthrough/run_demo.py"

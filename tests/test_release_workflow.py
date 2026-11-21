@@ -512,8 +512,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
             {"ref": expected_handoff_ref},
         )
 
+        import run_checks
+
         build = jobs["build"]
         self.assertNotIn("concurrency", build)
+        self.assertEqual(build.get("timeout-minutes"), 20)
+        self.assertGreaterEqual(
+            build["timeout-minutes"] * 60,
+            run_checks.TESTS_PHASE_TIMEOUT + 600,
+        )
         self.assertEqual(build.get("needs"), ["preflight", "validate"])
         self.assertIn(
             "needs.preflight.outputs.should_build == 'true'", str(build.get("if", ""))
@@ -2105,14 +2112,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         """release.yml calls reusable validate.yml so Ubuntu/Windows, Python 3.12/3.13, pre-commit, walkthrough, and Chromium gate releases."""
+        import run_checks
+
         validate_data = yaml.safe_load(VALIDATE_WORKFLOW.read_text(encoding="utf-8"))
         triggers = validate_data.get("on") or validate_data.get(True) or {}
+        self.assertIn("merge_group", triggers)
+        self.assertEqual(
+            triggers["merge_group"],
+            {"types": ["checks_requested"]},
+        )
         self.assertIn("workflow_call", triggers)
         wf_call_inputs = (triggers["workflow_call"] or {}).get("inputs", {})
         self.assertIn("ref", wf_call_inputs)
         self.assertEqual(wf_call_inputs["ref"].get("default"), "")
 
-        matrix = validate_data["jobs"]["validate"]["strategy"]["matrix"]
+        validate_job_cfg = validate_data["jobs"]["validate"]
+        self.assertEqual(validate_job_cfg.get("timeout-minutes"), 20)
+        self.assertGreaterEqual(
+            validate_job_cfg["timeout-minutes"] * 60,
+            run_checks.TESTS_PHASE_TIMEOUT + 600,
+        )
+        matrix = validate_job_cfg["strategy"]["matrix"]
         self.assertEqual(matrix["os"], ["ubuntu-latest", "windows-latest"])
         self.assertEqual(matrix["python-version"], ["3.12", "3.13"])
 
