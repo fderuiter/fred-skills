@@ -215,21 +215,52 @@ Bearer sk-proj-1234567890abcdef1234567890
         triage.validate_bundle(bundle)
 
     def test_validate_bundle_schema_validation_error_chains_cause(self):
-        import jsonschema
-
         with self.assertRaises(ValueError) as ctx:
             triage.validate_bundle({"schema_version": "invalid-schema"})
         self.assertIn("Schema validation error", str(ctx.exception))
-        self.assertIsInstance(ctx.exception.__cause__, jsonschema.ValidationError)
-        self.assertTrue(ctx.exception.__suppress_context__)
+        self.assertIn("is a required property", str(ctx.exception))
 
-    def test_validate_bundle_missing_jsonschema_suppresses_context(self):
+        bad_schema = self.temp_path / "corrupt-bundle.schema.json"
+        bad_schema.write_text("{not-json", encoding="utf-8")
+        with self.assertRaises(ValueError) as schema_ctx:
+            triage.validate_bundle({}, schema_path=bad_schema)
+        self.assertIn("Schema validation error", str(schema_ctx.exception))
+        self.assertIsInstance(schema_ctx.exception.__cause__, ValueError)
+
+    def test_validate_bundle_stdlib_without_jsonschema_and_under_no_site(self):
+        transcript_file = self.temp_path / "stdlib_transcript.txt"
+        transcript_file.write_text(
+            "Tool execution timed out after 15 seconds\n", encoding="utf-8"
+        )
+        valid_bundle = triage.generate_diagnostic_bundle(transcript_file)
         with patch.dict("sys.modules", {"jsonschema": None}):
-            with self.assertRaises(ValueError) as ctx:
-                triage.validate_bundle({})
-            self.assertIn("jsonschema not installed", str(ctx.exception))
-            self.assertIsNone(ctx.exception.__cause__)
-            self.assertTrue(ctx.exception.__suppress_context__)
+            triage.validate_bundle(valid_bundle)
+            invalid_bundle = json.loads(json.dumps(valid_bundle))
+            invalid_bundle["failure_classification"]["failure_type"] = (
+                "not_a_valid_failure_type"
+            )
+            with self.assertRaises(ValueError) as bad_ctx:
+                triage.validate_bundle(invalid_bundle)
+            self.assertIn("Schema validation error", str(bad_ctx.exception))
+            self.assertIn("failure_classification/failure_type", str(bad_ctx.exception))
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                str(ROOT / "scripts/fred.py"),
+                "triage",
+                str(transcript_file),
+                "--check-schema",
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        parsed_bundle = json.loads(proc.stdout)
+        self.assertEqual("1.0", parsed_bundle["schema_version"])
 
     def test_generate_bundle_suppresses_corrupted_workspace_state(self):
         transcript_file = self.temp_path / "transcript_corrupt.txt"

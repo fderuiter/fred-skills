@@ -2812,21 +2812,20 @@ def validate_bundle(bundle: dict[str, Any], schema_path: Path | None = None) -> 
     )
     if not schema_file.is_file():
         raise ValueError(f"Bundle schema not found at {schema_file}")
+    script_dir = str(Path(__file__).resolve().parent)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
     try:
-        import jsonschema
+        import validate_audit
 
-        jsonschema.validate(bundle, json.loads(schema_file.read_text(encoding="utf-8")))
-    except ImportError:
-        raise ValueError(
-            "jsonschema not installed, cannot validate bundle schema"
-        ) from None
-    except (
-        ValueError,
-        OSError,
-        jsonschema.ValidationError,
-        jsonschema.SchemaError,
-    ) as e:
+        schema = json.loads(schema_file.read_text(encoding="utf-8"))
+        if not isinstance(schema, Mapping):
+            raise TypeError("Bundle schema root must be a JSON object")
+        errors = validate_audit.validate(bundle, schema)
+    except (ImportError, OSError, TypeError, ValueError) as e:
         raise ValueError(f"Schema validation error: {e}") from e
+    if errors:
+        raise ValueError(f"Schema validation error: {'; '.join(errors)}")
 
 
 CANDIDATE_TRANSCRIPTS: tuple[str, ...] = (

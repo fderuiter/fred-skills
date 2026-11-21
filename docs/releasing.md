@@ -70,8 +70,12 @@ zero-touch publication or draft promotion (`--verify-tag` and `--target`). Tags 
 dispatches targeting commits outside `origin/main` fail fast before attestation or release creation.
 Ordinary pull requests have no `contents: write` job and never invoke live model adapters.
 
-ZIP, TAR, and `.tar.gz` archives contain standalone skill directories; the repository
-source is still needed for root CLI tooling. Archive entries use fixed POSIX path order,
+Pack, skill, and suite ZIP, TAR, and `.tar.gz` archives contain standalone skill
+directories, while `fred-skills-<VERSION>-cli.tar.gz` and `fred-skills-<VERSION>-cli.zip`
+package a self-contained root CLI bundle (`catalog/`, `schemas/`, `shared/`, `skills/`,
+`evals/`, and `scripts/`) that runs every `scripts/fred.py` subcommand on Python 3.12+
+standard library without a repository checkout (contributor test suites and static site
+builds still run from the repository source). Archive entries use fixed POSIX path order,
 normalized timestamps, and deterministic permissions (`0755` for executable skill scripts
 and `0644` for regular files) with level-9 DEFLATE compression. Compressed `.zip` and
 `.tar.gz` bytes may differ across Python or zlib versions, so compare checksums produced in

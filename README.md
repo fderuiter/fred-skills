@@ -61,13 +61,9 @@ Replace `starter` with any of the 13 packs in [`catalog/packs.json`](catalog/pac
 
 ## Try the local walkthrough
 
-Use Python 3.12+; the synthetic walkthrough also needs Node.js 20+.
+Use Python 3.12+ (standard library only; no third-party Python packages required). The synthetic walkthrough also needs Node.js 20+.
 
 ```sh
-python -m venv .venv
-# Activate: source .venv/bin/activate (macOS/Linux)
-# PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
 python examples/walkthrough/run_demo.py --output audit-output/demo
 ```
 
@@ -102,7 +98,7 @@ remains supported; Python is unnecessary for instruction-only use.
 ## Release archives and supply chain verification
 
 Official releases provide versioned curated pack archives led by the 6-skill `starter` pack (`fred-skills-0.3.0-starter.tar`),
-standalone tarball archives for each of the 57 skills (e.g., `repo-audit-concurrency.tar.gz`), and a consolidated suite archive
+standalone tarball archives for each of the 57 skills (e.g., `repo-audit-concurrency.tar.gz`), self-contained standalone CLI bundles (`fred-skills-0.3.0-cli.tar.gz` and `fred-skills-0.3.0-cli.zip`) that run on the Python 3.12+ standard library without cloning the repository, and a consolidated suite archive
 (`fred-skills-suite.tar.gz`), accompanied by SHA-256 checksum manifests (`SHA256SUMS` and `checksums.sha256`) and signed SLSA provenance attestations.
 **Stage-1 context budget warning (`fred-skills-suite.tar.gz`):** Extracting `fred-skills-suite.tar.gz` installs all 57 skills at once, which can crowd or exceed Stage-1 skill-listing budgets on smaller context windows in [OpenAI Codex](https://developers.openai.com/codex/skills) (`2%` of context or `8,000`-character fallback) and [Claude Code](https://code.claude.com/docs/en/skills) (`1%` of context, `skillListingBudgetFraction = 0.01`);
 prefer `fred-skills-0.3.0-starter.tar` (`6` skills, `<= 1,500` raw characters) or individual skill tarballs by default.
@@ -120,6 +116,9 @@ curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/SHA25
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/repo-audit-concurrency.tar.gz
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/checksums.sha256
 
+# Standalone zero-dependency CLI bundle (Python 3.12+ standard library)
+curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-0.3.0-cli.tar.gz
+
 # Complete audit suite archive (loads all 57 skills; see Stage-1 budget warning above)
 curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-skills-suite.tar.gz
 ```
@@ -135,6 +134,7 @@ sha256sum --ignore-missing -c checksums.sha256
 
 # Verify SLSA build provenance attestation using GitHub CLI
 gh attestation verify fred-skills-0.3.0-starter.tar --repo fderuiter/fred-skills
+gh attestation verify fred-skills-0.3.0-cli.tar.gz --repo fderuiter/fred-skills
 gh attestation verify repo-audit-concurrency.tar.gz --repo fderuiter/fred-skills
 gh attestation verify fred-skills-suite.tar.gz --repo fderuiter/fred-skills
 ```
@@ -155,6 +155,8 @@ tar -xzf repo-audit-concurrency.tar.gz -C /path/to/project/.agents/skills/
 # Extract complete suite (creates all 57 skill directories; see Stage-1 budget warning above)
 tar -xzf fred-skills-suite.tar.gz -C /path/to/project/.agents/skills/
 ```
+
+To run the root CLI without cloning the repository, extract `fred-skills-0.3.0-cli.tar.gz` (or `fred-skills-0.3.0-cli.zip`) into its own directory and run `python3 scripts/fred.py --help` with Python 3.12+ (standard library only).
 
 See the [CLI guide](docs/toolkit.md) for resuming work, source freshness, reports,
 comparisons, scanner imports, project profiles, and installation recovery, the

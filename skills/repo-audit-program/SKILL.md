@@ -68,8 +68,8 @@ independently fixable defects into a vague architectural epic.
 ## Validate and deliver
 
 Run the [audit validator](scripts/validate_audit.py) (`python3 <this-skill>/scripts/validate_audit.py <audit.json>`) after producing the ledger.
-The checker needs Python 3 and jsonschema; use an approved existing environment. If absent,
-report the blocked check and review against the schema manually. This validates shape,
+The checker uses only the Python 3.12+ standard library (zero third-party dependencies). If
+Python 3.12+ is unavailable, report the blocked check and review against the schema manually. This validates shape,
 references, and issue-dependency cycles, not evidence truth or audit completeness.
 
 Deliver an executive account of material risks; coverage and limitations; contract and

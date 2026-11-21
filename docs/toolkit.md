@@ -1,10 +1,13 @@
 # Local toolkit guide
 
-Run `python scripts/fred.py --help` from the toolkit root. Python 3.12+ and
-`requirements-dev.txt` are required for the CLI. JSON goes to stdout; runtime errors
+Run `python scripts/fred.py --help` from a repository checkout or an extracted
+`fred-skills-<VERSION>-cli.tar.gz` / `fred-skills-<VERSION>-cli.zip` bundle. Only
+Python 3.12+ (standard library, zero third-party packages) is required for the CLI;
+`requirements-dev.txt` is needed only for contributor linting, typechecking, and test
+suites. JSON goes to stdout; runtime errors
 go to stderr (with `Hint:` lines, or JSON via `--json`) with exit `1`, while CLI usage
 errors exit `2`. Paths with spaces need normal shell quoting; commands work with `python`
-on Windows in a virtual environment. See the [Developer API Guide](api.md) for Python APIs.
+on Windows. See the [Developer API Guide](api.md) for Python APIs.
 
 ## Discover and plan
 

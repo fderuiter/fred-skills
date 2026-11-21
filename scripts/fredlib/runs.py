@@ -3,15 +3,13 @@ from __future__ import annotations
 import copy
 import functools
 import importlib.util
+import json
 import re
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import yaml
+from typing import Any
 
 from . import _sarif_import
 from .common import (
@@ -24,6 +22,7 @@ from .common import (
     _deliverable_for_run,
     _detect_domain_kind,
     _is_single_line_text,
+    _load_canonical_validator,
     _load_suite_contracts,
     _markdown_code_span,
     _suite_for_run,
@@ -48,37 +47,402 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _require_yaml() -> Any:
-    try:
-        import yaml as _yaml
-    except ImportError as exc:
-        raise RuntimeError(
-            "Dependency missing: PyYAML. Use an approved environment with PyYAML; project config not loaded."
-        ) from exc
-    return _yaml
+_YAML_CONFIG_KEY_RE = re.compile(r'^([A-Za-z0-9_.-]+|"[^"]+"|\'[^\']+\')\s*:(.*)$')
+_YAML_CONFIG_INT_RE = re.compile(r"-?(?:0|[1-9][0-9]*)")
+_YAML_CONFIG_FLOAT_RE = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]+")
+_YAML_CONFIG_LITERALS: dict[str, Any] = {
+    "true": True,
+    "True": True,
+    "TRUE": True,
+    "false": False,
+    "False": False,
+    "FALSE": False,
+    "null": None,
+    "Null": None,
+    "NULL": None,
+    "~": None,
+}
 
 
-def _require_jsonschema() -> Any:
-    try:
-        import jsonschema as _jsonschema
-    except ImportError as exc:
-        raise RuntimeError(
-            "Dependency missing: jsonschema. Use an approved environment with jsonschema; no validation performed."
-        ) from exc
-    return _jsonschema
-
-
-def _format_yaml_error(config_path: Path, exc: yaml.YAMLError) -> FredCliError:
-    mark = getattr(exc, "problem_mark", None)
-    problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
-    loc = (
-        f" (line {mark.line + 1}, column {mark.column + 1})" if mark is not None else ""
-    )
+def _yaml_config_error(config_path: Path, line_no: int, problem: str) -> FredCliError:
     return FredCliError(
-        f"Malformed YAML in project config '{config_path}'{loc}: {problem}",
+        f"Malformed YAML in project config '{config_path}' (line {line_no}): {problem}",
         code="invalid_yaml",
         hint="Fix the YAML syntax in the project config file (supported keys: profile, exclude, critical_workflows).",
     )
+
+
+def _advance_yaml_quote(
+    ch: str, in_single: bool, in_double: bool
+) -> tuple[bool, bool, bool]:
+    if ch == "\\" and in_double:
+        return in_single, in_double, True
+    if ch == "'" and not in_double:
+        return not in_single, in_double, False
+    if ch == '"' and not in_single:
+        return in_single, not in_double, False
+    return in_single, in_double, False
+
+
+def _has_unclosed_yaml_quote(text: str) -> bool:
+    in_single = False
+    in_double = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            escaped = False
+            continue
+        in_single, in_double, escaped = _advance_yaml_quote(ch, in_single, in_double)
+    return in_single or in_double or escaped
+
+
+def _strip_yaml_comment_checked(raw: str, config_path: Path, line_no: int) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+    trimmed = raw
+    for idx, ch in enumerate(raw):
+        if escaped:
+            escaped = False
+            continue
+        if (
+            ch == "#"
+            and not (in_single or in_double)
+            and (idx == 0 or raw[idx - 1].isspace())
+        ):
+            trimmed = raw[:idx]
+            break
+        if ch in {"{", "}"} and not (in_single or in_double):
+            raise _yaml_config_error(
+                config_path, line_no, "flow mappings are not supported"
+            )
+        in_single, in_double, escaped = _advance_yaml_quote(ch, in_single, in_double)
+    if in_single or in_double or escaped:
+        raise _yaml_config_error(config_path, line_no, "unterminated quoted string")
+    return trimmed.strip()
+
+
+def _fold_yaml_quoted_lines(raw_inner: str) -> str:
+    if "\n" not in raw_inner:
+        return raw_inner
+    segments = raw_inner.split("\n")
+    out: list[str] = [segments[0].rstrip(" \t")]
+    blank_run = 0
+    for idx, seg in enumerate(segments[1:], start=1):
+        cleaned = seg.lstrip(" \t") if idx == len(segments) - 1 else seg.strip(" \t")
+        if not cleaned and idx < len(segments) - 1:
+            blank_run += 1
+            continue
+        out.append("\n" * blank_run if blank_run > 0 else " ")
+        blank_run = 0
+        out.append(cleaned)
+    return "".join(out)
+
+
+def _find_closing_quote_index(cleaned: str) -> int:
+    quote = cleaned[0]
+    idx = 1
+    total = len(cleaned)
+    while idx < total:
+        ch = cleaned[idx]
+        if quote == '"' and ch == "\\":
+            idx += 2
+            continue
+        if quote == "'" and ch == "'" and idx + 1 < total and cleaned[idx + 1] == "'":
+            idx += 2
+            continue
+        if ch == quote:
+            return idx
+        idx += 1
+    return -1
+
+
+def _parse_yaml_quoted_value(cleaned: str, config_path: Path, line_no: int) -> str:
+    close_idx = _find_closing_quote_index(cleaned)
+    if close_idx < 1 or close_idx != len(cleaned) - 1:
+        raise _yaml_config_error(config_path, line_no, "malformed quoted string")
+    folded = _fold_yaml_quoted_lines(cleaned[1:-1])
+    if cleaned[0] == "'":
+        return folded.replace("''", "'")
+    json_ready = folded.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    try:
+        loaded = json.loads(f'"{json_ready}"')
+    except json.JSONDecodeError as exc:
+        raise _yaml_config_error(
+            config_path, line_no, "invalid escape sequence in double-quoted string"
+        ) from exc
+    return str(loaded)
+
+
+def _split_yaml_flow_sequence(inner: str, config_path: Path, line_no: int) -> list[str]:
+    items: list[str] = []
+    start = 0
+    in_single = False
+    in_double = False
+    escaped = False
+    depth = 0
+    for idx, ch in enumerate(inner):
+        if escaped:
+            escaped = False
+            continue
+        if not (in_single or in_double):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth < 0:
+                    raise _yaml_config_error(
+                        config_path, line_no, "unmatched closing bracket"
+                    )
+            elif ch == "," and depth == 0:
+                items.append(inner[start:idx].strip())
+                start = idx + 1
+                continue
+        in_single, in_double, escaped = _advance_yaml_quote(ch, in_single, in_double)
+    if depth != 0:
+        raise _yaml_config_error(config_path, line_no, "unterminated flow sequence")
+    items.append(inner[start:].strip())
+    if items and items[-1] == "":
+        items.pop()
+    if any(part == "" for part in items):
+        raise _yaml_config_error(config_path, line_no, "empty element in flow sequence")
+    return items
+
+
+def _parse_yaml_scalar_config(raw: str, config_path: Path, line_no: int) -> Any:
+    cleaned = _strip_yaml_comment_checked(raw, config_path, line_no)
+    if not cleaned:
+        return None
+    if cleaned[0] in {'"', "'"}:
+        return _parse_yaml_quoted_value(cleaned, config_path, line_no)
+    if cleaned.startswith("["):
+        if not cleaned.endswith("]"):
+            raise _yaml_config_error(config_path, line_no, "unterminated flow sequence")
+        inner = cleaned[1:-1].strip()
+        if not inner:
+            return []
+        return [
+            _parse_yaml_scalar_config(part, config_path, line_no)
+            for part in _split_yaml_flow_sequence(inner, config_path, line_no)
+        ]
+    if "[" in cleaned or "]" in cleaned:
+        raise _yaml_config_error(
+            config_path, line_no, "unexpected flow sequence bracket"
+        )
+    if ": " in cleaned or cleaned.endswith(":"):
+        raise _yaml_config_error(
+            config_path, line_no, "mapping values are not allowed in plain scalar"
+        )
+    if cleaned in _YAML_CONFIG_LITERALS:
+        return _YAML_CONFIG_LITERALS[cleaned]
+    if _YAML_CONFIG_INT_RE.fullmatch(cleaned):
+        return int(cleaned)
+    if _YAML_CONFIG_FLOAT_RE.fullmatch(cleaned):
+        return float(cleaned)
+    return cleaned
+
+
+def _consume_yaml_value_text(
+    first_raw: str,
+    raw_lines: list[str],
+    next_idx: int,
+    config_path: Path,
+    line_no: int,
+) -> tuple[str, int]:
+    lstripped = first_raw.lstrip()
+    if not lstripped.startswith(('"', "'")) or not _has_unclosed_yaml_quote(lstripped):
+        return first_raw, next_idx
+    parts = [lstripped]
+    idx = next_idx
+    total = len(raw_lines)
+    while idx < total and _has_unclosed_yaml_quote("\n".join(parts)):
+        parts.append(raw_lines[idx])
+        idx += 1
+    joined = "\n".join(parts)
+    if _has_unclosed_yaml_quote(joined):
+        raise _yaml_config_error(config_path, line_no, "unterminated quoted string")
+    return joined, idx
+
+
+def _parse_yaml_sequence_block(
+    raw_lines: list[str], start_idx: int, config_path: Path
+) -> tuple[list[Any], int]:
+    items: list[Any] = []
+    seq_indent: int | None = None
+    idx = start_idx
+    total = len(raw_lines)
+    while idx < total:
+        line = raw_lines[idx]
+        line_no = idx + 1
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        leading = line[: len(line) - len(line.lstrip())]
+        if "\t" in leading:
+            raise _yaml_config_error(
+                config_path, line_no, "tab indentation is not allowed in YAML"
+            )
+        indent = len(leading)
+        if indent == 0 and not (stripped == "-" or stripped.startswith("- ")):
+            break
+        if seq_indent is None:
+            seq_indent = indent
+        elif indent < seq_indent and not (stripped == "-" or stripped.startswith("- ")):
+            break
+        if indent != seq_indent or not (stripped == "-" or stripped.startswith("- ")):
+            raise _yaml_config_error(
+                config_path, line_no, "invalid YAML sequence entry"
+            )
+        raw_item = "" if stripped == "-" else line.lstrip()[2:]
+        item_text, idx = _consume_yaml_value_text(
+            raw_item, raw_lines, idx + 1, config_path, line_no
+        )
+        items.append(_parse_yaml_scalar_config(item_text, config_path, line_no))
+    return items, idx
+
+
+def _parse_yaml_indented_mapping(
+    raw_lines: list[str], start_idx: int, config_path: Path
+) -> tuple[dict[str, Any], int]:
+    nested: dict[str, Any] = {}
+    map_indent: int | None = None
+    idx = start_idx
+    total = len(raw_lines)
+    while idx < total:
+        line = raw_lines[idx]
+        line_no = idx + 1
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        leading = line[: len(line) - len(line.lstrip())]
+        if "\t" in leading:
+            raise _yaml_config_error(
+                config_path, line_no, "tab indentation is not allowed in YAML"
+            )
+        indent = len(leading)
+        if indent == 0:
+            break
+        if map_indent is None:
+            map_indent = indent
+        if indent != map_indent:
+            raise _yaml_config_error(config_path, line_no, "unexpected indentation")
+        match = _YAML_CONFIG_KEY_RE.match(line.lstrip(" "))
+        if match is None:
+            raise _yaml_config_error(config_path, line_no, "invalid nested YAML entry")
+        key = str(_parse_yaml_scalar_config(match.group(1), config_path, line_no))
+        val_text, idx = _consume_yaml_value_text(
+            match.group(2), raw_lines, idx + 1, config_path, line_no
+        )
+        nested[key] = _parse_yaml_scalar_config(val_text, config_path, line_no)
+    return nested, idx
+
+
+def _parse_yaml_key_block(
+    raw_lines: list[str], start_idx: int, config_path: Path
+) -> tuple[Any, int]:
+    probe = start_idx
+    total = len(raw_lines)
+    while probe < total:
+        stripped = raw_lines[probe].strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        probe += 1
+    if probe >= total:
+        return None, total
+    first_line = raw_lines[probe]
+    first_stripped = first_line.strip()
+    leading = first_line[: len(first_line) - len(first_line.lstrip())]
+    if "\t" in leading:
+        raise _yaml_config_error(
+            config_path, probe + 1, "tab indentation is not allowed in YAML"
+        )
+    if first_stripped == "-" or first_stripped.startswith("- "):
+        return _parse_yaml_sequence_block(raw_lines, probe, config_path)
+    if len(leading) == 0:
+        return None, probe
+    return _parse_yaml_indented_mapping(raw_lines, probe, config_path)
+
+
+def _parse_top_level_yaml_mapping_entry(
+    line: str,
+    line_no: int,
+    raw_lines: list[str],
+    next_idx: int,
+    config_path: Path,
+) -> tuple[str, Any, int]:
+    match = _YAML_CONFIG_KEY_RE.match(line)
+    if match is None:
+        raise _yaml_config_error(config_path, line_no, "expected YAML key-value entry")
+    key = str(_parse_yaml_scalar_config(match.group(1), config_path, line_no))
+    raw_rest = match.group(2)
+    val_text, after_idx = _consume_yaml_value_text(
+        raw_rest, raw_lines, next_idx, config_path, line_no
+    )
+    if (
+        after_idx == next_idx
+        and _strip_yaml_comment_checked(raw_rest, config_path, line_no) == ""
+    ):
+        val, final_idx = _parse_yaml_key_block(raw_lines, next_idx, config_path)
+        return key, val, final_idx
+    return key, _parse_yaml_scalar_config(val_text, config_path, line_no), after_idx
+
+
+def _parse_project_config_yaml(raw_yaml: str, config_path: Path) -> Any:
+    raw_lines = raw_yaml.splitlines()
+    result: dict[str, Any] = {}
+    saw_content = False
+    ended_doc = False
+    idx = 0
+    total = len(raw_lines)
+    while idx < total:
+        line = raw_lines[idx]
+        line_no = idx + 1
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            idx += 1
+            continue
+        leading = line[: len(line) - len(line.lstrip())]
+        if "\t" in leading:
+            raise _yaml_config_error(
+                config_path, line_no, "tab indentation is not allowed in YAML"
+            )
+        if stripped == "---" and not saw_content and not ended_doc:
+            idx += 1
+            continue
+        if stripped == "..." and not ended_doc:
+            ended_doc = True
+            idx += 1
+            continue
+        if ended_doc or len(leading) > 0:
+            raise _yaml_config_error(config_path, line_no, "unexpected YAML content")
+        if not saw_content and (stripped == "-" or stripped.startswith("- ")):
+            seq_val, idx = _parse_yaml_sequence_block(raw_lines, idx, config_path)
+            if any(
+                rem.strip() and not rem.strip().startswith("#")
+                for rem in raw_lines[idx:]
+            ):
+                raise _yaml_config_error(
+                    config_path, idx + 1, "unexpected trailing YAML content"
+                )
+            return seq_val
+        if not saw_content and ":" not in stripped:
+            scalar = _parse_yaml_scalar_config(line, config_path, line_no)
+            if any(
+                rem.strip() and not rem.strip().startswith("#")
+                for rem in raw_lines[idx + 1 :]
+            ):
+                raise _yaml_config_error(
+                    config_path, line_no + 1, "unexpected trailing YAML content"
+                )
+            return scalar
+        saw_content = True
+        key, val, idx = _parse_top_level_yaml_mapping_entry(
+            line, line_no, raw_lines, idx + 1, config_path
+        )
+        result[key] = val
+    return result if saw_content else None
 
 
 _COMMA_SPLIT_RE = re.compile(r",(?![^{]*\})")
@@ -227,11 +591,7 @@ def _load_project_config(config: Path | None, profile_list: str) -> dict[str, An
             code="io_error",
             hint=f"Check file permissions for '{config_path}'.",
         ) from exc
-    yaml_mod = _require_yaml()
-    try:
-        loaded = yaml_mod.safe_load(raw_yaml)
-    except yaml_mod.YAMLError as exc:
-        raise _format_yaml_error(config_path, exc) from exc
+    loaded = _parse_project_config_yaml(raw_yaml, config_path)
     if not isinstance(loaded, dict) or set(loaded) - {
         "profile",
         "exclude",
@@ -987,8 +1347,12 @@ def _render_skill_prompt_templates(run: dict) -> str:
         if not isinstance(skill_name, str):
             continue
         template_path = ROOT / "skills" / skill_name / "assets/prompt.md"
-        if not template_path.is_file():
-            continue
+        if template_path.is_symlink() or not template_path.is_file():
+            raise FredCliError(
+                f"Missing prompt template for planned skill '{skill_name}': {template_path}",
+                code="missing_prompt_template",
+                hint=f"Ensure 'skills/{skill_name}/assets/prompt.md' exists in the toolkit installation.",
+            )
         rendered = template_path.read_text(encoding="utf-8").strip()
         for placeholder, value in replacements.items():
             rendered = rendered.replace(placeholder, value)
@@ -1369,12 +1733,15 @@ def audit_errors(audit: dict) -> list[str]:
 
 
 def _schema_errors(payload: object, schema_rel: str) -> list[str]:
-    jsonschema_mod = _require_jsonschema()
-    schema = read_json(ROOT / schema_rel)
-    return [
-        str(error.message)
-        for error in jsonschema_mod.Draft202012Validator(schema).iter_errors(payload)
-    ]
+    schema = read_json_object(
+        ROOT / schema_rel,
+        label=f"Schema '{schema_rel}'",
+    )
+    validator = _load_canonical_validator(
+        "audit",
+        spec_factory=importlib.util.spec_from_file_location,
+    )
+    return validator._schema_errors(payload, schema)
 
 
 def _require_audit_ledger(payload: object, command_name: str) -> dict:

@@ -4463,7 +4463,7 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
             self.assertEqual(0, rec_proc.returncode, rec_proc.stderr)
             self.assertTrue((work / "remediation.json").is_file())
 
-            # Commands requiring run.schema.json validation (validate-run) exit cleanly with code 1 and no traceback under -S
+            # validate-run and --config succeed on stdlib Python (-S), while malformed YAML or flow mappings fail with invalid_yaml
             run_ws = work / "run-ws"
             runs.initialize(self.repo, run_ws, "apply-fix")
             val_proc = subprocess.run(
@@ -4479,9 +4479,139 @@ class BoundaryGuardAndContractTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            self.assertEqual(1, val_proc.returncode)
-            self.assertIn("Dependency missing: jsonschema", val_proc.stderr)
-            self.assertNotIn("Traceback", val_proc.stderr)
+            self.assertEqual(0, val_proc.returncode, val_proc.stderr)
+            self.assertTrue(json.loads(val_proc.stdout)["valid"])
+
+            dup_run = json.loads((run_ws / "run.json").read_text(encoding="utf-8"))
+            dup_skill = dup_run["plan"]["skills"][0]
+            dup_run["checkpoints"] = [
+                {
+                    "at": "2026-01-01T00:00:00Z",
+                    "state": "running",
+                    "note": "Duplicate skill check",
+                    "remaining_skills": [dup_skill, dup_skill],
+                }
+            ]
+            atomic_json(run_ws / "run.json", dup_run)
+            dup_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "validate-run",
+                    str(run_ws),
+                    "--json",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(1, dup_proc.returncode)
+            dup_err = json.loads(dup_proc.stderr)
+            self.assertEqual("schema_validation_failed", dup_err["code"])
+            self.assertIn("non-unique elements", dup_err["message"])
+
+            valid_cfg = work / "valid-config.yaml"
+            valid_cfg.write_text(
+                "---\n"
+                "# Stdlib project configuration\n"
+                "profile: web-app\n"
+                "exclude:\n"
+                "  - vendor/**\n"
+                '  - "generated/**"\n'
+                "critical_workflows: [\"Checkout, billing\", 'Session login']\n",
+                encoding="utf-8",
+            )
+            cfg_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(ROOT / "scripts/fred.py"),
+                    "plan",
+                    str(self.repo),
+                    "--task",
+                    "investigate-bug",
+                    "--budget",
+                    "brief",
+                    "--config",
+                    str(valid_cfg),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, cfg_proc.returncode, cfg_proc.stderr)
+            cfg_plan = json.loads(cfg_proc.stdout)["plan"]
+            self.assertEqual("web-app", cfg_plan["profile"])
+            self.assertEqual(
+                ["Checkout, billing", "Session login"],
+                cfg_plan["critical_workflows"],
+            )
+
+            for idx, bad_yaml_body in enumerate(
+                (
+                    "profile: [unclosed\n",
+                    "{profile: web-app}\n",
+                    "profile: {nested: web-app}\n",
+                    "exclude:\n  - {path: vendor}\n",
+                    "exclude: [{path: vendor}]\n",
+                    'profile: "unterminated\n',
+                    "\tprofile: web-app\n",
+                )
+            ):
+                bad_cfg = work / f"bad-stdlib-{idx}.yaml"
+                bad_cfg.write_text(bad_yaml_body, encoding="utf-8")
+                bad_proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "-S",
+                        str(ROOT / "scripts/fred.py"),
+                        "plan",
+                        str(self.repo),
+                        "--task",
+                        "investigate-bug",
+                        "--config",
+                        str(bad_cfg),
+                        "--json",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(1, bad_proc.returncode, bad_yaml_body)
+                bad_err = json.loads(bad_proc.stderr)
+                self.assertEqual("invalid_yaml", bad_err["code"], bad_yaml_body)
+                self.assertIn("Malformed YAML", bad_err["message"])
+
+            missing_skill_run = {
+                "schema_version": "1.0",
+                "run_id": "run-missing-template",
+                "repository": {
+                    "path": str(self.repo),
+                    "revision": "deadbeef",
+                    "dirty": False,
+                },
+                "snapshot": {"digest": "abc123"},
+                "plan": {
+                    "task": "investigate-bug",
+                    "mode": "investigate",
+                    "budget": "brief",
+                    "skills": ["nonexistent-skill-without-prompt"],
+                    "deferred_skills": [],
+                    "completed_skills": [],
+                    "remaining_skills": ["nonexistent-skill-without-prompt"],
+                },
+                "authority": {
+                    "allow_fixes": False,
+                    "allow_issue_publication": False,
+                },
+            }
+            with self.assertRaises(FredCliError) as missing_tpl_ctx:
+                runs._render_skill_prompt_templates(missing_skill_run)
+            self.assertEqual("missing_prompt_template", missing_tpl_ctx.exception.code)
 
 
 class FailClosedSharedReadersTests(unittest.TestCase):
