@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify GitHub Actions commit SHA pins, lockfile parity, and upstream tags."""
+"""Verify GitHub Actions commit SHA pins, lockfile parity, runtimes, and upstream tags."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +26,11 @@ LOCKFILE_REL_PATH = ".github/action-pins.json"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 2
 DEFAULT_RETRY_BACKOFF = 0.5
+MAX_COMPOSITE_DEPTH = 5
+ZERO_GIT_SHA = "0" * 40
+
+DEPRECATED_ACTION_RUNTIMES: frozenset[str] = frozenset({"node12", "node16", "node20"})
+SUPPORTED_ACTION_RUNTIMES: frozenset[str] = frozenset({"node24", "composite", "docker"})
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_PART_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -33,6 +40,9 @@ MINOR_COMMENT_RE = re.compile(r"^v\d+\.\d+$")
 
 RunCommandFn = Callable[..., subprocess.CompletedProcess[str]]
 SleepFn = Callable[[float], None]
+FetchManifestFn = Callable[[str, str, str], tuple[str | None, str | None]]
+
+_REAL_SUBPROCESS_RUN: RunCommandFn = subprocess.run
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,7 @@ class LockedActionPin:
     repo: str
     sha: str
     version: str
+    runtime: str | None = None
 
 
 def _relative_display_path(file_path: Path, root: Path) -> str:
@@ -192,17 +203,11 @@ def _validate_single_uses(
     )
 
 
-def inspect_workflow_file(
-    file_path: Path,
-    root: Path = ROOT,
+def _inspect_workflow_text(
+    text: str,
+    rel_path: str,
 ) -> tuple[list[ActionPin], list[str]]:
-    """Parse and offline-validate all action pins in a single workflow YAML file."""
-    rel_path = _relative_display_path(file_path, root)
-    try:
-        text = file_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return [], [f"{rel_path}: Cannot read workflow file: {exc}"]
-
+    """Parse and offline-validate action pins from workflow YAML text."""
     try:
         doc_node = yaml.compose(text)
     except yaml.YAMLError as exc:
@@ -228,6 +233,19 @@ def inspect_workflow_file(
             pins.append(pin)
 
     return pins, errors
+
+
+def inspect_workflow_file(
+    file_path: Path,
+    root: Path = ROOT,
+) -> tuple[list[ActionPin], list[str]]:
+    """Parse and offline-validate all action pins in a single workflow YAML file."""
+    rel_path = _relative_display_path(file_path, root)
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [], [f"{rel_path}: Cannot read workflow file: {exc}"]
+    return _inspect_workflow_text(text, rel_path)
 
 
 def discover_workflow_files(
@@ -262,6 +280,42 @@ def discover_workflow_files(
     if not files:
         return [], [".github/workflows: No workflow YAML files found"]
     return files, []
+
+
+def _validate_lockfile_runtime(
+    rel_path: str,
+    repo_key: str,
+    entry: Mapping[str, Any],
+    *,
+    require_runtime: bool,
+) -> tuple[str | None, str | None]:
+    """Validate optional or required `runtime` metadata for a lockfile entry."""
+    supported_list = ", ".join(sorted(SUPPORTED_ACTION_RUNTIMES))
+    if "runtime" not in entry:
+        if require_runtime:
+            return (
+                None,
+                f"{rel_path}: Entry for '{repo_key}' must specify 'runtime' (expected one of: {supported_list})",
+            )
+        return None, None
+
+    runtime = entry.get("runtime")
+    if not isinstance(runtime, str) or not runtime.strip():
+        return (
+            None,
+            f"{rel_path}: Entry for '{repo_key}' must specify a non-empty string 'runtime' (got {runtime!r})",
+        )
+    if runtime in DEPRECATED_ACTION_RUNTIMES:
+        return (
+            None,
+            f"{rel_path}: Entry for '{repo_key}' specifies deprecated runtime '{runtime}' (expected one of: {supported_list})",
+        )
+    if runtime not in SUPPORTED_ACTION_RUNTIMES:
+        return (
+            None,
+            f"{rel_path}: Entry for '{repo_key}' specifies unsupported runtime '{runtime}' (expected one of: {supported_list})",
+        )
+    return runtime, None
 
 
 def load_lockfile(
@@ -303,6 +357,9 @@ def load_lockfile(
     if not isinstance(actions_obj, dict) or not actions_obj:
         return {}, [f"{rel_path}: Lockfile 'actions' must be a non-empty JSON object"]
 
+    require_runtime = any(
+        isinstance(val, dict) and "runtime" in val for val in actions_obj.values()
+    )
     locked: dict[str, LockedActionPin] = {}
     errors: list[str] = []
     for repo_key, entry in actions_obj.items():
@@ -327,7 +384,7 @@ def load_lockfile(
             )
             continue
 
-        extra_entry_keys = sorted(set(entry.keys()) - {"sha", "version"})
+        extra_entry_keys = sorted(set(entry.keys()) - {"sha", "version", "runtime"})
         if extra_entry_keys:
             errors.append(
                 f"{rel_path}: Entry for '{repo_key}' has unexpected key(s): {', '.join(extra_entry_keys)}"
@@ -348,9 +405,24 @@ def load_lockfile(
             )
             entry_valid = False
 
+        runtime_val, runtime_err = _validate_lockfile_runtime(
+            rel_path,
+            repo_key,
+            entry,
+            require_runtime=require_runtime,
+        )
+        if runtime_err is not None:
+            errors.append(runtime_err)
+            entry_valid = False
+
         if entry_valid:
             assert isinstance(sha, str) and isinstance(version, str)
-            locked[repo_key] = LockedActionPin(repo=repo_key, sha=sha, version=version)
+            locked[repo_key] = LockedActionPin(
+                repo=repo_key,
+                sha=sha,
+                version=version,
+                runtime=runtime_val,
+            )
 
     return locked, errors
 
@@ -493,15 +565,206 @@ def fetch_remote_refs(
     return None, None, last_error
 
 
+def fetch_remote_action_manifest(
+    repo: str,
+    ref: str,
+    subpath: str = "",
+    timeout: float = DEFAULT_TIMEOUT,
+    retries: int = DEFAULT_RETRIES,
+    retry_backoff: float = DEFAULT_RETRY_BACKOFF,
+    sleep_fn: SleepFn = time.sleep,
+) -> tuple[str | None, str | None]:
+    """Fetch upstream `action.yml` or `action.yaml` from raw.githubusercontent.com."""
+    clean_sub = subpath.strip("/")
+    candidates = (
+        (f"{clean_sub}/action.yml", f"{clean_sub}/action.yaml")
+        if clean_sub
+        else ("action.yml", "action.yaml")
+    )
+    max_attempts = max(1, retries + 1)
+    target_label = f"{repo}@{ref}{f'/{clean_sub}' if clean_sub else ''}"
+    last_error = f"Upstream action.yml not found for {target_label}"
+
+    for rel_manifest in candidates:
+        url = f"https://raw.githubusercontent.com/{repo}/{ref}/{rel_manifest}"
+        not_found = False
+        for attempt in range(max_attempts):
+            if attempt > 0 and retry_backoff > 0:
+                sleep_fn(retry_backoff * (2 ** (attempt - 1)))
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "fred-skills-check-workflow-pins/1.0"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return resp.read().decode("utf-8"), None
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    not_found = True
+                    break
+                if exc.code == 429 or 500 <= exc.code < 600:
+                    last_error = (
+                        f"HTTP {exc.code} fetching {rel_manifest} for {target_label}"
+                    )
+                    continue
+                return (
+                    None,
+                    f"HTTP {exc.code} fetching {rel_manifest} for {target_label}",
+                )
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last_error = f"Failed to fetch {rel_manifest} for {target_label}: {exc}"
+        if not not_found:
+            return None, last_error
+
+    return None, last_error
+
+
+def _parse_composite_step_target(
+    parent_repo: str,
+    parent_ref: str,
+    parent_subpath: str,
+    step_uses: str,
+) -> tuple[tuple[str, str, str] | None, str | None]:
+    """Resolve a composite step `uses` value into `(repo, ref, subpath)` or skip/error."""
+    uses = step_uses.strip()
+    if not uses or uses.startswith("docker://"):
+        return None, None
+    if uses.startswith("./"):
+        rel_sub = uses[2:].strip("/")
+        combined = f"{parent_subpath.strip('/')}/{rel_sub}".strip("/")
+        return (parent_repo, parent_ref, combined), None
+
+    target, sep, child_ref = uses.rpartition("@")
+    parts = [p for p in target.split("/") if p]
+    if (
+        not sep
+        or len(parts) < 2
+        or not child_ref
+        or any(
+            part in {".", ".."} or not REPO_PART_RE.fullmatch(part)
+            for part in parts[:2]
+        )
+    ):
+        return None, f"invalid composite step reference '{uses}'"
+
+    child_repo = f"{parts[0]}/{parts[1]}"
+    child_subpath = "/".join(parts[2:])
+    return (child_repo, child_ref, child_subpath), None
+
+
+def _verify_manifest_tree(
+    loc: str,
+    repo: str,
+    ref: str,
+    subpath: str,
+    fetch_fn: FetchManifestFn,
+    manifest_cache: dict[tuple[str, str, str], tuple[str | None, str | None]],
+    *,
+    expected_runtime: str | None = None,
+    lockfile_display: str = LOCKFILE_REL_PATH,
+    depth: int = 0,
+    ancestry: frozenset[tuple[str, str, str]] = frozenset(),
+) -> list[str]:
+    """Verify `runs.using` in an upstream `action.yml` and any composite child steps."""
+    key = (repo, ref, subpath.strip("/"))
+    target_label = f"{repo}@{ref}{f'/{key[2]}' if key[2] else ''}"
+    if key in ancestry:
+        return []
+    if depth > MAX_COMPOSITE_DEPTH:
+        return [
+            f"{loc}: Composite action '{target_label}' exceeds max nesting depth {MAX_COMPOSITE_DEPTH}"
+        ]
+
+    if key not in manifest_cache:
+        manifest_cache[key] = fetch_fn(repo, ref, key[2])
+    raw_manifest, fetch_err = manifest_cache[key]
+    if fetch_err is not None or raw_manifest is None:
+        return [
+            f"{loc}: {fetch_err or f'Unable to fetch action.yml for {target_label}'}"
+        ]
+
+    try:
+        doc: Any = yaml.safe_load(raw_manifest)
+    except yaml.YAMLError as exc:
+        return [
+            f"{loc}: Invalid YAML in upstream action.yml for '{target_label}': {exc}"
+        ]
+
+    runs = doc.get("runs") if isinstance(doc, dict) else None
+    using = runs.get("using") if isinstance(runs, dict) else None
+    if not isinstance(using, str) or not using.strip():
+        return [
+            f"{loc}: Upstream action.yml for '{target_label}' is missing string 'runs.using'"
+        ]
+
+    using = using.strip()
+    supported_list = ", ".join(sorted(SUPPORTED_ACTION_RUNTIMES))
+    if using in DEPRECATED_ACTION_RUNTIMES:
+        return [
+            f"{loc}: Action '{target_label}' declares deprecated runtime runs.using='{using}' in upstream action.yml (expected one of: {supported_list})"
+        ]
+    if using not in SUPPORTED_ACTION_RUNTIMES:
+        return [
+            f"{loc}: Action '{target_label}' declares unsupported runtime runs.using='{using}' in upstream action.yml (expected one of: {supported_list})"
+        ]
+
+    errors: list[str] = []
+    if depth == 0 and expected_runtime is not None and using != expected_runtime:
+        errors.append(
+            f"{loc}: Action '{target_label}' upstream runs.using='{using}' does not match {lockfile_display} runtime '{expected_runtime}'"
+        )
+
+    if using != "composite":
+        return errors
+
+    steps = runs.get("steps") if isinstance(runs, dict) else None
+    if not isinstance(steps, list):
+        errors.append(
+            f"{loc}: Composite action '{target_label}' is missing 'runs.steps' list in upstream action.yml"
+        )
+        return errors
+
+    next_ancestry = ancestry | {key}
+    for step in steps:
+        if not isinstance(step, dict) or not isinstance(step.get("uses"), str):
+            continue
+        child_target, parse_err = _parse_composite_step_target(
+            repo, ref, key[2], step["uses"]
+        )
+        if parse_err is not None:
+            errors.append(f"{loc}: Composite action '{target_label}' has {parse_err}")
+            continue
+        if child_target is None:
+            continue
+        errors.extend(
+            _verify_manifest_tree(
+                loc,
+                child_target[0],
+                child_target[1],
+                child_target[2],
+                fetch_fn,
+                manifest_cache,
+                lockfile_display=lockfile_display,
+                depth=depth + 1,
+                ancestry=next_ancestry,
+            )
+        )
+    return errors
+
+
 def verify_pins_online(
     pins: Sequence[ActionPin],
+    locked: Mapping[str, LockedActionPin] | None = None,
+    lockfile_display: str = LOCKFILE_REL_PATH,
     timeout: float = DEFAULT_TIMEOUT,
     retries: int = DEFAULT_RETRIES,
     retry_backoff: float = DEFAULT_RETRY_BACKOFF,
     run_fn: RunCommandFn | None = None,
     sleep_fn: SleepFn = time.sleep,
+    manifest_fetcher: FetchManifestFn | None = None,
+    verify_runtimes: bool | None = None,
 ) -> list[str]:
-    """Verify action commit SHAs and version comments against upstream repositories."""
+    """Verify action commit SHAs, version comments, and upstream `action.yml` runtimes."""
     unique_repos = sorted({pin.repo for pin in pins})
     remote_cache: dict[str, tuple[dict[str, str], set[str]]] = {}
     errors: list[str] = []
@@ -520,6 +783,7 @@ def verify_pins_online(
             continue
         remote_cache[repo] = (tag_commits, all_commits)
 
+    verified_pins: list[ActionPin] = []
     for pin in pins:
         if pin.repo not in remote_cache:
             continue
@@ -531,6 +795,7 @@ def verify_pins_online(
         if any(
             tag_matches_version_comment(tag, pin.version_comment) for tag in sha_tags
         ):
+            verified_pins.append(pin)
             continue
 
         expected_commit = tag_commits.get(pin.version_comment)
@@ -557,7 +822,174 @@ def verify_pins_online(
                 f"{loc}: Commit SHA {pin.sha} for '{pin.repo}' does not resolve to any tag matching '# {pin.version_comment}'{hint}"
             )
 
+    effective_run = subprocess.run if run_fn is None else run_fn
+    should_verify_runtimes = (
+        verify_runtimes
+        if verify_runtimes is not None
+        else (manifest_fetcher is not None or effective_run is _REAL_SUBPROCESS_RUN)
+    )
+    if not should_verify_runtimes:
+        return errors
+
+    def _default_fetch(
+        repo_id: str, ref_id: str, sub: str
+    ) -> tuple[str | None, str | None]:
+        return fetch_remote_action_manifest(
+            repo_id,
+            ref_id,
+            subpath=sub,
+            timeout=timeout,
+            retries=retries,
+            retry_backoff=retry_backoff,
+            sleep_fn=sleep_fn,
+        )
+
+    effective_fetcher = _default_fetch if manifest_fetcher is None else manifest_fetcher
+    manifest_cache: dict[tuple[str, str, str], tuple[str | None, str | None]] = {}
+    checked_repo_shas: set[tuple[str, str]] = set()
+    for pin in verified_pins:
+        repo_sha = (pin.repo, pin.sha)
+        if repo_sha in checked_repo_shas:
+            continue
+        checked_repo_shas.add(repo_sha)
+        loc = f"{pin.relative_path}:L{pin.line_no}"
+        locked_entry = locked.get(pin.repo) if locked is not None else None
+        expected_rt = locked_entry.runtime if locked_entry is not None else None
+        errors.extend(
+            _verify_manifest_tree(
+                loc,
+                pin.repo,
+                pin.sha,
+                "",
+                effective_fetcher,
+                manifest_cache,
+                expected_runtime=expected_rt,
+                lockfile_display=lockfile_display,
+            )
+        )
+
     return errors
+
+
+def _run_local_git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    return _REAL_SUBPROCESS_RUN(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=DEFAULT_TIMEOUT,
+        check=False,
+    )
+
+
+def _git_rev_parse_commit(root: Path, ref: str) -> str | None:
+    proc = _run_local_git(root, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if proc.returncode != 0:
+        return None
+    sha = proc.stdout.strip()
+    return sha if re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
+
+
+def _git_merge_base(root: Path, ref_a: str, ref_b: str) -> str | None:
+    proc = _run_local_git(root, "merge-base", ref_a, ref_b)
+    if proc.returncode != 0:
+        return None
+    sha = proc.stdout.strip()
+    return sha if re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
+
+
+def _load_baseline_lockfile_at_commit(
+    root: Path, commit_sha: str
+) -> dict[str, tuple[str, str, str | None]]:
+    proc = _run_local_git(root, "show", f"{commit_sha}:{LOCKFILE_REL_PATH}")
+    if proc.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+    actions = payload.get("actions") if isinstance(payload, dict) else None
+    if not isinstance(actions, dict):
+        return {}
+    baseline: dict[str, tuple[str, str, str | None]] = {}
+    for repo_key, entry in actions.items():
+        if not isinstance(repo_key, str) or not isinstance(entry, dict):
+            continue
+        sha = entry.get("sha")
+        version = entry.get("version")
+        runtime = entry.get("runtime")
+        if isinstance(sha, str) and isinstance(version, str):
+            baseline[repo_key] = (
+                sha,
+                version,
+                runtime if isinstance(runtime, str) else None,
+            )
+    return baseline
+
+
+def _load_baseline_workflow_pins_at_commit(
+    root: Path, commit_sha: str
+) -> set[tuple[str, str, str]]:
+    tree_proc = _run_local_git(
+        root, "ls-tree", "-r", "--name-only", commit_sha, "--", ".github/workflows"
+    )
+    if tree_proc.returncode != 0:
+        return set()
+    pin_tuples: set[tuple[str, str, str]] = set()
+    for rel_line in tree_proc.stdout.splitlines():
+        rel_path = rel_line.strip()
+        if not rel_path.lower().endswith((".yml", ".yaml")):
+            continue
+        show_proc = _run_local_git(root, "show", f"{commit_sha}:{rel_path}")
+        if show_proc.returncode != 0:
+            continue
+        pins, _ = _inspect_workflow_text(show_proc.stdout, rel_path)
+        for pin in pins:
+            pin_tuples.add((pin.repo, pin.sha, pin.version_comment))
+    return pin_tuples
+
+
+def filter_changed_pins(
+    pins: Sequence[ActionPin],
+    locked: Mapping[str, LockedActionPin],
+    root: Path = ROOT,
+    changed_from: str | None = None,
+) -> tuple[list[ActionPin], list[str]]:
+    """Filter action pins to repositories modified since `changed_from`."""
+    if changed_from is None:
+        return list(pins), []
+
+    raw_ref = changed_from.strip()
+    if not raw_ref or raw_ref == ZERO_GIT_SHA:
+        parent_sha = _git_rev_parse_commit(root, "HEAD~1")
+        if parent_sha is None:
+            return list(pins), []
+        compare_sha = parent_sha
+    else:
+        resolved = _git_rev_parse_commit(root, raw_ref)
+        if resolved is None:
+            return [], [f"Cannot resolve --changed-from git revision '{raw_ref}'"]
+        head_sha = _git_rev_parse_commit(root, "HEAD")
+        if head_sha is not None and resolved != head_sha:
+            mb = _git_merge_base(root, resolved, head_sha)
+            compare_sha = mb if mb is not None else resolved
+        else:
+            compare_sha = resolved
+
+    base_locked = _load_baseline_lockfile_at_commit(root, compare_sha)
+    base_workflow_pins = _load_baseline_workflow_pins_at_commit(root, compare_sha)
+
+    changed_repos: set[str] = set()
+    for repo, entry in locked.items():
+        if base_locked.get(repo) != (entry.sha, entry.version, entry.runtime):
+            changed_repos.add(repo)
+    for pin in pins:
+        if (pin.repo, pin.sha, pin.version_comment) not in base_workflow_pins:
+            changed_repos.add(pin.repo)
+
+    return [pin for pin in pins if pin.repo in changed_repos], []
 
 
 def check_pins(
@@ -566,11 +998,14 @@ def check_pins(
     lockfile: Path | str | None = None,
     require_lockfile: bool = True,
     verify_remote: bool = False,
+    changed_from: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     retries: int = DEFAULT_RETRIES,
     retry_backoff: float = DEFAULT_RETRY_BACKOFF,
     run_fn: RunCommandFn | None = None,
     sleep_fn: SleepFn = time.sleep,
+    manifest_fetcher: FetchManifestFn | None = None,
+    verify_runtimes: bool | None = None,
 ) -> list[str]:
     """Validate workflow action pins, offline lockfile parity, and optional remote SHAs."""
     files, errors = discover_workflow_files(root=root, workflow_files=workflow_files)
@@ -595,7 +1030,10 @@ def check_pins(
             else None
         )
 
+    locked: dict[str, LockedActionPin] = {}
+    lockfile_display = LOCKFILE_REL_PATH
     if lockfile_path is not None:
+        lockfile_display = _relative_display_path(lockfile_path, root)
         locked, lock_errors = load_lockfile(lockfile_path, root=root)
         errors.extend(lock_errors)
         if not lock_errors:
@@ -603,7 +1041,7 @@ def check_pins(
                 verify_lockfile_parity(
                     all_pins,
                     locked,
-                    lockfile_display=_relative_display_path(lockfile_path, root),
+                    lockfile_display=lockfile_display,
                     check_unused=(workflow_files is None),
                 )
             )
@@ -611,14 +1049,29 @@ def check_pins(
     if errors or not verify_remote:
         return errors
 
+    remote_pins, diff_errors = filter_changed_pins(
+        all_pins,
+        locked,
+        root=root,
+        changed_from=changed_from,
+    )
+    if diff_errors:
+        return diff_errors
+    if not remote_pins:
+        return []
+
     errors.extend(
         verify_pins_online(
-            all_pins,
+            remote_pins,
+            locked=locked or None,
+            lockfile_display=lockfile_display,
             timeout=timeout,
             retries=retries,
             retry_backoff=retry_backoff,
             run_fn=run_fn,
             sleep_fn=sleep_fn,
+            manifest_fetcher=manifest_fetcher,
+            verify_runtimes=verify_runtimes,
         )
     )
     return errors
@@ -629,20 +1082,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Verify GitHub Actions commit SHA pins, .github/action-pins.json lockfile "
-            "parity, and optional upstream git ls-remote tag resolution."
+            "parity, supported runtimes, and optional upstream git ls-remote tag resolution."
         )
     )
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Validate 40-character hex SHAs, version comments, and lockfile parity offline (default mode).",
+        help="Validate 40-character hex SHAs, version comments, runtimes, and lockfile parity offline (default mode).",
     )
     parser.add_argument(
         "--verify-remote",
         "--online",
         dest="verify_remote",
         action="store_true",
-        help="Also query upstream action repositories via git ls-remote to verify commit and tag resolution.",
+        help="Also query upstream action repositories via git ls-remote and verify action.yml runtimes.",
+    )
+    parser.add_argument(
+        "--changed-from",
+        default=None,
+        metavar="REF",
+        help="Scope --verify-remote queries to action repositories with pins modified since git REF.",
     )
     parser.add_argument(
         "--lockfile",
@@ -689,6 +1148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lockfile=args.lockfile,
         require_lockfile=True,
         verify_remote=args.verify_remote,
+        changed_from=args.changed_from,
         timeout=args.timeout,
         retries=args.retries,
     )
@@ -702,11 +1162,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    mode_label = (
-        "offline lockfile and upstream remote"
-        if args.verify_remote
-        else "offline lockfile"
-    )
+    if args.verify_remote and args.changed_from is not None:
+        mode_label = f"offline lockfile and changed upstream remote since {args.changed_from or 'HEAD~1'}"
+    elif args.verify_remote:
+        mode_label = "offline lockfile and upstream remote"
+    else:
+        mode_label = "offline lockfile"
     print(f"PASS: Verified workflow action pins ({mode_label}).")
     return 0
 

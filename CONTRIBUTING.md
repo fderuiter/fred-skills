@@ -103,7 +103,7 @@ python scripts/validate_skills.py --base-ref main --telemetry validation-telemet
 
 Manual Ruff commands (`ruff format .` and `ruff check --fix .`) are needed only when `make` is absent, as `make fix` invokes them automatically.
 
-All commands above run without network access once the development dependencies are installed (`check_workflow_pins.py` and `verify_workflow_actions.py` verify workflow action SHAs and version comments against `.github/action-pins.json`); CI additionally runs `python scripts/check_workflow_pins.py --verify-remote` to confirm upstream commit and tag resolution via `git ls-remote`.
+All commands above run without network access once the development dependencies are installed (`check_workflow_pins.py` and `verify_workflow_actions.py` verify workflow action SHAs, version comments, and supported `node24` / `composite` runtimes against `.github/action-pins.json`); `validate.yml` scopes `python scripts/check_workflow_pins.py --verify-remote --changed-from <base>` to modified action pins on `push` and `pull_request` (skipping `--verify-remote` on reusable `workflow_call` release gates), while `.github/workflows/audit-action-pins.yml` runs scheduled and manual full `python scripts/check_workflow_pins.py --verify-remote` checks across all upstream tags and `action.yml` runtimes.
 The ledger validator runs on the Python 3.12 standard library; instruction-only use does not need Python.
 
 ## Change a skill
