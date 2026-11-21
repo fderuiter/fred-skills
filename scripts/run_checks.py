@@ -4,12 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import math
 import os
+import queue
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -34,7 +41,8 @@ DEFAULT_PHASES: tuple[str, ...] = (
     "tests",
 )
 FAST_PHASE_TIMEOUT = 300
-TESTS_PHASE_TIMEOUT = 900
+TESTS_PHASE_TIMEOUT = 600
+DEFAULT_TEST_WORKERS = 4
 PHASE_TIMEOUTS: dict[str, int] = {
     "lint": FAST_PHASE_TIMEOUT,
     "format": FAST_PHASE_TIMEOUT,
@@ -43,14 +51,115 @@ PHASE_TIMEOUTS: dict[str, int] = {
     "docs": FAST_PHASE_TIMEOUT,
     "tests": TESTS_PHASE_TIMEOUT,
 }
+SLOWEST_TEST_MODULES: tuple[str, ...] = (
+    "tests.test_fred_cli",
+    "tests.test_evaluation_cli",
+    "tests.test_packaging",
+    "tests.test_installation_release",
+    "tests.test_doc_verification",
+    "tests.test_package_skills",
+    "tests.test_runbooks_integration",
+    "tests.test_scaffolder_and_telemetry",
+    "tests.test_release_workflow",
+    "tests.test_diagnostics",
+    "tests.test_toolkit",
+    "tests.test_vetting",
+    "tests.test_suite_validators",
+    "tests.test_build_site",
+    "tests.test_pages_workflow",
+    "tests.test_audit_to_sarif",
+    "tests.test_audit_validator",
+    "tests.test_api_guide",
+    "tests.test_catalog_experience",
+)
+_SLOWEST_MODULE_RANK: dict[str, int] = {
+    mod: idx for idx, mod in enumerate(SLOWEST_TEST_MODULES)
+}
 
 
-def build_check_env(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
+@dataclass(frozen=True)
+class _ModuleRunResult:
+    index: int
+    display: str
+    returncode: int
+    duration: float
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    cancelled: bool = False
+
+
+def _coerce_text(stream: str | bytes | None) -> str:
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return stream
+
+
+def build_check_env(
+    base_env: Mapping[str, str] | None = None,
+    temp_dir: Path | None = None,
+) -> dict[str, str]:
     """Return a child-process environment with bytecode caching disabled."""
     env = dict(os.environ if base_env is None else base_env)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    if temp_dir is not None:
+        resolved_tmp = str(temp_dir)
+        env["TMPDIR"] = resolved_tmp
+        env["TEMP"] = resolved_tmp
+        env["TMP"] = resolved_tmp
+        env["RUNNER_TEMP"] = resolved_tmp
     return env
+
+
+def resolve_workers(workers: int | None = None) -> int:
+    """Resolve the parallel worker count for the tests phase."""
+    if workers is not None:
+        if workers < 1:
+            raise ValueError(f"Worker count must be >= 1, got {workers}")
+        return workers
+    return min(DEFAULT_TEST_WORKERS, max(1, os.cpu_count() or 1))
+
+
+def discover_test_modules(root: Path = ROOT) -> list[str]:
+    """Discover unittest modules under tests/ ordered slowest-first."""
+    tests_dir = root / "tests"
+    if not tests_dir.is_dir():
+        return []
+
+    discovered: list[tuple[str, int]] = []
+    for candidate in sorted(tests_dir.rglob("test*.py")):
+        if not candidate.is_file():
+            continue
+        rel_parent = candidate.parent.relative_to(tests_dir)
+        if rel_parent != Path("."):
+            current = tests_dir
+            importable = True
+            for part in rel_parent.parts:
+                current = current / part
+                if not (current / "__init__.py").is_file():
+                    importable = False
+                    break
+            if not importable:
+                continue
+        rel_mod = candidate.relative_to(root).with_suffix("")
+        module_name = ".".join(rel_mod.parts)
+        try:
+            file_size = candidate.stat().st_size
+        except OSError:
+            file_size = 0
+        discovered.append((module_name, file_size))
+
+    def _sort_key(item: tuple[str, int]) -> tuple[int, int, str]:
+        mod_name, size = item
+        if mod_name in _SLOWEST_MODULE_RANK:
+            return (0, _SLOWEST_MODULE_RANK[mod_name], mod_name)
+        return (1, -size, mod_name)
+
+    discovered.sort(key=_sort_key)
+    return [mod_name for mod_name, _ in discovered]
 
 
 def resolve_ruff_command(
@@ -153,7 +262,10 @@ def build_phase_commands(
             [python_executable, str(scripts_dir / "verify_doc_snippets.py")],
         ]
     if phase == "tests":
-        return [[python_executable, "-m", "unittest", "discover", "-s", "tests", "-v"]]
+        return [
+            [python_executable, "-B", "-m", "unittest", "-v", module_name]
+            for module_name in discover_test_modules(root)
+        ]
 
     raise ValueError(f"Unsupported check phase: {phase}")
 
@@ -181,6 +293,177 @@ def _format_command_display(cmd: Sequence[str], root: Path) -> str:
     return shlex.join(display_parts)
 
 
+def _run_tests_phase(
+    commands: Sequence[Sequence[str]],
+    root: Path,
+    base_env: Mapping[str, str],
+    phase_timeout: int,
+    workers: int,
+) -> int:
+    """Execute unittest modules across isolated parallel workers with ordered logs."""
+    if not commands:
+        print(
+            f"FAILED: phase 'tests' discovered no test modules under {root / 'tests'}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+    effective_workers = min(workers, len(commands))
+    print(
+        f"==> [tests] Running {len(commands)} test module(s) with {effective_workers} worker(s)",
+        flush=True,
+    )
+
+    phase_start = time.monotonic()
+    deadline = phase_start + phase_timeout
+    cancel_event = threading.Event()
+    worker_slots: queue.Queue[int] = queue.Queue()
+    for slot_id in range(effective_workers):
+        worker_slots.put(slot_id)
+
+    with tempfile.TemporaryDirectory(prefix="fred-checks-tests-") as temp_root_str:
+        temp_root = Path(temp_root_str).resolve()
+
+        def _execute_module(idx: int, cmd: Sequence[str]) -> _ModuleRunResult:
+            display = _format_command_display(cmd, root)
+            if cancel_event.is_set():
+                return _ModuleRunResult(
+                    index=idx,
+                    display=display,
+                    returncode=124,
+                    duration=0.0,
+                    stdout="",
+                    stderr="",
+                    cancelled=True,
+                )
+
+            slot_id = worker_slots.get()
+            try:
+                if cancel_event.is_set():
+                    return _ModuleRunResult(
+                        index=idx,
+                        display=display,
+                        returncode=124,
+                        duration=0.0,
+                        stdout="",
+                        stderr="",
+                        cancelled=True,
+                    )
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    cancel_event.set()
+                    return _ModuleRunResult(
+                        index=idx,
+                        display=display,
+                        returncode=124,
+                        duration=0.0,
+                        stdout="",
+                        stderr="",
+                        timed_out=True,
+                    )
+
+                call_timeout = min(phase_timeout, max(1, math.ceil(remaining)))
+                module_slug = cmd[-1].replace(".", "_")
+                worker_tmp = (
+                    temp_root / f"worker-{slot_id}" / f"{idx:02d}-{module_slug}"
+                )
+                worker_tmp.mkdir(parents=True, exist_ok=True)
+                worker_env = build_check_env(base_env, temp_dir=worker_tmp)
+
+                t0 = time.monotonic()
+                try:
+                    proc = subprocess.run(
+                        list(cmd),
+                        cwd=root,
+                        env=worker_env,
+                        capture_output=True,
+                        text=True,
+                        timeout=call_timeout,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    cancel_event.set()
+                    return _ModuleRunResult(
+                        index=idx,
+                        display=display,
+                        returncode=124,
+                        duration=time.monotonic() - t0,
+                        stdout=_coerce_text(exc.stdout),
+                        stderr=_coerce_text(exc.stderr),
+                        timed_out=True,
+                    )
+
+                return _ModuleRunResult(
+                    index=idx,
+                    display=display,
+                    returncode=proc.returncode,
+                    duration=time.monotonic() - t0,
+                    stdout=_coerce_text(proc.stdout),
+                    stderr=_coerce_text(proc.stderr),
+                )
+            finally:
+                worker_slots.put(slot_id)
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=effective_workers
+        ) as executor:
+            futures = [
+                executor.submit(_execute_module, idx, cmd)
+                for idx, cmd in enumerate(commands)
+            ]
+            ordered_results = [future.result() for future in futures]
+
+    for res in ordered_results:
+        if res.cancelled:
+            continue
+        status = (
+            "TIMEOUT"
+            if res.timed_out
+            else ("PASS" if res.returncode == 0 else f"EXIT {res.returncode}")
+        )
+        print(
+            f"==> [tests] {res.display} ({status}, {res.duration:.1f}s)",
+            flush=True,
+        )
+
+    has_timeout = False
+    first_failure_rc = 0
+    for res in ordered_results:
+        if res.cancelled or (not res.timed_out and res.returncode == 0):
+            continue
+        print(f"--- [tests] log: {res.display} ---", file=sys.stderr, flush=True)
+        if res.stdout:
+            sys.stderr.write(res.stdout)
+            if not res.stdout.endswith("\n"):
+                sys.stderr.write("\n")
+        if res.stderr:
+            sys.stderr.write(res.stderr)
+            if not res.stderr.endswith("\n"):
+                sys.stderr.write("\n")
+        sys.stderr.flush()
+        if res.timed_out:
+            has_timeout = True
+            print(
+                f"FAILED: phase 'tests' command timed out after {phase_timeout}s: {res.display}",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            if first_failure_rc == 0:
+                first_failure_rc = res.returncode
+            print(
+                f"FAILED: phase 'tests' command exited with status {res.returncode}: {res.display}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    if has_timeout:
+        return 124
+    return first_failure_rc
+
+
 def run_checks(
     phases: Sequence[str] | None = None,
     root: Path = ROOT,
@@ -191,9 +474,11 @@ def run_checks(
     step_summary: str | None = None,
     dry_run: bool = False,
     env: Mapping[str, str] | None = None,
+    workers: int | None = None,
 ) -> int:
     """Execute the selected validation phases and return an exit status code."""
     selected_phases = resolve_phases(phases)
+    resolved_workers = resolve_workers(workers)
     check_env = build_check_env(env)
     ruff_cmd = resolve_ruff_command(
         python_executable=python_executable,
@@ -212,6 +497,18 @@ def run_checks(
             step_summary=step_summary,
         )
         phase_timeout = PHASE_TIMEOUTS.get(phase, FAST_PHASE_TIMEOUT)
+        if phase == "tests" and not dry_run:
+            rc = _run_tests_phase(
+                commands=commands,
+                root=root,
+                base_env=check_env,
+                phase_timeout=phase_timeout,
+                workers=resolved_workers,
+            )
+            if rc != 0:
+                return rc
+            continue
+
         for cmd in commands:
             display = _format_command_display(cmd, root)
             if dry_run:
@@ -244,6 +541,16 @@ def run_checks(
     return 0
 
 
+def _positive_int(raw: str) -> int:
+    try:
+        parsed = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int value: {raw!r}") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {parsed}")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the CLI argument parser for scripts/run_checks.py."""
     parser = argparse.ArgumentParser(
@@ -265,6 +572,16 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         metavar="PHASE",
         help="Optional phase names to execute.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=(
+            f"Number of parallel test module workers "
+            f"(default: up to {DEFAULT_TEST_WORKERS} based on CPU count)."
+        ),
     )
     parser.add_argument(
         "--telemetry",
@@ -334,6 +651,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         base_ref=args.base_ref,
         step_summary=args.step_summary,
         dry_run=args.dry_run,
+        workers=args.workers,
     )
 
 
