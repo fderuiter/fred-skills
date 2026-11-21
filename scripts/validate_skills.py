@@ -409,7 +409,7 @@ def _format_vetting_finding(finding: Mapping[str, Any]) -> str:
     )
 
 
-@functools.lru_cache(maxsize=64)
+@functools.lru_cache(maxsize=256)
 def _cached_python_script_errors(
     source: str,
     rel_posix: str,
@@ -420,6 +420,14 @@ def _cached_python_script_errors(
     return tuple(_format_vetting_finding(item) for item in findings)
 
 
+@functools.lru_cache(maxsize=256)
+def _cached_markdown_vetting_errors(md_text: str, rel_posix: str) -> tuple[str, ...]:
+    return tuple(
+        _format_vetting_finding(item)
+        for item in vetting._vet_markdown_text(md_text, rel_posix)
+    )
+
+
 def _inspect_python_script(
     source: str,
     rel_posix: str,
@@ -428,6 +436,8 @@ def _inspect_python_script(
     effective = frozenset(
         cap for cap in allowed if cap not in _DISALLOWED_SKILL_CAPABILITIES
     )
+    if effective and not _cached_python_script_errors(source, rel_posix, frozenset()):
+        return []
     return list(_cached_python_script_errors(source, rel_posix, effective))
 
 
@@ -613,6 +623,27 @@ def _validate_scenario_semantics(
 
 _SCENARIO_SCHEMA: dict | None = None
 _VALIDATED_SCHEMA_TEXTS: set[str] = set()
+_SCHEMA_VALIDATOR_CACHE: dict[str, jsonschema.Draft202012Validator] = {}
+
+
+def _get_cached_schema_validator(
+    schema_data: dict[str, Any],
+    *,
+    with_format_checker: bool = False,
+) -> jsonschema.Draft202012Validator:
+    cache_key = (
+        f"{int(with_format_checker)}:"
+        f"{json.dumps(schema_data, sort_keys=True, separators=(',', ':'))}"
+    )
+    cached = _SCHEMA_VALIDATOR_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    checker = (
+        jsonschema.Draft202012Validator.FORMAT_CHECKER if with_format_checker else None
+    )
+    validator = jsonschema.Draft202012Validator(schema_data, format_checker=checker)
+    _SCHEMA_VALIDATOR_CACHE[cache_key] = validator
+    return validator
 
 
 def _check_draft202012_schema(raw_text: str, data: object) -> None:
@@ -822,9 +853,9 @@ def _build_output_validators(
         validators.append(
             (
                 rel_posix,
-                jsonschema.Draft202012Validator(
+                _get_cached_schema_validator(
                     schema_data,
-                    format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER,
+                    with_format_checker=True,
                 ),
             )
         )
@@ -1058,15 +1089,132 @@ def _evaluate_validator_job(
     return [msg for _, msg in outcomes if msg is not None]
 
 
-def _write_and_evaluate_job(
-    idx: int,
-    job: _ExampleValidatorJob,
+_BATCH_VALIDATOR_RUNNER = """\
+import io, json, pathlib, sys
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+code_cache = {}
+orig_argv, orig_path = list(sys.argv), list(sys.path)
+orig_out, orig_err = sys.stdout, sys.stderr
+base_mods = set(sys.modules)
+base_mod_count = len(base_mods)
+passed = []
+for item in manifest:
+    rcs = []
+    for sp in item["validators"]:
+        p = pathlib.Path(sp)
+        src = p.read_text(encoding="utf-8")
+        code = code_cache.get(src)
+        if code is None:
+            code = compile(src, sp, "exec")
+            code_cache[src] = code
+        sys.argv = [sp, item["example"]]
+        sys.path = [str(p.parent), *orig_path]
+        sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+        try:
+            exec(code, {"__name__": "__main__", "__file__": sp, "__builtins__": __builtins__})
+            rc = 0
+        except SystemExit as exc:
+            c = exc.code
+            rc = 0 if c is None else (c if isinstance(c, int) else 1)
+        except Exception:
+            rc = 2
+        finally:
+            sys.argv, sys.path = list(orig_argv), list(orig_path)
+            sys.stdout, sys.stderr = orig_out, orig_err
+            if len(sys.modules) != base_mod_count:
+                script_dir = str(p.parent.resolve())
+                for k in list(sys.modules):
+                    if k not in base_mods:
+                        mfile = getattr(sys.modules.get(k), "__file__", None) or ""
+                        if mfile.startswith(script_dir):
+                            sys.modules.pop(k, None)
+                base_mods = set(sys.modules)
+                base_mod_count = len(base_mods)
+        rcs.append(rc)
+    if rcs and all(r in (0, 1) for r in rcs) and any(r == 0 for r in rcs):
+        passed.append(item["id"])
+print(json.dumps({"passed": passed}))
+"""
+
+
+def _stage_validator_examples(
+    jobs: Sequence[_ExampleValidatorJob],
+    tmp_root: Path,
+) -> list[Path]:
+    paths: list[Path] = []
+    for idx, job in enumerate(jobs):
+        example_file = tmp_root / f"example-{idx}-{job.block_idx}.json"
+        example_file.write_text(job.raw_json_block, encoding="utf-8")
+        paths.append(example_file)
+    return paths
+
+
+def _run_batch_validator_pass(
+    jobs: Sequence[_ExampleValidatorJob],
+    example_files: Sequence[Path],
     tmp_root: Path,
     env: Mapping[str, str],
-) -> tuple[str, list[str]]:
-    example_file = tmp_root / f"example-{idx}-{job.block_idx}.json"
-    example_file.write_text(job.raw_json_block, encoding="utf-8")
-    return job.pkg_name, _evaluate_validator_job(job, example_file, env)
+) -> set[int] | None:
+    manifest_items = [
+        {
+            "id": idx,
+            "example": str(example_files[idx]),
+            "validators": [str(sp) for sp, _ in job.validators],
+        }
+        for idx, job in enumerate(jobs)
+    ]
+    manifest_path = tmp_root / "validator-batch.json"
+    manifest_path.write_text(json.dumps(manifest_items), encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-S",
+                "-c",
+                _BATCH_VALIDATOR_RUNNER,
+                str(manifest_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=30.0,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        payload = json.loads(proc.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    passed = payload.get("passed") if isinstance(payload, dict) else None
+    if not isinstance(passed, list):
+        return None
+    return {item for item in passed if isinstance(item, int)}
+
+
+def _evaluate_pending_jobs(
+    pending: Sequence[tuple[int, _ExampleValidatorJob]],
+    example_files: Sequence[Path],
+    env: Mapping[str, str],
+) -> list[tuple[str, list[str]]]:
+    if not pending:
+        return []
+    if len(pending) == 1:
+        idx, job = pending[0]
+        return [(job.pkg_name, _evaluate_validator_job(job, example_files[idx], env))]
+    workers = min(8, len(pending))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(
+            pool.map(
+                lambda pair: (
+                    pair[1].pkg_name,
+                    _evaluate_validator_job(pair[1], example_files[pair[0]], env),
+                ),
+                pending,
+            )
+        )
 
 
 def _execute_validator_jobs(
@@ -1075,22 +1223,21 @@ def _execute_validator_jobs(
     if not jobs:
         return {}
     env = _isolated_validator_env()
-    errors_by_pkg: dict[str, list[str]] = {}
     with tempfile.TemporaryDirectory(prefix="fred-skill-example-") as tmp_dir:
         tmp_root = Path(tmp_dir)
-        if len(jobs) == 1:
-            results = [_write_and_evaluate_job(0, jobs[0], tmp_root, env)]
-        else:
-            workers = min(8, len(jobs))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                results = list(
-                    pool.map(
-                        lambda pair: _write_and_evaluate_job(
-                            pair[0], pair[1], tmp_root, env
-                        ),
-                        enumerate(jobs),
-                    )
-                )
+        example_files = _stage_validator_examples(jobs, tmp_root)
+        passed_ids = (
+            _run_batch_validator_pass(jobs, example_files, tmp_root, env)
+            if len(jobs) > 1
+            else None
+        )
+        pending = [
+            (idx, job)
+            for idx, job in enumerate(jobs)
+            if passed_ids is None or idx not in passed_ids
+        ]
+        results = _evaluate_pending_jobs(pending, example_files, env)
+    errors_by_pkg: dict[str, list[str]] = {}
     for pkg_name, job_errors in results:
         if job_errors:
             errors_by_pkg.setdefault(pkg_name, []).extend(job_errors)
@@ -1701,7 +1848,7 @@ def _validate_prompt_template(
 def _check_scenarios_against_schema(
     scenarios_data: object, active_schema: dict[str, Any]
 ) -> list[str]:
-    validator = jsonschema.Draft202012Validator(active_schema)
+    validator = _get_cached_schema_validator(active_schema)
     schema_errors = sorted(
         validator.iter_errors(scenarios_data),
         key=lambda e: str(e.path),
@@ -1959,10 +2106,7 @@ def _inspect_markdown_text(
             )
     errors.extend(_check_markdown_links(md_text, path.parent, package_resolved))
     if rel_posix != "SKILL.md":
-        errors.extend(
-            _format_vetting_finding(item)
-            for item in vetting._vet_markdown_text(md_text, rel_posix)
-        )
+        errors.extend(_cached_markdown_vetting_errors(md_text, rel_posix))
     return errors
 
 

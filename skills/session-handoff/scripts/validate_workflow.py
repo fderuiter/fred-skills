@@ -391,6 +391,36 @@ def _check_entry_paths(entries: Any, label: str, allow_str: bool) -> list[str]:
     return errors
 
 
+def _observation_location_range_error(loc: Any) -> str | None:
+    if not isinstance(loc, Mapping):
+        return None
+    start_line = loc.get("line")
+    end_line = loc.get("end_line")
+    if end_line is None or isinstance(end_line, bool) or not isinstance(end_line, int):
+        return None
+    path_label = loc.get("path", "")
+    if start_line is None:
+        return f"Observation location end_line ({end_line}) requires line: {path_label}"
+    if (
+        isinstance(start_line, int)
+        and not isinstance(start_line, bool)
+        and end_line < start_line
+    ):
+        return f"Observation location end_line ({end_line}) precedes line ({start_line}): {path_label}"
+    return None
+
+
+def _check_observation_locations(locations: Any) -> list[str]:
+    if not isinstance(locations, list):
+        return []
+    errors = _check_entry_paths(locations, "observations.locations", allow_str=False)
+    for loc in locations:
+        range_err = _observation_location_range_error(loc)
+        if range_err is not None:
+            errors.append(range_err)
+    return errors
+
+
 def _check_observation_paths(data: Mapping[str, Any]) -> list[str]:
     observations = data.get("observations")
     if not isinstance(observations, list):
@@ -398,11 +428,7 @@ def _check_observation_paths(data: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     for obs in observations:
         if isinstance(obs, Mapping):
-            errors.extend(
-                _check_entry_paths(
-                    obs.get("locations", []), "observations.locations", allow_str=False
-                )
-            )
+            errors.extend(_check_observation_locations(obs.get("locations", [])))
     return errors
 
 

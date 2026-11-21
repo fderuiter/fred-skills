@@ -793,6 +793,19 @@ class SuiteValidatorsTests(unittest.TestCase):
             self.assertTrue(
                 validate_workflow.validate(bad_obs_doc, obs_schema), bad_obs_path
             )
+        for bad_obs_loc in (
+            {"path": "src/app.py", "line": 12, "end_line": 4},
+            {"path": "src/app.py", "line": None, "end_line": 4},
+        ):
+            bad_range_doc = {
+                **valid_obs,
+                "observations": [{**obs_entry, "locations": [bad_obs_loc]}],
+            }
+            range_errs = validate_workflow.validate(bad_range_doc, obs_schema)
+            self.assertTrue(
+                any("end_line" in err for err in range_errs),
+                f"Expected end_line range error for {bad_obs_loc}, got {range_errs}",
+            )
 
     def test_all_synced_validators_run_under_python_S_and_omit_dev_deps(
         self,

@@ -2629,6 +2629,141 @@ class ReportTests(unittest.TestCase):
             self.assertEqual("UNIQ-2", standalone_rec["finding_id"])
             self.assertEqual("accepted-risk", standalone_rec["state"])
 
+            # Reconcile handles mixed file-level (line: None) and line-level locations without TypeError,
+            # honors non-fred partial_fingerprints across line shifts, and rejects reversed observation end_line
+            edge_sarif = {
+                "version": "2.1.0",
+                "runs": [
+                    {
+                        "tool": {
+                            "driver": {
+                                "name": "CodeQL",
+                                "version": "2.19.0",
+                                "rules": [
+                                    {
+                                        "id": "py/fallback-rule",
+                                        "defaultConfiguration": {"level": "note"},
+                                    },
+                                    {
+                                        "id": "py/wrong-bool-rule",
+                                        "defaultConfiguration": {"level": "error"},
+                                    },
+                                ],
+                            }
+                        },
+                        "logicalLocations": [
+                            {"name": "zero_sym"},
+                            {"name": "bool_indexed_sym"},
+                        ],
+                        "results": [
+                            {
+                                "ruleId": "py/suppressed-empty-status",
+                                "level": "warning",
+                                "message": {
+                                    "text": "empty status defaults to accepted"
+                                },
+                                "suppressions": [{"kind": "inSource", "status": ""}],
+                                "locations": [],
+                            },
+                            {
+                                "ruleId": "py/mixed-locations",
+                                "level": "error",
+                                "message": {"text": "mixed region lines"},
+                                "partialFingerprints": {
+                                    "primaryLocationLineHash": "codeql-hash-77"
+                                },
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "app.py"},
+                                            "region": {"startLine": 0, "endLine": 5},
+                                        },
+                                        "logicalLocations": [{"index": True}],
+                                    },
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "app.py"},
+                                            "region": {"startLine": 8, "endLine": 3},
+                                        }
+                                    },
+                                ],
+                            },
+                            {
+                                "ruleId": "py/fallback-rule",
+                                "ruleIndex": True,
+                                "invocationIndex": True,
+                                "level": "HIGH",
+                                "message": {"text": "non-standard level falls back"},
+                                "locations": [
+                                    {
+                                        "physicalLocation": {
+                                            "artifactLocation": {"uri": "app.py"},
+                                            "region": {"startLine": 4, "endLine": 4},
+                                        }
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
+            }
+            edge_sarif_path = root / "edge.sarif"
+            atomic_json(edge_sarif_path, edge_sarif)
+            edge_imported = runs.import_sarif(edge_sarif_path)
+            self.assertEqual(2, len(edge_imported["observations"]))
+            edge_obs = edge_imported["observations"][0]
+            self.assertEqual(
+                [
+                    {"path": "app.py", "line": None},
+                    {"path": "app.py", "line": 8},
+                ],
+                edge_obs["locations"],
+            )
+            fallback_obs = edge_imported["observations"][1]
+            self.assertEqual("py/fallback-rule", fallback_obs["rule"])
+            self.assertEqual("note", fallback_obs["reported_level"])
+            edge_dir = root / "obs-edge"
+            edge_dir.mkdir()
+            atomic_json(edge_dir / "observations.json", edge_imported)
+            rec_partial_fp = runs.reconcile(
+                edge_dir,
+                "py/mixed-locations",
+                "in-progress",
+                "Check partial_fingerprints fallback",
+            )
+            self.assertEqual("codeql-hash-77", rec_partial_fp["fingerprint"])
+
+            no_fp_doc = copy.deepcopy(edge_imported)
+            no_fp_doc["observations"][0].pop("partial_fingerprints", None)
+            atomic_json(edge_dir / "observations.json", no_fp_doc)
+            rec_mixed_lines = runs.reconcile(
+                edge_dir,
+                "py/mixed-locations",
+                "accepted-risk",
+                "Mixed None and int lines sort cleanly",
+            )
+            self.assertTrue(rec_mixed_lines["fingerprint"])
+
+            reversed_range_doc = copy.deepcopy(no_fp_doc)
+            reversed_range_doc["observations"][0]["locations"] = [
+                {"path": "app.py", "line": 10, "end_line": 4}
+            ]
+            atomic_json(ws / "observations.json", reversed_range_doc)
+            rev_errs = runs.validate_run(ws)
+            self.assertTrue(
+                any("observations.json" in e and "end_line" in e for e in rev_errs),
+                rev_errs,
+            )
+            with self.assertRaises(FredCliError) as bad_obs_ctx:
+                runs.reconcile(edge_dir, "missing", "open", "note")
+            self.assertEqual("invalid_reconciliation", bad_obs_ctx.exception.code)
+            atomic_json(edge_dir / "observations.json", reversed_range_doc)
+            with self.assertRaises(FredCliError) as rev_obs_ctx:
+                runs.reconcile(
+                    edge_dir, "py/mixed-locations", "open", "reversed end_line"
+                )
+            self.assertEqual("invalid_observations", rev_obs_ctx.exception.code)
+
 
 class BoundaryGuardAndContractTests(unittest.TestCase):
     def setUp(self):

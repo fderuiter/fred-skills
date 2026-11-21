@@ -42,6 +42,7 @@ _NON_FAIL_RESULT_KINDS = frozenset(
 )
 _SKIPPED_RESULT_KINDS = frozenset({"pass", "notApplicable"})
 _RETAINED_RESULT_KINDS = frozenset({"fail", "open", "review", "informational"})
+_VALID_SARIF_LEVELS = frozenset({"none", "note", "warning", "error"})
 _ACTIVE_SUPPRESSION_STATUSES = frozenset({"underReview", "rejected"})
 _VALID_SUPPRESSION_KINDS = frozenset({"inSource", "external"})
 _AUDIT_PROPERTY_KEYS = (
@@ -324,6 +325,12 @@ def _add_version_control_roots(
             )
 
 
+def _nonneg_int_or_none(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def _add_invocation_roots(
     roots: list[str],
     run: dict[str, Any],
@@ -333,8 +340,9 @@ def _add_invocation_roots(
     invocations = run.get("invocations")
     if not isinstance(invocations, list):
         return
-    if isinstance(invocation_index, int) and 0 <= invocation_index < len(invocations):
-        inv = invocations[invocation_index]
+    inv_idx = _nonneg_int_or_none(invocation_index)
+    if inv_idx is not None and inv_idx < len(invocations):
+        inv = invocations[inv_idx]
         if isinstance(inv, dict):
             _append_usable_root(
                 roots, _extract_location_abs_dir(inv.get("workingDirectory"), base_map)
@@ -407,13 +415,9 @@ def _resolve_artifact_location_dict(
         return None
     if artifact_loc.get("uri"):
         return artifact_loc
-    idx = artifact_loc.get("index")
+    idx = _nonneg_int_or_none(artifact_loc.get("index"))
     artifacts = run.get("artifacts")
-    if (
-        isinstance(idx, int)
-        and isinstance(artifacts, list)
-        and 0 <= idx < len(artifacts)
-    ):
+    if idx is not None and isinstance(artifacts, list) and idx < len(artifacts):
         art = artifacts[idx]
         if isinstance(art, dict) and isinstance(art.get("location"), dict):
             return art["location"]
@@ -497,8 +501,8 @@ def _select_tool_component(
 ) -> dict[str, Any] | None:
     if not isinstance(tc_ref, dict):
         return None
-    idx = tc_ref.get("index")
-    if isinstance(idx, int) and 0 <= idx < len(extensions):
+    idx = _nonneg_int_or_none(tc_ref.get("index"))
+    if idx is not None and idx < len(extensions):
         return extensions[idx]
     components = [driver, *extensions]
     return _match_component_by_field(
@@ -530,10 +534,6 @@ def _lookup_rule_in_component(
             if isinstance(item, dict) and item.get("id") == rule_id:
                 return item
     return None
-
-
-def _nonneg_int_or_none(value: object) -> int | None:
-    return value if isinstance(value, int) and value >= 0 else None
 
 
 def _find_sarif_rule(
@@ -582,14 +582,13 @@ def _override_entry_level(
     if not isinstance(desc, dict) or not isinstance(cfg, dict):
         return None
     level = cfg.get("level")
-    if not isinstance(level, str) or not level:
+    if not isinstance(level, str) or level not in _VALID_SARIF_LEVELS:
         return None
     matches_id = bool(rule_id and desc.get("id") == rule_id)
+    norm_res_idx = _nonneg_int_or_none(res_idx)
+    desc_idx = _nonneg_int_or_none(desc.get("index"))
     matches_index = (
-        isinstance(res_idx, int)
-        and res_idx >= 0
-        and desc.get("index") == res_idx
-        and not desc.get("id")
+        norm_res_idx is not None and desc_idx == norm_res_idx and not desc.get("id")
     )
     return level if (matches_id or matches_index) else None
 
@@ -600,16 +599,20 @@ def _find_override_level(
     invocations = run.get("invocations")
     if not isinstance(invocations, list):
         return None
-    inv_idx = result.get("invocationIndex")
+    inv_idx = _nonneg_int_or_none(result.get("invocationIndex"))
     ordered = (
         [invocations[inv_idx]]
-        if isinstance(inv_idx, int) and 0 <= inv_idx < len(invocations)
+        if inv_idx is not None and inv_idx < len(invocations)
         else invocations
     )
     raw_rule_ref = result.get("rule")
     rule_ref: dict[str, Any] = raw_rule_ref if isinstance(raw_rule_ref, dict) else {}
-    ref_index = rule_ref.get("index")
-    res_idx = ref_index if isinstance(ref_index, int) else result.get("ruleIndex")
+    ref_index = _nonneg_int_or_none(rule_ref.get("index"))
+    res_idx = (
+        ref_index
+        if ref_index is not None
+        else _nonneg_int_or_none(result.get("ruleIndex"))
+    )
 
     for inv in ordered:
         overrides = (
@@ -634,7 +637,7 @@ def _resolve_sarif_level(
     if isinstance(kind, str) and kind in _NON_FAIL_RESULT_KINDS:
         return "none"
     explicit = result.get("level")
-    if isinstance(explicit, str) and explicit:
+    if isinstance(explicit, str) and explicit in _VALID_SARIF_LEVELS:
         return explicit
     override_level = _find_override_level(result, run, rule_id)
     if override_level:
@@ -645,7 +648,7 @@ def _resolve_sarif_level(
         else None
     )
     rule_level = default_cfg.get("level") if isinstance(default_cfg, dict) else None
-    if isinstance(rule_level, str) and rule_level:
+    if isinstance(rule_level, str) and rule_level in _VALID_SARIF_LEVELS:
         return rule_level
     return "warning"
 
@@ -671,11 +674,11 @@ def _extract_logical_symbol(
         direct = _symbol_from_logical_record(entry)
         if direct:
             return direct
-        idx = entry.get("index")
+        idx = _nonneg_int_or_none(entry.get("index"))
         if (
-            isinstance(idx, int)
+            idx is not None
             and isinstance(run_logical, list)
-            and 0 <= idx < len(run_logical)
+            and idx < len(run_logical)
             and isinstance(run_logical[idx], dict)
         ):
             indexed = _symbol_from_logical_record(run_logical[idx])
@@ -712,6 +715,12 @@ def _clean_fingerprint_map(raw_map: object) -> dict[str, str] | None:
     return cleaned or None
 
 
+def _positive_int_or_none(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
 def _build_location_record(
     item: dict[str, Any],
     run: dict[str, Any],
@@ -732,12 +741,14 @@ def _build_location_record(
         return None
     raw_region = physical.get("region")
     region: dict[str, Any] = raw_region if isinstance(raw_region, dict) else {}
+    start_line = _positive_int_or_none(region.get("startLine"))
+    end_line = _positive_int_or_none(region.get("endLine"))
     loc_record: dict[str, Any] = {
         "path": norm_path,
-        "line": region.get("startLine"),
+        "line": start_line,
     }
-    if region.get("endLine") is not None:
-        loc_record["end_line"] = region.get("endLine")
+    if start_line is not None and end_line is not None and end_line >= start_line:
+        loc_record["end_line"] = end_line
     symbol = _extract_logical_symbol(item, run)
     if symbol:
         loc_record["symbol"] = symbol
@@ -774,7 +785,7 @@ def _normalize_active_suppression(
     sup: dict[str, Any],
 ) -> tuple[bool, dict[str, str] | None]:
     status = sup.get("status")
-    if status is None or status == "accepted":
+    if status is None or status == "" or status == "accepted":
         return True, None
     if not isinstance(status, str) or status not in _ACTIVE_SUPPRESSION_STATUSES:
         return False, None
@@ -899,10 +910,10 @@ def _import_sarif_result(
     )
     if is_suppressed:
         return None
-    inv_idx = result.get("invocationIndex")
+    inv_idx = _nonneg_int_or_none(result.get("invocationIndex"))
     sarif_roots = (
         _collect_sarif_roots(run, base_map, inv_idx)
-        if isinstance(inv_idx, int) and inv_idx >= 0
+        if inv_idx is not None
         else default_sarif_roots
     )
     matched_rule = _find_sarif_rule(result, driver, extensions)

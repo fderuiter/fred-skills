@@ -2130,6 +2130,22 @@ _VALID_REMEDIATION_STATES = frozenset(
 _OBSERVATION_COMPANION_NAMES = ("observations.json", "scanner-observations.json")
 
 
+def _first_fingerprint_value(fp_map: object) -> str | None:
+    if not isinstance(fp_map, dict):
+        return None
+    for _, val in sorted(fp_map.items()):
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
+def _normalized_location_line(loc: dict[str, Any]) -> int:
+    raw_line = loc.get("line")
+    if isinstance(raw_line, int) and not isinstance(raw_line, bool) and raw_line >= 1:
+        return raw_line
+    return 0
+
+
 def _observation_fingerprint(obs: dict[str, Any]) -> str:
     for map_key in ("fingerprints", "partial_fingerprints"):
         fp_map = obs.get(map_key)
@@ -2137,16 +2153,15 @@ def _observation_fingerprint(obs: dict[str, Any]) -> str:
             fred_fp = fp_map.get("fred-skills/v1")
             if isinstance(fred_fp, str) and fred_fp:
                 return fred_fp
-    raw_fps = obs.get("fingerprints")
-    if isinstance(raw_fps, dict):
-        for _, val in sorted(raw_fps.items()):
-            if isinstance(val, str) and val:
-                return val
+    for map_key in ("fingerprints", "partial_fingerprints"):
+        fallback_fp = _first_fingerprint_value(obs.get(map_key))
+        if fallback_fp is not None:
+            return fallback_fp
     loc_tuples = sorted(
         (
             str(loc.get("path", "")),
             str(loc.get("symbol") or ""),
-            loc.get("line"),
+            _normalized_location_line(loc),
         )
         for loc in (obs.get("locations") or [])
         if isinstance(loc, dict)
