@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -2759,6 +2761,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
             ),
             bump_version.DISTRIBUTABLE_PATHS,
         )
+        makefile_text = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertLess(
+            makefile_text.index("$(PYTHON) scripts/build_catalog.py"),
+            makefile_text.index("$(PYTHON) scripts/bump_version.py"),
+        )
+        self.assertLess(
+            makefile_text.index("$(PYTHON) scripts/bump_version.py"),
+            makefile_text.index("$(PYTHON) scripts/build_experience.py"),
+        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir)
@@ -2959,8 +2970,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
             _write_lf(repo61 / "LICENSE", "MIT License (updated)\n")
             self.assertEqual(1, bump_version.main(["--root", str(repo61), "--check"]))
 
+            fix_cmd = (
+                ["make", "fix", f"PYTHON={shlex.quote(sys.executable)} -B"]
+                if shutil.which("make")
+                else [sys.executable, "-B", "scripts/bump_version.py"]
+            )
             fix_proc = subprocess.run(
-                ["make", "fix", f"PYTHON={sys.executable} -B"],
+                fix_cmd,
                 cwd=repo61,
                 capture_output=True,
                 text=True,

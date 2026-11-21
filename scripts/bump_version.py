@@ -155,13 +155,16 @@ def _worktree_json_dict(root: Path, rel_path: str) -> dict[str, Any] | None:
 
 def detect_distributable_changes(root: Path, tag: str) -> list[str]:
     """Return sorted distributable file paths modified or added since refs/tags/<tag>."""
+    git_pathspecs = tuple(
+        f":(glob){path}" if "*" in path else path for path in DISTRIBUTABLE_PATHS
+    )
     committed_proc = run_local_git(
         root,
         "diff",
         "--name-only",
         f"refs/tags/{tag}..HEAD",
         "--",
-        *DISTRIBUTABLE_PATHS,
+        *git_pathspecs,
         text=True,
         check=True,
     )
@@ -171,7 +174,7 @@ def detect_distributable_changes(root: Path, tag: str) -> list[str]:
         "--name-only",
         f"refs/tags/{tag}",
         "--",
-        *DISTRIBUTABLE_PATHS,
+        *git_pathspecs,
         text=True,
         check=True,
     )
@@ -181,7 +184,7 @@ def detect_distributable_changes(root: Path, tag: str) -> list[str]:
         "--others",
         "--exclude-standard",
         "--",
-        *DISTRIBUTABLE_PATHS,
+        *git_pathspecs,
         text=True,
         check=True,
     )

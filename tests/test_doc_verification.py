@@ -2093,6 +2093,8 @@ class DocSnippetVerificationTests(unittest.TestCase):
             subprocess.run(
                 [
                     "git",
+                    "-c",
+                    "core.autocrlf=false",
                     "clone",
                     "--depth=1",
                     "--no-tags",
@@ -2129,6 +2131,8 @@ class DocSnippetVerificationTests(unittest.TestCase):
             subprocess.run(
                 [
                     "git",
+                    "-c",
+                    "core.autocrlf=false",
                     "-C",
                     str(tagless_clone),
                     "fetch",
