@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -61,6 +62,8 @@ ROOT_MARKDOWN_FILES: tuple[str, ...] = (
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
     "SECURITY.md",
     "evals/README.md",
 )
@@ -68,9 +71,10 @@ AUXILIARY_ROOT_MARKDOWN: tuple[str, ...] = ROOT_MARKDOWN_FILES[1:]
 GITHUB_BLOB_BASE_URL = "https://github.com/fderuiter/fred-skills/blob/main"
 
 _HR_RE = re.compile(r"^\s*(?:-\s*-\s*-[-\s]*|\*\s*\*\s*\*[\*\s]*|_\s*_\s*_[_\s]*)$")
-_UL_ITEM_RE = re.compile(r"^([ \t]*)[-*+]\s+(.*)$")
-_OL_ITEM_RE = re.compile(r"^([ \t]*)\d+\.\s+(.*)$")
-_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
+_UL_ITEM_RE = re.compile(r"^([ \t]*)([-*+])(?:([ \t]+)(.*)|[ \t]*)$")
+_OL_ITEM_RE = re.compile(r"^([ \t]*)(\d+\.)(?:([ \t]+)(.*)|[ \t]*)$")
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>\s?(.*)$")
+_SHIM_DIRECTIVE_RE = re.compile(r"^@([^\s<>]+\.md)$")
 _INLINE_CODE_RE = re.compile(r"``(.+?)``|`([^`]+)`")
 _INLINE_LINK_RE = re.compile(r"(!?)\[([^\]]+)\]\(([^)]+)\)")
 _REF_LINK_RE = re.compile(r"\[([^\]]+)\]\[([^\]]*)\]")
@@ -121,6 +125,8 @@ def rewrite_link_target(
     source_rel_path: str,
     compiled_md_paths: frozenset[str],
     root: Path = ROOT,
+    *,
+    output_rel_path: str | None = None,
 ) -> str:
     """Rewrite relative .md link targets to .html (or GitHub blob URLs for pruned skill resources)."""
     cleaned = target.strip().strip("<>\"'")
@@ -130,18 +136,28 @@ def rewrite_link_target(
 
     raw_path = unquote(parsed.path)
     lower_path = raw_path.lower()
-    if not lower_path.endswith((".md", ".py")):
-        return cleaned
-
-    source_dir = (root.resolve() / source_rel_path).parent
+    resolved_root = root.resolve()
+    source_dir = (resolved_root / source_rel_path).parent
+    output_dir = (resolved_root / (output_rel_path or source_rel_path)).parent
     resolved = (source_dir / raw_path).resolve()
     try:
-        rel_target = resolved.relative_to(root.resolve()).as_posix()
+        rel_target = resolved.relative_to(resolved_root).as_posix()
     except ValueError:
         return cleaned
 
+    if not lower_path.endswith((".md", ".py")):
+        if output_dir != source_dir:
+            relocated = os.path.relpath(resolved, output_dir).replace("\\", "/")
+            return urlunsplit(("", "", relocated, parsed.query, parsed.fragment))
+        return cleaned
+
     if lower_path.endswith(".md") and rel_target in compiled_md_paths:
-        new_path = parsed.path[:-3] + ".html"
+        if output_dir != source_dir:
+            new_path = os.path.relpath(
+                resolved.with_suffix(".html"), output_dir
+            ).replace("\\", "/")
+        else:
+            new_path = parsed.path[:-3] + ".html"
         return urlunsplit(("", "", new_path, parsed.query, parsed.fragment))
 
     if _is_repo_hosted_skill_resource(rel_target):
@@ -176,6 +192,8 @@ def _render_inline(
     compiled_md_paths: frozenset[str],
     ref_defs: Mapping[str, str],
     root: Path,
+    *,
+    output_rel_path: str | None = None,
 ) -> str:
     """Render inline code, links, bold/italic, and escaped text safely."""
     code_tokens: list[str] = []
@@ -191,7 +209,11 @@ def _render_inline(
 
     def _build_anchor(label_raw: str, url_raw: str, is_image: bool) -> str:
         rewritten = rewrite_link_target(
-            url_raw, source_rel_path, compiled_md_paths, root=root
+            url_raw,
+            source_rel_path,
+            compiled_md_paths,
+            root=root,
+            output_rel_path=output_rel_path,
         )
         label_html = _format_escaped_emphasis(escape(label_raw, quote=True))
         for c_idx, c_html in enumerate(code_tokens):
@@ -241,19 +263,61 @@ def _is_table_separator(line: str) -> bool:
     return is_markdown_table_separator(line)
 
 
+def _leading_indent_cols(line: str) -> int:
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip(" "))
+
+
+def _strip_indent_columns(line: str, max_cols: int) -> str:
+    """Strip up to max_cols visual columns of leading spaces/tabs without touching content."""
+    if max_cols <= 0 or not line:
+        return line
+    col = 0
+    idx = 0
+    while idx < len(line) and col < max_cols:
+        ch = line[idx]
+        if ch == " ":
+            col += 1
+            idx += 1
+        elif ch == "\t":
+            next_col = col + (4 - (col % 4))
+            idx += 1
+            if next_col > max_cols:
+                return (" " * (next_col - max_cols)) + line[idx:]
+            col = next_col
+        else:
+            break
+    return line[idx:]
+
+
+class _CompileContext:
+    """Mutable document-level state shared across recursive block compilation."""
+
+    def __init__(self, inline_fn: Any) -> None:
+        self.inline_fn = inline_fn
+        self.seen_slugs: dict[str, int] = {}
+        self.first_title: str = ""
+
+
 def _consume_fenced_block(lines: list[str], start_idx: int) -> tuple[str, int]:
     block = consume_fenced_block(lines, start_idx)
-    indent_prefix = block.fence.indent
+    indent_cols = _leading_indent_cols(block.fence.indent)
     lang = block.fence.language
     code_lines = [
-        candidate[len(indent_prefix) :]
-        if indent_prefix and candidate.startswith(indent_prefix)
-        else candidate
+        _strip_indent_columns(candidate, indent_cols) if indent_cols else candidate
         for _, candidate in block.lines
     ]
     escaped_code = escape("\n".join(code_lines), quote=False)
     lang_attr = f' class="language-{escape(lang, quote=True)}"' if lang else ""
     return f"<pre><code{lang_attr}>{escaped_code}</code></pre>", block.end_line
+
+
+def _is_table_header_at(lines: list[str], idx: int) -> bool:
+    return (
+        "|" in lines[idx]
+        and idx + 1 < len(lines)
+        and _is_table_separator(lines[idx + 1])
+    )
 
 
 def _consume_table(
@@ -291,18 +355,61 @@ def _consume_table(
     return f'<div class="table-container"><table>{thead}{tbody}</table></div>', idx
 
 
-def _match_list_item(line: str) -> tuple[str, int, str] | None:
+def _match_list_item(line: str) -> tuple[str, int, int, str] | None:
     if _HR_RE.match(line):
         return None
-    ul_m = _UL_ITEM_RE.match(line)
-    if ul_m:
-        indent = len(ul_m.group(1).expandtabs(4))
-        return ("ul", indent, ul_m.group(2))
-    ol_m = _OL_ITEM_RE.match(line)
-    if ol_m:
-        indent = len(ol_m.group(1).expandtabs(4))
-        return ("ol", indent, ol_m.group(2))
+    for tag, pattern in (("ul", _UL_ITEM_RE), ("ol", _OL_ITEM_RE)):
+        m = pattern.match(line)
+        if m is not None:
+            lead, marker, sep, rest = (
+                m.group(1),
+                m.group(2),
+                m.group(3) or " ",
+                m.group(4) or "",
+            )
+            indent = _leading_indent_cols(lead)
+            content_indent = _leading_indent_cols(lead + marker + sep)
+            return (tag, indent, content_indent, rest)
     return None
+
+
+def _collect_list_item_lines(
+    lines: list[str],
+    start_idx: int,
+    base_indent: int,
+    content_indent: int,
+    first_text: str,
+) -> tuple[list[str], int]:
+    item_lines: list[str] = [first_text]
+    idx = start_idx + 1
+    while idx < len(lines):
+        nxt = lines[idx]
+        if not nxt.strip():
+            look = idx + 1
+            while look < len(lines) and not lines[look].strip():
+                look += 1
+            if look >= len(lines) or _leading_indent_cols(lines[look]) <= base_indent:
+                idx = look
+                break
+            item_lines.append("")
+            idx = look
+            continue
+
+        if _leading_indent_cols(nxt) <= base_indent:
+            break
+
+        if match_fence_open(nxt) is not None:
+            block = consume_fenced_block(lines, idx)
+            for _, raw_f_line in (
+                (start, lines[start]) for start in range(idx, block.end_line)
+            ):
+                item_lines.append(_strip_indent_columns(raw_f_line, content_indent))
+            idx = block.end_line
+            continue
+
+        item_lines.append(_strip_indent_columns(nxt, content_indent))
+        idx += 1
+    return item_lines, idx
 
 
 def _consume_list(
@@ -310,7 +417,7 @@ def _consume_list(
     start_idx: int,
     base_indent: int,
     list_tag: str,
-    inline_fn: Any,
+    ctx: _CompileContext,
 ) -> tuple[str, int]:
     items_html: list[str] = []
     idx = start_idx
@@ -319,96 +426,200 @@ def _consume_list(
         item_info = _match_list_item(lines[idx])
         if item_info is None:
             break
-        tag, indent, first_text = item_info
+        tag, indent, content_indent, first_text = item_info
         if indent < base_indent or (indent == base_indent and tag != list_tag):
             break
         if indent > base_indent:
-            sub_html, idx = _consume_list(lines, idx, indent, tag, inline_fn)
+            sub_html, idx = _consume_list(lines, idx, indent, tag, ctx)
             if items_html:
                 items_html[-1] = items_html[-1][:-5] + sub_html + "</li>"
             else:
                 items_html.append(f"<li>{sub_html}</li>")
             continue
 
-        text_parts = [first_text.strip()]
-        extra_blocks: list[str] = []
-        idx += 1
-
-        while idx < len(lines):
-            nxt = lines[idx]
-            if not nxt.strip():
-                look = idx + 1
-                while look < len(lines) and not lines[look].strip():
-                    look += 1
-                if look < len(lines):
-                    next_indent = len(lines[look]) - len(lines[look].lstrip(" \t"))
-                    next_item = _match_list_item(lines[look])
-                    if (
-                        match_fence_open(lines[look]) is not None
-                        and next_indent > base_indent
-                    ):
-                        idx = look
-                        fence_html, idx = _consume_fenced_block(lines, idx)
-                        extra_blocks.append(fence_html)
-                        continue
-                    if next_item and next_item[1] >= base_indent:
-                        idx = look
-                        break
-                    if (
-                        next_indent > base_indent
-                        and match_atx_heading(lines[look]) is None
-                    ):
-                        idx = look
-                        continue
-                idx = look
-                break
-
-            if match_fence_open(nxt) is not None:
-                fence_indent = len(nxt) - len(nxt.lstrip(" \t"))
-                if fence_indent > base_indent:
-                    fence_html, idx = _consume_fenced_block(lines, idx)
-                    extra_blocks.append(fence_html)
-                    continue
-                break
-
-            sub_item = _match_list_item(nxt)
-            if sub_item is not None:
-                if sub_item[1] > base_indent:
-                    sub_html, idx = _consume_list(
-                        lines, idx, sub_item[1], sub_item[0], inline_fn
-                    )
-                    extra_blocks.append(sub_html)
-                    continue
-                break
-
-            if match_atx_heading(nxt) is not None or _HR_RE.match(nxt):
-                break
-
-            line_indent = len(nxt.expandtabs(4)) - len(nxt.expandtabs(4).lstrip(" "))
-            if line_indent > base_indent:
-                text_parts.append(nxt.strip())
-                idx += 1
-                continue
-            break
-
-        lead_html = inline_fn(" ".join(p for p in text_parts if p))
-        items_html.append(f"<li>{lead_html}{''.join(extra_blocks)}</li>")
+        item_lines, idx = _collect_list_item_lines(
+            lines, idx, base_indent, content_indent, first_text
+        )
+        item_blocks = _compile_blocks(item_lines, ctx, allow_indented_headings=True)
+        if (
+            len(item_blocks) == 1
+            and item_blocks[0].startswith("<p>")
+            and item_blocks[0].endswith("</p>")
+        ):
+            items_html.append(f"<li>{item_blocks[0][3:-4]}</li>")
+        else:
+            items_html.append(f"<li>{''.join(item_blocks)}</li>")
 
     return f"<{list_tag}>{''.join(items_html)}</{list_tag}>", idx
 
 
-def compile_markdown(
+def _consume_blockquote(
+    lines: list[str],
+    start_idx: int,
+    ctx: _CompileContext,
+) -> tuple[str, int]:
+    bq_lines: list[str] = []
+    idx = start_idx
+    while idx < len(lines):
+        m = _BLOCKQUOTE_RE.match(lines[idx])
+        if m is None:
+            break
+        bq_lines.append(m.group(1))
+        idx += 1
+    inner_blocks = _compile_blocks(bq_lines, ctx, allow_indented_headings=True)
+    inner_html = "".join(inner_blocks) if inner_blocks else "<p></p>"
+    return f"<blockquote>{inner_html}</blockquote>", idx
+
+
+def _starts_non_paragraph_block(
+    lines: list[str],
+    idx: int,
+    heading_max_indent: int | None,
+) -> bool:
+    cur = lines[idx]
+    return bool(
+        not cur.strip()
+        or match_fence_open(cur) is not None
+        or match_atx_heading(cur, max_indent=heading_max_indent) is not None
+        or _HR_RE.match(cur)
+        or _BLOCKQUOTE_RE.match(cur)
+        or _match_list_item(cur) is not None
+        or _is_table_header_at(lines, idx)
+    )
+
+
+def _compile_blocks(
+    lines: list[str],
+    ctx: _CompileContext,
+    *,
+    allow_indented_headings: bool = False,
+) -> list[str]:
+    blocks: list[str] = []
+    heading_max_indent: int | None = None if allow_indented_headings else 3
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if not line.strip():
+            idx += 1
+            continue
+
+        if match_fence_open(line) is not None:
+            fence_html, idx = _consume_fenced_block(lines, idx)
+            blocks.append(fence_html)
+            continue
+
+        heading_info = match_atx_heading(line, max_indent=heading_max_indent)
+        if heading_info is not None:
+            level, raw_heading = heading_info
+            if not ctx.first_title:
+                ctx.first_title = re.sub(r"[`*_]", "", raw_heading).strip()
+            slug = unique_heading_slug(raw_heading, ctx.seen_slugs)
+            blocks.append(
+                f'<h{level} id="{escape(slug, quote=True)}">{ctx.inline_fn(raw_heading)}</h{level}>'
+            )
+            idx += 1
+            continue
+
+        if _HR_RE.match(line):
+            blocks.append("<hr>")
+            idx += 1
+            continue
+
+        if _is_table_header_at(lines, idx):
+            table_html, idx = _consume_table(lines, idx, ctx.inline_fn)
+            blocks.append(table_html)
+            continue
+
+        if _BLOCKQUOTE_RE.match(line):
+            bq_html, idx = _consume_blockquote(lines, idx, ctx)
+            blocks.append(bq_html)
+            continue
+
+        list_info = _match_list_item(line)
+        if list_info is not None:
+            list_html, idx = _consume_list(lines, idx, list_info[1], list_info[0], ctx)
+            blocks.append(list_html)
+            continue
+
+        para_lines: list[str] = []
+        while idx < len(lines) and not _starts_non_paragraph_block(
+            lines, idx, heading_max_indent
+        ):
+            para_lines.append(lines[idx].strip())
+            idx += 1
+        blocks.append(f"<p>{ctx.inline_fn(' '.join(para_lines))}</p>")
+
+    return blocks
+
+
+def _resolve_shim_target(
+    body_markdown: str,
+    source_rel_path: str,
+    root: Path,
+    visited: frozenset[str],
+) -> tuple[str, str, str] | None:
+    """Resolve a single-line @<target>.md host shim into (raw_target, target_rel, target_md)."""
+    shim_match = _SHIM_DIRECTIVE_RE.match(body_markdown.strip())
+    if shim_match is None:
+        return None
+    raw_target = shim_match.group(1)
+    resolved_root = root.resolve()
+    source_dir = (resolved_root / source_rel_path).parent
+    candidate = (source_dir / raw_target).resolve()
+    if (
+        not candidate.is_relative_to(resolved_root)
+        or not candidate.is_file()
+        or candidate.is_symlink()
+    ):
+        return None
+    target_rel = candidate.relative_to(resolved_root).as_posix()
+    if target_rel in visited:
+        return None
+    return raw_target, target_rel, candidate.read_text(encoding="utf-8")
+
+
+def _compile_markdown_internal(
     markdown_text: str,
     source_rel_path: str,
     compiled_md_paths: frozenset[str],
-    root: Path = ROOT,
+    root: Path,
+    *,
+    output_rel_path: str,
+    visited_shims: frozenset[str],
 ) -> tuple[str, str]:
-    """Compile Markdown text into (first_heading_title, rendered_html)."""
     frontmatter_pairs, body_markdown = parse_frontmatter_scalars(markdown_text)
+    shim_resolved = _resolve_shim_target(
+        body_markdown, source_rel_path, root, visited_shims
+    )
+    if shim_resolved is not None:
+        raw_target, target_rel, target_md = shim_resolved
+        effective_compiled = compiled_md_paths | {target_rel}
+        shim_href = rewrite_link_target(
+            raw_target,
+            source_rel_path,
+            effective_compiled,
+            root=root,
+            output_rel_path=output_rel_path,
+        )
+        shim_notice = (
+            f'<div class="callout"><p>Host instruction shim '
+            f"(<code>{escape(Path(output_rel_path).name)}</code>) — "
+            f"canonical repository instructions are maintained in "
+            f'<a href="{escape(shim_href, quote=True)}">{escape(shim_href)}</a>.</p></div>'
+        )
+        target_title, target_html = _compile_markdown_internal(
+            target_md,
+            target_rel,
+            effective_compiled,
+            root,
+            output_rel_path=output_rel_path,
+            visited_shims=visited_shims | {target_rel},
+        )
+        combined = f"{shim_notice}\n{target_html}" if target_html else shim_notice
+        return target_title, combined
+
     cleaned_md, ref_defs = strip_reference_link_definitions(body_markdown)
     lines = cleaned_md.splitlines()
-    seen_slugs: dict[str, int] = {}
-    first_title = ""
     blocks: list[str] = []
     if frontmatter_pairs:
         fm_items = "".join(
@@ -426,91 +637,35 @@ def compile_markdown(
             compiled_md_paths=compiled_md_paths,
             ref_defs=ref_defs,
             root=root,
+            output_rel_path=output_rel_path,
         )
 
-    idx = 0
-    while idx < len(lines):
-        line = lines[idx]
-        if not line.strip():
-            idx += 1
-            continue
+    ctx = _CompileContext(_inline)
+    blocks.extend(_compile_blocks(lines, ctx))
 
-        if match_fence_open(line) is not None:
-            fence_html, idx = _consume_fenced_block(lines, idx)
-            blocks.append(fence_html)
-            continue
-
-        heading_info = match_atx_heading(line)
-        if heading_info is not None:
-            level, raw_heading = heading_info
-            if not first_title:
-                first_title = re.sub(r"[`*_]", "", raw_heading).strip()
-            slug = unique_heading_slug(raw_heading, seen_slugs)
-            blocks.append(
-                f'<h{level} id="{escape(slug, quote=True)}">{_inline(raw_heading)}</h{level}>'
-            )
-            idx += 1
-            continue
-
-        if _HR_RE.match(line):
-            blocks.append("<hr>")
-            idx += 1
-            continue
-
-        if "|" in line and idx + 1 < len(lines) and _is_table_separator(lines[idx + 1]):
-            table_html, idx = _consume_table(lines, idx, _inline)
-            blocks.append(table_html)
-            continue
-
-        bq_match = _BLOCKQUOTE_RE.match(line)
-        if bq_match:
-            quote_parts: list[str] = []
-            while idx < len(lines):
-                m = _BLOCKQUOTE_RE.match(lines[idx])
-                if not m:
-                    break
-                if m.group(1).strip():
-                    quote_parts.append(m.group(1).strip())
-                idx += 1
-            blocks.append(
-                f"<blockquote><p>{_inline(' '.join(quote_parts))}</p></blockquote>"
-            )
-            continue
-
-        list_info = _match_list_item(line)
-        if list_info is not None:
-            list_html, idx = _consume_list(
-                lines, idx, list_info[1], list_info[0], _inline
-            )
-            blocks.append(list_html)
-            continue
-
-        para_lines: list[str] = []
-        while idx < len(lines):
-            cur = lines[idx]
-            if (
-                not cur.strip()
-                or match_fence_open(cur) is not None
-                or match_atx_heading(cur) is not None
-                or _HR_RE.match(cur)
-                or _BLOCKQUOTE_RE.match(cur)
-                or _match_list_item(cur) is not None
-                or (
-                    "|" in cur
-                    and idx + 1 < len(lines)
-                    and _is_table_separator(lines[idx + 1])
-                )
-            ):
-                break
-            para_lines.append(cur.strip())
-            idx += 1
-        blocks.append(f"<p>{_inline(' '.join(para_lines))}</p>")
-
+    first_title = ctx.first_title
     if not first_title and frontmatter_pairs:
         fm_map = dict(frontmatter_pairs)
         first_title = fm_map.get("title") or fm_map.get("name") or ""
 
     return first_title, "\n".join(blocks)
+
+
+def compile_markdown(
+    markdown_text: str,
+    source_rel_path: str,
+    compiled_md_paths: frozenset[str],
+    root: Path = ROOT,
+) -> tuple[str, str]:
+    """Compile Markdown text into (first_heading_title, rendered_html)."""
+    return _compile_markdown_internal(
+        markdown_text,
+        source_rel_path,
+        compiled_md_paths,
+        root,
+        output_rel_path=source_rel_path,
+        visited_shims=frozenset({source_rel_path}),
+    )
 
 
 def _render_skill_metadata_section(

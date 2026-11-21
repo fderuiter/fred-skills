@@ -35,9 +35,10 @@ from _doc_invariants import (
     build_prose_count_rules,
     discover_untagged_release_notes,
     find_prose_count_mismatches,
+    git_tag_exists,
 )
 from _markdown_utils import match_atx_heading, scan_markdown_fences
-from skill_tools import FredCliError
+from skill_tools import FredCliError, git_blob_bytes, run_local_git
 
 fred: ModuleType | None
 try:
@@ -1286,6 +1287,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         help="Non-mutating verification mode (standard repository flag)",
     )
     parser.add_argument(
+        "--root",
+        type=Path,
+        default=ROOT,
+        help="Repository root directory.",
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         help="Optional specific files to check",
@@ -2042,6 +2049,92 @@ def _load_known_skills(root: Path) -> set[str]:
     return {entry.parent.name for entry in skills_dir.glob("*/SKILL.md")}
 
 
+def _load_tagged_packs(root: Path, tag: str) -> set[str]:
+    """Load canonical pack names from refs/tags/<tag>:catalog/packs.json."""
+    raw_bytes = git_blob_bytes(root, f"refs/tags/{tag}:catalog/packs.json")
+    if raw_bytes is None:
+        return set()
+    try:
+        loaded = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    packs = loaded.get("packs") if isinstance(loaded, dict) else None
+    if not isinstance(packs, dict):
+        return set()
+    return {str(name) for name in packs}
+
+
+def _extract_skill_entry_name(rel_path: str) -> str | None:
+    """Extract <skill> when rel_path matches skills/<skill>/SKILL.md."""
+    parts = rel_path.strip().split("/")
+    if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md":
+        return parts[1] or None
+    return None
+
+
+def _load_tagged_skills(root: Path, tag: str) -> set[str]:
+    """Load standalone skill names from refs/tags/<tag> skills/*/SKILL.md."""
+    proc = run_local_git(
+        root,
+        "ls-tree",
+        "-r",
+        "--name-only",
+        f"refs/tags/{tag}",
+        "--",
+        "skills",
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return set()
+    names = (_extract_skill_entry_name(line) for line in proc.stdout.splitlines())
+    return {name for name in names if name is not None}
+
+
+def _check_pack_against_catalog(
+    pack_name: str,
+    filename: str,
+    expected_ver: str,
+    root: Path,
+) -> tuple[bool, str]:
+    """Verify pack_name exists at refs/tags/v<expected_ver> when tagged, else catalog/packs.json."""
+    tag = f"v{expected_ver}"
+    if git_tag_exists(root, tag):
+        if pack_name not in _load_tagged_packs(root, tag):
+            return (
+                False,
+                f"Pack '{pack_name}' in archive '{filename}' does not exist at tag 'refs/tags/{tag}'",
+            )
+        return True, ""
+    known_packs = _load_known_packs(root)
+    if known_packs and pack_name not in known_packs:
+        return (
+            False,
+            f"Unknown pack '{pack_name}' in archive '{filename}' (not in catalog/packs.json)",
+        )
+    return True, ""
+
+
+def _check_skill_archive_against_catalog(
+    skill_name: str,
+    asset: str,
+    root: Path,
+) -> tuple[bool, str]:
+    """Verify skill_name exists at refs/tags/v<VERSION> when tagged, else skills/*/SKILL.md."""
+    tag = f"v{_read_expected_version(root)}"
+    if git_tag_exists(root, tag):
+        if skill_name not in _load_tagged_skills(root, tag):
+            return (
+                False,
+                f"Standalone skill archive '{asset}' does not exist at tag 'refs/tags/{tag}'",
+            )
+        return True, ""
+    known_skills = _load_known_skills(root)
+    if known_skills and skill_name not in known_skills:
+        return False, f"Unknown standalone skill archive: {asset}"
+    return True, ""
+
+
 def _split_pack_archive_stem(
     filename: str,
     expected_version: str,
@@ -2079,13 +2172,7 @@ def _validate_pack_archive_name(filename: str, root: Path) -> tuple[bool, str]:
         return True, ""
     if filename.endswith(".tar.gz"):
         return False, f"Pack archive '{filename}' must use .tar or .zip extension"
-    known_packs = _load_known_packs(root)
-    if known_packs and pack_name not in known_packs:
-        return (
-            False,
-            f"Unknown pack '{pack_name}' in archive '{filename}' (not in catalog/packs.json)",
-        )
-    return True, ""
+    return _check_pack_against_catalog(pack_name, filename, expected_ver, root)
 
 
 def _validate_release_asset_name(asset: str, root: Path) -> tuple[bool, str]:
@@ -2096,10 +2183,7 @@ def _validate_release_asset_name(asset: str, root: Path) -> tuple[bool, str]:
         return _validate_pack_archive_name(asset, root)
     if asset.endswith(".tar.gz"):
         skill_name = asset.removesuffix(".tar.gz")
-        known_skills = _load_known_skills(root)
-        if known_skills and skill_name not in known_skills:
-            return False, f"Unknown standalone skill archive: {asset}"
-        return True, ""
+        return _check_skill_archive_against_catalog(skill_name, asset, root)
     return False, f"Unrecognized release asset filename: {asset}"
 
 
@@ -3062,7 +3146,11 @@ def verify_all_snippets(
         else None
     )
 
-    if target_rel_paths is None or "docs/toolkit.md" in target_rel_paths:
+    check_toolkit = (
+        target_rel_paths is None
+        and (root.resolve() == ROOT.resolve() or (root / "docs/toolkit.md").is_file())
+    ) or (target_rel_paths is not None and "docs/toolkit.md" in target_rel_paths)
+    if check_toolkit:
         subcmd_errors = verify_toolkit_subcommands(root=root)
         errors.extend(subcmd_errors)
 
@@ -3102,7 +3190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
     try:
-        errors = verify_all_snippets(root=ROOT, files=args.files or None)
+        errors = verify_all_snippets(root=args.root.resolve(), files=args.files or None)
     except (FredCliError, subprocess.TimeoutExpired) as exc:
         _print_cli_exception(exc)
         return 1

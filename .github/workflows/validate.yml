@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_call:
     inputs:
       ref:
@@ -16,8 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: skills-${{ github.workflow != 'Validate skill packages' && 'validate-' || '' }}${{ github.workflow }}-${{ (github.workflow != 'Validate skill packages' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.sha || github.ref }}${{ github.workflow != 'Validate skill packages' && '-' || '' }}${{ github.workflow != 'Validate skill packages' && github.run_id || '' }}
-  cancel-in-progress: ${{ github.workflow == 'Validate skill packages' && github.ref != 'refs/heads/main' }}
+  group: skills-${{ github.workflow != 'Validate skill packages' && 'validate-' || '' }}${{ github.workflow }}-${{ (github.workflow != 'Validate skill packages' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && github.sha || github.ref }}${{ github.workflow != 'Validate skill packages' && '-' || '' }}${{ github.workflow != 'Validate skill packages' && github.run_id || '' }}
+  cancel-in-progress: ${{ github.workflow == 'Validate skill packages' && github.event_name != 'merge_group' && github.ref != 'refs/heads/main' }}
 
 env:
   PYTHONDONTWRITEBYTECODE: '1'
@@ -31,13 +33,19 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ['3.12', '3.13']
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify clean merge tree against base branch
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: git merge-tree --write-tree "origin/$BASE_BRANCH" HEAD
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
@@ -56,7 +64,7 @@ jobs:
       - name: Validate skill packages and catalogs
         shell: bash
         env:
-          BASE_REF: ${{ (inputs.ref != '' && format('{0}~1', inputs.ref)) || (github.event_name == 'pull_request' && format('origin/{0}', github.base_ref)) || ((github.ref_type == 'tag' || startsWith(github.ref, 'refs/tags/')) && 'HEAD~1') || github.event.before }}
+          BASE_REF: ${{ (inputs.ref != '' && format('{0}~1', inputs.ref)) || (github.event_name == 'pull_request' && format('origin/{0}', github.base_ref)) || (github.event_name == 'merge_group' && github.event.merge_group.base_sha) || ((github.ref_type == 'tag' || startsWith(github.ref, 'refs/tags/')) && 'HEAD~1') || github.event.before }}
         run: python scripts/run_checks.py --phase packages --telemetry validation-telemetry.json --base-ref "$BASE_REF" --step-summary
       - name: Upload skill validation telemetry
         if: always()
@@ -77,7 +85,7 @@ jobs:
         if: github.event_name != 'workflow_call' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         shell: bash
         env:
-          BASE_REF: ${{ (github.event_name == 'pull_request' && format('origin/{0}', github.base_ref)) || github.event.before }}
+          BASE_REF: ${{ (github.event_name == 'pull_request' && format('origin/{0}', github.base_ref)) || (github.event_name == 'merge_group' && github.event.merge_group.base_sha) || github.event.before }}
         run: |
           RESOLVED_BASE="$BASE_REF"
           if [ -z "$RESOLVED_BASE" ] || ! git cat-file -e "${RESOLVED_BASE}^{commit}" 2>/dev/null; then

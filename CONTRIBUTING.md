@@ -71,6 +71,7 @@ python scripts/run_checks.py --phase typecheck
 python scripts/run_checks.py --phase packages
 python scripts/run_checks.py --phase docs
 python scripts/run_checks.py --phase tests
+python scripts/run_checks.py --phase tests --workers 4
 
 # Individual linting, formatting, static type, and verification commands
 ruff check .

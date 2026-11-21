@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -247,33 +248,196 @@ class ScaffolderTests(unittest.TestCase):
         )
         self.assertTrue(overwritten["package_dir"].is_dir())
 
+    def _populate_full_isolated_root(self) -> None:
+        ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+        for rel_file in (
+            "VERSION",
+            ".pre-commit-config.yaml",
+            "Makefile",
+            "pyproject.toml",
+            "requirements-dev.txt",
+        ):
+            src = ROOT / rel_file
+            if src.is_file():
+                (self.root / rel_file).write_bytes(src.read_bytes())
+        for root_md in sorted(ROOT.glob("*.md")):
+            if root_md.is_file():
+                (self.root / root_md.name).write_bytes(root_md.read_bytes())
+        for rel_dir in (
+            "catalog",
+            "docs",
+            "evals",
+            "examples",
+            "schemas",
+            "scripts",
+            "shared",
+            "skills",
+            ".github",
+        ):
+            src_dir = ROOT / rel_dir
+            if src_dir.is_dir():
+                shutil.copytree(
+                    src_dir,
+                    self.root / rel_dir,
+                    dirs_exist_ok=True,
+                    ignore=ignore_bytecode,
+                )
+
+    def test_standalone_scaffolder_syncs_suite_companions_and_formats_cleanly(
+        self,
+    ) -> None:
+        ignore_bytecode = shutil.ignore_patterns("__pycache__", "*.pyc")
+        shutil.copytree(ROOT / "shared", self.root / "shared", ignore=ignore_bytecode)
+        shutil.copytree(ROOT / "scripts", self.root / "scripts", ignore=ignore_bytecode)
+        shutil.copytree(
+            ROOT / "schemas",
+            self.root / "schemas",
+            dirs_exist_ok=True,
+            ignore=ignore_bytecode,
+        )
+        for rel_file in ("VERSION", "pyproject.toml"):
+            dst = self.root / rel_file
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((ROOT / rel_file).read_bytes())
+
+        dry_res = scaffold_skill.scaffold_skill(
+            "repo-audit-dry-preview",
+            root=self.root,
+            suite="repository-audits",
+            dry_run=True,
+        )
+        self.assertTrue(dry_res["dry_run"])
+        self.assertFalse((self.root / "skills").exists())
+
+        suite_specs: tuple[tuple[str, str | None, str, str], ...] = (
+            (
+                "repo-audit-rate-limits",
+                "repository-audits",
+                "assets/audit.schema.json",
+                "scripts/validate_audit.py",
+            ),
+            (
+                "repo-triage-regressions",
+                "repository-workflows",
+                "references/workflow-protocol.md",
+                "scripts/validate_workflow.py",
+            ),
+            (
+                "arch-service-contracts",
+                "software-architecture",
+                "assets/architecture.schema.json",
+                "scripts/validate_architecture.py",
+            ),
+            (
+                "review-api-changes",
+                "code-review",
+                "assets/review.schema.json",
+                "scripts/validate_review.py",
+            ),
+            (
+                "test-mutation-bounds",
+                "automated-testing",
+                "assets/testing.schema.json",
+                "scripts/validate_testing.py",
+            ),
+            (
+                "spec-acceptance-matrix",
+                "spec-driven-development",
+                "assets/spec.schema.json",
+                "scripts/validate_spec.py",
+            ),
+            (
+                "a" * 64,
+                None,
+                "assets/audit.schema.json",
+                "scripts/validate_audit.py",
+            ),
+        )
+        format_targets: list[str] = []
+        for skill_name, suite_name, suite_resource, suite_validator in suite_specs:
+            scaffold_skill.scaffold_skill(
+                skill_name,
+                root=self.root,
+                suite=suite_name,
+            )
+            pkg_dir = self.root / "skills" / skill_name
+            skill_md = (pkg_dir / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn(f"]({suite_resource})", skill_md)
+            self.assertIn(f"]({suite_validator})", skill_md)
+            self.assertTrue((pkg_dir / suite_resource).is_file())
+            self.assertTrue((pkg_dir / suite_validator).is_file())
+            format_targets.extend(
+                [
+                    str(pkg_dir / "scripts/validate_output.py"),
+                    str(pkg_dir / "SKILL.md"),
+                    str(pkg_dir / "references/examples.md"),
+                ]
+            )
+
+        ruff_bin = shutil.which("ruff")
+        self.assertIsNotNone(ruff_bin, "ruff binary required in dev test environment")
+        assert ruff_bin is not None
+        check_proc = subprocess.run(
+            [
+                ruff_bin,
+                "check",
+                "--config",
+                str(self.root / "pyproject.toml"),
+                str(self.root / "skills"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0, check_proc.returncode, check_proc.stdout + check_proc.stderr
+        )
+
+        fmt_proc = subprocess.run(
+            [
+                ruff_bin,
+                "format",
+                "--check",
+                "--config",
+                str(self.root / "pyproject.toml"),
+                *format_targets,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, fmt_proc.returncode, fmt_proc.stdout + fmt_proc.stderr)
+
+        val_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(ROOT / "scripts/validate_skills.py"),
+                "--root",
+                str(self.root),
+                "--no-ledger",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, val_proc.returncode, val_proc.stdout + val_proc.stderr)
+
     def test_scaffolder_with_catalog_sync_passes_catalog_and_experience_checks(
         self,
     ) -> None:
-        # Copy real catalog and shared manifests into isolated root to test full drift-free sync
-        for rel_file in (
-            "VERSION",
-            "scripts/audit_to_sarif.py",
-            "catalog/suites.json",
-            "catalog/experience.json",
-            "catalog/recipes.json",
-            "catalog/packs.json",
-            "catalog/hosts.json",
-        ):
-            src = ROOT / rel_file
-            dst = self.root / rel_file
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(src.read_bytes())
-
-        import shutil
-
-        shutil.copytree(ROOT / "shared", self.root / "shared")
-        shutil.copytree(ROOT / "skills", self.root / "skills")
+        self._populate_full_isolated_root()
+        version = (self.root / "VERSION").read_text(encoding="utf-8").strip()
+        historical_notes = self.root / "docs/release-notes-0.2.0.md"
+        historical_before = historical_notes.read_bytes()
+        active_notes = self.root / f"docs/release-notes-{version}.md"
+        self.assertTrue(active_notes.is_file())
 
         proc = subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "scripts/scaffold_skill.py"),
+                "-B",
+                str(self.root / "scripts/scaffold_skill.py"),
                 "repo-audit-rate-limits",
                 "--catalog",
                 "--suite",
@@ -299,7 +463,9 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual([], build_experience.build(self.root, check=True))
         baseline_skills = expected_total_skills(ROOT)
         self.assertGreaterEqual(baseline_skills, 1)
-        errors, telemetry = validate_skills.validate_with_telemetry(self.root)
+        errors, telemetry = validate_skills.validate_with_telemetry(
+            self.root, record_attempts=False
+        )
         self.assertEqual([], errors)
         self.assertEqual(baseline_skills + 1, telemetry["total_packages"])
 
@@ -317,15 +483,117 @@ class ScaffolderTests(unittest.TestCase):
                 sync_catalog=True,
                 suite=extra_suite,
             )
+
+        expected_total = baseline_skills + 1 + len(extra_specs)
         self.assertEqual([], sync_audit_resources.sync(self.root, check=True))
         self.assertEqual([], build_catalog.build(self.root, check=True))
         self.assertEqual([], build_experience.build(self.root, check=True))
-        all_errors, all_telemetry = validate_skills.validate_with_telemetry(self.root)
-        self.assertEqual([], all_errors)
-        self.assertEqual(
-            baseline_skills + 1 + len(extra_specs),
-            all_telemetry["total_packages"],
+
+        packs = json.loads(
+            (self.root / "catalog/packs.json").read_text(encoding="utf-8")
+        )["packs"]
+        all_new = ["repo-audit-rate-limits", *(n for n, _ in extra_specs)]
+        for sk_name in all_new:
+            self.assertIn(sk_name, packs["complete"]["skills"])
+        self.assertIn(f"({expected_total} skills;", packs["complete"]["description"])
+        self.assertIn("repo-audit-rate-limits", packs["full-audit"]["skills"])
+        for non_audit_name, _ in extra_specs:
+            self.assertNotIn(non_audit_name, packs["full-audit"]["skills"])
+
+        self.assertIn(
+            f"Total: {expected_total} skills.",
+            active_notes.read_text(encoding="utf-8"),
         )
+        self.assertIn(
+            f"**{expected_total} standalone skills**",
+            (self.root / "README.md").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            f"exposes all {expected_total} skills",
+            (self.root / "docs/integration.md").read_text(encoding="utf-8"),
+        )
+        self.assertEqual(historical_before, historical_notes.read_bytes())
+
+        ruff_bin = shutil.which("ruff")
+        self.assertIsNotNone(ruff_bin, "ruff binary required in dev test environment")
+        assert ruff_bin is not None
+        new_pkg_targets = [
+            str(p)
+            for sk_name in all_new
+            for p in (
+                self.root / "skills" / sk_name / "scripts/validate_output.py",
+                self.root / "skills" / sk_name / "SKILL.md",
+                self.root / "skills" / sk_name / "references/examples.md",
+            )
+        ]
+        ruff_check_proc = subprocess.run(
+            [
+                ruff_bin,
+                "check",
+                "--config",
+                str(self.root / "pyproject.toml"),
+                *(str(self.root / "skills" / sk_name) for sk_name in all_new),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0,
+            ruff_check_proc.returncode,
+            ruff_check_proc.stdout + ruff_check_proc.stderr,
+        )
+        ruff_fmt_proc = subprocess.run(
+            [
+                ruff_bin,
+                "format",
+                "--check",
+                "--config",
+                str(self.root / "pyproject.toml"),
+                *new_pkg_targets,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            0, ruff_fmt_proc.returncode, ruff_fmt_proc.stdout + ruff_fmt_proc.stderr
+        )
+
+        val_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(self.root / "scripts/validate_skills.py"),
+                "--root",
+                str(self.root),
+                "--no-ledger",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, val_proc.returncode, val_proc.stdout + val_proc.stderr)
+
+        doc_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(self.root / "scripts/verify_doc_snippets.py"),
+                "--root",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, doc_proc.returncode, doc_proc.stdout + doc_proc.stderr)
+
+        all_errors, all_telemetry = validate_skills.validate_with_telemetry(
+            self.root, record_attempts=False
+        )
+        self.assertEqual([], all_errors)
+        self.assertEqual(expected_total, all_telemetry["total_packages"])
 
     def test_scaffolder_catalog_sync_in_minimal_root(self) -> None:
         scaffold_skill.scaffold_skill(

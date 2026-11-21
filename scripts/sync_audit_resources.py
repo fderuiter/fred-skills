@@ -279,6 +279,29 @@ def _sync_manifest(
     return problems
 
 
+def sync_skill_package(
+    root: Path,
+    package: Path,
+    suite_name: str,
+    skill_name: str,
+    *,
+    check: bool = False,
+) -> list[str]:
+    shared_root = root / "shared"
+    if not shared_root.is_dir():
+        return []
+    problems: list[str] = []
+    for manifest_path in sorted(shared_root.glob("*/manifest.json")):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("suite", "repository-audits") == suite_name:
+            problems.extend(
+                _sync_skill_package(
+                    manifest_path.parent, root, package, manifest, skill_name, check
+                )
+            )
+    return problems
+
+
 def sync(root: Path = ROOT, check: bool = False) -> list[str]:
     problems: list[str] = []
     members = suite_members(root)

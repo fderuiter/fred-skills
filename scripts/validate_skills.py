@@ -3639,6 +3639,68 @@ def _check_single_tagged_release_note(root: Path, tag_ver: str) -> list[str]:
     return []
 
 
+_TAG_IMMUTABLE_PACKAGED_PATHS: tuple[str, ...] = ("skills", "catalog/packs.json")
+
+
+def _is_bytecode_artifact_path(rel_path: str) -> bool:
+    parts = rel_path.replace("\\", "/").split("/")
+    return "__pycache__" in parts or rel_path.endswith((".pyc", ".pyo"))
+
+
+def _collect_post_tag_packaged_changes(root: Path, tag: str) -> list[str]:
+    diff_proc = run_local_git(
+        root,
+        "diff",
+        "--name-only",
+        f"refs/tags/{tag}",
+        "--",
+        *_TAG_IMMUTABLE_PACKAGED_PATHS,
+        text=True,
+        check=False,
+    )
+    untracked_proc = run_local_git(
+        root,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "--",
+        *_TAG_IMMUTABLE_PACKAGED_PATHS,
+        text=True,
+        check=False,
+    )
+    if diff_proc.returncode != 0:
+        return [f"refs/tags/{tag} (git diff failed)"]
+    raw_lines = diff_proc.stdout.splitlines() + untracked_proc.stdout.splitlines()
+    return sorted(
+        {
+            cleaned
+            for line in raw_lines
+            if (cleaned := line.strip()) and not _is_bytecode_artifact_path(cleaned)
+        }
+    )
+
+
+def _validate_version_tag_immutability(root: Path) -> list[str]:
+    version_path = root / "VERSION"
+    if not version_path.is_file() or not (root / ".git").exists():
+        return []
+    ver = version_path.read_text(encoding="utf-8").strip()
+    if not ver or not git_tag_exists(root, f"v{ver}"):
+        return []
+    tag = f"v{ver}"
+    changed = _collect_post_tag_packaged_changes(root, tag)
+    if not changed:
+        return []
+    preview = ", ".join(changed[:5])
+    more = f" (+{len(changed) - 5} more)" if len(changed) > 5 else ""
+    msg = (
+        f"VERSION: release tag immutability violation against refs/tags/{tag}; "
+        f"skills/ or catalog/packs.json diverged ({preview}{more}) — "
+        "bump VERSION and add docs/release-notes-<VERSION>.md"
+    )
+    return [msg]
+
+
 def _validate_tagged_release_notes_immutability(root: Path) -> list[str]:
     errors: list[str] = []
     for tag_ver in _discover_tagged_release_note_versions(root):
@@ -3675,6 +3737,7 @@ def _validate_documentation_invariants(root: Path) -> list[str]:
         return load_errors
     count_rules = _build_prose_count_rules(exp)
     errors = _validate_tagged_release_notes_immutability(root)
+    errors.extend(_validate_version_tag_immutability(root))
     for rel_path in discover_untagged_release_notes(root):
         errors.extend(
             _validate_single_doc_file(
