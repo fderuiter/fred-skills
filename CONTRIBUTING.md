@@ -109,9 +109,11 @@ The ledger validator runs on the Python 3.12 standard library; instruction-only 
 ## Change a skill
 
 1. Scaffold a compliant starter package with `python scripts/scaffold_skill.py <skill-name>`
-   (add `--catalog --suite <suite>` to update `catalog/suites.json`, `catalog/experience.json`,
-   and generated discovery indexes), then establish a real task, its expected output, and
-   when the skill should activate.
+   (which automatically updates `catalog/suites.json`, `catalog/experience.json`, generated
+   discovery indexes, shared resources, prose counts, and starter evaluation fixtures when
+   targeting `skills/`; pass `--suite <suite>` to select a suite or `--no-catalog` /
+   `--output-dir <path>` for standalone scaffolding), then establish a real task, its
+   expected output, and when the skill should activate.
 2. Put a brief, specific trigger in `description` (`1–1024` characters, unique across skills)
    with `name` matching the directory; put procedure in the `SKILL.md` body under `500` lines.
    Link package-local references directly without symlinks or paths escaping the skill directory.

@@ -269,6 +269,39 @@ class AuditValidatorTests(unittest.TestCase):
             )
             self.assertEqual(1, bad_audit_proc.returncode)
 
+    def test_missing_finding_status_and_fields_return_errors_without_keyerror(self):
+        del self.audit["findings"][0]["status"]
+        self.audit["issues"] = [self.issue()]
+        errors = self.errors()
+        self.assertTrue(
+            any("'status' is a required property" in error for error in errors),
+            errors,
+        )
+
+    def test_non_audit_schema_skips_audit_semantic_rules_without_keyerror(self):
+        non_audit_schema = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["findings"],
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "summary"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "summary": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "additionalProperties": False,
+        }
+        payload = {"findings": [{"id": "F-1", "summary": "Custom finding"}]}
+        self.assertEqual([], validator.validate(payload, non_audit_schema))
+
 
 if __name__ == "__main__":
     unittest.main()

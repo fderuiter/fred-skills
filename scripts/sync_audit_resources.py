@@ -8,7 +8,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path, PureWindowsPath
 
-from skill_tools import ROOT, suite_members
+from skill_tools import ROOT, suite_members, suite_skills_by_suite
 
 
 def _resolve_script_source(shared: Path, root: Path, rel: Path) -> Path:
@@ -302,11 +302,54 @@ def sync_skill_package(
     return problems
 
 
+_TRIAGE_REL_PATH = "skills/repo-audit-diagnostics/scripts/triage.py"
+_TRIAGE_SKILLS_START = "_DEFAULT_SUITE_SKILLS: dict[str, tuple[str, ...]] = {\n"
+_TRIAGE_SKILLS_END = "\n}\n\n_DEFAULT_SUITE_ARTIFACTS:"
+
+
+def _render_triage_suite_entry(suite_name: str, skills: tuple[str, ...]) -> str:
+    if not skills:
+        return f'    "{suite_name}": (),\n'
+    joined = "".join(f'        "{skill}",\n' for skill in skills)
+    return f'    "{suite_name}": (\n{joined}    ),\n'
+
+
+def _render_triage_suite_skills_block(
+    suite_skills: Mapping[str, tuple[str, ...]],
+) -> str:
+    entries = "".join(
+        _render_triage_suite_entry(name, skills)
+        for name, skills in suite_skills.items()
+    )
+    return f"{_TRIAGE_SKILLS_START}{entries}}}"
+
+
+def _sync_triage_suite_skills(root: Path, check: bool) -> list[str]:
+    triage_path = root / _TRIAGE_REL_PATH
+    suite_skills = suite_skills_by_suite(root)
+    if not triage_path.is_file() or suite_skills is None:
+        return []
+    current = triage_path.read_text(encoding="utf-8")
+    start_idx = current.find(_TRIAGE_SKILLS_START)
+    end_idx = current.find(_TRIAGE_SKILLS_END, max(start_idx, 0))
+    if start_idx < 0 or end_idx < 0:
+        return [f"Missing _DEFAULT_SUITE_SKILLS block: {_TRIAGE_REL_PATH}"]
+    rendered = _render_triage_suite_skills_block(suite_skills)
+    updated = f"{current[:start_idx]}{rendered}{current[end_idx + 2 :]}"
+    if updated == current:
+        return []
+    if check:
+        return [f"Shared resource drift: {_TRIAGE_REL_PATH} (_DEFAULT_SUITE_SKILLS)"]
+    triage_path.write_text(updated, encoding="utf-8", newline="\n")
+    return []
+
+
 def sync(root: Path = ROOT, check: bool = False) -> list[str]:
     problems: list[str] = []
     members = suite_members(root)
     for manifest_path in sorted((root / "shared").glob("*/manifest.json")):
         problems.extend(_sync_manifest(root, manifest_path, members, check))
+    problems.extend(_sync_triage_suite_skills(root, check))
     return problems
 
 

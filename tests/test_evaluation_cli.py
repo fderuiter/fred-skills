@@ -1153,12 +1153,16 @@ class EvaluationTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(0, proc.returncode, proc.stderr)
-            schema_names = sorted(
-                p.name
-                for p in (temp_root / "skills/arch-aaa-dual/assets").glob(
-                    "*.schema.json"
-                )
+            assets_dir = temp_root / "skills/arch-aaa-dual/assets"
+            self.assertEqual(
+                ["architecture.schema.json"],
+                sorted(p.name for p in assets_dir.glob("*.schema.json")),
             )
+            (assets_dir / "arch-aaa-dual.schema.json").write_text(
+                '{"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "properties": {"id": {"type": "string"}}, "additionalProperties": false}\n',
+                encoding="utf-8",
+            )
+            schema_names = sorted(p.name for p in assets_dir.glob("*.schema.json"))
             self.assertEqual(
                 ["arch-aaa-dual.schema.json", "architecture.schema.json"],
                 schema_names,

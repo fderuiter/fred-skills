@@ -354,6 +354,8 @@ class ScaffolderTests(unittest.TestCase):
             ),
         )
         format_targets: list[str] = []
+        from _markdown_utils import extract_fenced_blocks
+
         for skill_name, suite_name, suite_resource, suite_validator in suite_specs:
             scaffold_skill.scaffold_skill(
                 skill_name,
@@ -366,9 +368,45 @@ class ScaffolderTests(unittest.TestCase):
             self.assertIn(f"]({suite_validator})", skill_md)
             self.assertTrue((pkg_dir / suite_resource).is_file())
             self.assertTrue((pkg_dir / suite_validator).is_file())
+            self.assertFalse((pkg_dir / "scripts/validate_output.py").exists())
+            schemas = sorted(p.name for p in (pkg_dir / "assets").glob("*.schema.json"))
+            if suite_name == "repository-workflows":
+                self.assertEqual([f"{skill_name}.schema.json"], schemas)
+            else:
+                self.assertNotIn(f"{skill_name}.schema.json", schemas)
+                self.assertEqual(1, len(schemas))
+
+            fenced, _ = extract_fenced_blocks(
+                (pkg_dir / "references/examples.md").read_text(encoding="utf-8")
+            )
+            json_blocks = [body for lang, body in fenced if lang == "json"]
+            self.assertEqual(1, len(json_blocks))
+            sample_path = self.root / f"{skill_name}-sample.json"
+            sample_path.write_text(json_blocks[0], encoding="utf-8")
+            sample_args = [
+                sys.executable,
+                "-B",
+                str(pkg_dir / suite_validator),
+                str(sample_path),
+            ]
+            if suite_name == "repository-workflows":
+                sample_args.extend(
+                    ["--schema", str(pkg_dir / f"assets/{skill_name}.schema.json")]
+                )
+            sample_proc = subprocess.run(
+                sample_args,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                0,
+                sample_proc.returncode,
+                sample_proc.stdout + sample_proc.stderr,
+            )
             format_targets.extend(
                 [
-                    str(pkg_dir / "scripts/validate_output.py"),
+                    str(pkg_dir / suite_validator),
                     str(pkg_dir / "SKILL.md"),
                     str(pkg_dir / "references/examples.md"),
                 ]
@@ -423,6 +461,53 @@ class ScaffolderTests(unittest.TestCase):
         )
         self.assertEqual(0, val_proc.returncode, val_proc.stdout + val_proc.stderr)
 
+    def test_no_catalog_and_external_output_dir_preserve_standalone_mode(self) -> None:
+        self._populate_full_isolated_root()
+        suites_before = (self.root / "catalog/suites.json").read_bytes()
+        cases_before = (self.root / "evals/cases.json").read_bytes()
+
+        no_cat_proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(self.root / "scripts/scaffold_skill.py"),
+                "standalone-local-check",
+                "--no-catalog",
+                "--root",
+                str(self.root),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, no_cat_proc.returncode, no_cat_proc.stderr)
+        local_pkg = self.root / "skills/standalone-local-check"
+        self.assertTrue(
+            (local_pkg / "assets/standalone-local-check.schema.json").is_file()
+        )
+        self.assertTrue((local_pkg / "scripts/validate_output.py").is_file())
+        self.assertEqual(
+            suites_before, (self.root / "catalog/suites.json").read_bytes()
+        )
+        self.assertEqual(cases_before, (self.root / "evals/cases.json").read_bytes())
+        shutil.rmtree(local_pkg)
+
+        ext_dir = self.root / "external-out"
+        ext_res = scaffold_skill.scaffold_skill(
+            "external-standalone-skill",
+            root=self.root,
+            output_dir=ext_dir,
+        )
+        ext_pkg = ext_res["package_dir"]
+        self.assertEqual(ext_dir / "external-standalone-skill", ext_pkg)
+        self.assertTrue(
+            (ext_pkg / "assets/external-standalone-skill.schema.json").is_file()
+        )
+        self.assertTrue((ext_pkg / "scripts/validate_output.py").is_file())
+        self.assertEqual(
+            suites_before, (self.root / "catalog/suites.json").read_bytes()
+        )
+
     def test_scaffolder_with_catalog_sync_passes_catalog_and_experience_checks(
         self,
     ) -> None:
@@ -432,14 +517,22 @@ class ScaffolderTests(unittest.TestCase):
         historical_before = historical_notes.read_bytes()
         active_notes = self.root / f"docs/release-notes-{version}.md"
         self.assertTrue(active_notes.is_file())
+        baseline_packs = json.loads(
+            (self.root / "catalog/packs.json").read_text(encoding="utf-8")
+        )["packs"]
+        baseline_cases = len(
+            json.loads((self.root / "evals/cases.json").read_text(encoding="utf-8"))[
+                "cases"
+            ]
+        )
 
+        # Bare invocation (no --catalog flag) must auto-synchronize catalog in a full clone.
         proc = subprocess.run(
             [
                 sys.executable,
                 "-B",
                 str(self.root / "scripts/scaffold_skill.py"),
                 "repo-audit-rate-limits",
-                "--catalog",
                 "--suite",
                 "repository-audits",
                 "--phase",
@@ -470,21 +563,22 @@ class ScaffolderTests(unittest.TestCase):
         self.assertEqual(baseline_skills + 1, telemetry["total_packages"])
 
         extra_specs = (
-            ("arch-service-contracts", "software-architecture"),
-            ("review-api-changes", "code-review"),
-            ("test-mutation-bounds", "automated-testing"),
-            ("spec-acceptance-matrix", "spec-driven-development"),
-            ("repo-triage-regressions", "repository-workflows"),
+            ("arch-service-contracts", "software-architecture", True),
+            ("review-api-changes", "code-review", None),
+            ("test-mutation-bounds", "automated-testing", None),
+            ("spec-acceptance-matrix", "spec-driven-development", None),
+            ("repo-triage-regressions", "repository-workflows", None),
         )
-        for extra_name, extra_suite in extra_specs:
+        for extra_name, extra_suite, sync_flag in extra_specs:
             scaffold_skill.scaffold_skill(
                 extra_name,
                 root=self.root,
-                sync_catalog=True,
+                sync_catalog=sync_flag,
                 suite=extra_suite,
             )
 
         expected_total = baseline_skills + 1 + len(extra_specs)
+        expected_cases = baseline_cases + (1 + len(extra_specs)) * 3
         self.assertEqual([], sync_audit_resources.sync(self.root, check=True))
         self.assertEqual([], build_catalog.build(self.root, check=True))
         self.assertEqual([], build_experience.build(self.root, check=True))
@@ -492,13 +586,66 @@ class ScaffolderTests(unittest.TestCase):
         packs = json.loads(
             (self.root / "catalog/packs.json").read_text(encoding="utf-8")
         )["packs"]
-        all_new = ["repo-audit-rate-limits", *(n for n, _ in extra_specs)]
+        all_new = ["repo-audit-rate-limits", *(n for n, _, _ in extra_specs)]
         for sk_name in all_new:
             self.assertIn(sk_name, packs["complete"]["skills"])
+            self.assertFalse(
+                (self.root / "skills" / sk_name / "scripts/validate_output.py").exists()
+            )
         self.assertIn(f"({expected_total} skills;", packs["complete"]["description"])
         self.assertIn("repo-audit-rate-limits", packs["full-audit"]["skills"])
-        for non_audit_name, _ in extra_specs:
+        for non_audit_name, _, _ in extra_specs:
             self.assertNotIn(non_audit_name, packs["full-audit"]["skills"])
+
+        # Locked curated packs must remain untouched; suite-preferred packs get new skills.
+        self.assertEqual(
+            ["session-handoff", "terse-output-commit"],
+            packs["session-hygiene"]["skills"],
+        )
+        self.assertEqual(
+            baseline_packs["starter"]["skills"], packs["starter"]["skills"]
+        )
+        self.assertIn(
+            "arch-service-contracts", packs["software-architecture"]["skills"]
+        )
+        self.assertIn("review-api-changes", packs["code-review"]["skills"])
+        self.assertIn("test-mutation-bounds", packs["automated-testing"]["skills"])
+        self.assertIn(
+            "spec-acceptance-matrix", packs["spec-driven-development"]["skills"]
+        )
+        self.assertIn("repo-triage-regressions", packs["verified-fixes"]["skills"])
+
+        # Experience symptom quality checks matching test_catalog_experience.py.
+        experience_skills = json.loads(
+            (self.root / "catalog/experience.json").read_text(encoding="utf-8")
+        )["skills"]
+        for sk_name in all_new:
+            symptoms = experience_skills[sk_name]["symptoms"]
+            self.assertGreaterEqual(len(symptoms), 3)
+            normalized = [s.strip().lower() for s in symptoms]
+            slug_tokens = set(sk_name.split("-"))
+            stripped_tokens = set(
+                sk_name.removeprefix("repo-audit-").removeprefix("repo-").split("-")
+            )
+            self.assertFalse(
+                set(normalized) <= slug_tokens or set(normalized) <= stripped_tokens,
+                symptoms,
+            )
+            self.assertTrue(any(" " in s for s in normalized), symptoms)
+            if sk_name != "repo-audit-rate-limits":
+                self.assertTrue(
+                    all(len(s.split()) >= 2 for s in normalized),
+                    symptoms,
+                )
+
+        # Prose count invariants in docs/validation.md, evals/README.md, and release docs.
+        validation_md = (self.root / "docs/validation.md").read_text(encoding="utf-8")
+        self.assertIn(f"not {expected_cases} executed evaluations", validation_md)
+        self.assertIn(f"{expected_cases} raw cases", validation_md)
+        self.assertIn(f"({expected_cases * 2} runs)", validation_md)
+        evals_readme = (self.root / "evals/README.md").read_text(encoding="utf-8")
+        self.assertIn(f"{expected_cases} skill scenario specifications", evals_readme)
+        self.assertIn(f"across all {expected_total} skills", evals_readme)
 
         self.assertIn(
             f"Total: {expected_total} skills.",
@@ -514,6 +661,57 @@ class ScaffolderTests(unittest.TestCase):
         )
         self.assertEqual(historical_before, historical_notes.read_bytes())
 
+        # Verify triage.py _DEFAULT_SUITE_SKILLS parity and drift detection.
+        triage_path = self.root / "skills/repo-audit-diagnostics/scripts/triage.py"
+        triage_text = triage_path.read_text(encoding="utf-8")
+        for sk_name in all_new:
+            self.assertIn(f'"{sk_name}"', triage_text)
+        drifted_triage = triage_text.replace('"repo-audit-rate-limits",\n', "")
+        triage_path.write_text(drifted_triage, encoding="utf-8")
+        self.assertTrue(
+            any(
+                "triage.py" in err
+                for err in sync_audit_resources.sync(self.root, check=True)
+            )
+        )
+        self.assertEqual([], sync_audit_resources.sync(self.root, check=False))
+        self.assertEqual([], sync_audit_resources.sync(self.root, check=True))
+
+        # Verify evaluations.evaluate executes all 18 starter cases via reference_adapter.py.
+        from fredlib import evaluations
+
+        new_case_ids = [
+            f"{sk}-{suffix}" for sk in all_new for suffix in ("a", "b", "routing")
+        ]
+        eval_argv = [
+            sys.executable,
+            "-B",
+            str(self.root / "evals/reference_adapter.py"),
+            "--prompt",
+            "{prompt_file}",
+            "--output",
+            "{output_file}",
+        ]
+        with tempfile.TemporaryDirectory() as eval_tmp:
+            eval_result = evaluations.evaluate(
+                Path(eval_tmp) / "eval-out",
+                eval_argv,
+                cases=new_case_ids,
+                root=self.root,
+            )
+        self.assertEqual(len(new_case_ids) * 2, len(eval_result["runs"]))
+        self.assertTrue(
+            all(
+                row["state"] == "executed" and row["exact_match"]
+                for row in eval_result["runs"]
+            ),
+            [
+                (row["case"], row["configuration"], row["state"], row.get("error"))
+                for row in eval_result["runs"]
+                if row["state"] != "executed" or not row["exact_match"]
+            ],
+        )
+
         ruff_bin = shutil.which("ruff")
         self.assertIsNotNone(ruff_bin, "ruff binary required in dev test environment")
         assert ruff_bin is not None
@@ -521,7 +719,7 @@ class ScaffolderTests(unittest.TestCase):
             str(p)
             for sk_name in all_new
             for p in (
-                self.root / "skills" / sk_name / "scripts/validate_output.py",
+                *(self.root / "skills" / sk_name / "scripts").glob("*.py"),
                 self.root / "skills" / sk_name / "SKILL.md",
                 self.root / "skills" / sk_name / "references/examples.md",
             )
