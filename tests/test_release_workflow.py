@@ -2785,12 +2785,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         makefile_text = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertLess(
-            makefile_text.index("$(PYTHON) scripts/build_catalog.py"),
-            makefile_text.index("$(PYTHON) scripts/bump_version.py"),
+            makefile_text.index("$(PYTHON) -B scripts/build_catalog.py"),
+            makefile_text.index("$(PYTHON) -B scripts/bump_version.py"),
         )
         self.assertLess(
-            makefile_text.index("$(PYTHON) scripts/bump_version.py"),
-            makefile_text.index("$(PYTHON) scripts/build_experience.py"),
+            makefile_text.index("$(PYTHON) -B scripts/bump_version.py"),
+            makefile_text.index("$(PYTHON) -B scripts/build_experience.py"),
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:

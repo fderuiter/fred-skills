@@ -16,55 +16,61 @@ repos:
         types_or: [python, markdown]
       - id: mypy
         name: Check Python static types with mypy
-        entry: python -m mypy
+        entry: python -B -m mypy
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:.*\.pyi?|pyproject\.toml|requirements.*\.txt|\.pre-commit-config\.yaml)$
       - id: sync-audit-resources
         name: Check shared resource copies
-        entry: python scripts/sync_audit_resources.py --check
+        entry: python -B scripts/sync_audit_resources.py --check
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:shared/|skills/|catalog/suites\.json$|scripts/(?:sync_audit_resources|skill_tools|audit_to_sarif|validate_.*)\.py$)
       - id: build-catalog
         name: Check discovery indexes
-        entry: python scripts/build_catalog.py --check
+        entry: python -B scripts/build_catalog.py --check
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:skills/|catalog/|VERSION$|docs/catalog\.md$|\.claude-plugin/marketplace\.json$|\.cursor-plugin/marketplace\.json$|gemini-extension\.json$|scripts/(?:build_catalog|skill_tools)\.py$)
       - id: build-experience
         name: Check experience documentation
-        entry: python scripts/build_experience.py --check
+        entry: python -B scripts/build_experience.py --check
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:skills/|catalog/|VERSION$|docs/(?:experience\.md|explorer\.html)$|scripts/(?:build_experience|build_site|skill_tools)\.py$|scripts/fredlib/(?:common|reports)\.py$)
+      - id: bump-version
+        name: Check version and manifest sync
+        entry: python -B scripts/bump_version.py --check
+        language: system
+        pass_filenames: false
+        files: ^(?:VERSION$|LICENSE$|README\.md$|skills/|catalog/|shared/|schemas/|\.claude-plugin/marketplace\.json$|\.cursor-plugin/marketplace\.json$|gemini-extension\.json$|docs/(?:usage\.md|explorer\.html|releasing\.md|release-notes-.*\.md)$|scripts/(?:fredlib/|fred\.py$|skill_tools\.py$|audit_to_sarif\.py$|package_skills\.py$|validate_.*\.py$|bump_version\.py$|_doc_invariants\.py$))
       - id: validate-skills
         name: Validate standalone packages
-        entry: python scripts/validate_skills.py --telemetry validation-telemetry.json
+        entry: python -B scripts/validate_skills.py --telemetry validation-telemetry.json
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:skills/|shared/|catalog/|schemas/|VERSION$|README\.md$|AGENTS\.md$|CONTRIBUTING\.md$|docs/(?:architecture|catalog|implementation-status|research|validation)\.md$|scripts/(?:validate_.*|skill_tools|_doc_invariants|_markdown_utils)\.py$|scripts/fredlib/vetting\.py$)
       - id: check-doc-links
         name: Check relative documentation links
-        entry: python scripts/check_doc_links.py
+        entry: python -B scripts/check_doc_links.py
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:.*\.(?:md|html)$|docs/|skills/|scripts/(?:check_doc_links|skill_tools|_markdown_utils)\.py$)
       - id: verify-doc-snippets
         name: Verify documentation command snippets
-        entry: python scripts/verify_doc_snippets.py
+        entry: python -B scripts/verify_doc_snippets.py --commit-safe
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:[^/]+\.md$|docs/.*\.md$|Makefile$|\.pre-commit-config\.yaml$|VERSION$|requirements.*\.txt$|catalog/.*\.json$|evals/cases\.json$|\.claude-plugin/marketplace\.json$|shared/repo-audit/resources/assets/audit\.schema\.json$|skills/[^/]+/SKILL\.md$|skills/repo-audit-diagnostics/scripts/triage\.py$|examples/walkthrough/run_demo\.py$|scripts/.*\.py$)
       - id: verify-workflow-actions
         name: Verify workflow action pins
-        entry: python scripts/verify_workflow_actions.py --check
+        entry: python -B scripts/verify_workflow_actions.py --check
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^(?:\.github/(?:workflows/.*\.ya?ml|action-pins\.json)$|scripts/(?:verify_workflow_actions|check_workflow_pins)\.py$)
       - id: unit-tests
         name: Test validation and synthetic contracts
-        entry: python scripts/run_checks.py --phase tests
+        entry: python -B scripts/run_checks.py --phase tests
         language: system
         pass_filenames: false
         always_run: true

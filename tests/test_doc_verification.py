@@ -2478,6 +2478,81 @@ class FailClosedDocVerificationTests(unittest.TestCase):
                 _load_tagged_packs(repo, "v0.1.0")
             self.assertEqual("invalid_json", json_blob.exception.code)
 
+    def test_commit_safe_mode_uses_inprocess_parsers_and_skips_ruff_and_check_subprocesses(
+        self,
+    ) -> None:
+        clear_subprocess_cache()
+        real_run = subprocess.run
+        spawned: list[list[str]] = []
+
+        def spy_run(
+            cmd: list[str], *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            spawned.append(list(cmd))
+            return real_run(cmd, *args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+        commit_safe_valid = [
+            "ruff check .",
+            "ruff format --check .",
+            "make check",
+            "make test",
+            "python scripts/run_checks.py --phase tests --module tests.test_toolkit -k help --fail-fast",
+            "python scripts/sync_audit_resources.py --check",
+            "python scripts/build_catalog.py --check",
+            "python scripts/build_experience.py --check",
+            "python scripts/bump_version.py --check",
+            "python scripts/validate_skills.py",
+            "python scripts/check_doc_links.py",
+            "python scripts/verify_workflow_actions.py --check",
+            "python scripts/fred.py search tenant",
+        ]
+        commit_safe_invalid = [
+            "ruff check . --nonexistent-ruff-flag",
+            "make unknown_target",
+            "python scripts/run_checks.py --phase bogus",
+            "python scripts/run_checks.py --phase tests --module tests.nonexistent",
+            "python scripts/sync_audit_resources.py --invalid-flag",
+            "python scripts/bump_version.py --invalid-flag",
+            "python scripts/validate_skills.py --invalid-flag",
+        ]
+        try:
+            with patch("verify_doc_snippets.subprocess.run", side_effect=spy_run):
+                for cmd in commit_safe_valid:
+                    ok, msg = execute_snippet_command(cmd, root=ROOT, commit_safe=True)
+                    self.assertTrue(ok, f"Expected commit-safe '{cmd}' to pass: {msg}")
+                for bad_cmd in commit_safe_invalid:
+                    ok, _ = execute_snippet_command(
+                        bad_cmd, root=ROOT, commit_safe=True
+                    )
+                    self.assertFalse(
+                        ok, f"Expected commit-safe '{bad_cmd}' to fail validation"
+                    )
+            forbidden_subprocs = [
+                cmd
+                for cmd in spawned
+                if any(
+                    tok.endswith(
+                        (
+                            "sync_audit_resources.py",
+                            "build_catalog.py",
+                            "build_experience.py",
+                            "bump_version.py",
+                            "validate_skills.py",
+                            "run_checks.py",
+                        )
+                    )
+                    for tok in cmd
+                )
+                or (len(cmd) >= 2 and cmd[0].endswith("ruff") and "." in cmd)
+            ]
+            self.assertEqual(
+                [],
+                forbidden_subprocs,
+                f"commit_safe=True must not spawn repo-wide ruff or --check subprocesses: {forbidden_subprocs}",
+            )
+        finally:
+            clear_subprocess_cache()
+
 
 if __name__ == "__main__":
     unittest.main()

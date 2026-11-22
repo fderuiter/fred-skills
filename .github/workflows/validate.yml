@@ -55,7 +55,7 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: Verify Python and Markdown formatting
         env:
-          SKIP: ruff-lint,mypy,sync-audit-resources,build-catalog,build-experience,validate-skills,check-doc-links,verify-doc-snippets,verify-workflow-actions,unit-tests
+          SKIP: ruff-lint,mypy,sync-audit-resources,build-catalog,build-experience,bump-version,validate-skills,check-doc-links,verify-doc-snippets,verify-workflow-actions,unit-tests
         run: pre-commit run --all-files
       - name: Lint Python sources
         run: python scripts/run_checks.py --phase lint

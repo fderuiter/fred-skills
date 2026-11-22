@@ -13,3 +13,21 @@ exclude = [
 [[tool.mypy.overrides]]
 module = ["playwright", "playwright.*"]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "scripts"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    "dist",
+    "evals",
+    "examples",
+    "oracles",
+    "shared",
+    "skills",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".fred-skills",
+]
