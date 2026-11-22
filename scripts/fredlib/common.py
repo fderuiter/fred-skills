@@ -392,6 +392,7 @@ def _detect_artifact_suite(data: object) -> str | None:
 
 class _ScriptValidator(Protocol):
     def validate(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
+    def _schema_errors(self, data: Any, schema: Mapping[str, Any]) -> list[str]: ...
 
 
 _CANONICAL_VALIDATOR_SCRIPTS: dict[str, tuple[str, str]] = {

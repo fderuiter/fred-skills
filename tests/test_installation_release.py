@@ -584,78 +584,405 @@ class InstallationTests(unittest.TestCase):
             self.assertIn("LICENSE", gznames)
             self.assertIn("skills/repo-audit-concurrency/SKILL.md", gznames)
 
-        # Check standalone CLI bundles (tar.gz and zip) and execute extracted CLI under -S
+        # Check standalone CLI bundles (tar.gz and zip) and execute all 29 subcommands under -S
         cli_tar_gz = one / f"fred-skills-{first['version']}-cli.tar.gz"
         cli_zip = one / f"fred-skills-{first['version']}-cli.zip"
         self.assertTrue(cli_tar_gz.is_file())
         self.assertTrue(cli_zip.is_file())
+        required_cli_entries = (
+            "LICENSE",
+            "VERSION",
+            "catalog/packs.json",
+            "catalog/skills.json",
+            "catalog/suites.json",
+            "schemas/run.schema.json",
+            "schemas/observations.schema.json",
+            "schemas/evaluation-scenarios.schema.json",
+            "shared/repo-audit/manifest.json",
+            "shared/repo-audit/resources/assets/audit.schema.json",
+            "scripts/fred.py",
+            "scripts/skill_tools.py",
+            "scripts/_markdown_utils.py",
+            "scripts/audit_to_sarif.py",
+            "scripts/validate_architecture.py",
+            "scripts/validate_audit.py",
+            "scripts/validate_review.py",
+            "scripts/validate_spec.py",
+            "scripts/validate_testing.py",
+            "scripts/validate_workflow.py",
+            "scripts/fredlib/__init__.py",
+            "scripts/fredlib/releases.py",
+            "skills/repo-audit-concurrency/SKILL.md",
+            "skills/repo-audit-concurrency/assets/prompt.md",
+            "skills/repo-audit-diagnostics/scripts/triage.py",
+            "skills/repo-audit-diagnostics/scripts/validate_audit.py",
+            "evals/cases.json",
+            "evals/reference_adapter.py",
+        )
+        excluded_cli_entries = (
+            "requirements-dev.txt",
+            "scripts/build_site.py",
+            "scripts/validate_skills.py",
+        )
         with tarfile.open(cli_tar_gz, "r:gz") as ctar:
             cnames = set(ctar.getnames())
-            for req in (
-                "LICENSE",
-                "VERSION",
-                "catalog/packs.json",
-                "catalog/skills.json",
-                "scripts/fred.py",
-                "scripts/skill_tools.py",
-                "scripts/_markdown_utils.py",
-                "scripts/audit_to_sarif.py",
-                "scripts/fredlib/__init__.py",
-                "scripts/fredlib/releases.py",
-            ):
+            for req in required_cli_entries:
                 self.assertIn(req, cnames)
-            self.assertEqual(0o755, ctar.getmember("scripts/fred.py").mode)
-            self.assertEqual(0o755, ctar.getmember("scripts/audit_to_sarif.py").mode)
+            for excl in excluded_cli_entries:
+                self.assertNotIn(excl, cnames)
+            self.assertFalse(any(name.startswith("tests/") for name in cnames))
+            for exec_entry in (
+                "scripts/fred.py",
+                "scripts/audit_to_sarif.py",
+                "scripts/validate_audit.py",
+                "scripts/validate_workflow.py",
+                "skills/repo-audit-diagnostics/scripts/triage.py",
+            ):
+                self.assertEqual(0o755, ctar.getmember(exec_entry).mode, exec_entry)
             self.assertEqual(0o644, ctar.getmember("scripts/skill_tools.py").mode)
             self.assertEqual(0o644, ctar.getmember("scripts/_markdown_utils.py").mode)
             self.assertEqual(0o644, ctar.getmember("scripts/fredlib/releases.py").mode)
+            self.assertEqual(0o644, ctar.getmember("schemas/run.schema.json").mode)
+            self.assertEqual(0o644, ctar.getmember("evals/reference_adapter.py").mode)
             self.assertEqual(0o644, ctar.getmember("LICENSE").mode)
         with zipfile.ZipFile(cli_zip, "r") as czip:
-            self.assertEqual(
-                0o100755, czip.getinfo("scripts/fred.py").external_attr >> 16
-            )
-            self.assertEqual(
-                0o100755, czip.getinfo("scripts/audit_to_sarif.py").external_attr >> 16
-            )
+            znames = set(czip.namelist())
+            self.assertEqual(cnames, znames)
+            for exec_entry in (
+                "scripts/fred.py",
+                "scripts/audit_to_sarif.py",
+                "scripts/validate_audit.py",
+                "skills/repo-audit-diagnostics/scripts/triage.py",
+            ):
+                self.assertEqual(
+                    0o100755,
+                    czip.getinfo(exec_entry).external_attr >> 16,
+                    exec_entry,
+                )
             self.assertEqual(
                 0o100644, czip.getinfo("scripts/skill_tools.py").external_attr >> 16
             )
 
-        standalone_cli_dir = self.root / "standalone_cli_check"
-        standalone_cli_dir.mkdir()
         starter_tar_name = f"fred-skills-{first['version']}-starter.tar"
-        shutil.copy2(one / "manifest.json", standalone_cli_dir / "manifest.json")
-        shutil.copy2(one / "SHA256SUMS", standalone_cli_dir / "SHA256SUMS")
-        shutil.copy2(one / starter_tar_name, standalone_cli_dir / starter_tar_name)
-        with tarfile.open(cli_tar_gz, "r:gz") as ctar:
-            ctar.extractall(standalone_cli_dir, filter="data")
-        cli_proc = subprocess.run(
-            [
-                sys.executable,
-                "-S",
-                "scripts/fred.py",
-                "verify-release",
-                "manifest.json",
-                "--archive",
-                starter_tar_name,
-                "--expected-version",
-                first["version"],
-                "--require-licensing",
-            ],
-            cwd=standalone_cli_dir,
-            capture_output=True,
-            text=True,
-            check=False,
+        self._verify_extracted_cli_archive_all_29_subcommands(
+            cli_tar_gz,
+            is_zip=False,
+            release_dir=one,
+            starter_tar_name=starter_tar_name,
+            expected_version=first["version"],
         )
-        self.assertEqual(0, cli_proc.returncode, cli_proc.stderr)
-        cli_verified = json.loads(cli_proc.stdout)
-        self.assertEqual(1, cli_verified["verified_archives"])
+        self._verify_extracted_cli_archive_all_29_subcommands(
+            cli_zip,
+            is_zip=True,
+            release_dir=one,
+            starter_tar_name=starter_tar_name,
+            expected_version=first["version"],
+        )
 
         # Verify tampering is detected
         corrupt_target = one / first["archives"][0]["file"]
         corrupt_target.write_bytes(corrupt_target.read_bytes() + b"tampered")
         with self.assertRaises(ValueError):
             releases.verify(manifest_path)
+
+    def _extract_cli_bundle(
+        self, archive_path: Path, standalone_dir: Path, *, is_zip: bool
+    ) -> None:
+        standalone_dir.mkdir(parents=True, exist_ok=True)
+        if is_zip:
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                zf.extractall(standalone_dir)
+                for info in zf.infolist():
+                    perm = (info.external_attr >> 16) & 0o777
+                    if perm:
+                        (standalone_dir / info.filename).chmod(perm)
+            return
+        with tarfile.open(archive_path, "r:gz") as tf:
+            tf.extractall(standalone_dir, filter="data")
+
+    def _verify_extracted_cli_archive_all_29_subcommands(
+        self,
+        archive_path: Path,
+        *,
+        is_zip: bool,
+        release_dir: Path,
+        starter_tar_name: str,
+        expected_version: str,
+    ) -> None:
+        import os
+
+        import fred
+
+        suffix = "zip" if is_zip else "targz"
+        standalone_dir = self.root / f"standalone_cli_empty_{suffix}"
+        work_dir = self.root / f"standalone_cli_work_{suffix}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        self._extract_cli_bundle(archive_path, standalone_dir, is_zip=is_zip)
+
+        target_repo = work_dir / "target-repo"
+        target_repo.mkdir()
+        (target_repo / "session.mjs").write_text(
+            "export function start() { return 1; }\n", encoding="utf-8"
+        )
+        project_cfg = work_dir / "project-config.yaml"
+        project_cfg.write_text(
+            "profile: browser-async\n"
+            "exclude:\n"
+            "  - dist/**\n"
+            "critical_workflows:\n"
+            '  - "Session lifecycle"\n',
+            encoding="utf-8",
+        )
+        transcript_path = work_dir / "transcript.txt"
+        transcript_path.write_text(
+            "Tool execution timed out after 15 seconds\n", encoding="utf-8"
+        )
+        verify_stage = work_dir / "verify-stage"
+        verify_stage.mkdir()
+        shutil.copy2(release_dir / "manifest.json", verify_stage / "manifest.json")
+        shutil.copy2(release_dir / "SHA256SUMS", verify_stage / "SHA256SUMS")
+        shutil.copy2(release_dir / starter_tar_name, verify_stage / starter_tar_name)
+
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(work_dir),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        executed_subcommands: set[str] = set()
+
+        def run_cli_s(*cli_args: str) -> dict:
+            subcmd = cli_args[0]
+            proc = subprocess.run(
+                [sys.executable, "-S", "scripts/fred.py", *cli_args],
+                cwd=standalone_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                0,
+                proc.returncode,
+                f"[{suffix}] {subcmd} failed: stderr={proc.stderr!r} stdout={proc.stdout!r}",
+            )
+            self.assertNotIn("Traceback", proc.stderr)
+            executed_subcommands.add(subcmd)
+            return json.loads(proc.stdout)
+
+        # 1-4: Discovery
+        run_cli_s("tasks")
+        run_cli_s("packs")
+        run_cli_s("hosts")
+        run_cli_s("search", "concurrency")
+
+        # 5-7: Planning & Init (with --config and prompt.md active skill verification)
+        run_cli_s("preflight", str(target_repo))
+        plan_out = run_cli_s(
+            "plan",
+            str(target_repo),
+            "--task",
+            "investigate-bug",
+            "--budget",
+            "brief",
+            "--config",
+            str(project_cfg),
+        )
+        self.assertEqual("browser-async", plan_out["plan"]["profile"])
+
+        audit_ws = work_dir / "audit-ws"
+        run_cli_s(
+            "init",
+            str(target_repo),
+            "--task",
+            "investigate-bug",
+            "--budget",
+            "brief",
+            "--config",
+            str(project_cfg),
+            "--output",
+            str(audit_ws),
+        )
+        run_doc = read_json(audit_ws / "run.json")
+        prompt_text = (audit_ws / "prompt.md").read_text(encoding="utf-8")
+        self.assertNotIn("No skill prompt templates resolved", prompt_text)
+        slices = run_doc["plan"].get("slices") or [run_doc["plan"]["skills"]]
+        active_skills = slices[0]
+        self.assertTrue(len(active_skills) > 0)
+        for sk in active_skills:
+            self.assertIn(f"### `{sk}`", prompt_text)
+            raw_tpl = (standalone_dir / "skills" / sk / "assets/prompt.md").read_text(
+                encoding="utf-8"
+            )
+            first_non_placeholder_line = next(
+                ln.strip()
+                for ln in raw_tpl.splitlines()
+                if ln.strip() and "<" not in ln
+            )
+            self.assertIn(first_non_placeholder_line, prompt_text)
+
+        # Seed valid confirmed finding in audit_ws/audit.json for reporting/reconcile/sarif
+        seeded_audit = read_json(ROOT / "tests/fixtures/audit-valid.json")
+        existing_audit = read_json(audit_ws / "audit.json")
+        seeded_audit["run_id"] = run_doc["run_id"]
+        seeded_audit["repository"] = existing_audit["repository"]
+        atomic_json(audit_ws / "audit.json", seeded_audit)
+
+        # Also init single-task loop workspace for `advance`
+        loop_ws = work_dir / "loop-ws"
+        run_cli_s(
+            "init",
+            str(target_repo),
+            "--task",
+            "apply-fix",
+            "--output",
+            str(loop_ws),
+        )
+
+        # 8-15: Run Management
+        run_cli_s("validate-run", str(audit_ws))
+        run_cli_s(
+            "checkpoint",
+            str(audit_ws),
+            "--state",
+            "running",
+            "--note",
+            "Initial audit pass",
+        )
+        run_cli_s("resume", str(audit_ws))
+        run_cli_s("advance", str(loop_ws), "--note", "Completed pass 1")
+        run_cli_s(
+            "memory",
+            str(audit_ws),
+            "--output",
+            str(work_dir / "memory.json"),
+        )
+        run_cli_s("compare", str(audit_ws), str(audit_ws))
+        run_cli_s(
+            "reconcile",
+            str(audit_ws),
+            "--finding",
+            "F-1",
+            "--state",
+            "in-progress",
+            "--note",
+            "Triaging finding under stdlib Python",
+        )
+        sarif_file = work_dir / "exported.sarif"
+        run_cli_s("export-sarif", str(audit_ws), "--output", str(sarif_file))
+        run_cli_s(
+            "import-sarif",
+            str(sarif_file),
+            "--root",
+            str(target_repo),
+            "--output",
+            str(work_dir / "observations.json"),
+        )
+
+        # 16-18: Reporting (with export-sarif above)
+        run_cli_s(
+            "report",
+            str(audit_ws),
+            "--output",
+            str(work_dir / "report.html"),
+        )
+        run_cli_s(
+            "issues",
+            str(audit_ws),
+            "--output",
+            str(work_dir / "issues"),
+        )
+
+        # 19-25: Installation & Vetting
+        install_dest = work_dir / "agent-dest"
+        install_dest.mkdir()
+        run_cli_s("vet", "skills/repo-audit-concurrency")
+        run_cli_s(
+            "install",
+            "--destination",
+            str(install_dest),
+            "--host",
+            "codex",
+            "--skill",
+            "repo-audit-concurrency",
+        )
+        run_cli_s(
+            "installed",
+            "--destination",
+            str(install_dest),
+            "--host",
+            "codex",
+            "--check",
+        )
+        run_cli_s(
+            "recover-install",
+            "--destination",
+            str(install_dest),
+            "--host",
+            "codex",
+            "--confirm-interrupted",
+        )
+        run_cli_s(
+            "update",
+            "--destination",
+            str(install_dest),
+            "--host",
+            "codex",
+            "--skill",
+            "repo-audit-concurrency",
+        )
+        run_cli_s(
+            "remove",
+            "--destination",
+            str(install_dest),
+            "--host",
+            "codex",
+            "--skill",
+            "repo-audit-concurrency",
+        )
+        run_cli_s(
+            "rollback",
+            "--destination",
+            str(install_dest),
+            "--host",
+            "codex",
+        )
+
+        # 26-28: Release & Evaluation
+        run_cli_s(
+            "evaluate",
+            "--output",
+            str(work_dir / "eval-out"),
+            "--case",
+            "concurrency-a",
+            "--adapter-argv",
+            json.dumps([sys.executable, "-S", "evals/reference_adapter.py"]),
+        )
+        sub_rel_dir = work_dir / "sub-release"
+        run_cli_s("release", "--pack", "starter", "--output", str(sub_rel_dir))
+        cli_verified = run_cli_s(
+            "verify-release",
+            str(verify_stage / "manifest.json"),
+            "--archive",
+            starter_tar_name,
+            "--expected-version",
+            expected_version,
+            "--require-licensing",
+        )
+        self.assertEqual(1, cli_verified["verified_archives"])
+
+        # 29: Diagnostics
+        run_cli_s(
+            "triage",
+            str(transcript_path),
+            "--workspace",
+            str(audit_ws),
+            "--check-schema",
+            "--output",
+            str(work_dir / "diag-out"),
+        )
+
+        self.assertEqual(set(fred.COMMAND_REGISTRY.keys()), executed_subcommands)
+        self.assertEqual(29, len(executed_subcommands))
 
     def test_unified_release_supports_custom_root_packs(self):
         atomic_json(

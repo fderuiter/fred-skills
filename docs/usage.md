@@ -154,12 +154,12 @@ curl -LO https://github.com/fderuiter/fred-skills/releases/download/v0.3.0/fred-
 
 ### Verify checksums and manifest
 
-Check artifact integrity against the release manifest or checksums:
+Check artifact integrity against `SHA256SUMS` or unpack the self-contained standalone CLI bundle (`fred-skills-0.3.0-cli.tar.gz` or `fred-skills-0.3.0-cli.zip`), which includes `catalog/`, `schemas/`, `shared/`, `skills/`, `evals/`, and `scripts/` so every `scripts/fred.py` subcommand (`verify-release`, `plan`, `init`, `install`, `triage`, `report`, and more) runs on Python 3.12+ standard library without cloning the repository:
 
 ```sh
 # Verify SHA-256 checksum against manifest
 sha256sum --ignore-missing -c SHA256SUMS
-# Or unpack the standalone CLI bundle and verify the downloaded archive
+# Or unpack the standalone zero-dependency CLI bundle and verify the downloaded archive
 tar -xzf fred-skills-0.3.0-cli.tar.gz
 python3 scripts/fred.py verify-release manifest.json --archive fred-skills-0.3.0-starter.tar
 ```

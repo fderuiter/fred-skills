@@ -386,7 +386,27 @@ def _collect_cli_catalog_entries(root: Path) -> list[tuple[str, bytes]]:
     ]
 
 
-def _collect_cli_script_entries(root: Path) -> list[tuple[str, bytes]]:
+_CLI_EXECUTABLE_SCRIPTS: tuple[str, ...] = (
+    "scripts/fred.py",
+    "scripts/audit_to_sarif.py",
+    "scripts/validate_architecture.py",
+    "scripts/validate_audit.py",
+    "scripts/validate_review.py",
+    "scripts/validate_spec.py",
+    "scripts/validate_testing.py",
+    "scripts/validate_workflow.py",
+)
+_CLI_LIBRARY_SCRIPTS: tuple[str, ...] = (
+    "scripts/skill_tools.py",
+    "scripts/_markdown_utils.py",
+)
+_CLI_IGNORED_NAMES: frozenset[str] = frozenset({"__pycache__", ".DS_Store"})
+_CLI_IGNORED_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo"})
+
+
+def _collect_cli_script_entries(
+    root: Path,
+) -> tuple[list[tuple[str, bytes]], set[str]]:
     scripts_root = (
         root
         if (root / "scripts/fred.py").exists()
@@ -395,12 +415,7 @@ def _collect_cli_script_entries(root: Path) -> list[tuple[str, bytes]]:
     )
     entries = [
         (rel_script, _read_checked_repo_file(scripts_root / rel_script, scripts_root))
-        for rel_script in (
-            "scripts/fred.py",
-            "scripts/skill_tools.py",
-            "scripts/_markdown_utils.py",
-            "scripts/audit_to_sarif.py",
-        )
+        for rel_script in (*_CLI_EXECUTABLE_SCRIPTS, *_CLI_LIBRARY_SCRIPTS)
     ]
     fredlib_dir = scripts_root / "scripts/fredlib"
     if fredlib_dir.is_symlink() or not fredlib_dir.is_dir():
@@ -412,13 +427,73 @@ def _collect_cli_script_entries(root: Path) -> list[tuple[str, bytes]]:
                 _read_checked_repo_file(py_path, scripts_root),
             )
         )
-    return entries
+    return entries, set(_CLI_EXECUTABLE_SCRIPTS)
+
+
+def _walk_cli_directory(
+    cur_dir: Path,
+    base_root: Path,
+    entries: list[tuple[str, bytes]],
+    execs: set[str],
+) -> None:
+    for child in sorted(cur_dir.iterdir(), key=lambda p: p.name):
+        if child.is_symlink():
+            raise ValueError(f"Symlinks not supported in release packages: {child}")
+        if child.name in _CLI_IGNORED_NAMES or child.suffix in _CLI_IGNORED_SUFFIXES:
+            continue
+        if child.is_dir():
+            _walk_cli_directory(child, base_root, entries, execs)
+            continue
+        data = _read_checked_repo_file(child, base_root)
+        arcname = child.relative_to(base_root).as_posix()
+        entries.append((arcname, data))
+        if arcname.endswith(".py") and (
+            data.startswith(b"#!") or "/scripts/" in arcname
+        ):
+            execs.add(arcname)
+
+
+def _collect_cli_tree_entries(
+    root: Path, rel_dir: str
+) -> tuple[list[tuple[str, bytes]], set[str]]:
+    candidate = root / rel_dir
+    base_root = root if candidate.exists() or candidate.is_symlink() else ROOT
+    target_dir = base_root / rel_dir
+    if target_dir.is_symlink():
+        raise ValueError(f"Symlinks not supported in release packages: {target_dir}")
+    if not target_dir.is_dir():
+        raise ValueError(f"Expected {rel_dir} directory: {target_dir}")
+    entries: list[tuple[str, bytes]] = []
+    execs: set[str] = set()
+    _walk_cli_directory(target_dir, base_root, entries, execs)
+    return entries, execs
+
+
+def _collect_cli_skills_entries(
+    root: Path, suite_skills: Sequence[str] | None = None
+) -> tuple[list[tuple[str, bytes]], set[str]]:
+    candidate = root / "skills"
+    skills_root = root if candidate.exists() or candidate.is_symlink() else ROOT
+    skills_dir = skills_root / "skills"
+    if skills_dir.is_symlink():
+        raise ValueError(f"Symlinks not supported in release packages: {skills_dir}")
+    names = (
+        list(suite_skills)
+        if suite_skills is not None and skills_root == root
+        else _get_suite_skills(skills_root)
+    )
+    raw_entries, raw_execs = _scan_skills_entries(names, root=skills_root)
+    return (
+        [(f"skills/{arcname}", data) for arcname, data in raw_entries],
+        {f"skills/{arcname}" for arcname in raw_execs},
+    )
 
 
 def _build_cli_bundles(
     output: Path,
     license_entries: list[tuple[str, bytes]],
     root: Path = ROOT,
+    suite_skills: Sequence[str] | None = None,
 ) -> dict[str, list[str]]:
     ver = version(root)
     version_path = root / "VERSION"
@@ -429,13 +504,22 @@ def _build_cli_bundles(
         if version_path.exists()
         else f"{ver}\n".encode()
     )
+    script_entries, cli_execs = _collect_cli_script_entries(root)
     entries: list[tuple[str, bytes]] = [
         *license_entries,
         ("VERSION", version_bytes),
         *_collect_cli_catalog_entries(root),
-        *_collect_cli_script_entries(root),
+        *script_entries,
     ]
-    cli_execs = {"scripts/fred.py", "scripts/audit_to_sarif.py"}
+    for rel_dir in ("schemas", "shared", "evals"):
+        dir_entries, dir_execs = _collect_cli_tree_entries(root, rel_dir)
+        entries.extend(dir_entries)
+        cli_execs.update(dir_execs)
+    skill_entries, skill_execs = _collect_cli_skills_entries(
+        root, suite_skills=suite_skills
+    )
+    entries.extend(skill_entries)
+    cli_execs.update(skill_execs)
     stem = f"fred-skills-{ver}-cli"
     tar_gz_name = f"{stem}.tar.gz"
     zip_name = f"{stem}.zip"
@@ -552,7 +636,11 @@ def _build_all_packs_release(
     archive_skills.update(
         _build_gemini_bundles(output, suite_skills, license_entries, root=root)
     )
-    archive_skills.update(_build_cli_bundles(output, license_entries, root=root))
+    archive_skills.update(
+        _build_cli_bundles(
+            output, license_entries, root=root, suite_skills=suite_skills
+        )
+    )
 
     all_skills = sorted(set().union(*archive_skills.values()))
     all_archives = _collect_output_archives(

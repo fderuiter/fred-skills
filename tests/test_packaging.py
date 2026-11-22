@@ -5122,6 +5122,42 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Error [subprocess_timeout]:", err_demo.getvalue())
         self.assertNotIn("Traceback", err_demo.getvalue())
 
+        # 5. examples/walkthrough/run_demo.py catches RuntimeError with structured stderr and exit code 1
+        err_runtime = io.StringIO()
+        with (
+            patch.object(
+                run_demo_mod.runs,
+                "validate_run",
+                side_effect=RuntimeError("simulated validation runtime failure"),
+            ),
+            contextlib.redirect_stderr(err_runtime),
+        ):
+            rc_runtime = run_demo_mod.main(
+                ["--output", str(self.root / "demo-runtime-err")]
+            )
+        self.assertEqual(1, rc_runtime)
+        self.assertIn("Error [runtime_error]:", err_runtime.getvalue())
+        self.assertIn("simulated validation runtime failure", err_runtime.getvalue())
+        self.assertNotIn("Traceback", err_runtime.getvalue())
+
+        # 6. examples/walkthrough/run_demo.py executes end-to-end under Python -S
+        stdlib_demo_out = self.root / "demo-stdlib-s"
+        stdlib_demo_proc = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                str(demo_path),
+                "--output",
+                str(stdlib_demo_out),
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, stdlib_demo_proc.returncode, stdlib_demo_proc.stderr)
+        self.assertEqual("passed", json.loads(stdlib_demo_proc.stdout)["validation"])
+
     def test_validate_skill_executes_bundled_validator_under_isolated_stdlib(
         self,
     ) -> None:

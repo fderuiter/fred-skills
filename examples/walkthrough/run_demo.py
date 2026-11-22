@@ -143,6 +143,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    except RuntimeError as exc:
+        print(f"Error [runtime_error]: {exc}", file=sys.stderr)
+        return 1
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

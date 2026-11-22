@@ -31,6 +31,7 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "required",
         "title",
         "type",
+        "uniqueItems",
     }
 )
 
@@ -83,6 +84,14 @@ def _json_equal(left: Any, right: Any) -> bool:
     return type(left) is type(right) and bool(left == right)
 
 
+def _has_duplicate_json_items(items: list[Any]) -> bool:
+    return any(
+        _json_equal(item, prev)
+        for idx, item in enumerate(items)
+        for prev in items[:idx]
+    )
+
+
 def _validate_type_keyword(expected: Any) -> None:
     names = [expected] if isinstance(expected, str) else expected
     if not isinstance(names, list) or not names:
@@ -116,6 +125,8 @@ def _validate_schema_scalars(node: Mapping[str, Any]) -> None:
         _validate_type_keyword(node["type"])
     if "enum" in node and not isinstance(node["enum"], list):
         raise ValueError("Invalid JSON Schema enum: expected array")
+    if "uniqueItems" in node and not isinstance(node["uniqueItems"], bool):
+        raise ValueError("Invalid JSON Schema uniqueItems: expected boolean")
     if "required" in node:
         req = node["required"]
         if not isinstance(req, list) or not all(isinstance(k, str) for k in req):
@@ -214,6 +225,8 @@ def _eval_array_keywords(
     errors: list[str] = []
     if "minItems" in node and len(val) < node["minItems"]:
         errors.append(f"{_format_loc(path)}: {val!r} is too short")
+    if node.get("uniqueItems") is True and _has_duplicate_json_items(val):
+        errors.append(f"{_format_loc(path)}: {val!r} has non-unique elements")
     if "items" in node:
         item_schema = node["items"]
         for idx, item in enumerate(val):

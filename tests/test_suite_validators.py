@@ -1001,6 +1001,46 @@ class SuiteValidatorsTests(unittest.TestCase):
         )
         self.assertEqual([], sync_audit_resources.sync(self.tmp_dir, check=True))
 
+    def test_unique_items_keyword_across_all_suite_validators(self) -> None:
+        validators = (
+            validate_architecture,
+            validate_audit,
+            validate_review,
+            validate_spec,
+            validate_testing,
+            validate_workflow,
+        )
+        schema: dict[str, Any] = {
+            "type": "object",
+            "required": ["tags"],
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "uniqueItems": True,
+                }
+            },
+        }
+        for mod in validators:
+            with self.subTest(validator=mod.__name__):
+                self.assertEqual(
+                    [], mod._schema_errors({"tags": ["a", "b", 1, True]}, schema)
+                )
+                dup_errs = mod._schema_errors({"tags": ["a", "b", "a"]}, schema)
+                self.assertEqual(1, len(dup_errs))
+                self.assertIn("non-unique elements", dup_errs[0])
+                obj_dup = mod._schema_errors(
+                    {"tags": [{"k": 1, "v": 2}, {"v": 2, "k": 1}]}, schema
+                )
+                self.assertEqual(1, len(obj_dup))
+                with self.assertRaises(ValueError):
+                    mod._schema_errors(
+                        {"tags": []},
+                        {
+                            "type": "object",
+                            "properties": {"tags": {"uniqueItems": "yes"}},
+                        },
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
